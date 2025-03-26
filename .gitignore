@@ -22,3 +22,6 @@ venv*/
 *.id2
 *.til
 *.elf
+
+# Generated server files
+server_generated.py

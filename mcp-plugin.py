@@ -2,7 +2,7 @@ import json
 import threading
 import http.server
 from urllib.parse import urlparse
-from typing import Dict, Any, Callable, get_type_hints, TypedDict, Optional
+from typing import Dict, Any, Callable, get_type_hints, TypedDict, Optional, Annotated
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -356,7 +356,10 @@ def get_function(address: int) -> Optional[Function]:
 
 @jsonrpc
 @idaread
-def get_function_by_name(name: str) -> Optional[Function]:
+def get_function_by_name(
+    name: Annotated[str, "Name of the function to get"]
+) -> Optional[Function]:
+    """Get a function by its name"""
     function_address = idaapi.get_name_ea(ida_pro.BADADDR, name)
     if function_address == ida_pro.BADADDR:
         return None
@@ -364,22 +367,28 @@ def get_function_by_name(name: str) -> Optional[Function]:
 
 @jsonrpc
 @idaread
-def get_function_by_address(address: int) -> Optional[Function]:
+def get_function_by_address(
+    address: Annotated[int, "Address of the function to get"]
+) -> Optional[Function]:
+    """Get a function by its address"""
     return get_function(address)
 
 @jsonrpc
 @idaread
 def get_current_address() -> int:
+    """Get the address currently selected by the user"""
     return idaapi.get_screen_ea()
 
 @jsonrpc
 @idaread
 def get_current_function() -> Optional[Function]:
+    """Get the function currently selected by the user"""
     return get_function(idaapi.get_screen_ea())
 
 @jsonrpc
 @idaread
 def list_functions() -> list[Function]:
+    """List all functions in the database"""
     return [get_function(address) for address in idautils.Functions()]
 
 class DecompilationResult(TypedDict):
@@ -389,7 +398,10 @@ class DecompilationResult(TypedDict):
 
 @jsonrpc
 @idaread
-def decompile_function(address: int) -> DecompilationResult:
+def decompile_function(
+    address: Annotated[int, "Address of the function to decompile"]
+) -> DecompilationResult:
+    """Decompile a function at the given address"""
     if not ida_hexrays.init_hexrays_plugin():
         return {
             "address": -1,
@@ -412,12 +424,18 @@ def decompile_function(address: int) -> DecompilationResult:
 
 @jsonrpc
 @idaread
-def show_decompilation(address: int):
+def show_decompilation(
+    address: Annotated[int, "Address of the function to show in the decompiler"]
+) -> None:
+    """Show a function in the decompiler"""
     ida_hexrays.open_pseudocode(address, ida_hexrays.OPF_REUSE)
 
 @jsonrpc
 @idaread
-def show_disassembly(address: int):
+def show_disassembly(
+    address: Annotated[int, "Address to show in the disassembly view"]
+) -> None:
+    """Show an address in the disassembly view"""
     ida_hexrays.jumpto(address)
 
 def refresh_decompiler_widget():
@@ -435,7 +453,12 @@ def refresh_decompiler_ctext(function_address: int):
 
 @jsonrpc
 @idawrite
-def rename_local_variable(function_address: int, old_name: str, new_name: str) -> bool:
+def rename_local_variable(
+    function_address: Annotated[int, "Address of the function containing the variable"],
+    old_name: Annotated[str, "Current name of the variable"],
+    new_name: Annotated[str, "New name for the variable"]
+) -> bool:
+    """Rename a local variable in a function"""
     if not ida_hexrays.rename_lvar(function_address, old_name, new_name):
         return False
     refresh_decompiler_ctext(function_address)
@@ -443,7 +466,11 @@ def rename_local_variable(function_address: int, old_name: str, new_name: str) -
 
 @jsonrpc
 @idawrite
-def rename_function(function_address: int, new_name: str) -> bool:
+def rename_function(
+    function_address: Annotated[int, "Address of the function to rename"],
+    new_name: Annotated[str, "New name for the function"]
+) -> bool:
+    """Rename a function"""
     fn = idaapi.get_func(function_address)
     if not fn:
         return False
@@ -453,7 +480,11 @@ def rename_function(function_address: int, new_name: str) -> bool:
 
 @jsonrpc
 @idawrite
-def set_function_prototype(function_address: int, prototype: str) -> str:
+def set_function_prototype(
+    function_address: Annotated[int, "Address of the function"],
+    prototype: Annotated[str, "New function prototype"]
+) -> str:
+    """Set a function's prototype"""
     fn = idaapi.get_func(function_address)
     if not fn:
         return "error: function not found"
@@ -484,7 +515,12 @@ class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
 
 @jsonrpc
 @idawrite
-def set_local_variable_type(function_address: int, variable_name: str, new_type: str) -> str:
+def set_local_variable_type(
+    function_address: Annotated[int, "Address of the function containing the variable"],
+    variable_name: Annotated[str, "Name of the variable"],
+    new_type: Annotated[str, "New type for the variable"]
+) -> str:
+    """Set a local variable's type"""
     try:
         new_tif = ida_typeinf.tinfo_t(new_type, None, ida_typeinf.PT_SIL)
     except Exception as e:

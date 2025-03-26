@@ -1,116 +1,15 @@
-import os
-import sys
+import ast
 import json
-import tempfile
-import subprocess
 import http.client
-from typing import Annotated, Dict, Optional, TypedDict, List, Any
-from dataclasses import dataclass
 
 from fastmcp import FastMCP
-from pydantic import Field
 
 # The log_level is necessary for Cline to work: https://github.com/jlowin/fastmcp/issues/81
 mcp = FastMCP("IDA Pro", log_level="ERROR")
 
-class Function(TypedDict):
-    start_address: int
-    end_address: int
-    name: str
-    prototype: str
-
-class DecompilationResult(TypedDict):
-    address: int
-    pseudocode: str
-    error: str
-
-@mcp.tool()
-def get_function_by_name(
-    name: Annotated[str, Field(description="Name of the function to get")]
-) -> Optional[Function]:
-    """Get a function by its name"""
-    return make_jsonrpc_request("get_function_by_name", name)
-
-@mcp.tool()
-def get_function_by_address(
-    address: Annotated[int, Field(description="Address of the function to get")]
-) -> Optional[Function]:
-    """Get a function by its address"""
-    return make_jsonrpc_request("get_function_by_address", address)
-
-@mcp.tool()
-def get_current_address() -> int:
-    """Get the current screen address"""
-    return make_jsonrpc_request("get_current_address")
-
-@mcp.tool()
-def get_current_function() -> Optional[Function]:
-    """Get the function at the current screen address"""
-    return make_jsonrpc_request("get_current_function")
-
-@mcp.tool()
-def list_functions() -> List[Function]:
-    """List all functions in the database"""
-    return make_jsonrpc_request("list_functions")
-
-@mcp.tool()
-def decompile_function(
-    address: Annotated[int, Field(description="Address of the function to decompile")]
-) -> DecompilationResult:
-    """Decompile a function at the given address"""
-    return make_jsonrpc_request("decompile_function", address)
-
-@mcp.tool()
-def show_decompilation(
-    address: Annotated[int, Field(description="Address of the function to show in the decompiler")]
-) -> None:
-    """Show a function in the decompiler"""
-    return make_jsonrpc_request("show_decompilation", address)
-
-@mcp.tool()
-def show_disassembly(
-    address: Annotated[int, Field(description="Address to show in the disassembly view")]
-) -> None:
-    """Show an address in the disassembly view"""
-    return make_jsonrpc_request("show_disassembly", address)
-
-@mcp.tool()
-def rename_local_variable(
-    function_address: Annotated[int, Field(description="Address of the function containing the variable")],
-    old_name: Annotated[str, Field(description="Current name of the variable")],
-    new_name: Annotated[str, Field(description="New name for the variable")]
-) -> bool:
-    """Rename a local variable in a function"""
-    return make_jsonrpc_request("rename_local_variable", function_address, old_name, new_name)
-
-@mcp.tool()
-def rename_function(
-    function_address: Annotated[int, Field(description="Address of the function to rename")],
-    new_name: Annotated[str, Field(description="New name for the function")]
-) -> bool:
-    """Rename a function"""
-    return make_jsonrpc_request("rename_function", function_address, new_name)
-
-@mcp.tool()
-def set_function_prototype(
-    function_address: Annotated[int, Field(description="Address of the function")],
-    prototype: Annotated[str, Field(description="New function prototype")]
-) -> str:
-    """Set a function's prototype"""
-    return make_jsonrpc_request("set_function_prototype", function_address, prototype)
-
-@mcp.tool()
-def set_local_variable_type(
-    function_address: Annotated[int, Field(description="Address of the function containing the variable")],
-    variable_name: Annotated[str, Field(description="Name of the variable")],
-    new_type: Annotated[str, Field(description="New type for the variable")]
-) -> str:
-    """Set a local variable's type"""
-    return make_jsonrpc_request("set_local_variable_type", function_address, variable_name, new_type)
-
 jsonrpc_request_id = 1
 
-def make_jsonrpc_request(method: str, *params) -> Any:
+def make_jsonrpc_request(method: str, *params):
     """Make a JSON-RPC request to the IDA plugin"""
     global jsonrpc_request_id
     conn = http.client.HTTPConnection("localhost", 13337)
@@ -138,6 +37,105 @@ def make_jsonrpc_request(method: str, *params) -> Any:
         raise
     finally:
         conn.close()
+
+class MCPVisitor(ast.NodeVisitor):
+    def __init__(self):
+        self.types = {}
+        self.functions = {}
+
+    def visit_FunctionDef(self, node):
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name):
+                if decorator.id == "jsonrpc":
+                    for i, arg in enumerate(node.args.args):
+                        arg_name = arg.arg
+                        arg_type = arg.annotation
+                        if arg_type is None:
+                            raise Exception(f"Missing argument type for {node.name}.{arg_name}")
+                        if isinstance(arg_type, ast.Subscript):
+                            assert isinstance(arg_type.value, ast.Name)
+                            assert arg_type.value.id == "Annotated"
+                            assert isinstance(arg_type.slice, ast.Tuple)
+                            assert len(arg_type.slice.elts) == 2
+                            annot_type = arg_type.slice.elts[0]
+                            annot_description = arg_type.slice.elts[1]
+                            assert isinstance(annot_description, ast.Constant)
+                            node.args.args[i].annotation = ast.Subscript(
+                                value=ast.Name(id="Annotated", ctx=ast.Load()),
+                                slice=ast.Tuple(
+                                    elts=[
+                                    annot_type,
+                                    ast.Call(
+                                        func=ast.Name(id="Field", ctx=ast.Load()),
+                                        args=[],
+                                        keywords=[
+                                        ast.keyword(
+                                            arg="description",
+                                            value=annot_description)])],
+                                    ctx=ast.Load()),
+                                ctx=ast.Load())
+                        elif isinstance(arg_type, ast.Name):
+                            pass
+                        else:
+                            raise Exception(f"Unexpected type annotation for {node.name}.{arg_name} -> {type(arg_type)}")
+
+                    body_comment = node.body[0]
+                    if isinstance(body_comment, ast.Expr) and isinstance(body_comment.value, ast.Constant):
+                        new_body = [body_comment]
+                    else:
+                        new_body = []
+
+                    call_args = [ast.Constant(value=node.name)]
+                    for arg in node.args.args:
+                        call_args.append(ast.Name(id=arg.arg, ctx=ast.Load()))
+                    new_body.append(ast.Return(
+                        value=ast.Call(
+                            func=ast.Name(id="make_jsonrpc_request", ctx=ast.Load()),
+                            args=call_args,
+                            keywords=[])))
+                    decorator_list = [
+                        ast.Call(
+                            func=ast.Attribute(
+                                value=ast.Name(id="mcp", ctx=ast.Load()),
+                                attr="tool",
+                                ctx=ast.Load()),
+                            args=[],
+                            keywords=[]
+                        )
+                    ]
+                    node_nobody = ast.FunctionDef(node.name, node.args, new_body, decorator_list, node.returns, node.type_comment, lineno=node.lineno, col_offset=node.col_offset)
+                    self.functions[node.name] = node_nobody
+
+    def visit_ClassDef(self, node):
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                if base.id == "TypedDict":
+                    self.types[node.name] = node
+
+
+IDA_PLUGIN_PY = "mcp-plugin.py"
+GENERATED_PY = "server_generated.py"
+
+# NOTE: This is in the global scope on purpose
+with open(IDA_PLUGIN_PY, "r") as f:
+    code = f.read()
+module = ast.parse(code, IDA_PLUGIN_PY)
+visitor = MCPVisitor()
+visitor.visit(module)
+code = """# NOTE: This file has been automatically generated, do not modify!
+from typing import Annotated, Optional, TypedDict
+from pydantic import Field
+
+"""
+for type in visitor.types.values():
+    code += ast.unparse(type)
+    code += "\n\n"
+for function in visitor.functions.values():
+    code += ast.unparse(function)
+    code += "\n\n"
+with open(GENERATED_PY, "w") as f:
+    f.write(code)
+exec(compile(code, GENERATED_PY, "exec"))
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
