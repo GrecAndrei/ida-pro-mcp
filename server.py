@@ -2,6 +2,7 @@ import os
 import sys
 import ast
 import json
+import shutil
 import http.client
 
 from fastmcp import FastMCP
@@ -142,6 +143,19 @@ exec(compile(code, GENERATED_PY, "exec"))
 
 def main():
     if sys.argv[1:] == ["--generate-only"]:
+        sys.exit(0)
+    elif sys.argv[1:] == ["--install-plugin"]:
+        if sys.platform == "win32":
+            ida_plugin_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro", "plugins")
+        else:
+            ida_plugin_folder = os.path.join(os.path.expanduser("~"), ".idapro", "plugins")
+        plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
+        if input(f"Installing IDA plugin to {plugin_destination}, proceed? [Y/n] ").lower() == "n":
+            sys.exit(1)
+        if not os.path.exists(ida_plugin_folder):
+            os.makedirs(ida_plugin_folder)
+        shutil.copy(IDA_PLUGIN_PY, plugin_destination)
+        print(f"Installed plugin: {plugin_destination}")
         sys.exit(0)
     mcp.run(transport="stdio")
 
