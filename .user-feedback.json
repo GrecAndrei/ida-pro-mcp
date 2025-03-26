@@ -1,0 +1,4 @@
+{
+  "run_command": "uv run fastmcp dev server.py",
+  "execute_automatically": false
+}
