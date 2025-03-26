@@ -1,3 +1,5 @@
+import os
+import sys
 import ast
 import json
 import http.client
@@ -113,8 +115,9 @@ class MCPVisitor(ast.NodeVisitor):
                     self.types[node.name] = node
 
 
-IDA_PLUGIN_PY = "mcp-plugin.py"
-GENERATED_PY = "server_generated.py"
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+IDA_PLUGIN_PY = os.path.join(SCRIPT_DIR, "mcp-plugin.py")
+GENERATED_PY = os.path.join(SCRIPT_DIR, "server_generated.py")
 
 # NOTE: This is in the global scope on purpose
 with open(IDA_PLUGIN_PY, "r") as f:
@@ -137,5 +140,10 @@ with open(GENERATED_PY, "w") as f:
     f.write(code)
 exec(compile(code, GENERATED_PY, "exec"))
 
-if __name__ == "__main__":
+def main():
+    if sys.argv[1:] == ["--generate-only"]:
+        sys.exit(0)
     mcp.run(transport="stdio")
+
+if __name__ == "__main__":
+    main()

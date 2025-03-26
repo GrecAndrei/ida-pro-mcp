@@ -23,8 +23,14 @@ Available functionality:
 There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
 
 1. The plugin installation should not require installing dependencies, just copy `mcp-plugin.py` in the IDA plugins folder and go!
-2. The architecture of other plugins make it difficult to add new functionality quickly.
+2. The architecture of other plugins make it difficult to add new functionality quickly (too much boilerplate of unnecessary dependencies).
 3. Learning new technologies is fun!
+
+If you want to check them out, here is a list (in the order I discovered them):
+
+- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython)
+- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality)
+- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate)
 
 ## IDA Pro Installation
 
