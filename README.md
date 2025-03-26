@@ -64,6 +64,10 @@ uv run fastmcp dev server.py
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
 
+Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to [`mcp-plugin.py`](https://github.com/mrexodia/ida-pro-mcp/blob/7186d29a3c8b04f19907ab6d3d0e7a6f8f880bc0/mcp-plugin.py#L540-L581) and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
+
+https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
+
 ## Available tools
 
 ```
