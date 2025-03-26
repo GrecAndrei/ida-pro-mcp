@@ -2,6 +2,8 @@
 
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
+https://github.com/user-attachments/assets/1479592f-8d2b-4aef-865f-e7d0424cb745
+
 ## IDA Pro Installation
 
 1. Copy `mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows)
