@@ -4,6 +4,21 @@ Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe 
 
 https://github.com/user-attachments/assets/1479592f-8d2b-4aef-865f-e7d0424cb745
 
+Available functionality:
+
+- `get_function_by_name(name)`: Get a function by its name
+- `get_function_by_address(address)`: Get a function by its address
+- `get_current_address()`: Get the address currently selected by the user
+- `get_current_function()`: Get the function currently selected by the user
+- `list_functions()`: List all functions in the database
+- `decompile_function(address)`: Decompile a function at the given address
+- `show_decompilation(address)`: Show a function in the decompiler
+- `show_disassembly(address)`: Show an address in the disassembly view
+- `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function
+- `rename_function(function_address, new_name)`: Rename a function
+- `set_function_prototype(function_address, prototype)`: Set a function's prototype
+- `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type
+
 ## IDA Pro Installation
 
 1. Copy `mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows)
