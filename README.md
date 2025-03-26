@@ -20,6 +20,12 @@ Available functionality:
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type
 - `get_metadata()`: Show metadata about the current IDB
 
+There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
+
+1. The plugin installation should not require installing dependencies, just copy `mcp-plugin.py` in the IDA plugins folder and go!
+2. The architecture of other plugins make it difficult to add new functionality quickly.
+3. Learning new technologies is fun!
+
 ## IDA Pro Installation
 
 1. Copy `mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows)
