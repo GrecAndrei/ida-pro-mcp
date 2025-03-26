@@ -25,3 +25,6 @@ venv*/
 
 # Generated server files
 server_generated.py
+
+# Python package
+src/

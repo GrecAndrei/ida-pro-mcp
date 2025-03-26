@@ -119,9 +119,9 @@ wheels = [
 ]
 
 [[package]]
-name = "ida-mcp"
-version = "0.1.0"
-source = { virtual = "." }
+name = "ida-pro-mcp"
+version = "1.0.1"
+source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
 ]
