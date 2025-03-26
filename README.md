@@ -18,6 +18,7 @@ Available functionality:
 - `rename_function(function_address, new_name)`: Rename a function
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type
+- `get_metadata()`: Show metadata about the current IDB
 
 ## IDA Pro Installation
 
