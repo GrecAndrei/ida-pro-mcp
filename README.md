@@ -6,19 +6,20 @@ https://github.com/user-attachments/assets/1479592f-8d2b-4aef-865f-e7d0424cb745
 
 Available functionality:
 
-- `get_function_by_name(name)`: Get a function by its name
-- `get_function_by_address(address)`: Get a function by its address
-- `get_current_address()`: Get the address currently selected by the user
-- `get_current_function()`: Get the function currently selected by the user
-- `list_functions()`: List all functions in the database
-- `decompile_function(address)`: Decompile a function at the given address
-- `show_decompilation(address)`: Show a function in the decompiler
-- `show_disassembly(address)`: Show an address in the disassembly view
-- `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function
-- `rename_function(function_address, new_name)`: Rename a function
-- `set_function_prototype(function_address, prototype)`: Set a function's prototype
-- `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type
-- `get_metadata()`: Show metadata about the current IDB
+- `get_function_by_name(name)`: Get a function by its name.
+- `get_function_by_address(address)`: Get a function by its address.
+- `get_current_address()`: Get the address currently selected by the user.
+- `get_current_function()`: Get the function currently selected by the user.
+- `list_functions()`: List all functions in the database.
+- `decompile_function(address)`: Decompile a function at the given address.
+- `disassemble_function(address)`: Get assembly code (address: instruction; comment) for a function.
+- `set_decompiler_comment(address, comment)`: Set a comment for a given address in the function pseudocode.
+- `set_disassembly_comment(address, comment)`: Set a comment for a given address in the function disassembly.
+- `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
+- `rename_function(function_address, new_name)`: Rename a function.
+- `set_function_prototype(function_address, prototype)`: Set a function's prototype.
+- `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
+- `get_metadata()`: Get metadata about the current IDB.
 
 There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
 
@@ -28,14 +29,14 @@ There are a few IDA Pro MCP servers floating around, but I created my own for a 
 
 If you want to check them out, here is a list (in the order I discovered them):
 
-- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython)
-- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality)
-- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate)
+- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython).
+- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
+- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
 
 ## IDA Pro Installation
 
-1. Copy `mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows)
-2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server
+1. Copy `mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
+2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server.
 
 ## MCP Server Installation (Cline/Claude)
 
