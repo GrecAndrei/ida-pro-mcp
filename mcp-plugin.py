@@ -135,21 +135,28 @@ class JSONRPCRequestHandler(http.server.BaseHTTPRequestHandler):
             }
             if e.data is not None:
                 response["error"]["data"] = e.data
+        except IDAError as e:
+            response["error"] = {
+                "code": -32000,
+                "message": e.message,
+            }
         except Exception as e:
+            traceback.print_exc()
             response["error"] = {
                 "code": -32603,
                 "message": "Internal error",
-                "data": str(e)
+                "data": traceback.format_exc(),
             }
 
         try:
             response_body = json.dumps(response).encode("utf-8")
         except Exception as e:
+            traceback.print_exc()
             response_body = json.dumps({
                 "error": {
                     "code": -32603,
                     "message": "Internal error",
-                    "data": str(e)
+                    "data": traceback.format_exc(),
                 }
             }).encode("utf-8")
 
@@ -235,6 +242,14 @@ import ida_nalt
 import ida_bytes
 import ida_typeinf
 
+class IDAError(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+
+    @property
+    def message(self) -> str:
+        return self.args[0]
+
 class IDASyncError(Exception):
     pass
 
@@ -261,10 +276,10 @@ logger = logging.getLogger(__name__)
 
 # Enum for safety modes. Higher means safer:
 class IDASafety:
-    SAFE_NONE = 0
-    SAFE_READ = 1
-    SAFE_WRITE = 2
-
+    ida_kernwin.MFF_READ
+    SAFE_NONE = ida_kernwin.MFF_FAST
+    SAFE_READ = ida_kernwin.MFF_READ
+    SAFE_WRITE = ida_kernwin.MFF_WRITE
 
 call_stack = queue.LifoQueue()
 
@@ -297,15 +312,16 @@ def sync_wrapper(ff, safety_mode: IDASafety):
         call_stack.put((ff.__name__))
         try:
             res_container.put(ff())
-        except Exception:
-            traceback.print_exc()
-            res_container.put(None)
+        except Exception as x:
+            res_container.put(x)
         finally:
             call_stack.get()
             #logger.debug('Finished runned')
 
     ret_val = idaapi.execute_sync(runned, safety_mode)
     res = res_container.get()
+    if isinstance(res, Exception):
+        raise res
     return res
 
 def idawrite(f):
@@ -343,7 +359,7 @@ class Function(TypedDict):
 def get_function(address: int) -> Optional[Function]:
     fn = idaapi.get_func(address)
     if fn is None:
-        return None
+        raise IDAError(f"No function found at address {address}")
     # NOTE: You need IDA 9.0 SP1 or newer for this
     prototype: ida_typeinf.tinfo_t = fn.get_prototype()
     if prototype is not None:
@@ -359,18 +375,18 @@ def get_function(address: int) -> Optional[Function]:
 @idaread
 def get_function_by_name(
     name: Annotated[str, "Name of the function to get"]
-) -> Optional[Function]:
+) -> Function:
     """Get a function by its name"""
     function_address = idaapi.get_name_ea(ida_pro.BADADDR, name)
     if function_address == ida_pro.BADADDR:
-        return None
+        raise IDAError(f"No function found with name {name}")
     return get_function(function_address)
 
 @jsonrpc
 @idaread
 def get_function_by_address(
     address: Annotated[int, "Address of the function to get"]
-) -> Optional[Function]:
+) -> Function:
     """Get a function by its address"""
     return get_function(address)
 
@@ -458,23 +474,25 @@ def rename_local_variable(
     function_address: Annotated[int, "Address of the function containing the variable"],
     old_name: Annotated[str, "Current name of the variable"],
     new_name: Annotated[str, "New name for the variable"]
-) -> bool:
+):
     """Rename a local variable in a function"""
-    if not ida_hexrays.rename_lvar(function_address, old_name, new_name):
-        return False
-    refresh_decompiler_ctext(function_address)
-    return True
+    func = idaapi.get_func(function_address)
+    if not func:
+        raise IDAError(f"No function found at address {function_address}")
+    if not ida_hexrays.rename_lvar(func.start_ea, old_name, new_name):
+        raise IDAError(f"Failed to rename local variable {old_name} in function {func.start_ea}")
+    refresh_decompiler_ctext(func.start_ea)
 
 @jsonrpc
 @idawrite
 def rename_function(
     function_address: Annotated[int, "Address of the function to rename"],
     new_name: Annotated[str, "New name for the function"]
-) -> bool:
+):
     """Rename a function"""
     fn = idaapi.get_func(function_address)
     if not fn:
-        return False
+        raise IDAError(f"No function found at address {function_address}")
     result = idaapi.set_name(fn.start_ea, new_name)
     refresh_decompiler_ctext(fn.start_ea)
     return result
@@ -488,17 +506,16 @@ def set_function_prototype(
     """Set a function's prototype"""
     fn = idaapi.get_func(function_address)
     if not fn:
-        return "error: function not found"
+        raise IDAError(f"No function found at address {function_address}")
     try:
         tif = ida_typeinf.tinfo_t(prototype, None, ida_typeinf.PT_SIL)
         if not tif.is_func():
-            return "error: parsed declaration is not a function type"
+            raise IDAError(f"Parsed declaration is not a function type")
         if not ida_typeinf.apply_tinfo(fn.start_ea, tif, ida_typeinf.PT_SIL):
-            return "error: failed to apply type"
+            raise IDAError(f"Failed to apply type")
         refresh_decompiler_ctext(fn.start_ea)
-        return "success"
     except Exception as e:
-        return f"error: failed to parse prototype string: {prototype}"
+        raise IDAError(f"Failed to parse prototype string: {prototype}")
 
 class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
     def __init__(self, var_name: str, new_type: ida_typeinf.tinfo_t):
@@ -507,7 +524,7 @@ class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
         self.new_type = new_type
 
     def modify_lvars(self, lvars):
-        for idx, lvar_saved in enumerate(lvars.lvvec):
+        for lvar_saved in lvars.lvvec:
             lvar_saved: ida_hexrays.lvar_saved_info_t
             if lvar_saved.name == self.var_name:
                 lvar_saved.type = self.new_type
@@ -520,22 +537,21 @@ def set_local_variable_type(
     function_address: Annotated[int, "Address of the function containing the variable"],
     variable_name: Annotated[str, "Name of the variable"],
     new_type: Annotated[str, "New type for the variable"]
-) -> str:
+):
     """Set a local variable's type"""
     try:
         new_tif = ida_typeinf.tinfo_t(new_type, None, ida_typeinf.PT_SIL)
     except Exception as e:
-        return f"error: failed to parse type: {new_type}"
+        raise IDAError(f"Failed to parse type: {new_type}")
     fn = idaapi.get_func(function_address)
     if not fn:
-        return "error: function not found"
+        raise IDAError(f"No function found at address {function_address}")
     if not ida_hexrays.rename_lvar(fn.start_ea, variable_name, variable_name):
-        return f"error: failed to find local variable: {variable_name}"
+        raise IDAError(f"Failed to find local variable: {variable_name}")
     modifier = my_modifier_t(variable_name, new_tif)
     if not ida_hexrays.modify_user_lvars(fn.start_ea, modifier):
-        return f"error: failed to modify local variable: {variable_name}"
+        raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(fn.start_ea)
-    return "success"
 
 class Metadata(TypedDict):
     path: str
