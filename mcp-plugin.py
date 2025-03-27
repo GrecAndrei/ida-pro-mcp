@@ -464,8 +464,13 @@ class ConvertedNumber(TypedDict):
     bytes: str
 
 @jsonrpc
-def convert_number(text: str) -> ConvertedNumber:
+def convert_number(
+    text: Annotated[str, "Textual representation of the number to convert"],
+    size: Annotated[Optional[int], "Size of the variable in bytes"],
+) -> ConvertedNumber:
     """Convert a number (decimal, hexadecimal) to different representations"""
+    if not size:
+        size = 8
     try:
         value = int(text, 0)
     except ValueError:
@@ -473,7 +478,7 @@ def convert_number(text: str) -> ConvertedNumber:
     return {
         "decimal": str(value),
         "hexadecimal": hex(value),
-        "bytes": value.to_bytes(8, "little", signed=True).hex(" "),
+        "bytes": value.to_bytes(size, "little", signed=True).hex(" "),
     }
 
 @jsonrpc
