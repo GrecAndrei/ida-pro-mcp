@@ -3,7 +3,7 @@ import struct
 import threading
 import http.server
 from urllib.parse import urlparse
-from typing import Dict, Any, Callable, get_type_hints, TypedDict, Optional, Annotated
+from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -13,7 +13,7 @@ class JSONRPCError(Exception):
 
 class RPCRegistry:
     def __init__(self):
-        self.methods: Dict[str, Callable] = {}
+        self.methods: dict[str, Callable] = {}
 
     def register(self, func: Callable) -> Callable:
         self.methods[func.__name__] = func
