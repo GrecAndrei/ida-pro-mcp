@@ -606,9 +606,9 @@ def rename_function(
     fn = idaapi.get_func(function_address)
     if not fn:
         raise IDAError(f"No function found at address {function_address}")
-    result = idaapi.set_name(fn.start_ea, new_name)
+    if not idaapi.set_name(fn.start_ea, new_name):
+        raise IDAError(f"Failed to rename function {fn.start_ea} to {new_name}")
     refresh_decompiler_ctext(fn.start_ea)
-    return result
 
 @jsonrpc
 @idawrite
