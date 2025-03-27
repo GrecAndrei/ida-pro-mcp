@@ -458,6 +458,24 @@ def get_current_function() -> Optional[Function]:
     """Get the function currently selected by the user"""
     return get_function(idaapi.get_screen_ea())
 
+class ConvertedNumber(TypedDict):
+    decimal: str
+    hexadecimal: str
+    bytes: str
+
+@jsonrpc
+def convert_number(text: str) -> ConvertedNumber:
+    """Convert a number (decimal, hexadecimal) to different representations"""
+    try:
+        value = int(text, 0)
+    except ValueError:
+        raise IDAError(f"Invalid number: {text}")
+    return {
+        "decimal": str(value),
+        "hexadecimal": hex(value),
+        "bytes": value.to_bytes(8, "little", signed=True).hex(" "),
+    }
+
 @jsonrpc
 @idaread
 def list_functions() -> list[Function]:
@@ -486,7 +504,6 @@ def decompile_function(
     """Decompile a function at the given address"""
     cfunc = decompile_checked(address)
     sv = cfunc.get_pseudocode()
-    cfunc.get_eamap()
     pseudocode = ""
     for i, sl in enumerate(sv):
         sl: ida_kernwin.simpleline_t
