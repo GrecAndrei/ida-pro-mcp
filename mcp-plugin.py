@@ -353,6 +353,49 @@ def idaread(f):
         return sync_wrapper(ff, idaapi.MFF_READ)
     return wrapper
 
+class Metadata(TypedDict):
+    path: str
+    module: str
+    base: str
+    size: str
+    md5: str
+    sha256: str
+    crc32: str
+    filesize: str
+
+def get_image_size():
+    try:
+        # https://www.hex-rays.com/products/ida/support/sdkdoc/structidainfo.html
+        info = idaapi.get_inf_structure()
+        omin_ea = info.omin_ea
+        omax_ea = info.omax_ea
+    except AttributeError:
+        import ida_ida
+        omin_ea = ida_ida.inf_get_omin_ea()
+        omax_ea = ida_ida.inf_get_omax_ea()
+    # Bad heuristic for image size (bad if the relocations are the last section)
+    image_size = omax_ea - omin_ea
+    # Try to extract it from the PE header
+    header = idautils.peutils_t().header()
+    if header and header[:4] == b"PE\0\0":
+        image_size = struct.unpack("<I", header[0x50:0x54])[0]
+    return image_size
+
+@jsonrpc
+@idaread
+def get_metadata() -> Metadata:
+    """Get metadata about the current IDB"""
+    return {
+        "path": idaapi.get_input_file_path(),
+        "module": idaapi.get_root_filename(),
+        "base": hex(idaapi.get_imagebase()),
+        "size": hex(get_image_size()),
+        "md5": ida_nalt.retrieve_input_file_md5().hex(),
+        "sha256": ida_nalt.retrieve_input_file_sha256().hex(),
+        "crc32": hex(ida_nalt.retrieve_input_file_crc32()),
+        "filesize": hex(ida_nalt.retrieve_input_file_size()),
+    }
+
 class Function(TypedDict):
     start_address: int
     end_address: int
@@ -622,49 +665,6 @@ def set_local_variable_type(
     if not ida_hexrays.modify_user_lvars(fn.start_ea, modifier):
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(fn.start_ea)
-
-class Metadata(TypedDict):
-    path: str
-    module: str
-    base: str
-    size: str
-    md5: str
-    sha256: str
-    crc32: str
-    filesize: str
-
-def get_image_size():
-    try:
-        # https://www.hex-rays.com/products/ida/support/sdkdoc/structidainfo.html
-        info = idaapi.get_inf_structure()
-        omin_ea = info.omin_ea
-        omax_ea = info.omax_ea
-    except AttributeError:
-        import ida_ida
-        omin_ea = ida_ida.inf_get_omin_ea()
-        omax_ea = ida_ida.inf_get_omax_ea()
-    # Bad heuristic for image size (bad if the relocations are the last section)
-    image_size = omax_ea - omin_ea
-    # Try to extract it from the PE header
-    header = idautils.peutils_t().header()
-    if header and header[:4] == b"PE\0\0":
-        image_size = struct.unpack("<I", header[0x50:0x54])[0]
-    return image_size
-
-@jsonrpc
-@idaread
-def get_metadata() -> Metadata:
-    """Get metadata about the current IDB"""
-    return {
-        "path": idaapi.get_input_file_path(),
-        "module": idaapi.get_root_filename(),
-        "base": hex(idaapi.get_imagebase()),
-        "size": hex(get_image_size()),
-        "md5": ida_nalt.retrieve_input_file_md5().hex(),
-        "sha256": ida_nalt.retrieve_input_file_sha256().hex(),
-        "crc32": hex(ida_nalt.retrieve_input_file_crc32()),
-        "filesize": hex(ida_nalt.retrieve_input_file_size()),
-    }
 
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
