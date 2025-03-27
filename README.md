@@ -90,3 +90,8 @@ https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 <arguments></arguments>
 </use_mcp_tool>
 ```
+
+## Tips for Enhancing LLM Accuracy 
+Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts).
+- https://github.com/EthanHenrickson/math-mcp [Basic mathematical operations]
+- https://github.com/gmh5225/hex2dec-mcp [Hex to Decimal Conversion]
