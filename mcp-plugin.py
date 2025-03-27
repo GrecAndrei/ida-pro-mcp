@@ -126,6 +126,8 @@ class JSONRPCRequestHandler(http.server.BaseHTTPRequestHandler):
 
             # Dispatch the method
             result = rpc_registry.dispatch(request["method"], request.get("params", []))
+            if result is None:
+                result = "success"
             response["result"] = result
 
         except JSONRPCError as e:
