@@ -43,8 +43,9 @@ def make_jsonrpc_request(method: str, *params):
 
 class MCPVisitor(ast.NodeVisitor):
     def __init__(self):
-        self.types = {}
-        self.functions = {}
+        self.types: dict[str, ast.ClassDef] = {}
+        self.functions: dict[str, ast.FunctionDef] = {}
+        self.descriptions: dict[str, str] = {}
 
     def visit_FunctionDef(self, node):
         for decorator in node.decorator_list:
@@ -85,6 +86,7 @@ class MCPVisitor(ast.NodeVisitor):
                     body_comment = node.body[0]
                     if isinstance(body_comment, ast.Expr) and isinstance(body_comment.value, ast.Constant):
                         new_body = [body_comment]
+                        self.descriptions[node.name] = body_comment.value.value
                     else:
                         new_body = []
 
@@ -143,6 +145,17 @@ exec(compile(code, GENERATED_PY, "exec"))
 
 def main():
     if sys.argv[1:] == ["--generate-only"]:
+        for function in visitor.functions.values():
+            signature = function.name + "("
+            for i, arg in enumerate(function.args.args):
+                if i > 0:
+                    signature += ", "
+                signature += arg.arg
+            signature += ")"
+            description = visitor.descriptions.get(function.name, "<no description>")
+            if description[-1] != ".":
+                description += "."
+            print(f"- `{signature}`: {description}")
         sys.exit(0)
     elif sys.argv[1:] == ["--install-plugin"]:
         if sys.platform == "win32":
