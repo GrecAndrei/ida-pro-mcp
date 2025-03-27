@@ -408,36 +408,47 @@ def list_functions() -> list[Function]:
     """List all functions in the database"""
     return [get_function(address) for address in idautils.Functions()]
 
-class DecompilationResult(TypedDict):
-    address: int
-    pseudocode: str
-    error: str
+def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
+    if not ida_hexrays.init_hexrays_plugin():
+        raise IDAError("Hex-Rays decompiler is not available")
+    error = ida_hexrays.hexrays_failure_t()
+    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(address, error, ida_hexrays.DECOMP_WARNINGS)
+    if not cfunc:
+        message = f"Decompilation failed at {address}"
+        if error.str:
+            message += f": {error.str}"
+        if error.errea != idaapi.BADADDR:
+            message += f" (address: {error.errea})"
+        raise IDAError(message)
+    return cfunc
 
 @jsonrpc
 @idaread
 def decompile_function(
     address: Annotated[int, "Address of the function to decompile"]
-) -> DecompilationResult:
+) -> str:
     """Decompile a function at the given address"""
-    if not ida_hexrays.init_hexrays_plugin():
-        return {
-            "address": -1,
-            "pseudocode": "",
-            "error": "Hex-Rays decompiler is not available",
-        }
-    error = ida_hexrays.hexrays_failure_t()
-    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(address, error, ida_hexrays.DECOMP_WARNINGS)
-    if not cfunc:
-        return {
-            "address": address,
-            "pseudocode": "",
-            "error": f"decompilation failed at {error.errea}: {error.str}",
-        }
-    return {
-        "address": cfunc.entry_ea,
-        "pseudocode": str(cfunc),
-        "error": "",
-    }
+    cfunc = decompile_checked(address)
+    sv = cfunc.get_pseudocode()
+    cfunc.get_eamap()
+    pseudocode = ""
+    for i, sl in enumerate(sv):
+        sl: ida_kernwin.simpleline_t
+        item = ida_hexrays.ctree_item_t()
+        addr = None if i > 0 else cfunc.entry_ea
+        if cfunc.get_line_item(sl.line, 1, False, None, item, None):
+            ds = item.dstr().split(": ")
+            if len(ds) == 2:
+                addr = int(ds[0], 16)
+        line = ida_lines.tag_remove(sl.line)
+        if len(pseudocode) > 0:
+            pseudocode += "\n"
+        if addr is None:
+            pseudocode += f"/* line: {i} */ {line}"
+        else:
+            pseudocode += f"/* line: {i}, address: {addr} */ {line}"
+
+    return pseudocode
 
 @jsonrpc
 @idaread
