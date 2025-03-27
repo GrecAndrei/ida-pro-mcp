@@ -244,6 +244,7 @@ import idautils
 import ida_nalt
 import ida_bytes
 import ida_typeinf
+import ida_xref
 
 class IDAError(Exception):
     def __init__(self, message: str):
@@ -400,21 +401,30 @@ class Function(TypedDict):
     start_address: int
     end_address: int
     name: str
-    prototype: str
+    prototype: Optional[str]
 
-def get_function(address: int) -> Optional[Function]:
+def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
+    try:
+        # NOTE: You need IDA 9.0 SP1 or newer for this
+        prototype: ida_typeinf.tinfo_t = fn.get_prototype()
+        if prototype is not None:
+            return str(prototype)
+        else:
+            return None
+    except:
+        return None
+
+def get_function(address: int, *, raise_error=True) -> Optional[Function]:
     fn = idaapi.get_func(address)
     if fn is None:
-        raise IDAError(f"No function found at address {address}")
-    # NOTE: You need IDA 9.0 SP1 or newer for this
-    prototype: ida_typeinf.tinfo_t = fn.get_prototype()
-    if prototype is not None:
-        prototype = str(prototype)
+        if raise_error:
+            raise IDAError(f"No function found at address {address}")
+        return None
     return {
-        "start_address": fn.start_ea,
+        "address": fn.start_ea,
         "end_address": fn.end_ea,
         "name": fn.name,
-        "prototype": prototype,
+        "prototype": get_prototype(fn),
     }
 
 @jsonrpc
@@ -517,6 +527,25 @@ def disassemble_function(address: Annotated[int, "Address of the function to dis
         if comment:
             disassembly += f"; {comment}"
     return disassembly
+
+class Xref(TypedDict):
+    address: int
+    type: str
+    function: Optional[Function]
+
+@jsonrpc
+@idaread
+def get_xrefs_to(address: Annotated[int, "Address to get cross references to"]) -> list[Xref]:
+    """Get all cross references to the given address"""
+    xrefs = []
+    xref: ida_xref.xrefblk_t
+    for xref in idautils.XrefsTo(address):
+        xrefs.append({
+            "address": xref.frm,
+            "type": "code" if xref.iscode else "data",
+            "function": get_function(xref.frm, raise_error=False),
+        })
+    return xrefs
 
 @jsonrpc
 @idawrite
