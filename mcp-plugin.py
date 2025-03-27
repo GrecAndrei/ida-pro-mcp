@@ -232,6 +232,7 @@ import functools
 import ida_pro
 import ida_hexrays
 import ida_kernwin
+import ida_funcs
 import ida_gdl
 import ida_lines
 import ida_idaapi
@@ -452,19 +453,75 @@ def decompile_function(
 
 @jsonrpc
 @idaread
-def show_decompilation(
-    address: Annotated[int, "Address of the function to show in the decompiler"]
-) -> None:
-    """Show a function in the decompiler"""
-    ida_hexrays.open_pseudocode(address, ida_hexrays.OPF_REUSE)
+def disassemble_function(address: Annotated[int, "Address of the function to disassemble"]) -> str:
+    """Get assembly code (address: instruction; comment) for a function"""
+    func = idaapi.get_func(address)
+    if not func:
+        raise IDAError(f"No function found at address {address}")
+
+    # TODO: add labels
+    disassembly = ""
+    for address in ida_funcs.func_item_iterator_t(func):
+        if len(disassembly) > 0:
+            disassembly += "\n"
+        disassembly += f"{address}: "
+        disassembly += idaapi.generate_disasm_line(address, idaapi.GENDSM_REMOVE_TAGS)
+        comment = idaapi.get_cmt(address, False)
+        if not comment:
+            comment = idaapi.get_cmt(address, True)
+        if comment:
+            disassembly += f"; {comment}"
+    return disassembly
 
 @jsonrpc
-@idaread
-def show_disassembly(
-    address: Annotated[int, "Address to show in the disassembly view"]
-) -> None:
-    """Show an address in the disassembly view"""
-    ida_hexrays.jumpto(address)
+@idawrite
+def set_decompiler_comment(
+    address: Annotated[int, "Address in the function to set the comment for"],
+    comment: Annotated[str, "Comment text (not shown in the disassembly)"]):
+    """Set a comment for a given address in the function pseudocode"""
+
+    # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
+    # Check if the address corresponds to a line
+    cfunc = decompile_checked(address)
+
+    # Special case for function entry comments
+    if address == cfunc.entry_ea:
+        idc.set_func_cmt(address, comment, True)
+        cfunc.refresh_func_ctext()
+        return
+
+    eamap = cfunc.get_eamap()
+    if address not in eamap:
+        raise IDAError(f"Failed to set comment at {address}")
+    nearest_ea = eamap[address][0].ea
+
+    # Remove existing orphan comments
+    if cfunc.has_orphan_cmts():
+        cfunc.del_orphan_cmts()
+        cfunc.save_user_cmts()
+
+    # Set the comment by trying all possible item types
+    tl = idaapi.treeloc_t()
+    tl.ea = nearest_ea
+    for itp in range(idaapi.ITP_SEMI, idaapi.ITP_COLON):
+        tl.itp = itp
+        cfunc.set_user_cmt(tl, comment)
+        cfunc.save_user_cmts()
+        cfunc.refresh_func_ctext()
+        if not cfunc.has_orphan_cmts():
+            return
+        cfunc.del_orphan_cmts()
+        cfunc.save_user_cmts()
+    raise IDAError(f"Failed to set comment at {address}")
+
+@jsonrpc
+@idawrite
+def set_disassembly_comment(
+    address: Annotated[int, "Address in the function to set the comment for"],
+    comment: Annotated[str, "Comment text (not shown in the pseudocode)"]):
+    """Set a comment for a given address in the function disassembly"""
+    if not idaapi.set_cmt(address, comment, False):
+        raise IDAError(f"Failed to set comment at {address}")
 
 def refresh_decompiler_widget():
     widget = ida_kernwin.get_current_widget()
