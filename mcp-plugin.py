@@ -459,6 +459,8 @@ class ConvertedNumber(TypedDict):
     decimal: str
     hexadecimal: str
     bytes: str
+    ascii: Optional[str]
+    binary: str
 
 @jsonrpc
 def convert_number(
@@ -466,16 +468,42 @@ def convert_number(
     size: Annotated[Optional[int], "Size of the variable in bytes"],
 ) -> ConvertedNumber:
     """Convert a number (decimal, hexadecimal) to different representations"""
-    if not size:
-        size = 8
     try:
         value = int(text, 0)
     except ValueError:
         raise IDAError(f"Invalid number: {text}")
+
+    # Estimate the size of the number
+    if not size:
+        size = 0
+        n = abs(value)
+        while n:
+            size += 1
+            n >>= 1
+        size += 7
+        size //= 8
+
+    # Convert the number to bytes
+    try:
+        bytes = value.to_bytes(size, "little", signed=True)
+    except OverflowError:
+        raise IDAError(f"Number {text} is too big for {size} bytes")
+
+    # Convert the bytes to ASCII
+    ascii = ""
+    for byte in bytes.rstrip(b"\x00"):
+        if byte >= 32 and byte <= 126:
+            ascii += chr(byte)
+        else:
+            ascii = None
+            break
+
     return {
         "decimal": str(value),
         "hexadecimal": hex(value),
-        "bytes": value.to_bytes(size, "little", signed=True).hex(" "),
+        "bytes": bytes.hex(" "),
+        "ascii": ascii,
+        "binary": bin(value)
     }
 
 @jsonrpc
