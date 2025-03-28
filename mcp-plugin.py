@@ -408,7 +408,6 @@ def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
             return str(prototype)
         else:
             return None
-        
     except AttributeError:
         try:
             return idc.get_type(fn.start_ea)
@@ -428,9 +427,9 @@ def get_function(address: int, *, raise_error=True) -> Optional[Function]:
         if raise_error:
             raise IDAError(f"No function found at address {address}")
         return None
-    
+
     try:
-        name = fn.name
+        name = fn.get_name()
     except AttributeError:
         name = ida_funcs.get_func_name(fn.start_ea)
     return {
