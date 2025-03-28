@@ -242,6 +242,7 @@ import ida_nalt
 import ida_bytes
 import ida_typeinf
 import ida_xref
+import ida_entry
 
 class IDAError(Exception):
     def __init__(self, message: str):
@@ -596,6 +597,19 @@ def get_xrefs_to(address: Annotated[int, "Address to get cross references to"]) 
             "function": get_function(xref.frm, raise_error=False),
         })
     return xrefs
+
+@jsonrpc
+@idaread
+def get_entry_points() -> list[Function]:
+    """Get all entry points in the database"""
+    result = []
+    for i in range(ida_entry.get_entry_qty()):
+        ordinal = ida_entry.get_entry_ordinal(i)
+        address = ida_entry.get_entry(ordinal)
+        func = get_function(address, raise_error=False)
+        if func is not None:
+            result.append(func)
+    return result
 
 @jsonrpc
 @idawrite
