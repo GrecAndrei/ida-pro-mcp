@@ -403,14 +403,24 @@ class Function(TypedDict):
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
     try:
-        # NOTE: You need IDA 9.0 SP1 or newer for this
         prototype: ida_typeinf.tinfo_t = fn.get_prototype()
         if prototype is not None:
             return str(prototype)
         else:
             return None
-    except:
+        
+    except AttributeError:
+        try:
+            return idc.get_type(fn.start_ea)
+        except:
+            tif = ida_typeinf.tinfo_t()
+            if ida_nalt.get_tinfo(tif, fn.start_ea):
+                return str(tif)
+            return None
+    except Exception as e:
+        print(f"Error getting function prototype: {e}")
         return None
+
 
 def get_function(address: int, *, raise_error=True) -> Optional[Function]:
     fn = idaapi.get_func(address)
