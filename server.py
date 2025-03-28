@@ -33,10 +33,19 @@ def make_jsonrpc_request(method: str, *params):
 
         if "error" in data:
             error = data["error"]
-            raise Exception(f"JSON-RPC error {error['code']}: {error['message']}")
+            code = error["code"]
+            message = error["message"]
+            pretty = f"JSON-RPC error {code}: {message}"
+            if "data" in error:
+                pretty += "\n" + error["data"]
+            raise Exception(pretty)
 
-        return data.get("result")
-    except Exception as e:
+        result = data["result"]
+        # NOTE: LLMs do not respond well to empty responses
+        if result is None:
+            result = "success"
+        return result
+    except Exception:
         raise
     finally:
         conn.close()

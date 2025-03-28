@@ -126,8 +126,6 @@ class JSONRPCRequestHandler(http.server.BaseHTTPRequestHandler):
 
             # Dispatch the method
             result = rpc_registry.dispatch(request["method"], request.get("params", []))
-            if result is None:
-                result = "success"
             response["result"] = result
 
         except JSONRPCError as e:
@@ -146,7 +144,7 @@ class JSONRPCRequestHandler(http.server.BaseHTTPRequestHandler):
             traceback.print_exc()
             response["error"] = {
                 "code": -32603,
-                "message": "Internal error",
+                "message": "Internal error (please report a bug)",
                 "data": traceback.format_exc(),
             }
 
@@ -157,7 +155,7 @@ class JSONRPCRequestHandler(http.server.BaseHTTPRequestHandler):
             response_body = json.dumps({
                 "error": {
                     "code": -32603,
-                    "message": "Internal error",
+                    "message": "Internal error (please report a bug)",
                     "data": traceback.format_exc(),
                 }
             }).encode("utf-8")
@@ -705,7 +703,7 @@ def set_local_variable_type(
     """Set a local variable's type"""
     try:
         new_tif = ida_typeinf.tinfo_t(new_type, None, ida_typeinf.PT_SIL)
-    except Exception as e:
+    except Exception:
         raise IDAError(f"Failed to parse type: {new_type}")
     fn = idaapi.get_func(function_address)
     if not fn:
