@@ -353,6 +353,22 @@ def idaread(f):
         return sync_wrapper(ff, idaapi.MFF_READ)
     return wrapper
 
+def is_window_active():
+    """Returns whether IDA is currently active"""
+    try:
+        from PyQt5.QtWidgets import QApplication
+    except ImportError:
+        return False
+
+    app = QApplication.instance()
+    if app is None:
+        return False
+
+    for widget in app.topLevelWidgets():
+        if widget.isActiveWindow():
+            return True
+    return False
+
 class Metadata(TypedDict):
     path: str
     module: str
@@ -452,7 +468,7 @@ def create_demangled_to_ea_map():
     for ea in idautils.Functions():
         # Get the function name and demangle it
         # MNG_NODEFINIT inhibits everything except the main name
-        # where default demangling adds the function signature 
+        # where default demangling adds the function signature
         # and decorators (if any)
         demangled = idaapi.demangle_name(
             idc.get_name(ea, 0), idaapi.MNG_NODEFINIT)
@@ -574,7 +590,10 @@ def decompile_function(
     address: Annotated[str, "Address of the function to decompile"]
 ) -> str:
     """Decompile a function at the given address"""
-    cfunc = decompile_checked(parse_address(address))
+    address = parse_address(address)
+    cfunc = decompile_checked(address)
+    if is_window_active():
+        ida_hexrays.open_pseudocode(address, ida_hexrays.OPF_REUSE)
     sv = cfunc.get_pseudocode()
     pseudocode = ""
     for i, sl in enumerate(sv):
@@ -608,6 +627,8 @@ def disassemble_function(
     func = idaapi.get_func(start)
     if not func:
         raise IDAError(f"No function found containing address {start_address}")
+    if is_window_active():
+        ida_kernwin.jumpto(start)
 
     # TODO: add labels and limit the maximum number of instructions
     disassembly = ""
