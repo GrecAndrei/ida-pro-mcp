@@ -229,7 +229,6 @@ import queue
 import traceback
 import functools
 
-import ida_pro
 import ida_hexrays
 import ida_kernwin
 import ida_funcs
@@ -431,8 +430,8 @@ def get_function_by_name(
     name: Annotated[str, "Name of the function to get"]
 ) -> Function:
     """Get a function by its name"""
-    function_address = idaapi.get_name_ea(ida_pro.BADADDR, name)
-    if function_address == ida_pro.BADADDR:
+    function_address = idaapi.get_name_ea(idaapi.BADADDR, name)
+    if function_address == idaapi.BADADDR:
         raise IDAError(f"No function found with name {name}")
     return get_function(function_address)
 
@@ -512,10 +511,13 @@ def decompile_function(
         sl: ida_kernwin.simpleline_t
         item = ida_hexrays.ctree_item_t()
         addr = None if i > 0 else cfunc.entry_ea
-        if cfunc.get_line_item(sl.line, 1, False, None, item, None):
+        if cfunc.get_line_item(sl.line, 0, False, None, item, None):
             ds = item.dstr().split(": ")
             if len(ds) == 2:
-                addr = int(ds[0], 16)
+                try:
+                    addr = int(ds[0], 16)
+                except ValueError:
+                    pass
         line = ida_lines.tag_remove(sl.line)
         if len(pseudocode) > 0:
             pseudocode += "\n"
