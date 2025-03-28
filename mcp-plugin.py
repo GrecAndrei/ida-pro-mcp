@@ -243,6 +243,7 @@ import ida_bytes
 import ida_typeinf
 import ida_xref
 import ida_entry
+import idautils
 
 class IDAError(Exception):
     def __init__(self, message: str):
@@ -445,6 +446,19 @@ def get_function(address: int, *, raise_error=True) -> Optional[Function]:
         "size": hex(fn.end_ea - fn.start_ea),
     }
 
+DEMANGLED_TO_EA = {}
+
+def create_demangled_to_ea_map():
+    for ea in idautils.Functions():
+        # Get the function name and demangle it
+        # MNG_NODEFINIT inhibits everything except the main name
+        # where default demangling adds the function signature 
+        # and decorators (if any)
+        demangled = idaapi.demangle_name(
+            idc.get_name(ea, 0), idaapi.MNG_NODEFINIT)
+        if demangled:
+            DEMANGLED_TO_EA[demangled] = ea
+
 @jsonrpc
 @idaread
 def get_function_by_name(
@@ -453,7 +467,14 @@ def get_function_by_name(
     """Get a function by its name"""
     function_address = idaapi.get_name_ea(idaapi.BADADDR, name)
     if function_address == idaapi.BADADDR:
-        raise IDAError(f"No function found with name {name}")
+        # If map has not been created yet, create it
+        if len(DEMANGLED_TO_EA) == 0:
+            create_demangled_to_ea_map()
+        # Try to find the function in the map, else raise an error
+        if name in DEMANGLED_TO_EA:
+            function_address = DEMANGLED_TO_EA[name]
+        else:
+            raise IDAError(f"No function found with name {name}")
     return get_function(function_address)
 
 @jsonrpc
