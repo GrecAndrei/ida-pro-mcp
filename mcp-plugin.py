@@ -638,12 +638,15 @@ def get_entry_points() -> list[Function]:
 
 @jsonrpc
 @idawrite
-def set_decompiler_comment(
+def set_comment(
     address: Annotated[str, "Address in the function to set the comment for"],
-    comment: Annotated[str, "Comment text (not shown in the disassembly)"]):
-    """Set a comment for a given address in the function pseudocode"""
-
+    comment: Annotated[str, "Comment text"]
+):
+    """Set a comment for a given address in the function disassembly and pseudocode"""
     address = parse_address(address)
+
+    if not idaapi.set_cmt(address, comment, False):
+        raise IDAError(f"Failed to set disassembly comment at {hex(address)}")
 
     # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
     # Check if the address corresponds to a line
@@ -657,7 +660,8 @@ def set_decompiler_comment(
 
     eamap = cfunc.get_eamap()
     if address not in eamap:
-        raise IDAError(f"Failed to set comment at {hex(address)}")
+        print(f"Failed to set decompiler comment at {hex(address)}")
+        return
     nearest_ea = eamap[address][0].ea
 
     # Remove existing orphan comments
@@ -677,16 +681,7 @@ def set_decompiler_comment(
             return
         cfunc.del_orphan_cmts()
         cfunc.save_user_cmts()
-    raise IDAError(f"Failed to set comment at {hex(address)}")
-
-@jsonrpc
-@idawrite
-def set_disassembly_comment(
-    address: Annotated[str, "Address in the function to set the comment for"],
-    comment: Annotated[str, "Comment text (not shown in the pseudocode)"]):
-    """Set a comment for a given address in the function disassembly"""
-    if not idaapi.set_cmt(address, comment, False):
-        raise IDAError(f"Failed to set comment at {hex(address)}")
+    print(f"Failed to set decompiler comment at {hex(address)}")
 
 def refresh_decompiler_widget():
     widget = ida_kernwin.get_current_widget()
