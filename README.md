@@ -6,20 +6,23 @@ https://github.com/user-attachments/assets/1479592f-8d2b-4aef-865f-e7d0424cb745
 
 Available functionality:
 
+- `get_metadata()`: Get metadata about the current IDB.
 - `get_function_by_name(name)`: Get a function by its name.
 - `get_function_by_address(address)`: Get a function by its address.
 - `get_current_address()`: Get the address currently selected by the user.
 - `get_current_function()`: Get the function currently selected by the user.
+- `convert_number(text, size)`: Convert a number (decimal, hexadecimal) to different representations.
 - `list_functions()`: List all functions in the database.
 - `decompile_function(address)`: Decompile a function at the given address.
 - `disassemble_function(address)`: Get assembly code (address: instruction; comment) for a function.
+- `get_xrefs_to(address)`: Get all cross references to the given address.
+- `get_entry_points()`: Get all entry points in the database.
 - `set_decompiler_comment(address, comment)`: Set a comment for a given address in the function pseudocode.
 - `set_disassembly_comment(address, comment)`: Set a comment for a given address in the function disassembly.
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
 - `rename_function(function_address, new_name)`: Rename a function.
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
-- `get_metadata()`: Get metadata about the current IDB.
 
 There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
 
@@ -91,7 +94,8 @@ https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 </use_mcp_tool>
 ```
 
-## Tips for Enhancing LLM Accuracy 
+## Tips for Enhancing LLM Accuracy
+
 Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts).
 - https://github.com/EthanHenrickson/math-mcp [Basic mathematical operations]
 - https://github.com/gmh5225/hex2dec-mcp [Hex to Decimal Conversion]
