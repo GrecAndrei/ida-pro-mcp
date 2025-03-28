@@ -2,7 +2,9 @@
 
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
-https://github.com/user-attachments/assets/1479592f-8d2b-4aef-865f-e7d0424cb745
+https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
+
+The binaries and prompt for the video are available in the [mcp-reversing-dataset](https://github.com/mrexodia/mcp-reversing-dataset) repository.
 
 Available functionality:
 
@@ -35,6 +37,21 @@ If you want to check them out, here is a list (in the order I discovered them):
 - https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython).
 - https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
 - https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
+
+## Prompt Engineering
+
+LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
+
+> You task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
+> - Inspect the decompilation and add comments with your findings
+> - Rename variables to more sensible names
+> - Change the variable and argument types if necessary (especially pointer and array types)
+> - Change function names to be more descriptive
+> - If more details are necessary, disassemble the function and add comments with your findings
+> - NEVER convert number bases yourself. Use the convert_number MCP tool if needed!
+> - Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
+> - Create a report.md with your findings and steps taken at the end
+> - When you find a solution, prompt to user for feedback with the password you found
 
 ## IDA Pro Installation
 
