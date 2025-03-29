@@ -294,7 +294,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             json.dump(config, f, indent=2)
         if not quiet:
             action = "Uninstalled" if uninstall else "Installed"
-            print(f"{action} {name} MCP server\n  Config: {config_path}")
+            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
         installed += 1
     if not uninstall and installed == 0:
         print("No MCP servers installed")

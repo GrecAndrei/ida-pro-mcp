@@ -26,6 +26,16 @@ Available functionality:
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
 
+## Prerequisites
+
+- [Python](https://www.python.org/downloads/) (3.9 or higher)
+  - Use `idapyswitch` to switch to the newest Python version
+- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended)
+- Supported MCP Client (pick one you like)
+  - [Cline](https://cline.bot)
+  - [Roo Code](https://marketplace.visualstudio.com/items?itemName=RooVeterinaryInc.roo-cline)
+  - [Claude](https://claude.ai/download)
+
 ## Installation
 
 Install (or upgrade) the IDA Pro MCP package:
