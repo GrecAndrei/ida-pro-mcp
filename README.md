@@ -50,6 +50,8 @@ Configure the MCP servers and install the IDA Plugin:
 ida-pro-mcp --install
 ```
 
+**Important**: Make sure you completely restart IDA/Visual Studio Code/Claude for the installation to take effect. Claude runs in the background and you need to quit it from the tray icon.
+
 ## Prompt Engineering
 
 LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
