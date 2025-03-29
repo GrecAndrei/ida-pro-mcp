@@ -58,7 +58,11 @@ def check_connection() -> str:
         metadata = make_jsonrpc_request("get_metadata")
         return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
     except Exception as e:
-        return f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP to start the server?"
+        if sys.platform == "darwin":
+            shortcut = "Ctrl+Option+M"
+        else:
+            shortcut = "Ctrl+Alt+M"
+        return f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?"
 
 # Code taken from https://github.com/mrexodia/ida-pro-mcp (MIT License)
 class MCPVisitor(ast.NodeVisitor):
@@ -354,10 +358,12 @@ def main():
         install_ida_plugin(uninstall=True)
         return
 
+    # NOTE: Developers can use this to generate the README
     if args.generate_docs:
         generate_readme()
         return
 
+    # NOTE: This is silent for automated Cline installations
     if args.install_plugin:
         install_ida_plugin(quiet=True)
 
