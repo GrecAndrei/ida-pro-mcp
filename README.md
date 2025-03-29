@@ -28,7 +28,7 @@ Available functionality:
 
 ## Prerequisites
 
-- [Python](https://www.python.org/downloads/) (3.9 or higher)
+- [Python](https://www.python.org/downloads/) (3.10 or higher)
   - Use `idapyswitch` to switch to the newest Python version
 - [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended)
 - Supported MCP Client (pick one you like)
@@ -95,7 +95,7 @@ To install the MCP server yourself, follow these steps:
         "--directory",
         "c:\\MCP\\ida-pro-mcp",
         "run",
-        "server.py",
+        "ida-pro-mcp",
         "--install-plugin"
       ],
       "timeout": 1800,

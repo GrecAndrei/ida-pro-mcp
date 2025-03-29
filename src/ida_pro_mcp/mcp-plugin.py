@@ -1,8 +1,7 @@
 import sys
 
-# NOTE: This is an estimation, but lower certainly won't be supported
-if sys.version_info < (3, 9):
-    raise RuntimeError("Python 3.9 or higher is required for the MCP plugin")
+if sys.version_info < (3, 11):
+    raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
 
 import json
 import struct
