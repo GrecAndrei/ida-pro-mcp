@@ -1,3 +1,9 @@
+import sys
+
+# NOTE: This is an estimation, but lower certainly won't be supported
+if sys.version_info < (3, 9):
+    raise RuntimeError("Python 3.9 or higher is required for the MCP plugin")
+
 import json
 import struct
 import threading
@@ -832,7 +838,10 @@ class MCP(idaapi.plugin_t):
 
     def init(self):
         self.server = Server()
-        print("[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server")
+        hotkey = MCP.wanted_hotkey.replace("-", "+")
+        if sys.platform == "darwin":
+            hotkey = hotkey.replace("Alt", "Option")
+        print(f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server")
         return idaapi.PLUGIN_KEEP
 
     def run(self, args):

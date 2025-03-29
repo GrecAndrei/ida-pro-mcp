@@ -3,12 +3,13 @@ import sys
 import ast
 import json
 import shutil
+import argparse
 import http.client
 
 from fastmcp import FastMCP
 
 # The log_level is necessary for Cline to work: https://github.com/jlowin/fastmcp/issues/81
-mcp = FastMCP("IDA Pro", log_level="ERROR")
+mcp = FastMCP("github.com/mrexodia/ida-pro-mcp", log_level="ERROR")
 
 jsonrpc_request_id = 1
 
@@ -49,6 +50,15 @@ def make_jsonrpc_request(method: str, *params):
         raise
     finally:
         conn.close()
+
+@mcp.tool()
+def check_connection() -> str:
+    """Check if the IDA plugin is running"""
+    try:
+        metadata = make_jsonrpc_request("get_metadata")
+        return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
+    except Exception as e:
+        return f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP to start the server?"
 
 # Code taken from https://github.com/mrexodia/ida-pro-mcp (MIT License)
 class MCPVisitor(ast.NodeVisitor):
@@ -133,6 +143,8 @@ IDA_PLUGIN_PY = os.path.join(SCRIPT_DIR, "mcp-plugin.py")
 GENERATED_PY = os.path.join(SCRIPT_DIR, "server_generated.py")
 
 # NOTE: This is in the global scope on purpose
+if not os.path.exists(IDA_PLUGIN_PY):
+    raise RuntimeError(f"IDA plugin not found at {IDA_PLUGIN_PY} (did you move it?)")
 with open(IDA_PLUGIN_PY, "r") as f:
     code = f.read()
 module = ast.parse(code, IDA_PLUGIN_PY)
@@ -154,33 +166,199 @@ with open(GENERATED_PY, "w") as f:
     f.write(code)
 exec(compile(code, GENERATED_PY, "exec"))
 
-def main():
-    if sys.argv[1:] == ["--generate-only"]:
-        for function in visitor.functions.values():
-            signature = function.name + "("
-            for i, arg in enumerate(function.args.args):
-                if i > 0:
-                    signature += ", "
-                signature += arg.arg
-            signature += ")"
-            description = visitor.descriptions.get(function.name, "<no description>")
-            if description[-1] != ".":
-                description += "."
-            print(f"- `{signature}`: {description}")
-        sys.exit(0)
-    elif sys.argv[1:] == ["--install-plugin"]:
+MCP_FUNCTIONS = ["check_connection"] + list(visitor.functions.keys())
+
+def generate_readme():
+    print("README:")
+    print(f"- `check_connection`: Check if the IDA plugin is running.")
+    for function in visitor.functions.values():
+        signature = function.name + "("
+        for i, arg in enumerate(function.args.args):
+            if i > 0:
+                signature += ", "
+            signature += arg.arg
+        signature += ")"
+        description = visitor.descriptions.get(function.name, "<no description>")
+        if description[-1] != ".":
+            description += "."
+        print(f"- `{signature}`: {description}")
+    print("\nMCP Config:")
+    mcp_config = {
+        "mcpServers": {
+            "github.com/mrexodia/ida-pro-mcp": {
+            "command": "uv",
+            "args": [
+                "--directory",
+                "c:\\MCP\\ida-pro-mcp",
+                "run",
+                "server.py",
+                "--install-plugin"
+            ],
+            "timeout": 1800,
+            "disabled": False,
+            "autoApprove": MCP_FUNCTIONS,
+            "alwaysAllow": MCP_FUNCTIONS,
+            }
+        }
+    }
+    print(json.dumps(mcp_config, indent=2))
+
+def get_python_executable():
+    """Get the path to the Python executable"""
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
         if sys.platform == "win32":
-            ida_plugin_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro", "plugins")
+            return os.path.join(venv, "python.exe")
         else:
-            ida_plugin_folder = os.path.join(os.path.expanduser("~"), ".idapro", "plugins")
-        plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
-        if input(f"Installing IDA plugin to {plugin_destination}, proceed? [Y/n] ").lower() == "n":
-            sys.exit(1)
+            return os.path.join(venv, "bin", "python3")
+
+    for path in sys.path:
+        if sys.platform == "win32":
+            path = path.replace("/", "\\")
+
+        split = path.split(os.sep)
+        if split[-1].endswith(".zip"):
+            path = os.path.dirname(path)
+            if sys.platform == "win32":
+                python_executable = os.path.join(path, "python.exe")
+            else:
+                python_executable = os.path.join(path, "..", "bin", "python3")
+            python_executable = os.path.abspath(python_executable)
+
+            if os.path.exists(python_executable):
+                return python_executable
+    return sys.executable
+
+def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
+    if sys.platform == "win32":
+        configs = {
+            "Cline": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
+            "Roo Code": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
+            "Claude": (os.path.join(os.getenv("APPDATA"), "Claude"), "claude_desktop_config.json"),
+        }
+    elif sys.platform == "darwin":
+        configs = {
+            "Cline": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
+            "Roo Code": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
+            "Claude": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Claude"), "claude_desktop_config.json"),
+        }
+    else:
+        print(f"Unsupported platform: {sys.platform}")
+        return
+
+    installed = 0
+    for name, (config_dir, config_file) in configs.items():
+        config_path = os.path.join(config_dir, config_file)
+        if not os.path.exists(config_dir):
+            action = "uninstall" if uninstall else "installation"
+            if not quiet:
+                print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
+            continue
+        if not os.path.exists(config_path):
+            config = {}
+        else:
+            with open(config_path, "r") as f:
+                config = json.load(f)
+        if "mcpServers" not in config:
+            config["mcpServers"] = {}
+        mcp_servers = config["mcpServers"]
+        if uninstall:
+            if mcp.name not in mcp_servers:
+                if not quiet:
+                    print(f"Skipping {name} uninstall\n  Config: {config_path} (not installed)")
+                continue
+            del mcp_servers[mcp.name]
+        else:
+            if mcp.name in mcp_servers:
+                for key, value in mcp_servers[mcp.name].get("env", {}):
+                    env[key] = value
+            mcp_servers[mcp.name] = {
+                "command": get_python_executable(),
+                "args": [
+                    __file__,
+                ],
+                "timeout": 1800,
+                "disabled": False,
+                "autoApprove": MCP_FUNCTIONS,
+                "alwaysAllow": MCP_FUNCTIONS,
+            }
+            if env:
+                mcp_servers[mcp.name]["env"] = env
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        if not quiet:
+            action = "Uninstalled" if uninstall else "Installed"
+            print(f"{action} {name} MCP server\n  Config: {config_path}")
+        installed += 1
+    if not uninstall and installed == 0:
+        print("No MCP servers installed")
+
+def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
+    if sys.platform == "win32":
+        ida_plugin_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro", "plugins")
+    else:
+        ida_plugin_folder = os.path.join(os.path.expanduser("~"), ".idapro", "plugins")
+    plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
+    if uninstall:
+        if not os.path.exists(plugin_destination):
+            print(f"Skipping IDA plugin uninstall\n  Path: {plugin_destination} (not found)")
+            return
+        os.remove(plugin_destination)
+        if not quiet:
+            print(f"Uninstalled IDA plugin\n  Path: {plugin_destination}")
+    else:
+        # Create IDA plugins folder
         if not os.path.exists(ida_plugin_folder):
             os.makedirs(ida_plugin_folder)
-        shutil.copy(IDA_PLUGIN_PY, plugin_destination)
-        print(f"Installed plugin: {plugin_destination}")
-        sys.exit(0)
+
+        # Skip if symlink already up to date
+        realpath = os.path.realpath(plugin_destination)
+        if realpath == IDA_PLUGIN_PY:
+            if not quiet:
+                print(f"Skipping IDA plugin installation (symlink up to date)\n  Plugin: {realpath}")
+        else:
+            # Remove existing plugin
+            if os.path.lexists(plugin_destination):
+                os.remove(plugin_destination)
+
+            # Symlink or copy the plugin
+            try:
+                os.symlink(IDA_PLUGIN_PY, plugin_destination)
+            except OSError:
+                shutil.copy(IDA_PLUGIN_PY, plugin_destination)
+
+            if not quiet:
+                print(f"Installed IDA Pro plugin (IDA restart required)\n  Plugin: {plugin_destination}")
+
+def main():
+    parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
+    parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
+    parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
+    parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    if args.install and args.uninstall:
+        print("Cannot install and uninstall at the same time")
+        return
+
+    if args.install:
+        install_mcp_servers()
+        install_ida_plugin()
+        return
+
+    if args.uninstall:
+        install_mcp_servers(uninstall=True)
+        install_ida_plugin(uninstall=True)
+        return
+
+    if args.generate_docs:
+        generate_readme()
+        return
+
+    if args.install_plugin:
+        install_ida_plugin(quiet=True)
+
     mcp.run(transport="stdio")
 
 if __name__ == "__main__":
