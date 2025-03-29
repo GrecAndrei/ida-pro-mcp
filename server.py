@@ -50,6 +50,7 @@ def make_jsonrpc_request(method: str, *params):
     finally:
         conn.close()
 
+# Code taken from https://github.com/mrexodia/ida-pro-mcp (MIT License)
 class MCPVisitor(ast.NodeVisitor):
     def __init__(self):
         self.types: dict[str, ast.ClassDef] = {}
@@ -138,6 +139,7 @@ module = ast.parse(code, IDA_PLUGIN_PY)
 visitor = MCPVisitor()
 visitor.visit(module)
 code = """# NOTE: This file has been automatically generated, do not modify!
+# Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
 from typing import Annotated, Optional, TypedDict
 from pydantic import Field
 
