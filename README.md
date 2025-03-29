@@ -8,35 +8,37 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 Available functionality:
 
+- `check_connection`: Check if the IDA plugin is running.
 - `get_metadata()`: Get metadata about the current IDB.
 - `get_function_by_name(name)`: Get a function by its name.
 - `get_function_by_address(address)`: Get a function by its address.
 - `get_current_address()`: Get the address currently selected by the user.
 - `get_current_function()`: Get the function currently selected by the user.
 - `convert_number(text, size)`: Convert a number (decimal, hexadecimal) to different representations.
-- `list_functions()`: List all functions in the database.
+- `list_functions(offset, count)`: List all functions in the database (paginated).
 - `decompile_function(address)`: Decompile a function at the given address.
-- `disassemble_function(address)`: Get assembly code (address: instruction; comment) for a function.
+- `disassemble_function(start_address)`: Get assembly code (address: instruction; comment) for a function.
 - `get_xrefs_to(address)`: Get all cross references to the given address.
 - `get_entry_points()`: Get all entry points in the database.
-- `set_decompiler_comment(address, comment)`: Set a comment for a given address in the function pseudocode.
-- `set_disassembly_comment(address, comment)`: Set a comment for a given address in the function disassembly.
+- `set_comment(address, comment)`: Set a comment for a given address in the function disassembly and pseudocode.
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
 - `rename_function(function_address, new_name)`: Rename a function.
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
 
-There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
+## Installation
 
-1. The plugin installation should not require installing dependencies, just copy `mcp-plugin.py` in the IDA plugins folder and go!
-2. The architecture of other plugins make it difficult to add new functionality quickly (too much boilerplate of unnecessary dependencies).
-3. Learning new technologies is fun!
+Install (or upgrade) the IDA Pro MCP package:
 
-If you want to check them out, here is a list (in the order I discovered them):
+```sh
+pip install --upgrade git+https://github.com/mrexodia/ida-pro-mcp
+```
 
-- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython).
-- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
-- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
+Configure the MCP servers and install the IDA Plugin:
+
+```
+ida-pro-mcp --install
+```
 
 ## Prompt Engineering
 
@@ -53,20 +55,23 @@ LLMs are prone to hallucinations and you need to be specific with your prompting
 > - Create a report.md with your findings and steps taken at the end
 > - When you find a solution, prompt to user for feedback with the password you found
 
-## IDA Pro Installation
+This prompt was just the first experiment, please share if you found ways to improve the output!
 
-1. Copy `mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
-2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server.
+## Manual Installation
 
-## MCP Server Installation (Cline/Claude)
+_Note_: This section is for LLMs and power users who need detailed installation instructions.
 
-To install the MCP server in Cline, follow these steps:
+<details>
+
+## Manual MCP Server Installation (Cline/Roo Code)
+
+To install the MCP server yourself, follow these steps:
 
 1. Install [uv](https://github.com/astral-sh/uv) globally:
    - Windows: `pip install uv`
    - Linux/Mac: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 2. Clone this repository, for this example `C:\MCP\ida-pro-mcp`.
-3. Navigate to the Cline _MCP Servers_ configuration (see screenshot).
+3. Navigate to the Cline/Roo Code _MCP Servers_ configuration (see screenshot).
 4. Click on the _Installed_ tab.
 5. Click on _Configure MCP Servers_, which will open `cline_mcp_settings.json`.
 6. Add the `ida-pro-mcp` server:
@@ -80,16 +85,96 @@ To install the MCP server in Cline, follow these steps:
         "--directory",
         "c:\\MCP\\ida-pro-mcp",
         "run",
-        "server.py"
+        "server.py",
+        "--install-plugin"
       ],
-      "timeout": 600
+      "timeout": 1800,
+      "disabled": false,
+      "autoApprove": [
+        "check_connection",
+        "get_metadata",
+        "get_function_by_name",
+        "get_function_by_address",
+        "get_current_address",
+        "get_current_function",
+        "convert_number",
+        "list_functions",
+        "decompile_function",
+        "disassemble_function",
+        "get_xrefs_to",
+        "get_entry_points",
+        "set_comment",
+        "rename_local_variable",
+        "rename_function",
+        "set_function_prototype",
+        "set_local_variable_type"
+      ],
+      "alwaysAllow": [
+        "check_connection",
+        "get_metadata",
+        "get_function_by_name",
+        "get_function_by_address",
+        "get_current_address",
+        "get_current_function",
+        "convert_number",
+        "list_functions",
+        "decompile_function",
+        "disassemble_function",
+        "get_xrefs_to",
+        "get_entry_points",
+        "set_comment",
+        "rename_local_variable",
+        "rename_function",
+        "set_function_prototype",
+        "set_local_variable_type"
+      ]
     }
   }
 }
-
 ```
 
+To check if the connection works you can perform the following tool call:
+
+```
+<use_mcp_tool>
+<server_name>github.com/mrexodia/ida-pro-mcp</server_name>
+<tool_name>check_connection</tool_name>
+<arguments></arguments>
+</use_mcp_tool>
+```
+
+## IDA Plugin installation
+
+The IDA Pro plugin will be installed automatically when the MCP server starts. If you disabled the `--install-plugin` option, use the following steps:
+
+1. Copy (**not move**) `src/ida_pro_mcp/mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
+2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server.
+
+</details>
+
+## Comparison with other MCP servers
+
+There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
+
+1. Installation should be fully automated.
+2. The architecture of other plugins make it difficult to add new functionality quickly (too much boilerplate of unnecessary dependencies).
+3. Learning new technologies is fun!
+
+If you want to check them out, here is a list (in the order I discovered them):
+
+- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython).
+- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
+- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
+
+Feel free to open a PR to add your IDA Pro MCP server here.
+
 ## Development
+
+Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to [`mcp-plugin.py`](https://github.com/mrexodia/ida-pro-mcp/blob/164df8cf4ae251cc9cc0f464591fa6df8e0d9df4/src/ida_pro_mcp/mcp-plugin.py#L406-L419) and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
+
+https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
+
+To test the MCP server itself:
 
 ```sh
 uv run fastmcp dev server.py
@@ -97,22 +182,4 @@ uv run fastmcp dev server.py
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
 
-Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to [`mcp-plugin.py`](https://github.com/mrexodia/ida-pro-mcp/blob/7186d29a3c8b04f19907ab6d3d0e7a6f8f880bc0/mcp-plugin.py#L540-L581) and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
-
-https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
-
-## Available tools
-
-```
-<use_mcp_tool>
-<server_name>github.com/mrexodia/ida-pro-mcp</server_name>
-<tool_name>get_current_function</tool_name>
-<arguments></arguments>
-</use_mcp_tool>
-```
-
-## Tips for Enhancing LLM Accuracy
-
-Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts).
-- https://github.com/EthanHenrickson/math-mcp [Basic mathematical operations]
-- https://github.com/gmh5225/hex2dec-mcp [Hex to Decimal Conversion]
+For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`.
