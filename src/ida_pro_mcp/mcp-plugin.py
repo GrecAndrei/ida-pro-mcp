@@ -833,18 +833,9 @@ def create_new_type(
     c_declaration: Annotated[str, "C declaration of the type. Examples include: typedef int foo_t; struct bar { int a; bool b; };"],
 ):
     """Create a new local type from a C declaration"""
-    result = idaapi.idc_parse_decl(idaapi.cvar.idati, c_declaration, idaapi.PT_TYP)
-    if result is None:
+    result = idaapi.idc_parse_types(c_declaration, 1)  # PT_PAKDEF | PT_SILENT
+    if result is not 0:
         raise IDAError(f"Failed to parse type: {c_declaration}")
-    structure_name = result[0]
-    previous_ordinal = idaapi.get_type_ordinal(idaapi.cvar.idati, structure_name)
-    if previous_ordinal:
-        raise IDAError(f"Type {structure_name} already exists with ordinal {previous_ordinal}, "
-                        "please rename to avoid conflicts.")
-    ordinal = idaapi.idc_set_local_type(-1, c_declaration, idaapi.PT_TYP)
-    if not ordinal:
-        raise IDAError(f"Type {structure_name} already exists with ordinal {previous_ordinal}, "
-                        "please rename to avoid conflicts.")
 
 @jsonrpc
 @idawrite
