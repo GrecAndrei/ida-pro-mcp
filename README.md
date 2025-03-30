@@ -24,6 +24,7 @@ Available functionality:
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
 - `rename_function(function_address, new_name)`: Rename a function.
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
+- `create_new_type(c_declaration)`: Create a new local type from a C declaration.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
 
 ## Prerequisites
@@ -99,7 +100,7 @@ To install the MCP server yourself, follow these steps:
         "--directory",
         "c:\\MCP\\ida-pro-mcp",
         "run",
-        "ida-pro-mcp",
+        "server.py",
         "--install-plugin"
       ],
       "timeout": 1800,
@@ -121,6 +122,7 @@ To install the MCP server yourself, follow these steps:
         "rename_local_variable",
         "rename_function",
         "set_function_prototype",
+        "create_new_type",
         "set_local_variable_type"
       ],
       "alwaysAllow": [
@@ -140,6 +142,7 @@ To install the MCP server yourself, follow these steps:
         "rename_local_variable",
         "rename_function",
         "set_function_prototype",
+        "create_new_type",
         "set_local_variable_type"
       ]
     }
