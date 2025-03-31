@@ -596,6 +596,51 @@ def list_functions(
     functions = [get_function(address) for address in idautils.Functions()]
     return paginate(functions, offset, count)
 
+class String(TypedDict):
+    address: str
+    length: int
+    type: str
+    string: str
+
+def get_strings() -> list[String]:
+    strings = []
+    for item in idautils.Strings():
+        string_type = "C" if item.strtype == 0 else "Unicode"
+        try:
+            string = str(item)
+            if string:
+                strings.append({
+                    "address": hex(item.ea),
+                    "length": item.length,
+                    "type": string_type,
+                    "string": string
+                })
+        except:
+            continue
+    return strings
+
+@jsonrpc
+@idaread
+def list_strings(
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """List all strings in the database (paginated)"""
+    strings = get_strings()
+    return paginate(strings, offset, count)
+
+@jsonrpc
+@idaread
+def search_strings(
+    pattern: Annotated[str, "Substring to search for in strings"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Search for strings containing the given pattern (case-insensitive)"""
+    strings = get_strings()
+    matched_strings = [s for s in strings if pattern.lower() in s["string"].lower()]
+    return paginate(matched_strings, offset, count)
+
 def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     if not ida_hexrays.init_hexrays_plugin():
         raise IDAError("Hex-Rays decompiler is not available")
