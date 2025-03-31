@@ -72,6 +72,20 @@ LLMs are prone to hallucinations and you need to be specific with your prompting
 
 This prompt was just the first experiment, please share if you found ways to improve the output!
 
+## Tips for Enhancing LLM Accuracy
+
+Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `conver_number` MCP and you migyht also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
+
+Another thing to keep in mind is that LLMs will not perform well on obfuscated code. Before trying to use an LLM to solve the problem, take a look around the binary and spend some time (automatically) removing the following things:
+
+- String encryption
+- Import hashing
+- Control flow flattening
+- Code encryption
+- Anti-decompilation tricks
+
+You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
+
 ## Manual Installation
 
 _Note_: This section is for LLMs and power users who need detailed installation instructions.
