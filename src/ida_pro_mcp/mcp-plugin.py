@@ -2,7 +2,7 @@ import sys
 
 if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
-
+import re
 import json
 import struct
 import threading
@@ -639,6 +639,25 @@ def search_strings(
     """Search for strings containing the given pattern (case-insensitive)"""
     strings = get_strings()
     matched_strings = [s for s in strings if pattern.lower() in s["string"].lower()]
+    return paginate(matched_strings, offset, count)
+
+@jsonrpc
+@idaread
+def match_string(
+        pattern_str: Annotated[str, "The regular expression to match"],
+        offset: Annotated[int, "Offset to start listing from (start at 0)"],
+        count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Use regular expressions to match strings(It is preferred when searching for imprecise options and range searches)"""
+    strings = get_strings()
+    try:
+        pattern = re.compile(pattern_str)
+    except Exception as e:
+        raise ValueError(f"Regular expression syntax error, reason is {e}")
+    try:
+        matched_strings = [s for s in strings if s["string"] and re.search(pattern, s["string"])]
+    except Exception as e:
+        raise ValueError(f"The regular match failed, reason is {e}")
     return paginate(matched_strings, offset, count)
 
 def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
