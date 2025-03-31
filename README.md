@@ -24,7 +24,7 @@ Available functionality:
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
 - `rename_function(function_address, new_name)`: Rename a function.
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
-- `create_new_type(c_declaration)`: Create a new local type from a C declaration.
+- `declare_c_type(c_declaration)`: Create or update a local type from a C declaration.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
 
 ## Prerequisites
@@ -122,7 +122,7 @@ To install the MCP server yourself, follow these steps:
         "rename_local_variable",
         "rename_function",
         "set_function_prototype",
-        "create_new_type",
+        "declare_c_type",
         "set_local_variable_type"
       ],
       "alwaysAllow": [
@@ -142,7 +142,7 @@ To install the MCP server yourself, follow these steps:
         "rename_local_variable",
         "rename_function",
         "set_function_prototype",
-        "create_new_type",
+        "declare_c_type",
         "set_local_variable_type"
       ]
     }
@@ -199,4 +199,8 @@ uv run fastmcp dev server.py
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
 
-For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`.
+For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`. After [enabling symbolic links](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) you can run the following command:
+
+```sh
+uv run ida-pro-mcp --install
+```

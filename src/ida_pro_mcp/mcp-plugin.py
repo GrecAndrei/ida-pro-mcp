@@ -826,16 +826,54 @@ class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
                 lvar_saved.type = self.new_type
                 return True
         return False
-    
+
+# NOTE: This is extremely hacky, but necessary to get errors out of IDA
+def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, str]:
+    if sys.platform == "win32":
+        import ctypes
+        assert isinstance(decls, str), "decls must be a string"
+        assert isinstance(hti_flags, int), "hti_flags must be an int"
+        c_decls = decls.encode("utf-8")
+        c_til = None
+        ida_dll = ctypes.CDLL("ida")
+        ida_dll.parse_decls.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_int]
+        ida_dll.parse_decls.restype = ctypes.c_int
+
+        messages = []
+        @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p)
+        def magic_printer(fmt: bytes, arg1: bytes):
+            if fmt.count(b"%") == 1 and b"%s" in fmt:
+                formatted = fmt.replace(b"%s", arg1)
+                messages.append(formatted.decode("utf-8"))
+                return len(formatted) + 1
+            else:
+                messages.append(f"unsupported magic_printer fmt: {repr(fmt)}")
+                return 0
+
+        errors = ida_dll.parse_decls(c_til, c_decls, magic_printer, hti_flags)
+    else:
+        # NOTE: The approach above could also work on other platforms, but it's
+        # not been tested and there are differences in the vararg ABIs.
+        errors = ida_typeinf.parse_decls(None, decls, False, hti_flags)
+        messages = []
+    return errors, messages
+
 @jsonrpc
 @idawrite
-def create_new_type(
+def declare_c_type(
     c_declaration: Annotated[str, "C declaration of the type. Examples include: typedef int foo_t; struct bar { int a; bool b; };"],
 ):
-    """Create a new local type from a C declaration"""
-    result = idaapi.idc_parse_types(c_declaration, 1)  # PT_PAKDEF | PT_SILENT
-    if result is not 0:
-        raise IDAError(f"Failed to parse type: {c_declaration}")
+    """Create or update a local type from a C declaration"""
+    # PT_SIL: Suppress warning dialogs (although it seems unnecessary here)
+    # PT_EMPTY: Allow empty types (also unnecessary?)
+    # PT_TYP: Print back status messages with struct tags
+    flags = ida_typeinf.PT_SIL | ida_typeinf.PT_EMPTY | ida_typeinf.PT_TYP
+    errors, messages = parse_decls_ctypes(c_declaration, flags)
+
+    pretty_messages = "\n".join(messages)
+    if errors > 0:
+        raise IDAError(f"Failed to parse type:\n{c_declaration}\n\nErrors:\n{pretty_messages}")
+    return f"success\n\nInfo:\n{pretty_messages}"
 
 @jsonrpc
 @idawrite
