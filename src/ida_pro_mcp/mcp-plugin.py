@@ -632,23 +632,11 @@ def list_strings(
 @jsonrpc
 @idaread
 def search_strings(
-    pattern: Annotated[str, "Substring to search for in strings"],
-    offset: Annotated[int, "Offset to start listing from (start at 0)"],
-    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
-) -> Page[String]:
-    """Search for strings containing the given pattern (case-insensitive)"""
-    strings = get_strings()
-    matched_strings = [s for s in strings if pattern.lower() in s["string"].lower()]
-    return paginate(matched_strings, offset, count)
-
-@jsonrpc
-@idaread
-def match_string(
-        pattern_str: Annotated[str, "The regular expression to match"],
+        pattern_str: Annotated[str, "The regular expression to match((The generated regular expression includes case by default))"],
         offset: Annotated[int, "Offset to start listing from (start at 0)"],
         count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
 ) -> Page[String]:
-    """Use regular expressions to match strings(It is preferred when searching for imprecise options and range searches)"""
+    """Search for strings that satisfy a regular expression"""
     strings = get_strings()
     try:
         pattern = re.compile(pattern_str)
@@ -659,6 +647,20 @@ def match_string(
     except Exception as e:
         raise ValueError(f"The regular match failed, reason is {e}")
     return paginate(matched_strings, offset, count)
+
+@jsonrpc
+@idaread
+def search_strings(
+    pattern: Annotated[str, "Substring to search for in strings"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Search for strings containing the given pattern (case-insensitive)"""
+    strings = get_strings()
+    matched_strings = [s for s in strings if pattern.lower() in s["string"].lower()]
+    return paginate(matched_strings, offset, count)
+
+
 
 def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     if not ida_hexrays.init_hexrays_plugin():

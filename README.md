@@ -17,7 +17,7 @@ Available functionality:
 - `convert_number(text, size)`: Convert a number (decimal, hexadecimal) to different representations.
 - `list_functions(offset, count)`: List all functions in the database (paginated).
 - `list_strings(offset, count)`: List all strings in the database (paginated).
-- `search_strings(pattern, offset, count)`: Search for strings containing the given pattern (case-insensitive).
+- `search_strings(pattern, offset, count)`: Search for strings that satisfy a regular expression.
 - `decompile_function(address)`: Decompile a function at the given address.
 - `disassemble_function(start_address)`: Get assembly code (address: instruction; comment) for a function.
 - `get_xrefs_to(address)`: Get all cross references to the given address.
