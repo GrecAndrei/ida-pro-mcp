@@ -17,13 +17,15 @@ Available functionality:
 - `convert_number(text, size)`: Convert a number (decimal, hexadecimal) to different representations.
 - `list_functions(offset, count)`: List all functions in the database (paginated).
 - `list_strings(offset, count)`: List all strings in the database (paginated).
-- `search_strings(pattern, offset, count)`: Search for strings that satisfy a regular expression.
+- `search_strings(pattern, offset, count)`: Search for strings containing the given pattern (case-insensitive).
 - `decompile_function(address)`: Decompile a function at the given address.
 - `disassemble_function(start_address)`: Get assembly code (address: instruction; comment) for a function.
 - `get_xrefs_to(address)`: Get all cross references to the given address.
 - `get_entry_points()`: Get all entry points in the database.
 - `set_comment(address, comment)`: Set a comment for a given address in the function disassembly and pseudocode.
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
+- `rename_global_variable(old_name, new_name)`: Rename a global variable.
+- `set_global_variable_type(variable_name, new_type)`: Set a global variable's type.
 - `rename_function(function_address, new_name)`: Rename a function.
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
 - `declare_c_type(c_declaration)`: Create or update a local type from a C declaration.
@@ -31,7 +33,7 @@ Available functionality:
 
 ## Prerequisites
 
-- [Python](https://www.python.org/downloads/) (3.10 or higher)
+- [Python](https://www.python.org/downloads/) (**3.11 or higher**) 
   - Use `idapyswitch` to switch to the newest Python version
 - [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended)
 - Supported MCP Client (pick one you like)
@@ -130,12 +132,16 @@ To install the MCP server yourself, follow these steps:
         "get_current_function",
         "convert_number",
         "list_functions",
+        "list_strings",
+        "search_strings",
         "decompile_function",
         "disassemble_function",
         "get_xrefs_to",
         "get_entry_points",
         "set_comment",
         "rename_local_variable",
+        "rename_global_variable",
+        "set_global_variable_type",
         "rename_function",
         "set_function_prototype",
         "declare_c_type",
@@ -150,12 +156,16 @@ To install the MCP server yourself, follow these steps:
         "get_current_function",
         "convert_number",
         "list_functions",
+        "list_strings",
+        "search_strings",
         "decompile_function",
         "disassemble_function",
         "get_xrefs_to",
         "get_entry_points",
         "set_comment",
         "rename_local_variable",
+        "rename_global_variable",
+        "set_global_variable_type",
         "rename_function",
         "set_function_prototype",
         "declare_c_type",
