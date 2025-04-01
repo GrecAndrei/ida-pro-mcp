@@ -2,7 +2,7 @@ import sys
 
 if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
-
+import re
 import json
 import struct
 import threading
@@ -595,6 +595,72 @@ def list_functions(
     """List all functions in the database (paginated)"""
     functions = [get_function(address) for address in idautils.Functions()]
     return paginate(functions, offset, count)
+
+class String(TypedDict):
+    address: str
+    length: int
+    type: str
+    string: str
+
+def get_strings() -> list[String]:
+    strings = []
+    for item in idautils.Strings():
+        string_type = "C" if item.strtype == 0 else "Unicode"
+        try:
+            string = str(item)
+            if string:
+                strings.append({
+                    "address": hex(item.ea),
+                    "length": item.length,
+                    "type": string_type,
+                    "string": string
+                })
+        except:
+            continue
+    return strings
+
+@jsonrpc
+@idaread
+def list_strings(
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """List all strings in the database (paginated)"""
+    strings = get_strings()
+    return paginate(strings, offset, count)
+
+@jsonrpc
+@idaread
+def search_strings(
+        pattern_str: Annotated[str, "The regular expression to match((The generated regular expression includes case by default))"],
+        offset: Annotated[int, "Offset to start listing from (start at 0)"],
+        count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Search for strings that satisfy a regular expression"""
+    strings = get_strings()
+    try:
+        pattern = re.compile(pattern_str)
+    except Exception as e:
+        raise ValueError(f"Regular expression syntax error, reason is {e}")
+    try:
+        matched_strings = [s for s in strings if s["string"] and re.search(pattern, s["string"])]
+    except Exception as e:
+        raise ValueError(f"The regular match failed, reason is {e}")
+    return paginate(matched_strings, offset, count)
+
+@jsonrpc
+@idaread
+def search_strings(
+    pattern: Annotated[str, "Substring to search for in strings"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Search for strings containing the given pattern (case-insensitive)"""
+    strings = get_strings()
+    matched_strings = [s for s in strings if pattern.lower() in s["string"].lower()]
+    return paginate(matched_strings, offset, count)
+
+
 
 def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     if not ida_hexrays.init_hexrays_plugin():
