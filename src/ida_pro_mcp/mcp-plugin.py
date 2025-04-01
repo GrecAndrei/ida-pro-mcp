@@ -781,6 +781,32 @@ def rename_local_variable(
 
 @jsonrpc
 @idawrite
+def rename_global_variable(
+    old_name: Annotated[str, "Current name of the global variable"],
+    new_name: Annotated[str, "New name for the global variable (empty for a default name)"]
+):
+    """Rename a global variable"""
+    ea = idaapi.get_name_ea(idaapi.BADADDR, old_name)
+    if not idaapi.set_name(ea, new_name):
+        raise IDAError(f"Failed to rename global variable {old_name} to {new_name}")
+    refresh_decompiler_ctext(ea)
+
+@jsonrpc
+@idawrite
+def set_global_variable_type(
+    variable_name: Annotated[str, "Name of the global variable"],
+    new_type: Annotated[str, "New type for the variable"]
+):
+    """Set a global variable's type"""
+    ea = idaapi.get_name_ea(idaapi.BADADDR, variable_name)
+    tif = ida_typeinf.tinfo_t(new_type, None, ida_typeinf.PT_SIL)
+    if not tif:
+        raise IDAError(f"Parsed declaration is not a variable type")
+    if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL):
+        raise IDAError(f"Failed to apply type")
+
+@jsonrpc
+@idawrite
 def rename_function(
     function_address: Annotated[str, "Address of the function to rename"],
     new_name: Annotated[str, "New name for the function (empty for a default name)"]
