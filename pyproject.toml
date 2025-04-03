@@ -16,7 +16,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "fastmcp>=0.4.1",
+    "mcp>=1.6.0",
 ]
 
 [project.urls]

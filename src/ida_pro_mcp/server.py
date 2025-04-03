@@ -6,7 +6,7 @@ import shutil
 import argparse
 import http.client
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 # The log_level is necessary for Cline to work: https://github.com/jlowin/fastmcp/issues/81
 mcp = FastMCP("github.com/mrexodia/ida-pro-mcp", log_level="ERROR")
