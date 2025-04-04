@@ -63,7 +63,7 @@ https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
 
 LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
 
-> You task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
+> Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
 > - Inspect the decompilation and add comments with your findings
 > - Rename variables to more sensible names
 > - Change the variable and argument types if necessary (especially pointer and array types)
