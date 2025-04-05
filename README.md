@@ -63,7 +63,7 @@ https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
 
 LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
 
-> You task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
+> Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
 > - Inspect the decompilation and add comments with your findings
 > - Rename variables to more sensible names
 > - Change the variable and argument types if necessary (especially pointer and array types)
@@ -78,7 +78,7 @@ This prompt was just the first experiment, please share if you found ways to imp
 
 ## Tips for Enhancing LLM Accuracy
 
-Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `conver_number` MCP and you migyht also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
+Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `conver_number` MCP and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
 
 Another thing to keep in mind is that LLMs will not perform well on obfuscated code. Before trying to use an LLM to solve the problem, take a look around the binary and spend some time (automatically) removing the following things:
 
