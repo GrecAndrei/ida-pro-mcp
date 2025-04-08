@@ -406,13 +406,20 @@ def get_image_size():
 @idaread
 def get_metadata() -> Metadata:
     """Get metadata about the current IDB"""
+    # Fat Mach-O binaries can return a None hash:
+    # https://github.com/mrexodia/ida-pro-mcp/issues/26
+    def hash(f):
+        try:
+            return f().hex()
+        except:
+            return None
     return {
         "path": idaapi.get_input_file_path(),
         "module": idaapi.get_root_filename(),
         "base": hex(idaapi.get_imagebase()),
         "size": hex(get_image_size()),
-        "md5": ida_nalt.retrieve_input_file_md5().hex(),
-        "sha256": ida_nalt.retrieve_input_file_sha256().hex(),
+        "md5": hash(ida_nalt.retrieve_input_file_md5),
+        "sha256": hash(ida_nalt.retrieve_input_file_sha256),
         "crc32": hex(ida_nalt.retrieve_input_file_crc32()),
         "filesize": hex(ida_nalt.retrieve_input_file_size()),
     }
