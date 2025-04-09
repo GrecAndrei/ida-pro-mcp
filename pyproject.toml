@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "mrexodia" }]
 keywords = ["ida", "mcp", "llm", "plugin"]
-license = "MIT"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
