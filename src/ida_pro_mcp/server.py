@@ -214,9 +214,11 @@ def get_python_executable():
     venv = os.environ.get("VIRTUAL_ENV")
     if venv:
         if sys.platform == "win32":
-            return os.path.join(venv, "python.exe")
+            python = os.path.join(venv, "Scripts", "python.exe")
         else:
-            return os.path.join(venv, "bin", "python3")
+            python = os.path.join(venv, "bin", "python3")
+        if os.path.exists(python):
+            return python
 
     for path in sys.path:
         if sys.platform == "win32":
