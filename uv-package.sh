@@ -1,4 +1,4 @@
 #!/bin/bash
-uv run server.py --generate-docs
+uv run ida-pro-mcp --generate-docs
 uv build
 uv publish

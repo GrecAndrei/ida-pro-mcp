@@ -220,7 +220,7 @@ https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 To test the MCP server itself:
 
 ```sh
-uv run fastmcp dev server.py
+uv run mcp dev src/ida_pro_mcp/server.py
 ```
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
@@ -229,4 +229,10 @@ For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC 
 
 ```sh
 uv run ida-pro-mcp --install
+```
+
+Generate the changelog of direct commits to `main`:
+
+```sh
+git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
