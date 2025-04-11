@@ -38,8 +38,11 @@ Available functionality:
 - [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended)
 - Supported MCP Client (pick one you like)
   - [Cline](https://cline.bot)
-  - [Roo Code](https://marketplace.visualstudio.com/items?itemName=RooVeterinaryInc.roo-cline)
+  - [Roo Code](https://roocode.com)
   - [Claude](https://claude.ai/download)
+  - [Cursor](https://cursor.com)
+  - [VSCode Agent Mode](https://github.blog/news-insights/product-news/github-copilot-agent-mode-activated/)
+  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients)
 
 ## Installation
 
