@@ -150,8 +150,11 @@ def main():
     fixup_tool_argument_descriptions(mcp)
 
     # NOTE: npx @modelcontextprotocol/inspector for debugging
-    logger.info("MCP Server (SSE) availabile at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
-    mcp.run(transport="sse")
+    logger.info("MCP Server availabile at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
+    try:
+        mcp.run(transport="sse")
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()

@@ -5,6 +5,7 @@ import json
 import shutil
 import argparse
 import http.client
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 
@@ -353,6 +354,7 @@ def main():
     parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--transport", type=str, default="stdio", help="Transport protocol to use (stdio or http://127.0.0.1:8744)")
     args = parser.parse_args()
 
     if args.install and args.uninstall:
@@ -378,7 +380,19 @@ def main():
     if args.install_plugin:
         install_ida_plugin(quiet=True)
 
-    mcp.run(transport="stdio")
+    try:
+        if args.transport == "stdio":
+            mcp.run(transport="stdio")
+        else:
+            url = urlparse(args.transport)
+            mcp.settings.host = url.hostname
+            mcp.settings.port = url.port
+            # NOTE: npx @modelcontextprotocol/inspector for debugging
+            print(f"MCP Server availabile at http://{mcp.settings.host}:{mcp.settings.port}/sse")
+            mcp.settings.log_level = "INFO"
+            mcp.run(transport="sse")
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()
