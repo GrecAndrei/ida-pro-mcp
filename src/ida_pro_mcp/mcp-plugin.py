@@ -626,6 +626,92 @@ def get_strings() -> list[String]:
             continue
     return strings
 
+def find_names_with_value(target_value):
+    result = []
+    for addr, name in idautils.Names():
+       demangled = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) 
+       if demangled and target_value in demangled:
+            result.append({
+                "address": hex(addr),
+                "name": name,
+                "demangled": demangled,
+            })
+    return result
+
+def dump_memory_bytes(start_ea, size):
+    data = idc.get_bytes(start_ea, size)
+    if not data:
+        print("Failed to read memory.")
+        return []
+    return list(data)
+
+@jsonrpc
+@idaread
+def get_memory_bytes(
+    address: Annotated[str, "Address to get memory bytes from"],
+    size: Annotated[int, "Number of bytes to read"]
+) -> list[int]:
+    """Get memory bytes at the given address"""
+    address = parse_address(address)
+    data = dump_memory_bytes(address, size)
+    if not data:
+        raise IDAError(f"Failed to read memory at {hex(address)}")
+    return data
+
+
+def get_names() -> list[String]:
+    names = []
+    for addr, name in idautils.Names():
+        demangled = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) 
+        if demangled:
+            names.append({
+                "address": hex(addr),
+                "name": name,
+                "demangled": demangled,
+            })
+    return names
+
+@jsonrpc
+@idaread
+def list_names(
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of names to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """List all names in the database (paginated)"""
+    names = get_names()
+    return paginate(names, offset, count)
+
+@jsonrpc
+@idaread
+def search_names(
+    pattern: Annotated[str, "Substring to search for in strings"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of names to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Search for strings containing the given pattern (case-insensitive)"""
+    names = get_names()
+    matched_names = [s for s in names if pattern.lower() in s["name"].lower()]
+    return paginate(matched_names, offset, count)
+
+@jsonrpc
+@idaread
+def search_names_by_expression(
+    pattern_str: Annotated[str, "The regular expression to match((The generated regular expression includes case by default))"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of names to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Search for names that satisfy a regular expression"""
+    names = get_names()
+    try:
+        pattern = re.compile(pattern_str)
+    except Exception as e:
+        raise ValueError(f"Regular expression syntax error, reason is {e}")
+    try:
+        matched_names = [s for s in names if s["name"] and re.search(pattern, s["name"])]
+    except Exception as e:
+        raise ValueError(f"The regular match failed, reason is {e}")
+    return paginate(matched_names, offset, count)
+
 @jsonrpc
 @idaread
 def list_strings(
