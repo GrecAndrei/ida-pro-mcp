@@ -631,6 +631,48 @@ def get_strings() -> list[String]:
             continue
     return strings
 
+class Global(TypedDict):
+    address: str
+    name: str
+    demangled: str
+
+def get_globals() -> list[Global]:
+    names = []
+    for addr, name in idautils.Names():
+        # Skip functions
+        if idaapi.get_func(addr):
+            continue
+        demangled = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) 
+        if demangled:
+            names.append({
+                "address": hex(addr),
+                "name": name,
+                "demangled": demangled,
+            })
+    return names
+
+@jsonrpc
+@idaread
+def list_globals(
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of globals to list (100 is a good default, 0 means remainder)"],
+) -> Page[Global]:
+    """List all globals in the database (paginated)"""
+    names = get_globals()
+    return paginate(names, offset, count)
+
+@jsonrpc
+@idaread
+def search_globals(
+    pattern: Annotated[str, "Substring to search for in globals"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of names to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """Search for globals containing the given pattern (case-insensitive)"""
+    names = get_globals()
+    matched_names = [s for s in names if pattern.lower() in s["name"].lower()]
+    return paginate(matched_names, offset, count)
+
 @jsonrpc
 @idaread
 def list_strings(
