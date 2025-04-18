@@ -598,6 +598,12 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
         "next_offset": next_offset,
     }
 
+def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
+    def matches(item: T) -> bool:
+        # TODO: proper pattern matching
+        return pattern.lower() in item[key].lower()
+    return list(filter(matches, data))
+
 @jsonrpc
 @idaread
 def list_functions(
@@ -608,111 +614,56 @@ def list_functions(
     functions = [get_function(address) for address in idautils.Functions()]
     return paginate(functions, offset, count)
 
+class Global(TypedDict):
+    address: str
+    name: str
+
+@jsonrpc
+@idaread
+def list_globals(
+    filter: Annotated[str, "Filter to apply to the list. Case-insensitive contains or /regex/ syntax"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of globals to list (100 is a good default, 0 means remainder)"],
+) -> Page[Global]:
+    """List all globals in the database (paginated)"""
+    globals = []
+    for addr, name in idautils.Names():
+        # Skip functions
+        if not idaapi.get_func(addr):
+            globals.append({
+                "address": hex(addr),
+                "name": name,
+            })
+    globals = pattern_filter(globals, filter, "name")
+    return paginate(globals, offset, count)
+
 class String(TypedDict):
     address: str
     length: int
-    type: str
     string: str
 
-def get_strings() -> list[String]:
+@jsonrpc
+@idaread
+def list_strings(
+    filter: Annotated[str, "Filter to apply to the list. Case-insensitive contains or /regex/ syntax"],
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
+) -> Page[String]:
+    """List all strings in the database (paginated)"""
     strings = []
     for item in idautils.Strings():
-        string_type = "C" if item.strtype == 0 else "Unicode"
         try:
             string = str(item)
             if string:
                 strings.append({
                     "address": hex(item.ea),
                     "length": item.length,
-                    "type": string_type,
                     "string": string,
                 })
         except:
             continue
-    return strings
-
-class Global(TypedDict):
-    address: str
-    name: str
-    demangled: str
-
-def get_globals() -> list[Global]:
-    names = []
-    for addr, name in idautils.Names():
-        # Skip functions
-        if idaapi.get_func(addr):
-            continue
-        demangled = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) 
-        if demangled:
-            names.append({
-                "address": hex(addr),
-                "name": name,
-                "demangled": demangled,
-            })
-    return names
-
-@jsonrpc
-@idaread
-def list_globals(
-    offset: Annotated[int, "Offset to start listing from (start at 0)"],
-    count: Annotated[int, "Number of globals to list (100 is a good default, 0 means remainder)"],
-) -> Page[Global]:
-    """List all globals in the database (paginated)"""
-    names = get_globals()
-    return paginate(names, offset, count)
-
-@jsonrpc
-@idaread
-def search_globals(
-    pattern: Annotated[str, "Substring to search for in globals"],
-    offset: Annotated[int, "Offset to start listing from (start at 0)"],
-    count: Annotated[int, "Number of names to list (100 is a good default, 0 means remainder)"],
-) -> Page[String]:
-    """Search for globals containing the given pattern (case-insensitive)"""
-    names = get_globals()
-    matched_names = [s for s in names if pattern.lower() in s["name"].lower()]
-    return paginate(matched_names, offset, count)
-
-@jsonrpc
-@idaread
-def list_strings(
-    offset: Annotated[int, "Offset to start listing from (start at 0)"],
-    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
-) -> Page[String]:
-    """List all strings in the database (paginated)"""
-    strings = get_strings()
+    strings = pattern_filter(strings, filter, "string")
     return paginate(strings, offset, count)
-
-@jsonrpc
-@idaread
-def search_strings(
-    pattern_str: Annotated[str, "The regular expression to match((The generated regular expression includes case by default))"],
-    offset: Annotated[int, "Offset to start listing from (start at 0)"],
-    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
-) -> Page[String]:
-    """Search for strings that satisfy a regular expression"""
-    strings = get_strings()
-    try:
-        pattern = re.compile(pattern_str)
-    except Exception as e:
-        raise ValueError(f"Regular expression syntax error, reason is {e}")
-    try:
-        matched_strings = [s for s in strings if s["string"] and re.search(pattern, s["string"])]
-    except Exception as e:
-        raise ValueError(f"The regular match failed, reason is {e}")
-    return paginate(matched_strings, offset, count)
-
-@jsonrpc
-@idaread
-def search_strings(
-    pattern: Annotated[str, "Substring to search for in strings"],
-    offset: Annotated[int, "Offset to start listing from (start at 0)"],
-    count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
-) -> Page[String]:
-    """Search for strings containing the given pattern (case-insensitive)"""
-    strings = get_strings()
-    matched_strings = [s for s in strings if pattern.lower() in s["string"].lower()]
-    return paginate(matched_strings, offset, count)
 
 def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     if not ida_hexrays.init_hexrays_plugin():
@@ -1126,19 +1077,14 @@ def dbg_get_call_stack() -> list[dict[str, str]]:
         pass
     return callstack
 
-@jsonrpc
-@idaread
-def dbg_list_breakpoints():
-    """
-    List all breakpoints in the program.
-    """
+def list_breakpoints():
     ea = ida_ida.inf_get_min_ea()
     end_ea = ida_ida.inf_get_max_ea()
-    bkpts = []
+    breakpoints = []
     while ea <= end_ea:
         bpt = ida_dbg.bpt_t()
         if ida_dbg.get_bpt(ea, bpt):
-            bkpts.append(
+            breakpoints.append(
                 {
                     "ea": hex(bpt.ea),
                     "type": bpt.type,
@@ -1147,14 +1093,21 @@ def dbg_list_breakpoints():
                 }
             )
         ea = ida_bytes.next_head(ea, end_ea)
-    return bkpts
+    return breakpoints
+
+@jsonrpc
+@idaread
+def dbg_list_breakpoints():
+    """
+    List all breakpoints in the program.
+    """
+    return list_breakpoints()
 
 @jsonrpc
 @idaread
 def dbg_start_process() -> str:
     """Start the debugger"""
-    ret = idaapi.start_process("", "", "")
-    if ret == 1:
+    if idaapi.start_process("", "", ""):
         return "Debugger started"
     return "Failed to start debugger"
 
@@ -1162,8 +1115,7 @@ def dbg_start_process() -> str:
 @idaread
 def dbg_exit_process() -> str:
     """Exit the debugger"""
-    ret = idaapi.exit_process()
-    if ret == 1:
+    if idaapi.exit_process():
         return "Debugger exited"
     return "Failed to exit debugger"
 
@@ -1171,8 +1123,7 @@ def dbg_exit_process() -> str:
 @idaread
 def dbg_continue_process() -> str:
     """Continue the debugger"""
-    ret = idaapi.continue_process()
-    if ret == 1:
+    if idaapi.continue_process():
         return "Debugger continued"
     return "Failed to continue debugger"
 
@@ -1183,8 +1134,7 @@ def dbg_run_to(
 ) -> str:
     """Run the debugger to the specified address"""
     ea = parse_address(address)
-    ret = idaapi.run_to(ea)
-    if ret == 1:
+    if idaapi.run_to(ea):
         return f"Debugger run to {hex(ea)}"
     return f"Failed to run to address {hex(ea)}"
 
@@ -1195,11 +1145,10 @@ def dbg_set_breakpoint(
 ) -> str:
     """Set a breakpoint at the specified address"""
     ea = parse_address(address)
-    ret = idaapi.add_bpt(ea, 0, idaapi.BPT_SOFT)
-    if ret == 1:
+    if idaapi.add_bpt(ea, 0, idaapi.BPT_SOFT):
         return f"Breakpoint set at {hex(ea)}"
-    bpts = dbg_list_breakpoints()
-    for bpt in bpts:
+    breakpoints = list_breakpoints()
+    for bpt in breakpoints:
         if bpt["ea"] == hex(ea):
             return f"Breakpoint already exists at {hex(ea)}"
     return f"Failed to set breakpoint at address {hex(ea)}"
@@ -1211,8 +1160,7 @@ def dbg_delete_breakpoint(
 ) -> str:
     """del a breakpoint at the specified address"""
     ea = parse_address(address)
-    ret = idaapi.del_bpt(ea)
-    if ret == 1:
+    if idaapi.del_bpt(ea):
         return f"Breakpoint deleted at {hex(ea)}"
     return f"Failed to delete breakpoint at address {hex(ea)}"
 
@@ -1224,8 +1172,7 @@ def dbg_enable_breakpoint(
 ) -> str:
     """Enable or disable a breakpoint at the specified address"""
     ea = parse_address(address)
-    ret = idaapi.enable_bpt(ea, enable)
-    if ret == 1:
+    if idaapi.enable_bpt(ea, enable):
         return f"Breakpoint {'enabled' if enable else 'disabled'} at {hex(ea)}"
     return f"Failed to {'' if enable else 'disable '}breakpoint at address {hex(ea)}"
 

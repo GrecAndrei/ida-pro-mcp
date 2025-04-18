@@ -136,6 +136,7 @@ class MCPVisitor(ast.NodeVisitor):
                         )
                     ]
                     node_nobody = ast.FunctionDef(node.name, node.args, new_body, decorator_list, node.returns, node.type_comment, lineno=node.lineno, col_offset=node.col_offset)
+                    assert node.name not in self.functions, f"Duplicate function: {node.name}"
                     self.functions[node.name] = node_nobody
 
     def visit_ClassDef(self, node):
