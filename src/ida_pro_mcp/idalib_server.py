@@ -107,6 +107,7 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="Show debug messages")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to listen on, default: 127.0.0.1")
     parser.add_argument("--port", type=int, default=8745, help="Port to listen on, default: 8745")
+    parser.add_argument("--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)")
     parser.add_argument("input_path", type=Path, help="Path to the input file to analyze.")
     args = parser.parse_args()
 
@@ -143,8 +144,9 @@ def main():
     plugin = importlib.import_module("ida_pro_mcp.mcp-plugin")
     logger.debug("adding tools...")
     for name, callable in plugin.rpc_registry.methods.items():
-        logger.debug("adding tool: %s: %s", name, callable)
-        mcp.add_tool(callable, name)
+        if args.unsafe or name not in plugin.rpc_registry.unsafe:
+            logger.debug("adding tool: %s: %s", name, callable)
+            mcp.add_tool(callable, name)
 
     # NOTE: https://github.com/modelcontextprotocol/python-sdk/issues/466
     fixup_tool_argument_descriptions(mcp)
