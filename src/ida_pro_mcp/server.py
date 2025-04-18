@@ -13,11 +13,13 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("github.com/mrexodia/ida-pro-mcp", log_level="ERROR")
 
 jsonrpc_request_id = 1
+ida_host = "127.0.0.1"
+ida_port = 13337
 
 def make_jsonrpc_request(method: str, *params):
     """Make a JSON-RPC request to the IDA plugin"""
-    global jsonrpc_request_id
-    conn = http.client.HTTPConnection("localhost", 13337)
+    global jsonrpc_request_id, ida_host, ida_port
+    conn = http.client.HTTPConnection(ida_host, ida_port)
     request = {
         "jsonrpc": "2.0",
         "method": method,
@@ -349,12 +351,14 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
                 print(f"Installed IDA Pro plugin (IDA restart required)\n  Plugin: {plugin_destination}")
 
 def main():
+    global ida_host, ida_port
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
     parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--transport", type=str, default="stdio", help="Transport protocol to use (stdio or http://127.0.0.1:8744)")
+    parser.add_argument("--ida-rpc", type=str, default=f"http://{ida_host}:{ida_port}", help=f"IDA RPC server to use (default: http://{ida_host}:{ida_port})")
     args = parser.parse_args()
 
     if args.install and args.uninstall:
@@ -379,6 +383,13 @@ def main():
     # NOTE: This is silent for automated Cline installations
     if args.install_plugin:
         install_ida_plugin(quiet=True)
+
+    # Parse IDA RPC server argument
+    ida_rpc = urlparse(args.ida_rpc)
+    if ida_rpc.hostname is None or ida_rpc.port is None:
+        raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
+    ida_host = ida_rpc.hostname
+    ida_port = ida_rpc.port
 
     try:
         if args.transport == "stdio":
