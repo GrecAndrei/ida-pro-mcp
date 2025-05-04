@@ -771,6 +771,47 @@ def get_xrefs_to(
 
 @jsonrpc
 @idaread
+def get_xrefs_to_field(
+    struct_name: Annotated[str, "Name of the struct (type) containing the field"],
+    field_name: Annotated[str, "Name of the field (member) to get xrefs to"],
+) -> list[Xref]:
+    """Get all cross references to a named struct field (member)"""
+    
+    # Get the type library
+    til = ida_typeinf.get_idati()
+    if not til:
+        raise IDAError("Failed to retrieve type library.")
+
+    # Get the structure type info
+    tif = ida_typeinf.tinfo_t()
+    if not tif.get_named_type(til, struct_name, ida_typeinf.BTF_STRUCT, True, False):
+        print(f"Structure '{struct_name}' not found.")
+        return []
+
+    # Get The field index
+    idx = ida_typeinf.get_udm_by_fullname(None, struct_name + '.' + field_name)
+    if idx == -1:
+        print(f"Field '{field_name}' not found in structure '{struct_name}'.")
+        return []
+
+    # Get the type identifier
+    tid = tif.get_udm_tid(idx)
+    if tid == ida_idaapi.BADADDR:
+        raise IDAError(f"Unable to get tid for structure '{struct_name}' and field '{field_name}'.")
+
+    # Get xrefs to the tid
+    xrefs = []
+    xref: ida_xref.xrefblk_t
+    for xref in idautils.XrefsTo(tid):
+        xrefs.append({
+            "address": hex(xref.frm),
+            "type": "code" if xref.iscode else "data",
+            "function": get_function(xref.frm, raise_error=False),
+        })
+    return xrefs
+
+@jsonrpc
+@idaread
 def get_entry_points() -> list[Function]:
     """Get all entry points in the database"""
     result = []
