@@ -93,6 +93,22 @@ Another thing to keep in mind is that LLMs will not perform well on obfuscated c
 
 You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
 
+## SSE Transport & Headless MCP
+
+You can run an SSE server to connect to the user interface like this:
+
+```sh
+uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
+```
+
+After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
+
+```sh
+uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
+```
+
+_Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
+
 ## Manual Installation
 
 _Note_: This section is for LLMs and power users who need detailed installation instructions.
