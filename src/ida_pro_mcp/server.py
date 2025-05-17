@@ -252,6 +252,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Roo Code": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
             "Claude": (os.path.join(os.getenv("APPDATA"), "Claude"), "claude_desktop_config.json"),
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
+            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
         }
     elif sys.platform == "darwin":
         configs = {
@@ -259,6 +260,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Roo Code": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
             "Claude": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Claude"), "claude_desktop_config.json"),
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
+            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
         }
     elif sys.platform == "linux":
         configs = {
@@ -266,6 +268,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Roo Code": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
             # Claude not supported on Linux
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
+            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
         }
     else:
         print(f"Unsupported platform: {sys.platform}")
@@ -283,7 +286,16 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             config = {}
         else:
             with open(config_path, "r") as f:
-                config = json.load(f)
+                data = f.read().strip()
+                if len(data) == 0:
+                    config = {}
+                else:
+                    try:
+                        config = json.load(f)
+                    except json.decoder.JSONDecodeError:
+                        if not quiet:
+                            print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
+                        continue
         if "mcpServers" not in config:
             config["mcpServers"] = {}
         mcp_servers = config["mcpServers"]

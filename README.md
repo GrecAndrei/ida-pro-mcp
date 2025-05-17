@@ -42,6 +42,7 @@ Available functionality:
   - [Claude](https://claude.ai/download)
   - [Cursor](https://cursor.com)
   - [VSCode Agent Mode](https://github.blog/news-insights/product-news/github-copilot-agent-mode-activated/)
+  - [Windsurf](https://windsurf.com)
   - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients)
 
 ## Installation
