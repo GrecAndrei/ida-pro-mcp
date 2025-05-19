@@ -59,7 +59,7 @@ Unsafe functions (`--unsafe` flag required):
   - [Cursor](https://cursor.com)
   - [VSCode Agent Mode](https://github.blog/news-insights/product-news/github-copilot-agent-mode-activated/)
   - [Windsurf](https://windsurf.com)
-  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients)
+  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
 
 ## Installation
 

@@ -250,6 +250,21 @@ def get_python_executable():
                 return python_executable
     return sys.executable
 
+def print_mcp_config():
+    print(json.dumps({
+            "mcpServers": {
+                mcp.name: {
+                    "command": get_python_executable(),
+                    "args": [
+                        __file__,
+                    ],
+                    "timeout": 1800,
+                    "disabled": False,
+                }
+            }
+        }, indent=2)
+    )
+
 def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
     if sys.platform == "win32":
         configs = {
@@ -333,7 +348,8 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
         installed += 1
     if not uninstall and installed == 0:
-        print("No MCP servers installed")
+        print("No MCP servers installed. For unsupported MCP clients, use the following config:\n")
+        print_mcp_config()
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
     if sys.platform == "win32":
@@ -382,6 +398,7 @@ def main():
     parser.add_argument("--transport", type=str, default="stdio", help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)")
     parser.add_argument("--ida-rpc", type=str, default=f"http://{ida_host}:{ida_port}", help=f"IDA RPC server to use (default: http://{ida_host}:{ida_port})")
     parser.add_argument("--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)")
+    parser.add_argument("--config", action="store_true", help="Generate MCP config JSON")
     args = parser.parse_args()
 
     if args.install and args.uninstall:
@@ -406,6 +423,10 @@ def main():
     # NOTE: This is silent for automated Cline installations
     if args.install_plugin:
         install_ida_plugin(quiet=True)
+
+    if args.config:
+        print_mcp_config()
+        return
 
     # Parse IDA RPC server argument
     ida_rpc = urlparse(args.ida_rpc)
