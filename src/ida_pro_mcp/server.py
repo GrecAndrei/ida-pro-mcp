@@ -181,21 +181,28 @@ exec(compile(code, GENERATED_PY, "exec"))
 
 MCP_FUNCTIONS = ["check_connection"] + list(visitor.functions.keys())
 UNSAFE_FUNCTIONS = visitor.unsafe
+SAFE_FUNCTIONS = [f for f in visitor.functions.keys() if f not in UNSAFE_FUNCTIONS]
 
 def generate_readme():
     print("README:")
-    print(f"- `check_connection`: Check if the IDA plugin is running.")
-    for function in visitor.functions.values():
+    print(f"- `check_connection()`: Check if the IDA plugin is running.")
+    def get_description(name: str):
+        function = visitor.functions[name]
         signature = function.name + "("
         for i, arg in enumerate(function.args.args):
             if i > 0:
                 signature += ", "
             signature += arg.arg
         signature += ")"
-        description = visitor.descriptions.get(function.name, "<no description>")
+        description = visitor.descriptions.get(function.name, "<no description>").strip()
         if description[-1] != ".":
             description += "."
-        print(f"- `{signature}`: {description}")
+        return f"- `{signature}`: {description}"
+    for safe_function in SAFE_FUNCTIONS:
+        print(get_description(safe_function))
+    print("\nUnsafe functions (`--unsafe` flag required):\n")
+    for unsafe_function in UNSAFE_FUNCTIONS:
+        print(get_description(unsafe_function))
     print("\nMCP Config:")
     mcp_config = {
         "mcpServers": {
@@ -210,8 +217,6 @@ def generate_readme():
             ],
             "timeout": 1800,
             "disabled": False,
-            "autoApprove": MCP_FUNCTIONS,
-            "alwaysAllow": MCP_FUNCTIONS,
             }
         }
     }
@@ -316,8 +321,8 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                 ],
                 "timeout": 1800,
                 "disabled": False,
-                "autoApprove": MCP_FUNCTIONS,
-                "alwaysAllow": MCP_FUNCTIONS,
+                "autoApprove": SAFE_FUNCTIONS,
+                "alwaysAllow": SAFE_FUNCTIONS,
             }
             if env:
                 mcp_servers[mcp.name]["env"] = env
