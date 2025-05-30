@@ -73,7 +73,7 @@ class MCPVisitor(ast.NodeVisitor):
         self.types: dict[str, ast.ClassDef] = {}
         self.functions: dict[str, ast.FunctionDef] = {}
         self.descriptions: dict[str, str] = {}
-        self.unsafe: set[str] = set()
+        self.unsafe: list[str] = []
 
     def visit_FunctionDef(self, node):
         for decorator in node.decorator_list:
@@ -140,7 +140,7 @@ class MCPVisitor(ast.NodeVisitor):
                     assert node.name not in self.functions, f"Duplicate function: {node.name}"
                     self.functions[node.name] = node_nobody
                 elif decorator.id == "unsafe":
-                    self.unsafe.add(node.name)
+                    self.unsafe.append(node.name)
 
     def visit_ClassDef(self, node):
         for base in node.bases:

@@ -20,6 +20,7 @@ Available functionality:
 - `list_globals(offset, count)`: List all globals in the database (paginated).
 - `list_strings_filter(offset, count, filter)`: List matching strings in the database (paginated, filtered).
 - `list_strings(offset, count)`: List all strings in the database (paginated).
+- `list_local_types()`: List all Local types in the database.
 - `decompile_function(address)`: Decompile a function at the given address.
 - `disassemble_function(start_address)`: Get assembly code (address: instruction; comment) for a function.
 - `get_xrefs_to(address)`: Get all cross references to the given address.
@@ -36,22 +37,22 @@ Available functionality:
 
 Unsafe functions (`--unsafe` flag required):
 
-- `dbg_get_call_stack()`: Get the current call stack.
 - `dbg_get_registers()`: Get all registers and their values. This function is only available when debugging.
-- `dbg_run_to(address)`: Run the debugger to the specified address.
+- `dbg_get_call_stack()`: Get the current call stack.
+- `dbg_list_breakpoints()`: List all breakpoints in the program.
+- `dbg_start_process()`: Start the debugger.
 - `dbg_exit_process()`: Exit the debugger.
 - `dbg_continue_process()`: Continue the debugger.
-- `dbg_enable_breakpoint(address, enable)`: Enable or disable a breakpoint at the specified address.
-- `dbg_list_breakpoints()`: List all breakpoints in the program.
+- `dbg_run_to(address)`: Run the debugger to the specified address.
 - `dbg_set_breakpoint(address)`: Set a breakpoint at the specified address.
 - `dbg_delete_breakpoint(address)`: del a breakpoint at the specified address.
-- `dbg_start_process()`: Start the debugger.
+- `dbg_enable_breakpoint(address, enable)`: Enable or disable a breakpoint at the specified address.
 
 ## Prerequisites
 
 - [Python](https://www.python.org/downloads/) (**3.11 or higher**) 
   - Use `idapyswitch` to switch to the newest Python version
-- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended)
+- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
 - Supported MCP Client (pick one you like)
   - [Cline](https://cline.bot)
   - [Roo Code](https://roocode.com)
@@ -63,10 +64,11 @@ Unsafe functions (`--unsafe` flag required):
 
 ## Installation
 
-Install (or upgrade) the IDA Pro MCP package:
+Install the latest version of the IDA Pro MCP package:
 
 ```sh
-pip install --upgrade git+https://github.com/mrexodia/ida-pro-mcp
+pip uninstall ida-pro-mcp
+pip install git+https://github.com/mrexodia/ida-pro-mcp
 ```
 
 Configure the MCP servers and install the IDA Plugin:
@@ -78,6 +80,8 @@ ida-pro-mcp --install
 **Important**: Make sure you completely restart IDA/Visual Studio Code/Claude for the installation to take effect. Claude runs in the background and you need to quit it from the tray icon.
 
 https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
+
+_Note_: You need to load a binary in IDA before the plugin menu will show up.
 
 ## Prompt Engineering
 
