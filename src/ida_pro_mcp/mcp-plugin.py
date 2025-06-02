@@ -891,6 +891,9 @@ def set_comment(
     if not idaapi.set_cmt(address, comment, False):
         raise IDAError(f"Failed to set disassembly comment at {hex(address)}")
 
+    if not ida_hexrays.init_hexrays_plugin():
+        return
+
     # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
     # Check if the address corresponds to a line
     cfunc = decompile_checked(address)
