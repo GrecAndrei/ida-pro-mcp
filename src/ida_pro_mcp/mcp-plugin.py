@@ -896,7 +896,10 @@ def set_comment(
 
     # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
     # Check if the address corresponds to a line
-    cfunc = decompile_checked(address)
+    try:
+        cfunc = decompile_checked(address)
+    except:
+        return
 
     # Special case for function entry comments
     if address == cfunc.entry_ea:
