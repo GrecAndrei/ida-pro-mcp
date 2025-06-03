@@ -535,9 +535,9 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT128)
 
     # Floating point types
-    elif type_name in ('float'):
+    elif type_name in ('float', ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_FLOAT)
-    elif type_name in ('double'):
+    elif type_name in ('double', ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_DOUBLE)
     elif type_name in ('long double', 'ldouble'):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_LDOUBLE)
@@ -547,7 +547,7 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_BOOL)
 
     # Void type
-    elif type_name in ('void'):
+    elif type_name in ('void', ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
 
     # If not a standard type, try to get a named type
