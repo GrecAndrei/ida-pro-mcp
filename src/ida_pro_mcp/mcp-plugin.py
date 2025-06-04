@@ -1224,7 +1224,7 @@ def get_defined_structures() -> list[dict]:
             members = []
             if tif.get_udt_details(udt):
                 members = [
-                    {'name': x.name, 'offset': x.offset, 'size': x.size, 'type': str(x.type)} for _, x in enumerate(udt)
+                    {'name': x.name, 'offset': x.offset // 8, 'size': x.size // 8, 'type': str(x.type)} for _, x in enumerate(udt)
                 ]
 
             rv += [
