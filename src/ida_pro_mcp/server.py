@@ -312,7 +312,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                     config = {}
                 else:
                     try:
-                        config = json.load(f)
+                        config = json.loads(data)
                     except json.decoder.JSONDecodeError:
                         if not quiet:
                             print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
