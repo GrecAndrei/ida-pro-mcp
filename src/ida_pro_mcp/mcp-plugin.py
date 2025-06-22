@@ -680,13 +680,12 @@ def list_imports(
 
         def imp_cb(ea, symbol_name, ordinal, acc):
             if not symbol_name:
-                symbol_name = "<unnamed>"
+                symbol_name = f"#{ordinal}"
 
             acc += [{
                 "module": module_name,
-                "import": symbol_name,
-                "address": f"{ea:#x}",
-                "ordinal": f"#{ordinal}"
+                "imported_name": symbol_name,
+                "address": hex(ea),
             }]
 
             return True
