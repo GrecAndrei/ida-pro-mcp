@@ -1179,12 +1179,17 @@ def set_local_variable_type(
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
 
+class StackFrameVariable(TypedDict):
+    name: str
+    offset: str
+    size: str
+    type: str
 
 @jsonrpc
 @idaread
 def get_stack_frame_variables(
         function_address: Annotated[str, "Address of the disassembled function to retrieve the stack frame variables"]
-) -> list[dict]:
+) -> list[StackFrameVariable]:
     """ Retrieve the stack frame variables for a given function """
 
     func = idaapi.get_func(parse_address(function_address))
@@ -1205,9 +1210,25 @@ def get_stack_frame_variables(
             size = udm.size // 8
             type = str(udm.type)
 
-            members += [{'name': name, 'offset': hex(offset), 'size': hex(size), 'type': type}]
+            members += [StackFrameVariable(name=name,
+                                           offset=hex(offset),
+                                           size=hex(size),
+                                           type=type)
+            ]
 
     return members
+
+
+class StructureMember(TypedDict):
+    name: str
+    offset: str
+    size: str
+    type: str
+
+class StructureDefinition(TypedDict):
+    name: str
+    size: str
+    members: list[StructureMember]
 
 @jsonrpc
 @idaread
@@ -1224,15 +1245,16 @@ def get_defined_structures() -> list[dict]:
             members = []
             if tif.get_udt_details(udt):
                 members = [
-                    {'name': x.name, 'offset': x.offset // 8, 'size': x.size // 8, 'type': str(x.type)} for _, x in enumerate(udt)
+                    StructureMember(name=x.name,
+                                    offset=hex(x.offset // 8),
+                                    size=hex(x.size // 8),
+                                    type=str(x.type))
+                    for _, x in enumerate(udt)
                 ]
 
-            rv += [
-                {'name': tif.get_type_name(),
-                 'size': tif.get_size(),
-                 'members': members,
-                 }
-            ]
+            rv += [StructureDefinition(name=tif.get_type_name(),
+                                       size=hex(tif.get_size()),
+                                       members=members)]
 
     return rv
 
@@ -1242,7 +1264,7 @@ def rename_stack_frame_variable(
         function_address: Annotated[str, "Address of the disassembled function to set the stack frame variables"],
         old_name: Annotated[str, "Current name of the variable"],
         new_name: Annotated[str, "New name for the variable (empty for a default name)"]
-) -> bool:
+):
     """ Change the name of a stack variable for an IDA function """
     func = idaapi.get_func(parse_address(function_address))
     if not func:
@@ -1267,7 +1289,8 @@ def rename_stack_frame_variable(
         raise IDAError(f"{old_name} is an argument member. Will not change the name.")
 
     sval = ida_frame.soff_to_fpoff(func, offset)
-    return ida_frame.define_stkvar(func, new_name, sval, udm.type)
+    if not ida_frame.define_stkvar(func, new_name, sval, udm.type):
+        raise IDAError("failed to rename stack frame variable")
 
 @jsonrpc
 @idawrite
@@ -1276,7 +1299,7 @@ def create_stack_frame_variable(
         offset: Annotated[str, "Offset of the stack frame variable"],
         variable_name: Annotated[str, "Name of the stack variable"],
         type_name: Annotated[str, "Type of the stack variable"]
-) -> bool:
+):
     """ For a given function, create a stack variable at an offset and with a specific type """
 
     func = idaapi.get_func(parse_address(function_address))
@@ -1290,7 +1313,8 @@ def create_stack_frame_variable(
         raise IDAError("No frame returned.")
 
     tif = get_type_by_name(type_name)
-    return ida_frame.define_stkvar(func, variable_name, offset, tif)
+    if not ida_frame.define_stkvar(func, variable_name, offset, tif):
+        raise IDAError("failed to define stack frame variable")
 
 @jsonrpc
 @idawrite
@@ -1298,7 +1322,7 @@ def set_stack_frame_variable_type(
         function_address: Annotated[str, "Address of the disassembled function to set the stack frame variables"],
         variable_name: Annotated[str, "Name of the stack variable"],
         type_name: Annotated[str, "Type of the stack variable"]
-) -> bool:
+):
     """ For a given disassembled function, set the type of a stack variable """
 
     func = idaapi.get_func(parse_address(function_address))
@@ -1319,7 +1343,8 @@ def set_stack_frame_variable_type(
     offset = udm.offset // 8
 
     tif = get_type_by_name(type_name)
-    return ida_frame.set_frame_member_type(func, offset, tif)
+    if not ida_frame.set_frame_member_type(func, offset, tif):
+        raise IDAError("failed to set stack frame variable type")
 
 @jsonrpc
 @idawrite
