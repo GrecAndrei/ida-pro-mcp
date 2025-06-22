@@ -1351,7 +1351,7 @@ def set_stack_frame_variable_type(
 def delete_stack_frame_variable(
         function_address: Annotated[str, "Address of the function to set the stack frame variables"],
         variable_name: Annotated[str, "Name of the stack variable"]
-) -> bool:
+):
     """ Delete the named stack variable for a given function """
 
     func = idaapi.get_func(parse_address(function_address))
@@ -1377,7 +1377,8 @@ def delete_stack_frame_variable(
     if ida_frame.is_funcarg_off(func, offset):
         raise IDAError(f"{variable_name} is an argument member. Will not delete.")
 
-    return ida_frame.delete_frame_members(func, offset, offset+size)
+    if not ida_frame.delete_frame_members(func, offset, offset+size):
+        raise IDAError("failed to delete stack frame variable")
 
 @jsonrpc
 @idaread
