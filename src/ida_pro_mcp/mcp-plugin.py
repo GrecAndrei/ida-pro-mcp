@@ -275,6 +275,9 @@ class IDAError(Exception):
 class IDASyncError(Exception):
     pass
 
+class DecompilerLicenseError(IDAError):
+    pass
+
 # Important note: Always make sure the return value from your function f is a
 # copy of the data you have gotten from IDA, and not the original data.
 #
@@ -736,6 +739,9 @@ def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     error = ida_hexrays.hexrays_failure_t()
     cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(address, error, ida_hexrays.DECOMP_WARNINGS)
     if not cfunc:
+        if error.code == ida_hexrays.MERR_LICENSE:
+            raise DecompilerLicenseError("Decompiler licence is not available. Use `disassemble_function` to get the assembly code instead.")
+
         message = f"Decompilation failed at {hex(address)}"
         if error.str:
             message += f": {error.str}"
@@ -898,7 +904,8 @@ def set_comment(
     # Check if the address corresponds to a line
     try:
         cfunc = decompile_checked(address)
-    except:
+    except DecompilerLicenseError:
+        # We failed to decompile the function due to a decompiler license error
         return
 
     # Special case for function entry comments
