@@ -276,6 +276,9 @@ class IDAError(Exception):
 class IDASyncError(Exception):
     pass
 
+class DecompilerLicenseError(IDAError):
+    pass
+
 # Important note: Always make sure the return value from your function f is a
 # copy of the data you have gotten from IDA, and not the original data.
 #
@@ -841,6 +844,9 @@ def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     error = ida_hexrays.hexrays_failure_t()
     cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(address, error, ida_hexrays.DECOMP_WARNINGS)
     if not cfunc:
+        if error.code == ida_hexrays.MERR_LICENSE:
+            raise DecompilerLicenseError("Decompiler licence is not available. Use `disassemble_function` to get the assembly code instead.")
+
         message = f"Decompilation failed at {hex(address)}"
         if error.str:
             message += f": {error.str}"
@@ -996,9 +1002,16 @@ def set_comment(
     if not idaapi.set_cmt(address, comment, False):
         raise IDAError(f"Failed to set disassembly comment at {hex(address)}")
 
+    if not ida_hexrays.init_hexrays_plugin():
+        return
+
     # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
     # Check if the address corresponds to a line
-    cfunc = decompile_checked(address)
+    try:
+        cfunc = decompile_checked(address)
+    except DecompilerLicenseError:
+        # We failed to decompile the function due to a decompiler license error
+        return
 
     # Special case for function entry comments
     if address == cfunc.entry_ea:
