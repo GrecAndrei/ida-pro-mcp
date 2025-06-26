@@ -1099,6 +1099,63 @@ def set_global_variable_type(
         raise IDAError(f"Failed to apply type")
 
 @jsonrpc
+@idaread
+def get_global_variable_value_by_name(variable_name: Annotated[str, "Name of the global variable"]) -> str:
+    """
+    Read a global variable's value (if known at compile-time)
+
+    Prefer this function over the `data_read_*` functions.
+    """
+    ea = idaapi.get_name_ea(idaapi.BADADDR, variable_name)
+    if ea == idaapi.BADADDR:
+        raise IDAError(f"Global variable {variable_name} not found")
+
+    return get_global_variable_value_internal(ea)
+
+@jsonrpc
+@idaread
+def get_global_variable_value_at_address(ea: Annotated[str, "Address of the global variable"]) -> str:
+    """
+    Read a global variable's value by its address (if known at compile-time)
+
+    Prefer this function over the `data_read_*` functions.
+    """
+    ea = parse_address(ea)
+    return get_global_variable_value_internal(ea)
+
+def get_global_variable_value_internal(ea: int) -> str:
+     # Get the type information for the variable
+     tif = ida_typeinf.tinfo_t()
+     if not ida_nalt.get_tinfo(tif, ea):
+         # No type info, maybe we can figure out its size by its name
+         if not ida_bytes.has_any_name(ea):
+             raise IDAError(f"Failed to get type information for variable at {ea:#x}")
+
+         size = ida_bytes.get_item_size(ea)
+         if size == 0:
+             raise IDAError(f"Failed to get type information for variable at {ea:#x}")
+     else:
+         # Determine the size of the variable
+         size = tif.get_size()
+
+     # Read the value based on the size
+     if size == 0 and tif.is_array() and tif.get_array_element().is_decl_char():
+         return_string = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8").strip()
+         return f"\"{return_string}\""
+     elif size == 1:
+         return hex(ida_bytes.get_byte(ea))
+     elif size == 2:
+         return hex(ida_bytes.get_word(ea))
+     elif size == 4:
+         return hex(ida_bytes.get_dword(ea))
+     elif size == 8:
+         return hex(ida_bytes.get_qword(ea))
+     else:
+         # For other sizes, return the raw bytes
+         return ' '.join(hex(x) for x in ida_bytes.get_bytes(ea, size))
+
+
+@jsonrpc
 @idawrite
 def rename_function(
     function_address: Annotated[str, "Address of the function to rename"],
@@ -1117,7 +1174,7 @@ def rename_function(
 def set_function_prototype(
     function_address: Annotated[str, "Address of the function"],
     prototype: Annotated[str, "New function prototype"],
-) -> str:
+):
     """Set a function's prototype"""
     func = idaapi.get_func(parse_address(function_address))
     if not func:
@@ -1429,6 +1486,87 @@ def delete_stack_frame_variable(
 
     if not ida_frame.delete_frame_members(func, offset, offset+size):
         raise IDAError("failed to delete stack frame variable")
+
+@jsonrpc
+@idaread
+def read_memory_bytes(
+        memory_address: Annotated[str, "Address of the memory value to be read"],
+        size: Annotated[int, "size of memory to read"]
+) -> str:
+    """
+    Read bytes at a given address.
+
+    Only use this function if `get_global_variable_at` and `get_global_variable_by_name`
+    both failed.
+    """
+    return ' '.join(f'{x:#02x}' for x in ida_bytes.get_bytes(parse_address(memory_address), size))
+
+@jsonrpc
+@idaread
+def data_read_byte(
+    address: Annotated[str, "Address to get 1 byte value from"],
+) -> int:
+    """
+    Read the 1 byte value at the specified address.
+
+    Only use this function if `get_global_variable_at` failed.
+    """
+    ea = parse_address(address)
+    return ida_bytes.get_wide_byte(ea)
+
+@jsonrpc
+@idaread
+def data_read_word(
+    address: Annotated[str, "Address to get 2 bytes value from"],
+) -> int:
+    """
+    Read the 2 byte value at the specified address as a WORD.
+
+    Only use this function if `get_global_variable_at` failed.
+    """
+    ea = parse_address(address)
+    return ida_bytes.get_wide_word(ea)
+
+@jsonrpc
+@idaread
+def data_read_dword(
+    address: Annotated[str, "Address to get 4 bytes value from"],
+) -> int:
+    """
+    Read the 4 byte value at the specified address as a DWORD.
+
+    Only use this function if `get_global_variable_at` failed.
+    """
+    ea = parse_address(address)
+    return ida_bytes.get_wide_dword(ea)
+
+@jsonrpc
+@idaread
+def data_read_qword(
+        address: Annotated[str, "Address to get 8 bytes value from"]
+) -> int:
+    """
+    Read the 8 byte value at the specified address as a QWORD.
+
+    Only use this function if `get_global_variable_at` failed.
+    """
+    ea = parse_address(address)
+    return ida_bytes.get_qword(ea)
+
+@jsonrpc
+@idaread
+def data_read_string(
+        address: Annotated[str, "Address to get string from"]
+) -> str:
+    """
+    Read the string at the specified address.
+
+    Only use this function if `get_global_variable_at` failed.
+    """
+    try:
+        return idaapi.get_strlit_contents(parse_address(address),-1,0).decode("utf-8")
+    except Exception as e:
+        return "Error:" + str(e)
 
 @jsonrpc
 @idaread
