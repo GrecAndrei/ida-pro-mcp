@@ -402,7 +402,7 @@ class Metadata(TypedDict):
     crc32: str
     filesize: str
 
-def get_image_size():
+def get_image_size() -> int:
     try:
         # https://www.hex-rays.com/products/ida/support/sdkdoc/structidainfo.html
         info = idaapi.get_inf_structure()
@@ -431,16 +431,15 @@ def get_metadata() -> Metadata:
             return f().hex()
         except:
             return None
-    return {
-        "path": idaapi.get_input_file_path(),
-        "module": idaapi.get_root_filename(),
-        "base": hex(idaapi.get_imagebase()),
-        "size": hex(get_image_size()),
-        "md5": hash(ida_nalt.retrieve_input_file_md5),
-        "sha256": hash(ida_nalt.retrieve_input_file_sha256),
-        "crc32": hex(ida_nalt.retrieve_input_file_crc32()),
-        "filesize": hex(ida_nalt.retrieve_input_file_size()),
-    }
+
+    return Metadata(path=idaapi.get_input_file_path(),
+                    module=idaapi.get_root_filename(),
+                    base=hex(idaapi.get_imagebase()),
+                    size=hex(get_image_size()),
+                    md5=hash(ida_nalt.retrieve_input_file_md5),
+                    sha256=hash(ida_nalt.retrieve_input_file_sha256),
+                    crc32=hex(ida_nalt.retrieve_input_file_crc32()),
+                    filesize=hex(ida_nalt.retrieve_input_file_size()))
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
     try:
@@ -486,11 +485,8 @@ def get_function(address: int, *, raise_error=True) -> Function:
         name = fn.get_name()
     except AttributeError:
         name = ida_funcs.get_func_name(fn.start_ea)
-    return {
-        "address": hex(fn.start_ea),
-        "name": name,
-        "size": hex(fn.end_ea - fn.start_ea),
-    }
+
+    return Function(address=hex(address), name=name, size=hex(fn.end_ea - fn.start_ea))
 
 DEMANGLED_TO_EA = {}
 
@@ -653,13 +649,13 @@ def convert_number(
             ascii = None
             break
 
-    return {
-        "decimal": str(value),
-        "hexadecimal": hex(value),
-        "bytes": bytes.hex(" "),
-        "ascii": ascii,
-        "binary": bin(value),
-    }
+    return ConvertedNumber(
+        decimal=str(value),
+        hexadecimal=hex(value),
+        bytes=bytes.hex(" "),
+        ascii=ascii,
+        binary=bin(value),
+    )
 
 T = TypeVar("T")
 
@@ -714,10 +710,8 @@ def list_globals_filter(
     for addr, name in idautils.Names():
         # Skip functions
         if not idaapi.get_func(addr):
-            globals.append({
-                "address": hex(addr),
-                "name": name,
-            })
+            globals += [Global(address=hex(addr), name=name)]
+
     globals = pattern_filter(globals, filter, "name")
     return paginate(globals, offset, count)
 
@@ -731,8 +725,8 @@ def list_globals(
 
 class Import(TypedDict):
     address: str
-    name: str
-    library: str
+    imported_name: str
+    module: str
 
 @jsonrpc
 @idaread
@@ -753,11 +747,7 @@ def list_imports(
             if not symbol_name:
                 symbol_name = f"#{ordinal}"
 
-            acc += [{
-                "module": module_name,
-                "imported_name": symbol_name,
-                "address": hex(ea),
-            }]
+            acc += [Import(address=hex(ea), imported_name=symbol_name, module=module_name)]
 
             return True
 
@@ -784,11 +774,9 @@ def list_strings_filter(
         try:
             string = str(item)
             if string:
-                strings.append({
-                    "address": hex(item.ea),
-                    "length": item.length,
-                    "string": string,
-                })
+                strings += [
+                    String(address=hex(item.ea), length=item.length, string=string),
+                ]
         except:
             continue
     strings = pattern_filter(strings, filter, "string")
@@ -929,11 +917,11 @@ def get_xrefs_to(
     xrefs = []
     xref: ida_xref.xrefblk_t
     for xref in idautils.XrefsTo(parse_address(address)):
-        xrefs.append({
-            "address": hex(xref.frm),
-            "type": "code" if xref.iscode else "data",
-            "function": get_function(xref.frm, raise_error=False),
-        })
+        xrefs += [
+            Xref(address=hex(xref.frm),
+                 type="code" if xref.iscode else "data",
+                 function=get_function(xref.frm, raise_error=False))
+        ]
     return xrefs
 
 @jsonrpc
@@ -970,11 +958,12 @@ def get_xrefs_to_field(
     xrefs = []
     xref: ida_xref.xrefblk_t
     for xref in idautils.XrefsTo(tid):
-        xrefs.append({
-            "address": hex(xref.frm),
-            "type": "code" if xref.iscode else "data",
-            "function": get_function(xref.frm, raise_error=False),
-        })
+
+        xrefs += [
+            Xref(address=hex(xref.frm),
+                 type="code" if xref.iscode else "data",
+                 function=get_function(xref.frm, raise_error=False))
+        ]
     return xrefs
 
 @jsonrpc
