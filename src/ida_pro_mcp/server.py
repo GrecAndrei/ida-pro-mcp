@@ -163,7 +163,11 @@ visitor = MCPVisitor()
 visitor.visit(module)
 code = """# NOTE: This file has been automatically generated, do not modify!
 # Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
-from typing import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
+import sys
+if sys.version_info >= (3, 12):
+    from typing import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
+else:
+    from typing_extensions import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
 from pydantic import Field
 
 T = TypeVar("T")
