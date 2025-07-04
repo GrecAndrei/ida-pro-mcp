@@ -274,6 +274,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             # Windows does not support Claude Code, yet.
+            "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
         }
     elif sys.platform == "darwin":
         configs = {
@@ -283,6 +284,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
+            "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
         }
     elif sys.platform == "linux":
         configs = {
@@ -292,6 +294,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
+            "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
         }
     else:
         print(f"Unsupported platform: {sys.platform}")
