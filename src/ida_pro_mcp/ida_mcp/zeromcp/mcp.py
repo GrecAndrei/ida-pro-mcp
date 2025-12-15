@@ -7,7 +7,7 @@ import inspect
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, HTTPServer
-from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict
+from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict, Literal
 from types import UnionType
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
@@ -606,6 +606,10 @@ class McpServer:
         # TypedDict
         if is_typeddict(py_type):
             return self._typed_dict_to_schema(py_type)
+
+        # Literal (enum)
+        if origin is Literal:
+            return {"type": "string", "enum": list(get_args(py_type))}
 
         # Primitives
         return {

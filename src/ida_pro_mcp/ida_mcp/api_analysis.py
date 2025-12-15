@@ -1437,3 +1437,76 @@ def analyze_strings(
         )
 
     return results
+
+
+# ============================================================================
+# Analysis Control
+# ============================================================================
+
+@tool
+@idaread
+def reanalyze(
+    items: Annotated[list[dict] | dict, "Items with 'start' and optional 'end' address"]
+) -> list[dict]:
+    """Force reanalysis of address range(s)"""
+    import ida_auto
+    from .utils import normalize_dict_list
+    
+    items = normalize_dict_list(items)
+    results = []
+    
+    for item in items:
+        start = item.get("start", item.get("addr", ""))
+        end = item.get("end", "")
+        
+        try:
+            start_ea = parse_address(start)
+            end_ea = parse_address(end) if end else start_ea + 1
+            
+            # Queue range for reanalysis
+            ida_auto.plan_range(start_ea, end_ea)
+            results.append({
+                "start": hex(start_ea),
+                "end": hex(end_ea),
+                "ok": True
+            })
+        except Exception as e:
+            results.append({"start": start, "error": str(e)})
+    
+    return results
+
+
+@tool
+@idaread
+def auto_wait() -> dict:
+    """Wait for auto-analysis to complete"""
+    import ida_auto
+    
+    try:
+        ida_auto.auto_wait()
+        return {"ok": True, "message": "Auto-analysis complete"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@tool
+@idaread
+def plan_ea(
+    addrs: Annotated[list[str] | str, "Address(es) to queue for analysis"]
+) -> list[dict]:
+    """Queue address(es) for analysis"""
+    import ida_auto
+    
+    addrs = normalize_list_input(addrs)
+    results = []
+    
+    for addr in addrs:
+        try:
+            ea = parse_address(addr)
+            ida_auto.plan_ea(ea)
+            results.append({"addr": addr, "ok": True})
+        except Exception as e:
+            results.append({"addr": addr, "error": str(e)})
+    
+    return results
+

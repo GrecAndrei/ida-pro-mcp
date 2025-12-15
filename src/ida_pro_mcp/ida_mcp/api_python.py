@@ -100,13 +100,15 @@ def py_eval(
             "ida_segregs": lazy_import("ida_segregs"),
             "ida_srclang": lazy_import("ida_srclang"),
             "ida_strlist": lazy_import("ida_strlist"),
-            "ida_struct": lazy_import("ida_struct"),
+            # ida_struct and ida_enum were removed in IDA 9.0
+            # Use ida_typeinf instead for new code
+            "ida_struct": lazy_import("ida_struct") if int(idaapi.get_kernel_version().split('.')[0]) < 9 else None,
             "ida_tryblks": lazy_import("ida_tryblks"),
             "ida_typeinf": ida_typeinf,
             "ida_ua": lazy_import("ida_ua"),
             "ida_undo": lazy_import("ida_undo"),
             "ida_xref": ida_xref,
-            "ida_enum": lazy_import("ida_enum"),
+            "ida_enum": lazy_import("ida_enum") if int(idaapi.get_kernel_version().split('.')[0]) < 9 else None,
             "parse_address": parse_address,
             "get_function": get_function,
         }

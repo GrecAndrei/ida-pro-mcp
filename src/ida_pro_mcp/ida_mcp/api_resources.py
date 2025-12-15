@@ -400,20 +400,41 @@ def types_resource() -> list[dict]:
 @idaread
 def structs_resource() -> list[dict]:
     """Get all structures/unions"""
-    import ida_struct
-
+    import ida_typeinf
+    
+    # Version check for IDA 9.0 compatibility
+    IDA_VERSION = idaapi.get_kernel_version()
+    IDA9 = int(IDA_VERSION.split('.')[0]) >= 9
+    
     structs = []
-    for idx in range(ida_struct.get_struc_qty()):
-        tid = ida_struct.get_struc_by_idx(idx)
-        struc = ida_struct.get_struc(tid)
-        if struc:
-            structs.append(
-                {
+    
+    if IDA9:
+        # IDA 9.0+: Use ida_typeinf for everything (ida_struct removed)
+        limit = ida_typeinf.get_ordinal_limit(None)
+        for ordinal in range(1, limit):
+            tif = ida_typeinf.tinfo_t()
+            if tif.get_numbered_type(None, ordinal):
+                if tif.is_struct() or tif.is_union():
+                    name = tif.get_type_name()
+                    size = tif.get_size()
+                    structs.append({
+                        "name": name,
+                        "size": hex(size) if size != idaapi.BADADDR else "unknown",
+                        "is_union": tif.is_union(),
+                    })
+    else:
+        # IDA 8.x: Use ida_struct
+        import ida_struct
+        for idx in range(ida_struct.get_struc_qty()):
+            tid = ida_struct.get_struc_by_idx(idx)
+            struc = ida_struct.get_struc(tid)
+            if struc:
+                structs.append({
                     "name": ida_struct.get_struc_name(tid),
                     "size": hex(ida_struct.get_struc_size(struc)),
                     "is_union": struc.is_union(),
-                }
-            )
+                })
+    
     return structs
 
 
@@ -421,40 +442,82 @@ def structs_resource() -> list[dict]:
 @idaread
 def struct_name_resource(name: Annotated[str, "Structure name"]) -> dict:
     """Get structure definition with fields"""
-    import ida_struct
     import ida_typeinf
-
-    sid = ida_struct.get_struc_id(name)
-    if sid == idaapi.BADADDR:
-        return {"error": f"Structure not found: {name}"}
-
-    struc = ida_struct.get_struc(sid)
-    if not struc:
-        return {"error": f"Structure not found: {name}"}
-
-    members = []
-    for i in range(struc.memqty):
-        member = struc.get_member(i)
-        if member:
-            mname = ida_struct.get_member_name(member.id)
-            tif = ida_typeinf.tinfo_t()
-            if ida_struct.get_member_tinfo(tif, member):
-                type_str = str(tif)
-            else:
-                type_str = "unknown"
-
+    
+    # Version check for IDA 9.0 compatibility
+    IDA_VERSION = idaapi.get_kernel_version()
+    IDA9 = int(IDA_VERSION.split('.')[0]) >= 9
+    
+    if IDA9:
+        # IDA 9.0+: Use ida_typeinf
+        tid = ida_typeinf.get_named_type_tid(name)
+        if tid == idaapi.BADADDR:
+            return {"error": f"Structure not found: {name}"}
+        
+        tif = ida_typeinf.tinfo_t()
+        if not tif.get_type_by_tid(tid):
+            return {"error": f"Structure not found: {name}"}
+        
+        if not (tif.is_struct() or tif.is_union()):
+            return {"error": f"'{name}' is not a struct/union"}
+        
+        # Get UDT details
+        udt = ida_typeinf.udt_type_data_t()
+        if not tif.get_udt_details(udt):
+            return {"error": f"Could not get struct details for {name}"}
+        
+        members = []
+        for i in range(udt.size()):
+            member = udt[i]
             members.append(
                 StructureMember(
-                    name=mname,
-                    offset=hex(member.soff),
-                    size=hex(ida_struct.get_member_size(member)),
-                    type=type_str,
+                    name=member.name,
+                    offset=hex(member.offset // 8),  # Offset is in bits
+                    size=hex(member.size // 8) if member.size else "0",
+                    type=str(member.type),
                 )
             )
-
-    return StructureDefinition(
-        name=name, size=hex(ida_struct.get_struc_size(struc)), members=members
-    )
+        
+        return StructureDefinition(
+            name=name, 
+            size=hex(tif.get_size()), 
+            members=members
+        )
+    else:
+        # IDA 8.x: Use ida_struct
+        import ida_struct
+        
+        sid = ida_struct.get_struc_id(name)
+        if sid == idaapi.BADADDR:
+            return {"error": f"Structure not found: {name}"}
+        
+        struc = ida_struct.get_struc(sid)
+        if not struc:
+            return {"error": f"Structure not found: {name}"}
+        
+        members = []
+        for i in range(struc.memqty):
+            member = struc.get_member(i)
+            if member:
+                mname = ida_struct.get_member_name(member.id)
+                tif = ida_typeinf.tinfo_t()
+                if ida_struct.get_member_tinfo(tif, member):
+                    type_str = str(tif)
+                else:
+                    type_str = "unknown"
+                
+                members.append(
+                    StructureMember(
+                        name=mname,
+                        offset=hex(member.soff),
+                        size=hex(ida_struct.get_member_size(member)),
+                        type=type_str,
+                    )
+                )
+        
+        return StructureDefinition(
+            name=name, size=hex(ida_struct.get_struc_size(struc)), members=members
+        )
 
 
 # ============================================================================

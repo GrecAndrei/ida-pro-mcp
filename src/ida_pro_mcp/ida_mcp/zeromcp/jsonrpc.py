@@ -1,7 +1,7 @@
 import json
 import inspect
 import traceback
-from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
+from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict, Literal
 from types import UnionType
 
 JsonRpcId: TypeAlias = str | int | float | None
@@ -195,6 +195,12 @@ class JsonRpcRegistry:
 
                     if not type_matched:
                         raise JsonRpcException(-32602, f"Invalid params: {param_name} union does not contain {type(value).__name__}")
+                    validated_params[param_name] = value
+                    continue
+
+                if origin is Literal:
+                    if value not in args:
+                        raise JsonRpcException(-32602, f"Invalid params: {param_name} expected one of {args}, got {value}")
                     validated_params[param_name] = value
                     continue
 
