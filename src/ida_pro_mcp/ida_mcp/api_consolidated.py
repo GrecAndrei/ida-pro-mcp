@@ -1781,33 +1781,79 @@ def files(
     action: Annotated[Literal[
         "save", "close", "open", "load_binary",
         "list_recent", "get_cwd", "set_cwd", 
-        "list_dir", "exists", "read", "write"
+        "list_dir", "exists", "read", "write", "sessions", "batch"
     ], "Action"],
-    path: Annotated[Optional[str], "File path"] = None,
+    path: Annotated[Optional[str], "File path or JSON array of paths for batch"] = None,
     base_addr: Annotated[Optional[str], "Base address for load_binary"] = None,
-    content: Annotated[Optional[str], "Content to write"] = None,
+    content: Annotated[Optional[str], "Content to write, or mode for open"] = None,
 ) -> dict:
     """
-    File and Database I/O.
+    File and Database I/O with MULTI-FILE BATCH ANALYSIS support.
     
-    Actions:
-    - save: Save the current IDB.
-    - close: Close the database (may exit IDA).
-    - open: Open a new database (.idb/.i64).
-    - load_binary: Load an additional binary file into the database.
-    - list_recent: List recently opened files (Best effort).
-    - get_cwd/set_cwd: Manage current working directory.
-    - list_dir: List files in a directory.
-    - exists/read/write: Basic file system operations.
+    ACTIONS:
     
-    Arguments:
-    - base_addr: Load address for load_binary.
-    - content: Content string for write.
+    open - Open file in new IDA instance (multi-session support!)
+        Params: path (REQUIRED), content (optional: "load"|"overwrite"|"-c -B"...)
+        Returns: {ok, path, mode, pid, cmd, existing_db, session_file}
+        Example: files(action="open", path="C:/samples/malware.exe")
+        Example: files(action="open", path="C:/samples/mal.exe", content="overwrite")
+        Behavior:
+          - Default ("load"): Opens existing .i64/.idb if found, else creates new
+          - "overwrite": Forces new database creation (deletes existing)
+          - Custom flags: Pass IDA CLI flags like "-c -B -A"
+        
+    batch - MULTI-FILE BATCH ANALYSIS (headless mode only!)
+        Params: path (JSON array of paths OR directory path)
+        Returns: {analyzed, failed, total, results: [{path, ok, functions, md5}]}
+        Example: files(action="batch", path='["file1.exe", "file2.exe"]')
+        Example: files(action="batch", path="C:/samples/")
+        Note: Requires idalib-mcp headless mode. Analyzes each file sequentially.
+        
+    sessions - List all spawned IDA sessions
+        Returns: {sessions: [{pid, path, port, started}], current: {pid, path}}
+        Example: files(action="sessions")
+        
+    save - Save current database
+    close - Close database (in headless: ready for next file)
+    load_binary - Load additional binary into current IDB
+    list_recent - List recently opened files
+    get_cwd/set_cwd - Working directory management
+    list_dir - Directory listing
+    exists/read/write - File system operations
     """
     try:
         import os
         
-        if action == "save":
+        if action == "sessions":
+            # List all spawned IDA sessions
+            import json
+            # Use user's home dir for session tracking (avoids Program Files permissions)
+            home_dir = os.path.expanduser("~")
+            session_file = os.path.join(home_dir, ".ida_mcp_sessions.json")
+            
+            sessions = []
+            try:
+                if os.path.exists(session_file):
+                    with open(session_file, "r") as f:
+                        sessions = json.load(f)
+            except:
+                pass
+            
+            # Current session info
+            current = {
+                "pid": os.getpid(),
+                "path": idc.get_idb_path(),
+                "port": 13337  # Default MCP port
+            }
+            
+            return {
+                "sessions": sessions,
+                "current": current,
+                "session_file": session_file,
+                "note": "Use open action to spawn new IDA instances"
+            }
+        
+        elif action == "save":
             import ida_loader
             if ida_loader.save_database(path or "", 0):
                 return {"ok": True, "path": path or idc.get_idb_path()}
@@ -1815,12 +1861,24 @@ def files(
         
         elif action == "close":
             # IDA 9.2: Closing is supported but context-dependent
-            # In GUI mode, this would close IDA. In idalib, call close_database.
+            # In headless/idalib mode: use idapro.close_database()
+            # In GUI mode: warn about qexit
+            
+            # Try idapro first (IDA 9.x headless)
+            try:
+                import idapro
+                if hasattr(idapro, 'close_database'):
+                    idapro.close_database()
+                    return {"ok": True, "note": "Database closed via idapro. Ready for next file."}
+            except ImportError:
+                pass
+            
+            # Try older idalib module name
             try:
                 import idalib
                 if hasattr(idalib, 'close_database'):
                     idalib.close_database()
-                    return {"ok": True, "note": "Database closed. idalib context ended."}
+                    return {"ok": True, "note": "Database closed via idalib."}
             except ImportError:
                 pass
             
@@ -1828,49 +1886,180 @@ def files(
             try:
                 import ida_pro
                 if hasattr(ida_pro, 'qexit'):
-                    return {"warning": "Use ida_pro.qexit(0) to close. This is destructive - not calling automatically.",
-                            "how_to": "misc(python) with code='import ida_pro; ida_pro.qexit(0)'"}
+                    return {"warning": "GUI mode - use ida_pro.qexit(0) to close. This exits IDA.",
+                            "how_to": "misc(action='python', code='import ida_pro; ida_pro.qexit(0)')"}
             except:
                 pass
             
-            return {"error": "close_database not available. In GUI mode, use File > Exit or misc(python) with qexit."}
+            return {"error": "close_database not available. In GUI mode, use File > Exit."}
         
         elif action == "open":
-            # IDA 9.2: File opening is supported via idalib.open_database()
-            # Key insight: pass CLI args to open_database for loading raw binaries
+            # IDA 9.2: File opening support
+            # In idalib: use open_database()
+            # In GUI mode: spawn a NEW IDA process with the target file
             if not path:
                 return {"error": "path required"}
             
+            import os
+            if not os.path.exists(path):
+                return {"error": f"File not found: {path}"}
+            
+            # HEADLESS MODE: Try idapro first (IDA 9.x), then idalib
+            # This allows batch analysis of multiple files
+            
+            # Try idapro (IDA 9.x headless)
+            try:
+                import idapro
+                import ida_auto
+                if hasattr(idapro, 'open_database'):
+                    # open_database returns 0 on success
+                    result = idapro.open_database(path, run_auto_analysis=True)
+                    if result == 0:
+                        # Wait for auto-analysis to complete
+                        ida_auto.auto_wait()
+                        return {"ok": True, "path": path, "mode": "idapro", 
+                                "note": "Database opened and auto-analysis complete"}
+                    return {"error": f"idapro.open_database failed with code: {result}"}
+            except ImportError:
+                pass
+            
+            # Try older idalib module
             try:
                 import idalib
-                
-                # Check if idalib has open_database (IDA 9.2+)
                 if hasattr(idalib, 'open_database'):
-                    # For .idb/.i64 files, open directly
                     if path.lower().endswith(('.idb', '.i64')):
                         result = idalib.open_database(path)
-                        if result:
-                            return {"ok": True, "path": path, "type": "database"}
+                        if result == 0:
+                            return {"ok": True, "path": path, "type": "database", "mode": "idalib"}
                         return {"error": f"Failed to open database: {path}"}
                     
-                    # For raw binaries, pass CLI args: -c (create new db), -A (auto-analysis)
-                    # The user can customize args via the content parameter
-                    cli_args = content or "-c -A"  # Default: create new, auto-analyze
+                    cli_args = content or "-c -A"
                     result = idalib.open_database(path, cli_args)
-                    if result:
-                        return {"ok": True, "path": path, "type": "binary", "args": cli_args}
+                    if result == 0:
+                        return {"ok": True, "path": path, "type": "binary", "mode": "idalib", "args": cli_args}
                     return {"error": f"Failed to load binary: {path}"}
-                else:
-                    return {"error": "idalib.open_database not found - requires IDA 9.2+"}
-                    
             except ImportError:
-                # Not running in idalib context (probably GUI mode)
-                return {
-                    "error": "open_database requires idalib (headless) context",
-                    "note": "In GUI mode, opening a new file replaces the current session. Use File > Open in IDA.",
-                    "limitation": "IDA uses one-IDB-per-process model. For batch processing, spawn new processes.",
-                    "alternative": "Use ida_loader.loader_input_t for loading additional binaries into current DB."
+                pass  # Fall through to GUI mode handling
+            
+            # GUI MODE: Spawn a new IDA process
+            # This allows AI agents to open files even in GUI mode
+            import subprocess
+            import sys
+            
+            # Find ida executable - IDA 9.x uses unified naming (ida.exe, idat.exe)
+            # Older versions (8.x) used ida64.exe, idat64.exe for 64-bit
+            ida_dir = idaapi.idadir("")
+            
+            # Try multiple executable names in order of preference
+            exe_candidates = []
+            if os.name == "nt":
+                # Windows
+                exe_candidates = ["ida.exe", "ida64.exe", "idat.exe", "idat64.exe"]
+            else:
+                # Linux/Mac
+                exe_candidates = ["ida", "ida64", "idat", "idat64"]
+            
+            ida_exe = None
+            for candidate in exe_candidates:
+                test_path = os.path.join(ida_dir, candidate)
+                if os.path.exists(test_path):
+                    ida_exe = test_path
+                    break
+            
+            if not ida_exe:
+                return {"error": f"IDA executable not found in {ida_dir}", "tried": exe_candidates}
+            
+            # Check for existing database
+            base_name = os.path.splitext(path)[0]
+            existing_idb = None
+            for ext in ['.i64', '.idb']:
+                check_path = base_name + ext
+                if os.path.exists(check_path):
+                    existing_idb = check_path
+                    break
+            
+            # Build command line with proper flags
+            # -B: batch mode (suppress dialogs)
+            # -c: create new database (overwrite if exists)
+            # content parameter can override: "overwrite", "load", or custom flags
+            mode = content.lower().strip() if content else "load"
+            
+            if mode == "overwrite" or mode == "new":
+                # Force create new database
+                cmd = [ida_exe, "-c", "-B", path]
+            elif mode == "load" and existing_idb:
+                # Load existing database directly
+                cmd = [ida_exe, existing_idb]
+            elif mode.startswith("-"):
+                # Custom flags passed
+                cmd = [ida_exe] + mode.split() + [path]
+            else:
+                # Default: batch mode, will load existing or create new
+                cmd = [ida_exe, "-B", path]
+            
+            # Track spawned instances for multi-session support
+            import json
+            # Use user's home dir for session tracking (avoids Program Files permissions)
+            home_dir = os.path.expanduser("~")
+            session_file = os.path.join(home_dir, ".ida_mcp_sessions.json")
+            
+            try:
+                # Spawn process WITH visible window
+                if os.name == "nt":
+                    # Windows: CREATE_NEW_PROCESS_GROUP keeps it independent but visible
+                    proc = subprocess.Popen(
+                        cmd,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                else:
+                    # Unix: use start_new_session
+                    proc = subprocess.Popen(
+                        cmd,
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                
+                # Record session for multi-instance tracking
+                session_info = {
+                    "pid": proc.pid,
+                    "path": path,
+                    "started": str(os.times()),
+                    "port": 13337  # Default, may increment if multiple instances
                 }
+                
+                # Load existing sessions and add new one
+                sessions = []
+                try:
+                    if os.path.exists(session_file):
+                        with open(session_file, "r") as f:
+                            sessions = json.load(f)
+                except:
+                    pass
+                
+                sessions.append(session_info)
+                
+                try:
+                    with open(session_file, "w") as f:
+                        json.dump(sessions, f, indent=2)
+                except:
+                    pass  # Non-critical
+                
+                return {
+                    "ok": True,
+                    "path": path,
+                    "mode": "spawned",
+                    "pid": proc.pid,
+                    "cmd": " ".join(cmd),
+                    "existing_db": existing_idb,
+                    "behavior": mode,
+                    "note": "IDA window spawned. MCP plugin will auto-start on port 13337+.",
+                    "session_file": session_file
+                }
+            except Exception as e:
+                return {"error": f"Failed to spawn IDA: {str(e)}", "cmd": " ".join(cmd)}
         
         elif action == "load_binary":
             # Load additional binary into current database (not replace)
@@ -1957,6 +2146,263 @@ def files(
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content)
             return {"ok": True, "path": path, "size": len(content)}
+        
+        elif action == "batch":
+            # FULLY AUTOMATIC BATCH ANALYSIS
+            # Spawns headless IDA worker to analyze multiple files
+            # NO MANUAL SETUP REQUIRED
+            
+            if not path:
+                return {"error": "path required - provide JSON array of paths or a directory"}
+            
+            import json as json_mod
+            import subprocess
+            import tempfile
+            import sys
+            
+            # Parse paths
+            file_list = []
+            if path.startswith("["):
+                try:
+                    file_list = json_mod.loads(path)
+                except:
+                    return {"error": "Invalid JSON array for paths"}
+            elif os.path.isdir(path):
+                for f in os.listdir(path):
+                    full = os.path.join(path, f)
+                    if os.path.isfile(full):
+                        ext = os.path.splitext(f)[1].lower()
+                        if ext in ['.exe', '.dll', '.so', '.dylib', '.bin', '.elf', '']:
+                            file_list.append(full)
+            else:
+                return {"error": f"path must be JSON array or directory, got: {path}"}
+            
+            if not file_list:
+                return {"error": "No files to analyze"}
+            
+            # Check if already in headless mode
+            try:
+                import idapro
+                if hasattr(idapro, 'open_database'):
+                    # Already in headless - do direct analysis
+                    results = []
+                    import ida_auto
+                    for filepath in file_list:
+                        if not os.path.exists(filepath):
+                            results.append({"path": filepath, "error": "File not found"})
+                            continue
+                        try:
+                            try:
+                                idapro.close_database()
+                            except:
+                                pass
+                            ret = idapro.open_database(filepath, run_auto_analysis=True)
+                            if ret == 0:
+                                ida_auto.auto_wait()
+                                func_count = len(list(idautils.Functions()))
+                                results.append({"path": filepath, "ok": True, "functions": func_count})
+                            else:
+                                results.append({"path": filepath, "error": f"open_database returned {ret}"})
+                        except Exception as e:
+                            results.append({"path": filepath, "error": str(e)})
+                    return {"mode": "direct", "analyzed": len([r for r in results if r.get("ok")]), 
+                            "failed": len([r for r in results if r.get("error")]), "results": results}
+            except ImportError:
+                pass
+            
+            # GUI MODE: Auto-spawn headless worker
+            # Find idat executable (text-mode IDA for scripting)
+            ida_dir = idaapi.idadir("")
+            idat_candidates = ["idat.exe", "idat64.exe", "idat"] if os.name == "nt" else ["idat64", "idat"]
+            idat_exe = None
+            for cand in idat_candidates:
+                test = os.path.join(ida_dir, cand)
+                if os.path.exists(test):
+                    idat_exe = test
+                    break
+            
+            if not idat_exe:
+                return {"error": f"idat executable not found in {ida_dir}"}
+            
+            # Create analysis script
+            script_content = '''
+import sys
+import json
+import os
+
+try:
+    import idapro
+    import ida_auto
+    import idautils
+    import idc
+except ImportError:
+    # Fallback for older IDA
+    import ida_auto
+    import idautils
+    import idc
+
+files = FILES_PLACEHOLDER
+results = []
+
+for filepath in files:
+    if not os.path.exists(filepath):
+        results.append({"path": filepath, "error": "File not found"})
+        continue
+    try:
+        # For idat, we need to use ida_loader or just run per-file
+        # This script runs once per file via idat -A -S
+        func_count = len(list(idautils.Functions()))
+        md5 = idc.retrieve_input_file_md5().hex() if hasattr(idc, 'retrieve_input_file_md5') else ""
+        results.append({
+            "path": idc.get_input_file_path(),
+            "ok": True,
+            "functions": func_count,
+            "strings": len(list(idautils.Strings())),
+            "md5": md5
+        })
+    except Exception as e:
+        results.append({"path": filepath, "error": str(e)})
+
+# Write results
+with open(OUTPUT_PLACEHOLDER, "w") as f:
+    json.dump(results, f)
+
+# Exit IDA
+import ida_pro
+ida_pro.qexit(0)
+'''
+            
+            # Run analysis on each file WITH CACHING
+            results = []
+            home_dir = os.path.expanduser("~")
+            cached_count = 0
+            
+            for filepath in file_list:
+                if not os.path.exists(filepath):
+                    results.append({"path": filepath, "error": "File not found"})
+                    continue
+                
+                # CACHE CHECK: If .i64 or .idb exists, load it instead of re-analyzing
+                base_name = os.path.splitext(filepath)[0]
+                cached_idb = None
+                for ext in ['.i64', '.idb']:
+                    check = base_name + ext
+                    if os.path.exists(check):
+                        cached_idb = check
+                        break
+                
+                if cached_idb:
+                    # Load cached database - much faster!
+                    output_file = os.path.join(home_dir, f".ida_batch_{os.getpid()}_{len(results)}.json")
+                    
+                    cache_script = f'''
+import json
+import idautils
+import idc
+import ida_pro
+
+try:
+    func_count = len(list(idautils.Functions()))
+    string_count = len(list(idautils.Strings()))
+    md5 = idc.retrieve_input_file_md5().hex() if hasattr(idc, 'retrieve_input_file_md5') else ""
+    result = {{"path": idc.get_input_file_path(), "ok": True, "functions": func_count, "strings": string_count, "md5": md5, "cached": True}}
+except Exception as e:
+    result = {{"path": "{filepath}", "error": str(e), "cached": True}}
+
+with open(r"{output_file}", "w") as f:
+    json.dump(result, f)
+
+ida_pro.qexit(0)
+'''
+                    script_file = os.path.join(home_dir, f".ida_batch_script_{os.getpid()}.py")
+                    with open(script_file, "w") as f:
+                        f.write(cache_script)
+                    
+                    try:
+                        # Load cached IDB - should be very fast
+                        cmd = [idat_exe, "-A", f"-S{script_file}", cached_idb]
+                        proc = subprocess.run(cmd, capture_output=True, timeout=60)  # Only 1 min for cached
+                        
+                        if os.path.exists(output_file):
+                            with open(output_file, "r") as f:
+                                result = json_mod.load(f)
+                                results.append(result)
+                                cached_count += 1
+                            os.remove(output_file)
+                        else:
+                            results.append({"path": filepath, "error": "Cache load failed"})
+                    except subprocess.TimeoutExpired:
+                        results.append({"path": filepath, "error": "Cache load timed out"})
+                    except Exception as e:
+                        results.append({"path": filepath, "error": f"Cache error: {str(e)}"})
+                    finally:
+                        try:
+                            os.remove(script_file)
+                        except:
+                            pass
+                    continue
+                
+                # NO CACHE: Full analysis needed
+                output_file = os.path.join(home_dir, f".ida_batch_{os.getpid()}_{len(results)}.json")
+                
+                single_script = f'''
+import json
+import os
+import idautils
+import idc
+import ida_pro
+
+try:
+    func_count = len(list(idautils.Functions()))
+    string_count = len(list(idautils.Strings()))
+    md5 = idc.retrieve_input_file_md5().hex() if hasattr(idc, 'retrieve_input_file_md5') else ""
+    result = {{"path": idc.get_input_file_path(), "ok": True, "functions": func_count, "strings": string_count, "md5": md5, "cached": False}}
+except Exception as e:
+    result = {{"path": "{filepath}", "error": str(e)}}
+
+with open(r"{output_file}", "w") as f:
+    json.dump(result, f)
+
+ida_pro.qexit(0)
+'''
+                
+                script_file = os.path.join(home_dir, f".ida_batch_script_{os.getpid()}.py")
+                with open(script_file, "w") as f:
+                    f.write(single_script)
+                
+                try:
+                    # Full analysis - longer timeout
+                    cmd = [idat_exe, "-A", f"-S{script_file}", filepath]
+                    proc = subprocess.run(cmd, capture_output=True, timeout=300)  # 5 min for new files
+                    
+                    # Read results
+                    if os.path.exists(output_file):
+                        with open(output_file, "r") as f:
+                            result = json_mod.load(f)
+                            results.append(result)
+                        os.remove(output_file)
+                    else:
+                        results.append({"path": filepath, "error": "Analysis did not produce output"})
+                except subprocess.TimeoutExpired:
+                    results.append({"path": filepath, "error": "Analysis timed out (5 min)"})
+                except Exception as e:
+                    results.append({"path": filepath, "error": f"Subprocess error: {str(e)}"})
+                finally:
+                    try:
+                        os.remove(script_file)
+                    except:
+                        pass
+            
+            return {
+                "mode": "auto-spawned",
+                "worker": idat_exe,
+                "analyzed": len([r for r in results if r.get("ok")]),
+                "cached": cached_count,
+                "fresh": len([r for r in results if r.get("ok") and not r.get("cached")]),
+                "failed": len([r for r in results if r.get("error")]),
+                "total": len(file_list),
+                "results": results
+            }
         
         else:
             return {"error": f"Unknown action: {action}"}
