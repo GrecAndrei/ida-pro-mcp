@@ -1,355 +1,436 @@
-# IDA Pro MCP
+<p align="center">
+  <img src="https://img.shields.io/badge/IDA%20Pro-9.0%2B-blue?style=for-the-badge" alt="IDA Pro 9.0+"/>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-green?style=for-the-badge" alt="Python 3.11+"/>
+  <img src="https://img.shields.io/badge/MCP-2.0-purple?style=for-the-badge" alt="MCP 2.0"/>
+  <img src="https://img.shields.io/badge/Tools-23-orange?style=for-the-badge" alt="23 Tools"/>
+  <img src="https://img.shields.io/badge/Actions-120%2B-red?style=for-the-badge" alt="120+ Actions"/>
+</p>
 
-Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
+<h1 align="center">
+  <br>
+  🔬 IDA Pro MCP Server
+  <br>
+  <sub>Model Context Protocol for IDA Pro</sub>
+</h1>
 
-https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
+<p align="center">
+  <strong>The most comprehensive MCP server for IDA Pro.</strong><br>
+  23 mega-tools with 120+ actions for AI-powered reverse engineering.<br>
+  Optimized for LLM context windows with action-based tool consolidation.
+</p>
 
-The binaries and prompt for the video are available in the [mcp-reversing-dataset](https://github.com/mrexodia/mcp-reversing-dataset) repository.
+---
 
-## Prerequisites
+## ⚡ Quick Start
 
-- [Python](https://www.python.org/downloads/) (**3.11 or higher**)
-  - Use `idapyswitch` to switch to the newest Python version
-- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
-- Supported MCP Client (pick one you like)
-  - [Amazon Q Developer CLI](https://aws.amazon.com/q/developer/)
-  - [Augment Code](https://www.augmentcode.com/)
-  - [Claude](https://claude.ai/download)
-  - [Claude Code](https://www.anthropic.com/code)
-  - [Cline](https://cline.bot)
-  - [Codex](https://github.com/openai/codex)
-  - [Copilot CLI](https://docs.github.com/en/copilot)
-  - [Crush](https://github.com/charmbracelet/crush)
-  - [Cursor](https://cursor.com)
-  - [Gemini CLI](https://google-gemini.github.io/gemini-cli/)
-  - [Kilo Code](https://www.kilocode.com/)
-  - [Kiro](https://kiro.dev/)
-  - [LM Studio](https://lmstudio.ai/)
-  - [Opencode](https://opencode.ai/)
-  - [Qodo Gen](https://www.qodo.ai/)
-  - [Qwen Coder](https://qwenlm.github.io/qwen-code-docs/)
-  - [Roo Code](https://roocode.com)
-  - [Trae](https://trae.ai/)
-  - [VS Code](https://code.visualstudio.com/)
-  - [Warp](https://www.warp.dev/)
-  - [Windsurf](https://windsurf.com)
-  - [Zed](https://zed.dev/)
-  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
-
-## Installation
-
-Install the latest version of the IDA Pro MCP package:
-
-```sh
-pip uninstall ida-pro-mcp
-pip install https://github.com/mrexodia/ida-pro-mcp/archive/refs/heads/main.zip
-```
-
-Configure the MCP servers and install the IDA Plugin:
-
-```
+```bash
+# Install
+pip install -e .
 ida-pro-mcp --install
+
+# Start in IDA Pro
+# Edit → Plugins → MCP (or Ctrl+Alt+M)
+
+# Configure your MCP client
+ida-pro-mcp --config
 ```
 
-**Important**: Make sure you completely restart IDA and your MCP client for the installation to take effect. Some clients (like Claude) run in the background and need to be quit from the tray icon.
+---
 
-https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
+## 🎯 Architecture
 
-_Note_: You need to load a binary in IDA before the plugin menu will show up.
-
-## Prompt Engineering
-
-LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
-
-```md
-Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
-
-- Inspect the decompilation and add comments with your findings
-- Rename variables to more sensible names
-- Change the variable and argument types if necessary (especially pointer and array types)
-- Change function names to be more descriptive
-- If more details are necessary, disassemble the function and add comments with your findings
-- NEVER convert number bases yourself. Use the `int_convert` MCP tool if needed!
-- Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
-- Create a report.md with your findings and steps taken at the end
-- When you find a solution, prompt to user for feedback with the password you found
+```
+┌─────────────────┐     MCP Protocol     ┌──────────────────┐
+│   AI Client     │◄────────────────────►│   MCP Server     │
+│ (Claude, Gemini)│      stdio/SSE       │  (Python, uv)    │
+└─────────────────┘                      └────────┬─────────┘
+                                                  │ HTTP/JSON
+                                                  ▼
+                                         ┌──────────────────┐
+                                         │   IDA Plugin     │
+                                         │  (ida_mcp.py)    │
+                                         │  :13337          │
+                                         └────────┬─────────┘
+                                                  │ IDAPython
+                                                  ▼
+                                         ┌──────────────────┐
+                                         │     IDA Pro      │
+                                         │   + Hex-Rays     │
+                                         └──────────────────┘
 ```
 
-This prompt was just the first experiment, please share if you found ways to improve the output!
+**Key Design Decisions:**
 
-Another prompt by [@can1357](https://github.com/can1357):
+- **Consolidated API**: 23 mega-tools instead of 100+ individual functions
+- **Action-based routing**: Each tool uses an `action` parameter for sub-operations
+- **Thread-safe**: `@idaread` / `@idawrite` decorators ensure safe IDA calls
+- **IDA 9.0+ compatible**: All deprecated APIs replaced with modern equivalents
 
-```md
-Your task is to create a complete and comprehensive reverse engineering analysis. Reference AGENTS.md to understand the project goals and ensure the analysis serves our purposes.
+---
 
-Use the following systematic methodology:
+## 📦 Complete Tool Reference
 
-1. **Decompilation Analysis**
-   - Thoroughly inspect the decompiler output
-   - Add detailed comments documenting your findings
-   - Focus on understanding the actual functionality and purpose of each component (do not rely on old, incorrect comments)
+### Core Database Tools
 
-2. **Improve Readability in the Database**
-   - Rename variables to sensible, descriptive names
-   - Correct variable and argument types where necessary (especially pointers and array types)
-   - Update function names to be descriptive of their actual purpose
+#### `idb` — Database Information
 
-3. **Deep Dive When Needed**
-   - If more details are necessary, examine the disassembly and add comments with findings
-   - Document any low-level behaviors that aren't clear from the decompilation alone
-   - Use sub-agents to perform detailed analysis
+| Action        | Description                            | Returns                                         |
+| ------------- | -------------------------------------- | ----------------------------------------------- |
+| `meta`        | Database metadata (path, base, hashes) | `{path, module, base, size, md5, sha256}`       |
+| `segments`    | List all segments                      | `{segments: [{name, start, end, size, perms}]}` |
+| `cursor`      | Current cursor position                | `{addr, function?: {addr, name}}`               |
+| `entrypoints` | Program entry points                   | `{entrypoints: [{addr, name, ordinal}]}`        |
 
-4. **Important Constraints**
-   - NEVER convert number bases yourself - use the int_convert MCP tool if needed
-   - Use MCP tools to retrieve information as necessary
-   - Derive all conclusions from actual analysis, not assumptions
-
-5. **Documentation**
-   - Produce comprehensive RE/*.md files with your findings
-   - Document the steps taken and methodology used
-   - When asked by the user, ensure accuracy over previous analysis file
-   - Organize findings in a way that serves the project goals outlined in AGENTS.md or CLAUDE.md
+```python
+idb(action="meta")
+idb(action="segments")
 ```
 
-Live stream discussing prompting and showing some real-world malware analysis:
+---
 
-[![](https://img.youtube.com/vi/iFxNuk3kxhk/0.jpg)](https://www.youtube.com/watch?v=iFxNuk3kxhk)
+#### `code` — Decompilation & Analysis
 
-## Tips for Enhancing LLM Accuracy
+| Action            | Description                                 | Required Params      |
+| ----------------- | ------------------------------------------- | -------------------- |
+| `decompile`       | Hex-Rays pseudocode                         | `addrs`              |
+| `disasm`          | Assembly listing                            | `addrs`              |
+| `xrefs_to`        | Cross-references TO address                 | `addrs`              |
+| `xrefs_from`      | Cross-references FROM address               | `addrs`              |
+| `callees`         | Functions called by target                  | `addrs`              |
+| `callers`         | Functions calling target                    | `addrs`              |
+| `blocks`          | Basic blocks (CFG nodes)                    | `addrs`              |
+| `analyze`         | Full analysis (decompile + xrefs + strings) | `addrs`              |
+| `callgraph`       | Generate call graph                         | `addrs`, `max_depth` |
+| `find_paths`      | Find paths between addresses                | `addrs`, `target`    |
+| `strings_in_func` | Strings referenced in function              | `addrs`              |
 
-Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `int_convert` MCP tool and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
-
-Another thing to keep in mind is that LLMs will not perform well on obfuscated code. Before trying to use an LLM to solve the problem, take a look around the binary and spend some time (automatically) removing the following things:
-
-- String encryption
-- Import hashing
-- Control flow flattening
-- Code encryption
-- Anti-decompilation tricks
-
-You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
-
-## SSE Transport & Headless MCP
-
-You can run an SSE server to connect to the user interface like this:
-
-```sh
-uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
+```python
+code(action="decompile", addrs="main")
+code(action="callees", addrs=["0x401000", "0x402000"])
+code(action="callgraph", addrs="WinMain", max_depth=3)
 ```
 
-After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
+---
 
-```sh
-uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
+#### `data` — Data Enumeration
+
+| Action      | Description           | Returns                                      |
+| ----------- | --------------------- | -------------------------------------------- |
+| `functions` | List functions        | `{functions: [{addr, name, size}], total}`   |
+| `globals`   | List global variables | `{globals: [{addr, name}]}`                  |
+| `strings`   | List strings          | `{strings: [{addr, string, length}], total}` |
+| `imports`   | List imports          | `{imports: [{addr, name, module}], total}`   |
+| `exports`   | List exports          | `{exports: [{addr, name, ordinal}]}`         |
+| `lookup`    | Resolve name↔address  | `{addr, name, is_func}`                      |
+
+```python
+data(action="functions", count=10, query="init")
+data(action="lookup", query="main")
 ```
 
-_Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
+---
 
+#### `search` — Pattern Search
 
-## MCP Resources
+| Action      | Pattern Format                | Example               |
+| ----------- | ----------------------------- | --------------------- |
+| `bytes`     | Hex bytes with `??` wildcards | `"48 83 EC ?? 48 8B"` |
+| `string`    | Substring match               | `"password"`          |
+| `immediate` | Constant value                | `"0xDEADBEEF"`        |
+| `name`      | Glob pattern                  | `"*crypt*"`           |
+| `insns`     | Mnemonic sequence             | `"push, mov, call"`   |
+| `data_ref`  | Data references to address    | `"0x404000"`          |
+| `code_ref`  | Code references to address    | `"main"`              |
 
-**Resources** are browsable IDB state endpoints that provide read-only access to binary metadata, functions, strings, and types. Unlike tools (which perform actions), resources follow REST-like URI patterns for efficient data exploration.
-
-**Core IDB State:**
-- `ida://idb/metadata` - IDB file info (path, arch, base, size, hashes)
-- `ida://idb/segments` - Memory segments with permissions
-- `ida://idb/entrypoints` - Entry points (main, TLS callbacks, etc.)
-
-**Code Browsing:**
-- `ida://functions` - List all functions (paginated, filterable)
-- `ida://function/{addr}` - Function details by address
-- `ida://globals` - List global variables (paginated, filterable)
-- `ida://global/{name_or_addr}` - Global variable details
-
-**Data Exploration:**
-- `ida://strings` - All strings (paginated, filterable)
-- `ida://string/{addr}` - String details at address
-- `ida://imports` - Imported functions (paginated)
-- `ida://import/{name}` - Import details by name
-- `ida://exports` - Exported functions (paginated)
-- `ida://export/{name}` - Export details by name
-
-**Type Information:**
-- `ida://types` - All local types
-- `ida://structs` - All structures/unions
-- `ida://struct/{name}` - Structure definition with fields
-
-**Analysis Context:**
-- `ida://xrefs/to/{addr}` - Cross-references to address
-- `ida://xrefs/from/{addr}` - Cross-references from address
-- `ida://stack/{func_addr}` - Stack frame variables
-
-**UI State:**
-- `ida://cursor` - Current cursor position and function
-- `ida://selection` - Current selection range
-
-**Debug State (when debugger active):**
-- `ida://debug/breakpoints` - All breakpoints
-- `ida://debug/registers` - Current register values
-- `ida://debug/callstack` - Current call stack
-
-## Core Functions
-
-- `idb_meta()`: Get IDB metadata (path, module, base address, size, hashes).
-- `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
-- `cursor_addr()`: Get current cursor address.
-- `cursor_func()`: Get current function at cursor.
-- `int_convert(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
-- `list_funcs(queries)`: List functions (paginated, filtered).
-- `list_globals(queries)`: List global variables (paginated, filtered).
-- `imports(offset, count)`: List all imported symbols with module names (paginated).
-- `strings(queries)`: List strings in the database (paginated, filtered).
-- `segments()`: List all memory segments with permissions.
-- `local_types()`: List all local types defined in the database.
-- `decompile(addrs)`: Decompile function(s) at given address(es).
-- `disasm(addrs)`: Disassemble function(s) with full details (arguments, stack frame, etc).
-- `xrefs_to(addrs)`: Get all cross-references to address(es).
-- `xrefs_to_field(queries)`: Get cross-references to specific struct field(s).
-- `callees(addrs)`: Get functions called by function(s) at address(es).
-- `callers(addrs)`: Get functions that call the function(s) at address(es).
-- `entrypoints()`: Get all program entry points.
-
-## Modification Operations
-
-- `set_comments(items)`: Set comments at address(es) in both disassembly and decompiler views.
-- `patch_asm(items)`: Patch assembly instructions at address(es).
-- `declare_type(decls)`: Declare C type(s) in the local type library.
-
-## Memory Reading Operations
-
-- `get_bytes(addrs)`: Read raw bytes at address(es).
-- `get_u8(addrs)`: Read 8-bit unsigned integer(s).
-- `get_u16(addrs)`: Read 16-bit unsigned integer(s).
-- `get_u32(addrs)`: Read 32-bit unsigned integer(s).
-- `get_u64(addrs)`: Read 64-bit unsigned integer(s).
-- `get_string(addrs)`: Read null-terminated string(s).
-- `get_global_value(queries)`: Read global variable value(s) by address or name (auto-detects, compile-time values).
-
-## Stack Frame Operations
-
-- `stack_frame(addrs)`: Get stack frame variables for function(s).
-- `declare_stack(items)`: Create stack variable(s) at specified offset(s).
-- `delete_stack(items)`: Delete stack variable(s) by name.
-
-## Structure Operations
-
-- `structs()`: List all defined structures with members.
-- `struct_info(names)`: Get detailed information about structure(s).
-- `read_struct(queries)`: Read structure field values at specific address(es).
-- `search_structs(filter)`: Search structures by name pattern.
-
-## Debugger Operations (Unsafe)
-
-- `dbg_regs()`: Get all registers for all threads.
-- `dbg_regs_thread(tids)`: Get all registers for specific thread(s).
-- `dbg_regs_cur()`: Get all registers for current thread.
-- `dbg_gpregs_thread(tids)`: Get general-purpose registers for thread(s).
-- `dbg_current_gpregs()`: Get general-purpose registers for current thread.
-- `dbg_regs_for_thread(thread_id, register_names)`: Get specific registers for a thread.
-- `dbg_current_regs(register_names)`: Get specific registers for current thread.
-- `dbg_callstack()`: Get call stack with module and symbol information.
-- `dbg_list_bps()`: List all breakpoints with their status.
-- `dbg_start()`: Start debugger process.
-- `dbg_exit()`: Exit debugger process.
-- `dbg_continue()`: Continue debugger execution.
-- `dbg_run_to(addr)`: Run debugger to specific address.
-- `dbg_add_bp(addrs)`: Add breakpoint(s) at address(es).
-- `dbg_step_into()`: Step into instruction.
-- `dbg_step_over()`: Step over instruction.
-- `dbg_delete_bp(addrs)`: Delete breakpoint(s) at address(es).
-- `dbg_enable_bp(items)`: Enable or disable breakpoint(s).
-- `dbg_read_mem(regions)`: Read memory from debugged process.
-- `dbg_write_mem(regions)`: Write memory to debugged process.
-
-## Advanced Analysis Operations
-
-- `py_eval(code)`: Execute arbitrary Python code in IDA context (returns dict with result/stdout/stderr, supports Jupyter-style evaluation).
-- `analyze_funcs(addrs)`: Comprehensive function analysis (decompilation, assembly, xrefs, callees, callers, strings, constants, basic blocks).
-
-## Pattern Matching & Search
-
-- `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-- `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-- `find_insn_operands(patterns, limit=1000, offset=0)`: Find instructions with specific operand values. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-- `search(type, targets, limit=1000, offset=0)`: Advanced search (immediate values, strings, data/code references). Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-
-## Control Flow Analysis
-
-- `basic_blocks(addrs)`: Get basic blocks with successors and predecessors.
-- `find_paths(queries)`: Find execution paths between source and target addresses.
-
-## Type Operations
-
-- `apply_types(applications)`: Apply type(s) to functions, globals, locals, or stack variables.
-- `infer_types(addrs)`: Infer types at address(es) using Hex-Rays or heuristics.
-
-## Export Operations
-
-- `export_funcs(addrs, format)`: Export function(s) in specified format (json, c_header, or prototypes).
-
-## Graph Operations
-
-- `callgraph(roots, max_depth)`: Build call graph from root function(s) with configurable depth.
-
-## Batch Operations
-
-- `rename(batch)`: Unified batch rename operation for functions, globals, locals, and stack variables (accepts dict with optional `func`, `data`, `local`, `stack` keys).
-- `patch(patches)`: Patch multiple byte sequences at once.
-
-## Cross-Reference Analysis
-
-- `xref_matrix(entities)`: Build cross-reference matrix between multiple addresses.
-
-## String Analysis
-
-- `analyze_strings(filters, limit=1000, offset=0)`: Analyze strings with pattern matching, length filtering, and xref information. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-
-**Key Features:**
-
-- **Type-safe API**: All functions use strongly-typed parameters with TypedDict schemas for better IDE support and LLM structured outputs
-- **Batch-first design**: Most operations accept both single items and lists
-- **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
-- **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` (default limit: 1000, enforced max: 10000 to prevent token overflow)
-- **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
-
-## Comparison with other MCP servers
-
-There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
-
-1. Installation should be fully automated.
-2. The architecture of other plugins make it difficult to add new functionality quickly (too much boilerplate of unnecessary dependencies).
-3. Learning new technologies is fun!
-
-If you want to check them out, here is a list (in the order I discovered them):
-
-- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython).
-- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
-- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
-
-Feel free to open a PR to add your IDA Pro MCP server here.
-
-## Development
-
-Adding new features is a super easy and streamlined process. All you have to do is add a new `@tool` function to the modular API files in `src/ida_pro_mcp/ida_mcp/api_*.py` and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
-
-https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
-
-To test the MCP server itself:
-
-```sh
-npx -y @modelcontextprotocol/inspector
+```python
+search(action="bytes", pattern="E8 ?? ?? ?? ?? 48 8B", limit=50)
+search(action="name", pattern="*printf*")
 ```
 
-This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
+---
 
-For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`. After [enabling symbolic links](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) you can run the following command:
+### Type System Tools
 
-```sh
-uv run ida-pro-mcp --install
+#### `types` — Type Management
+
+| Action          | Description                               | Params         |
+| --------------- | ----------------------------------------- | -------------- |
+| `list`          | List all types (structs, enums, typedefs) | —              |
+| `get`           | Get type definition                       | `name`         |
+| `set_prototype` | Set function prototype                    | `addr`, `decl` |
+| `parse_decl`    | Validate C declaration                    | `decl`         |
+| `declare`       | Create new type                           | `decl`         |
+| `apply`         | Apply type at address                     | `addr`, `name` |
+| `infer`         | Infer type at address                     | `addr`         |
+| `read_struct`   | Read struct from memory                   | `addr`, `name` |
+
+```python
+types(action="declare", decl="struct Packet { int id; char data[256]; };")
+types(action="apply", addr="0x405000", name="DWORD")
 ```
 
-Generate the changelog of direct commits to `main`:
+---
 
-```sh
-git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
+#### `enum` — Enum Management
+
+| Action       | Description      | Params                         |
+| ------------ | ---------------- | ------------------------------ |
+| `list`       | List all enums   | —                              |
+| `info`       | Get enum members | `name`                         |
+| `create`     | Create enum      | `name`, `bitfield`             |
+| `delete`     | Delete enum      | `name`                         |
+| `add_member` | Add member       | `name`, `member_name`, `value` |
+| `del_member` | Remove member    | `name`, `value`                |
+| `apply`      | Apply to operand | `addr`, `operand`, `name`      |
+| `search`     | Find by value    | `value`                        |
+
+---
+
+### Modification Tools
+
+#### `modify` — Database Modifications
+
+| Action      | Description    | Params                          |
+| ----------- | -------------- | ------------------------------- |
+| `rename`    | Rename address | `addr`, `value`                 |
+| `comment`   | Add comment    | `addr`, `value`, `comment_type` |
+| `set_type`  | Apply type     | `addr`, `value`                 |
+| `patch_asm` | Patch assembly | `addr`, `value`                 |
+
+```python
+modify(action="rename", addr="sub_401000", value="initialize_connection")
+modify(action="comment", addr="0x401000", value="Entry point", comment_type="anterior")
 ```
+
+---
+
+#### `bulk` — Batch Operations (LLM-Optimized)
+
+| Action               | Description               | Params                          |
+| -------------------- | ------------------------- | ------------------------------- |
+| `rename`             | Bulk rename               | `items: [{addr, value}]`        |
+| `comment`            | Bulk comment              | `items: [{addr, value, type?}]` |
+| `apply_type`         | Bulk type application     | `items: [{addr, value}]`        |
+| `export_annotations` | Export all names/comments | `path` (optional)               |
+| `import_annotations` | Import from JSON          | `path`                          |
+
+```python
+bulk(action="rename", items=[
+    {"addr": "0x401000", "value": "main"},
+    {"addr": "0x401100", "value": "init_crypto"},
+    {"addr": "0x401200", "value": "connect_server"}
+])
+```
+
+---
+
+### Memory & Debug Tools
+
+#### `memory` — Memory Operations
+
+| Action  | Type Values                                  | Description       |
+| ------- | -------------------------------------------- | ----------------- |
+| `read`  | `u8`, `u16`, `u32`, `u64`, `bytes`, `string` | Read from address |
+| `write` | —                                            | Patch bytes       |
+
+```python
+memory(action="read", addr="0x400000", type="bytes", size=32)
+memory(action="write", addr="0x401000", data="90 90 90 90")
+```
+
+---
+
+#### `debug` — Debugger Control
+
+| Action                            | Description         |
+| --------------------------------- | ------------------- |
+| `start`                           | Launch debugger     |
+| `stop`                            | Terminate process   |
+| `continue`                        | Resume execution    |
+| `step_into` / `step_over`         | Single step         |
+| `run_to`                          | Run to address      |
+| `breakpoints`                     | List breakpoints    |
+| `add_bp` / `del_bp` / `enable_bp` | Manage breakpoints  |
+| `regs`                            | Get register values |
+| `callstack`                       | Get call stack      |
+| `read_mem` / `write_mem`          | Debug memory access |
+
+---
+
+### Advanced Analysis Tools
+
+#### `microcode` — Hex-Rays IR Access
+
+| Action         | Description            | Returns                                       |
+| -------------- | ---------------------- | --------------------------------------------- |
+| `get`          | Microcode metadata     | `{qty, fullsize}`                             |
+| `blocks`       | Microcode basic blocks | `{blocks: [{idx, start, end, npred, nsucc}]}` |
+| `instructions` | Microcode instructions | `{instructions: [{opcode, ea, text}]}`        |
+
+```python
+microcode(action="blocks", addr="main", maturity=7)
+```
+
+---
+
+#### `graph` — Graph Export
+
+| Action       | Format         | Description           |
+| ------------ | -------------- | --------------------- |
+| `callgraph`  | `json` / `dot` | Function call graph   |
+| `cfg`        | `json` / `dot` | Control flow graph    |
+| `xref_graph` | `json` / `dot` | Cross-reference graph |
+
+```python
+graph(action="callgraph", addr="main", depth=3, format="dot")
+graph(action="cfg", addr="0x401000", format="json")
+```
+
+---
+
+#### `agent` — High-Level AI Helpers
+
+| Action             | Description                                    |
+| ------------------ | ---------------------------------------------- |
+| `analyze_function` | Comprehensive function analysis                |
+| `explore_address`  | Explore address context                        |
+| `find_references`  | Find all references to target                  |
+| `search_all`       | Universal search (functions + strings + names) |
+
+```python
+agent(action="search_all", query="password")
+```
+
+---
+
+### Utility Tools
+
+#### `misc` — Miscellaneous
+
+| Action                   | Description            |
+| ------------------------ | ---------------------- |
+| `python`                 | Execute Python code    |
+| `idc`                    | Execute IDC expression |
+| `undo` / `redo`          | Undo/redo operations   |
+| `sig_list` / `sig_apply` | FLIRT signatures       |
+| `til_load`               | Load type library      |
+| `bookmark_list`          | List bookmarks         |
+| `stack_get`              | Get stack variables    |
+| `reanalyze`              | Force reanalysis       |
+| `auto_wait`              | Wait for auto-analysis |
+
+---
+
+#### `files` — File Operations
+
+| Action                      | Description            |
+| --------------------------- | ---------------------- |
+| `save`                      | Save database          |
+| `open`                      | Open database (idalib) |
+| `close`                     | Close database         |
+| `load_binary`               | Load additional binary |
+| `get_cwd` / `set_cwd`       | Working directory      |
+| `list_dir`                  | Directory listing      |
+| `exists` / `read` / `write` | File operations        |
+
+---
+
+#### `funcs` — Function Management
+
+| Action      | Description                |
+| ----------- | -------------------------- |
+| `create`    | Create function at address |
+| `delete`    | Delete function            |
+| `set_flags` | Modify function flags      |
+| `comment`   | Set function comment       |
+
+---
+
+#### `segments` — Segment Management
+
+| Action     | Description       |
+| ---------- | ----------------- |
+| `list`     | List segments     |
+| `add`      | Create segment    |
+| `delete`   | Delete segment    |
+| `set_attr` | Modify attributes |
+| `move`     | Rebase segment    |
+
+---
+
+#### `signatures` — FLIRT/TIL/Lumina
+
+| Action                                   | Description             |
+| ---------------------------------------- | ----------------------- |
+| `list_applied`                           | Applied signature count |
+| `list_available`                         | Available .sig files    |
+| `apply`                                  | Apply FLIRT signature   |
+| `list_tils` / `load_til` / `loaded_tils` | Type libraries          |
+| `lumina_pull` / `lumina_push`            | Lumina integration      |
+
+---
+
+## 🔌 Supported MCP Clients
+
+| Client                 | Status         | Notes                |
+| ---------------------- | -------------- | -------------------- |
+| **Google Antigravity** | ✅ Recommended | Full tool support    |
+| Claude Desktop         | ✅ Full        | Native MCP           |
+| Cursor                 | ✅ Full        | Add to settings.json |
+| VS Code                | ✅ Full        | MCP extension        |
+| Gemini CLI             | ✅ Full        | Google's CLI         |
+| Amazon Q               | ✅ Full        | AWS integration      |
+
+```bash
+# Get config for your client
+ida-pro-mcp --config
+```
+
+---
+
+## 🛡️ IDA 9.0+ Compatibility
+
+This server is fully compatible with IDA Pro 9.0+ and handles all API deprecations:
+
+| Deprecated API           | Replacement                   |
+| ------------------------ | ----------------------------- |
+| `ida_struct` module      | `ida_typeinf`                 |
+| `ida_enum` module        | `ida_typeinf`                 |
+| `ida_nalt.get_entry_*`   | `ida_entry` / `idaapi`        |
+| `ida_search.find_binary` | `ida_bytes.bin_search`        |
+| `ida_dbg.call_stack_t`   | `ida_dbg.collect_stack_trace` |
+| Plugin enumeration       | Not available (returns error) |
+
+All tools include `hasattr` checks and graceful fallbacks.
+
+---
+
+## 📊 Performance
+
+- **23 tools** instead of 100+ (efficient context usage)
+- **Batch-first design** for minimal round-trips
+- **Thread-safe** with IDA's main thread synchronization
+- **Pagination** on large result sets
+
+---
+
+## 📖 Complete API Reference
+
+See **[MCP_API_REFERENCE.md](./MCP_API_REFERENCE.md)** for detailed documentation with:
+
+- All parameters (required/optional)
+- Return value schemas
+- Usage examples
+- Common error handling
+
+---
+
+## 📝 License
+
+MIT License
+
+---
+
+<p align="center">
+  <sub>Built for reverse engineers who prefer AI assistance over tedious clicking.</sub>
+</p>

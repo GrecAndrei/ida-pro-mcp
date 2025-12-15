@@ -342,6 +342,28 @@ class CodePattern(TypedDict):
     operands: NotRequired[list[str]]
 
 
+class EnumMember(TypedDict):
+    name: str
+    value: str
+    serial: int
+
+
+class EnumDef(TypedDict):
+    name: str
+    id: str  # Hex string
+    size: int
+    flags: str
+    members: int  # count
+
+
+class EnumInfo(TypedDict):
+    name: str
+    id: str
+    width: int
+    flag: str
+    members: list[EnumMember]
+
+
 class BasicBlock(TypedDict):
     start: str
     end: str
@@ -349,6 +371,14 @@ class BasicBlock(TypedDict):
     type: int
     successors: list[str]
     predecessors: list[str]
+
+
+class FileInfo(TypedDict):
+    name: str
+    path: str
+    type: str  # 'file' or 'dir'
+    size: int
+    mtime: str
 
 
 T = TypeVar("T")
