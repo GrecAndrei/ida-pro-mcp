@@ -40,11 +40,12 @@ warnings.filterwarnings("ignore")
 # Redirect stderr to devnull to prevent any stray output
 sys.stderr = io.StringIO()
 
-# List of available tools (20 total)
+# List of available tools (26 total)
 TOOLS = [
     "idb", "code", "data", "search", "types", "memory", "modify",
     "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
-    "fixups", "data_ops", "agent", "microcode", "graph", "bulk"
+    "fixups", "data_ops", "agent", "microcode", "graph", "bulk",
+    "ctree", "diff", "lumina", "symbols", "patterns", "structs"
 ]
 
 # Tool descriptions for MCP discovery - detailed for LLM comprehension
@@ -127,7 +128,19 @@ Required: idb, action, addr. Optional: depth, direction (down/up/both), format (
 
     "bulk": """Bulk operations for batch modifications.
 Actions: rename (batch rename from list), comment (batch add comments), set_type (batch set types), import_json (import annotations from file), export_json (export annotations).
-Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path."""
+Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path.""",
+
+    "ctree": """Access Hex-Rays CTree (decompiler AST) for deep code analysis.
+Actions: get (get full CTree structure), traverse (tree structure with depth), find_calls (find function calls with optional filter), find_vars (list local variables/args), find_strings (string references in function), find_conditions (if/while/for statements).
+Required: idb, action, addr (function address). Optional: query (filter for find_calls), depth (traversal depth).""",
+
+    "diff": """Binary comparison and diffing for patch analysis.
+Actions: functions (compare two functions by decompilation), bytes (compare byte ranges), signatures (find similar functions by code signature), names (list all named items for export), summary (database statistics for comparison).
+Required: idb, action. For functions: addr1, addr2. For bytes: addr1 (start:end), addr2. For signatures: addr1, threshold (0.0-1.0).""",
+
+    "lumina": """Interact with Hex-Rays Lumina cloud for function recognition.
+Actions: pull (pull function names from Lumina), push (push annotations to Lumina), status (check connection), history (function history), search (search Lumina by name).
+Required: idb, action. For pull/push: addr (specific) or push_all=True. For search: query. Note: Requires Lumina license."""
 }
 
 
