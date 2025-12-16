@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-IDA Pro MCP Server - Stdio Wrapper for Antigravity IDE
-
-This script wraps the IDA MCP daemon as a proper MCP server using
-stdio-based JSON-RPC protocol for integration with Google Antigravity IDE.
+IDA Pro MCP Server - Session-Based Architecture
 
 Features:
-- Receives MCP tool calls via stdin
-- Spawns idat.exe workers to execute tools
-- Returns results via stdout
+- Session-based IDB management (multiple LLMs can analyze same binary)
+- Multi-instance support (switch between multiple open files)
+- File locking to prevent conflicts
+- Structured error codes for LLM understanding
+- Automatic IDB discovery and selection
 
 Usage in mcp_config.json:
 {
@@ -31,8 +30,11 @@ import threading
 import subprocess
 import time
 import warnings
-from typing import Any, Dict, Optional
+import hashlib
+import glob
+from typing import Any, Dict, Optional, List
 from pathlib import Path
+from datetime import datetime
 
 # Suppress ALL warnings to prevent them from corrupting the JSON stream
 warnings.filterwarnings("ignore")
@@ -40,21 +42,304 @@ warnings.filterwarnings("ignore")
 # Redirect stderr to devnull to prevent any stray output
 sys.stderr = io.StringIO()
 
-# List of available tools (39 total)
+
+# =============================================================================
+# SESSION MANAGEMENT
+# =============================================================================
+
+class SimpleLock:
+    """Cross-platform file lock without external dependencies."""
+    
+    def __init__(self, path: str):
+        self.lock_file = path + ".mcp.lock"
+        self.locked = False
+        self.pid = os.getpid()
+    
+    def acquire(self, timeout: int = 10) -> bool:
+        """Acquire the lock. Returns True if successful."""
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                # Atomic create - fails if exists
+                fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, f"{self.pid}:{time.time()}".encode())
+                os.close(fd)
+                self.locked = True
+                return True
+            except FileExistsError:
+                # Check if lock is stale (older than 5 minutes)
+                if self._is_stale():
+                    self._force_release()
+                    continue
+                time.sleep(0.1)
+            except Exception:
+                time.sleep(0.1)
+        return False
+    
+    def release(self):
+        """Release the lock."""
+        if self.locked and os.path.exists(self.lock_file):
+            try:
+                os.remove(self.lock_file)
+            except:
+                pass
+            self.locked = False
+    
+    def is_locked(self) -> bool:
+        """Check if the file is currently locked."""
+        return os.path.exists(self.lock_file)
+    
+    def _is_stale(self) -> bool:
+        """Check if lock is stale (older than 5 minutes)."""
+        try:
+            if os.path.exists(self.lock_file):
+                mtime = os.path.getmtime(self.lock_file)
+                return time.time() - mtime > 300  # 5 minutes
+        except:
+            pass
+        return False
+    
+    def _force_release(self):
+        """Force release a stale lock."""
+        try:
+            os.remove(self.lock_file)
+        except:
+            pass
+    
+    def get_owner_info(self) -> Optional[Dict]:
+        """Get info about who holds the lock."""
+        try:
+            if os.path.exists(self.lock_file):
+                with open(self.lock_file, 'r') as f:
+                    data = f.read().strip()
+                    parts = data.split(':')
+                    if len(parts) >= 2:
+                        return {
+                            "pid": int(parts[0]),
+                            "locked_at": datetime.fromtimestamp(float(parts[1])).isoformat()
+                        }
+        except:
+            pass
+        return None
+    
+    def __enter__(self):
+        if not self.acquire():
+            raise RuntimeError("Could not acquire lock")
+        return self
+    
+    def __exit__(self, *args):
+        self.release()
+
+
+class Session:
+    """Represents an active IDB analysis session."""
+    
+    def __init__(self, session_id: str, idb_path: str, binary_path: str):
+        self.session_id = session_id
+        self.idb_path = idb_path
+        self.binary_path = binary_path
+        self.created_at = datetime.now()
+        self.last_used = datetime.now()
+        self.lock = SimpleLock(idb_path)
+    
+    def touch(self):
+        """Update last used timestamp."""
+        self.last_used = datetime.now()
+    
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "idb_path": self.idb_path,
+            "binary_path": self.binary_path,
+            "created_at": self.created_at.isoformat(),
+            "last_used": self.last_used.isoformat(),
+            "is_locked": self.lock.is_locked()
+        }
+
+
+class SessionManager:
+    """Manages multiple IDB analysis sessions."""
+    
+    def __init__(self, cache_dir: str):
+        self.cache_dir = cache_dir
+        self.sessions: Dict[str, Session] = {}
+        self.session_dir = os.path.join(cache_dir, "sessions")
+        os.makedirs(self.session_dir, exist_ok=True)
+    
+    def _generate_session_id(self) -> str:
+        """Generate a unique session ID."""
+        import random
+        import string
+        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    
+    def _get_session_idb_path(self, binary_path: str, session_id: str) -> str:
+        """Get the IDB path for a session."""
+        base = os.path.basename(binary_path)
+        # Store session IDBs in the session directory
+        return os.path.join(self.session_dir, f"{base}.{session_id}.i64")
+    
+    def discover_idbs(self, binary_path: str) -> List[Dict]:
+        """Find all existing IDBs for a binary file."""
+        results = []
+        base_name = os.path.basename(binary_path)
+        dir_path = os.path.dirname(os.path.abspath(binary_path))
+        
+        # Check for standard IDBs in same directory
+        for ext in ['.i64', '.idb']:
+            # Direct IDB
+            idb_path = binary_path + ext
+            if os.path.exists(idb_path):
+                lock = SimpleLock(idb_path)
+                results.append({
+                    "path": idb_path,
+                    "type": "standard",
+                    "last_modified": datetime.fromtimestamp(os.path.getmtime(idb_path)).isoformat(),
+                    "size_mb": round(os.path.getsize(idb_path) / 1024 / 1024, 2),
+                    "in_use": lock.is_locked(),
+                    "owner": lock.get_owner_info()
+                })
+            
+            # Also check without extension
+            base = os.path.splitext(binary_path)[0]
+            idb_path2 = base + ext
+            if os.path.exists(idb_path2) and idb_path2 != idb_path:
+                lock = SimpleLock(idb_path2)
+                results.append({
+                    "path": idb_path2,
+                    "type": "standard",
+                    "last_modified": datetime.fromtimestamp(os.path.getmtime(idb_path2)).isoformat(),
+                    "size_mb": round(os.path.getsize(idb_path2) / 1024 / 1024, 2),
+                    "in_use": lock.is_locked(),
+                    "owner": lock.get_owner_info()
+                })
+        
+        # Check for session IDBs in session directory
+        pattern = os.path.join(self.session_dir, f"{base_name}.*.i64")
+        for idb_path in glob.glob(pattern):
+            lock = SimpleLock(idb_path)
+            # Extract session ID from filename
+            parts = os.path.basename(idb_path).rsplit('.', 2)
+            session_id = parts[1] if len(parts) >= 3 else "unknown"
+            results.append({
+                "path": idb_path,
+                "type": "session",
+                "session_id": session_id,
+                "last_modified": datetime.fromtimestamp(os.path.getmtime(idb_path)).isoformat(),
+                "size_mb": round(os.path.getsize(idb_path) / 1024 / 1024, 2),
+                "in_use": lock.is_locked(),
+                "owner": lock.get_owner_info()
+            })
+        
+        return results
+    
+    def create_session(self, binary_path: str, use_existing: Optional[str] = None) -> Session:
+        """Create a new session or resume an existing one."""
+        session_id = self._generate_session_id()
+        
+        if use_existing:
+            # User wants to use an existing IDB
+            idb_path = use_existing
+        else:
+            # Create new session-specific IDB path
+            idb_path = self._get_session_idb_path(binary_path, session_id)
+        
+        session = Session(session_id, idb_path, binary_path)
+        self.sessions[session_id] = session
+        
+        return session
+    
+    def get_session(self, session_id: str) -> Optional[Session]:
+        """Get a session by ID."""
+        session = self.sessions.get(session_id)
+        if session:
+            session.touch()
+        return session
+    
+    def list_sessions(self) -> List[Dict]:
+        """List all active sessions."""
+        return [s.to_dict() for s in self.sessions.values()]
+    
+    def close_session(self, session_id: str):
+        """Close a session and release its lock."""
+        session = self.sessions.pop(session_id, None)
+        if session:
+            session.lock.release()
+
+
+# =============================================================================
+# ERROR CODES
+# =============================================================================
+
+class MCPError:
+    """Structured error codes for LLM understanding."""
+    
+    # File errors
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"
+    FILE_LOCKED = "FILE_LOCKED"
+    FILE_CORRUPT = "FILE_CORRUPT"
+    
+    # IDA errors
+    IDA_NOT_FOUND = "IDA_NOT_FOUND"
+    IDA_CRASHED = "IDA_CRASHED"
+    IDA_TIMEOUT = "IDA_TIMEOUT"
+    IDA_LICENSE = "IDA_LICENSE"
+    
+    # Session errors
+    SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
+    SESSION_LOCKED = "SESSION_LOCKED"
+    SESSION_REQUIRED = "SESSION_REQUIRED"
+    
+    # Tool errors
+    TOOL_NOT_FOUND = "TOOL_NOT_FOUND"
+    INVALID_ARGS = "INVALID_ARGS"
+    DECOMPILE_FAILED = "DECOMPILE_FAILED"
+
+def make_error(code: str, message: str, recoverable: bool = False, details: dict = None) -> dict:
+    """Create a structured error response."""
+    result = {
+        "error": True,
+        "code": code,
+        "message": message,
+        "recoverable": recoverable
+    }
+    if recoverable:
+        result["retry_after_seconds"] = 5
+    if details:
+        result["details"] = details
+    return result
+
+
+# =============================================================================
+# TOOLS LIST
+# =============================================================================
+
+# List of available tools (40 total - includes session_manager)
 TOOLS = [
+    "session",  # NEW: Session management tool
     "idb", "code", "data", "search", "types", "memory", "modify",
     "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
     "fixups", "data_ops", "agent", "microcode", "graph", "bulk",
     "ctree", "diff", "lumina", "symbols", "patterns", "structs",
     "emulate", "export", "history",
-    # Session B tools (30-35)
     "strings_xref", "entropy", "imports_deep", "comments_ai", "nav", "colorize",
-    # Dynamic analysis tools (36-39)
     "trace_analysis", "hooks", "taint", "coverage"
 ]
 
-# Tool descriptions for MCP discovery - detailed for LLM comprehension
+# Tool descriptions for MCP discovery
 TOOL_DESCRIPTIONS = {
+    "session": """Session management for multi-file and multi-LLM workflows.
+Actions: 
+- discover (find existing IDBs for a binary, shows which are in use)
+- create (create new session - either new IDB or use existing)
+- list (list active sessions)
+- switch (switch to a different session)
+- close (close a session and release locks)
+Required: action. 
+For discover/create: binary_path. 
+For create: use_existing (optional path to existing IDB).
+For switch/close: session_id.
+Returns session info with lock status.""",
+
     "idb": """IDB database metadata and navigation.
 Actions: meta (get file path, module name, base address, size, MD5/SHA256 hashes), segments (list all binary segments with permissions), cursor (get current address in IDA), entrypoints (list program entry points).
 Required: idb (path to IDB or binary file), action (one of the above).""",
@@ -159,7 +444,6 @@ Required: idb, action. For generate/create_sig: addr. For match: pattern (hex wi
 Actions: recover (recover struct from function usage), analyze_usage (analyze memory accesses), list (list all structs), create (create from C declaration), apply (apply struct at address).
 Required: idb, action. For recover/apply: addr. For create: decl (C code). For apply: name (struct name).""",
 
-    # Session B tools (30-35)
     "strings_xref": """Advanced string analysis with xref chains and encoding detection.
 Actions: analyze (deep analysis of string at address), xref_chain (trace string references through callers), detect_encoded (find encrypted/encoded strings), find_format (find format strings with args), clusters (group strings by calling function).
 Required: idb, action. For analyze/xref_chain: addr. Optional: query, depth.""",
@@ -183,6 +467,7 @@ Required: idb, action. For bookmark ops: addr, slot. For goto: addr.""",
     "colorize": """Code region coloring and highlighting.
 Actions: set_func (color entire function), set_range (color address range), set_insn (color single instruction), get (get color at address), clear (remove coloring), palette (get color names), highlight_pattern (highlight byte pattern matches).
 Required: idb, action. For set ops: addr, color. For range: end_addr. For pattern: pattern.""",
+
     "emulate": """Code emulation and snippet execution.
 Actions: snippet (trace code from address), appcall (call function with args - needs debugger), trace (static trace through function), decrypt_strings (find encrypted string patterns), eval_expr (evaluate value at address).
 Required: idb, action. For snippet/trace: addr, max_steps. For appcall: func_name or addr, args.""",
@@ -195,7 +480,6 @@ Required: idb, action. For listing/html/idc/json/headers: path (output file)."""
 Actions: undo (undo operations), redo (redo operations), list (show undo/redo status), snapshot (create named checkpoint), restore (restore from snapshot), diff (show changes).
 Required: idb, action. For undo/redo: count. For snapshot/restore: name.""",
 
-    # Dynamic analysis tools (36-39)
     "trace_analysis": """Post-mortem execution trace analysis.
 Actions: import_trace (load trace file), analyze_coverage (calculate coverage from trace), find_loops (detect hot loops), extract_api_calls (API call sequence), basic_blocks_hit (per-function block coverage).
 Required: idb, action. For most actions: path or trace_data (list of addresses).""",
@@ -214,8 +498,12 @@ Required: idb, action. For import/highlight: path. For report: addr. Optional: c
 }
 
 
+# =============================================================================
+# MCP SERVER
+# =============================================================================
+
 class IDAMCPServer:
-    """MCP server that routes tool calls to idat.exe workers."""
+    """MCP server with session management and multi-instance support."""
     
     def __init__(self):
         self.ida_dir = os.environ.get("IDADIR", "")
@@ -227,8 +515,11 @@ class IDAMCPServer:
         # Create cache dir
         os.makedirs(self.cache_dir, exist_ok=True)
         
-        # Current IDB path (set by user)
-        self.current_idb: Optional[str] = None
+        # Session manager
+        self.session_mgr = SessionManager(self.cache_dir)
+        
+        # Current active session
+        self.current_session: Optional[Session] = None
     
     def _find_idat(self) -> str:
         """Find idat.exe executable."""
@@ -262,6 +553,98 @@ class IDAMCPServer:
                 return idb_path2
         return None
     
+    def handle_session_tool(self, action: str, arguments: dict) -> dict:
+        """Handle session management actions."""
+        
+        if action == "discover":
+            binary_path = arguments.get("binary_path", "")
+            if not binary_path:
+                return make_error(MCPError.INVALID_ARGS, "binary_path required")
+            if not os.path.exists(binary_path):
+                return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {binary_path}")
+            
+            idbs = self.session_mgr.discover_idbs(binary_path)
+            return {
+                "binary": binary_path,
+                "existing_idbs": idbs,
+                "count": len(idbs),
+                "note": "Use 'create' action to start a session. Specify 'use_existing' to use an existing IDB."
+            }
+        
+        elif action == "create":
+            binary_path = arguments.get("binary_path", "")
+            use_existing = arguments.get("use_existing")
+            
+            if not binary_path:
+                return make_error(MCPError.INVALID_ARGS, "binary_path required")
+            if not os.path.exists(binary_path):
+                return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {binary_path}")
+            
+            # Check if use_existing is locked
+            if use_existing:
+                lock = SimpleLock(use_existing)
+                if lock.is_locked():
+                    owner = lock.get_owner_info()
+                    return make_error(
+                        MCPError.FILE_LOCKED,
+                        f"IDB is in use by another session",
+                        recoverable=True,
+                        details={"owner": owner}
+                    )
+            
+            session = self.session_mgr.create_session(binary_path, use_existing)
+            
+            # Acquire lock
+            if not session.lock.acquire(timeout=5):
+                return make_error(MCPError.FILE_LOCKED, "Could not acquire lock", recoverable=True)
+            
+            self.current_session = session
+            
+            return {
+                "created": True,
+                "session": session.to_dict(),
+                "note": "Session is now active. Use session_id or omit 'idb' param to use this session."
+            }
+        
+        elif action == "list":
+            return {
+                "sessions": self.session_mgr.list_sessions(),
+                "current": self.current_session.to_dict() if self.current_session else None
+            }
+        
+        elif action == "switch":
+            session_id = arguments.get("session_id", "")
+            if not session_id:
+                return make_error(MCPError.INVALID_ARGS, "session_id required")
+            
+            session = self.session_mgr.get_session(session_id)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session not found: {session_id}")
+            
+            self.current_session = session
+            return {
+                "switched": True,
+                "session": session.to_dict()
+            }
+        
+        elif action == "close":
+            session_id = arguments.get("session_id", "")
+            if not session_id and self.current_session:
+                session_id = self.current_session.session_id
+            
+            if not session_id:
+                return make_error(MCPError.INVALID_ARGS, "session_id required")
+            
+            self.session_mgr.close_session(session_id)
+            
+            if self.current_session and self.current_session.session_id == session_id:
+                self.current_session = None
+            
+            return {"closed": True, "session_id": session_id}
+        
+        else:
+            return make_error(MCPError.INVALID_ARGS, f"Unknown session action: {action}")
+    
     def call_tool(self, tool_name: str, idb_path: str, **kwargs) -> Dict[str, Any]:
         """Execute a tool from api_consolidated.py on an IDB file."""
         start_time = time.time()
@@ -274,23 +657,35 @@ class IDAMCPServer:
                 target = existing
         
         if not os.path.exists(target):
-            return {"error": f"File not found: {target}"}
+            return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {target}")
         
         if not self.idat_exe:
-            return {"error": "idat.exe not found. Set IDADIR environment variable."}
+            return make_error(MCPError.IDA_NOT_FOUND, "idat.exe not found. Set IDADIR environment variable.")
         
-        # Escape paths for Windows
-        escaped_api_path = self.api_path.replace('\\', '\\\\')
+        # Acquire lock for this IDB
+        lock = SimpleLock(target)
+        if lock.is_locked() and not lock.acquire(timeout=30):
+            owner = lock.get_owner_info()
+            return make_error(
+                MCPError.FILE_LOCKED,
+                f"IDB is locked by another process",
+                recoverable=True,
+                details={"owner": owner}
+            )
         
-        # Serialize kwargs as JSON
-        args_json = json.dumps(kwargs)
-        
-        # Create output file path
-        output_file = os.path.join(self.cache_dir, f"mcp_result_{os.getpid()}_{threading.get_ident()}.json")
-        escaped_output = output_file.replace('\\', '\\\\')
-        
-        # Generate script
-        script = f'''import json
+        try:
+            # Escape paths for Windows
+            escaped_api_path = self.api_path.replace('\\', '\\\\')
+            
+            # Serialize kwargs as JSON
+            args_json = json.dumps(kwargs)
+            
+            # Create output file path
+            output_file = os.path.join(self.cache_dir, f"mcp_result_{os.getpid()}_{threading.get_ident()}.json")
+            escaped_output = output_file.replace('\\', '\\\\')
+            
+            # Generate script
+            script = f'''import json
 import sys
 
 sys.path.insert(0, "{escaped_api_path}")
@@ -309,11 +704,10 @@ with open("{escaped_output}", "w") as f:
 import ida_pro
 ida_pro.qexit(0)
 '''
-        
-        # Write script to file
-        script_file = os.path.join(self.cache_dir, f"mcp_script_{os.getpid()}_{threading.get_ident()}.py")
-        
-        try:
+            
+            # Write script to file
+            script_file = os.path.join(self.cache_dir, f"mcp_script_{os.getpid()}_{threading.get_ident()}.py")
+            
             with open(script_file, 'w', encoding='utf-8') as f:
                 f.write(script)
             
@@ -321,28 +715,44 @@ ida_pro.qexit(0)
             
             proc = subprocess.run(cmd, capture_output=True, timeout=120)
             
+            # Check for common error patterns in stderr
+            stderr = proc.stderr.decode('utf-8', errors='ignore').lower()
+            
+            if proc.returncode != 0:
+                if "license" in stderr:
+                    return make_error(MCPError.IDA_LICENSE, "IDA license issue detected")
+                elif "access denied" in stderr or "locked" in stderr:
+                    return make_error(MCPError.FILE_LOCKED, "File access denied", recoverable=True)
+                elif "corrupt" in stderr:
+                    return make_error(MCPError.FILE_CORRUPT, "IDB appears to be corrupt")
+            
             if os.path.exists(output_file):
                 with open(output_file, 'r') as f:
                     result = json.load(f)
-                result["_execution_time"] = time.time() - start_time
+                result["_execution_time"] = round(time.time() - start_time, 2)
+                result["_session"] = self.current_session.session_id if self.current_session else None
                 return result
             else:
-                return {
-                    "error": "Tool execution produced no output",
-                    "returncode": proc.returncode
-                }
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "IDA crashed or produced no output",
+                    details={"returncode": proc.returncode}
+                )
         
         except subprocess.TimeoutExpired:
-            return {"error": "Tool execution timed out (120s)"}
+            return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (120s)", recoverable=True)
         except Exception as e:
-            return {"error": str(e)}
+            return make_error(MCPError.IDA_CRASHED, str(e))
         finally:
+            # Cleanup
             for f in [script_file, output_file]:
                 try:
                     if os.path.exists(f):
                         os.remove(f)
                 except:
                     pass
+            # Release lock if we acquired it
+            lock.release()
     
     def get_tools_list(self) -> list:
         """Return list of available tools in MCP format."""
@@ -356,14 +766,14 @@ ida_pro.qexit(0)
                     "properties": {
                         "idb": {
                             "type": "string",
-                            "description": "Path to IDB file or binary"
+                            "description": "Path to IDB file or binary (optional if session is active)"
                         },
                         "action": {
                             "type": "string",
                             "description": "Action to perform within this tool"
                         }
                     },
-                    "required": ["idb", "action"]
+                    "required": ["action"] if tool_name == "session" else ["idb", "action"]
                 }
             })
         return tools
@@ -385,7 +795,7 @@ ida_pro.qexit(0)
                     },
                     "serverInfo": {
                         "name": "ida-pro-mcp",
-                        "version": "1.0.0"
+                        "version": "2.0.0"  # Version bump for session support
                     }
                 }
             }
@@ -416,19 +826,34 @@ ida_pro.qexit(0)
                     }
                 }
             
-            idb_path = arguments.pop("idb", self.current_idb or "")
-            if not idb_path:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "error": {
-                        "code": -32602,
-                        "message": "Missing required parameter: idb"
-                    }
-                }
-            
-            # Execute tool
-            result = self.call_tool(tool_name, idb_path, **arguments)
+            # Handle session tool specially
+            if tool_name == "session":
+                action = arguments.get("action", "")
+                result = self.handle_session_tool(action, arguments)
+            else:
+                # Get IDB path - from args, current session, or error
+                idb_path = arguments.pop("idb", None)
+                
+                if not idb_path:
+                    if self.current_session:
+                        idb_path = self.current_session.idb_path
+                    else:
+                        return {
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "result": {
+                                "content": [{
+                                    "type": "text",
+                                    "text": json.dumps(make_error(
+                                        MCPError.SESSION_REQUIRED,
+                                        "No IDB specified and no active session. Use 'session' tool to create one, or specify 'idb' parameter."
+                                    ), indent=2)
+                                }]
+                            }
+                        }
+                
+                # Execute tool
+                result = self.call_tool(tool_name, idb_path, **arguments)
             
             return {
                 "jsonrpc": "2.0",
@@ -487,9 +912,12 @@ ida_pro.qexit(0)
                 break
             except Exception:
                 pass
+        
+        # Cleanup: release all session locks
+        for session in self.session_mgr.sessions.values():
+            session.lock.release()
 
 
 if __name__ == "__main__":
     server = IDAMCPServer()
     server.run()
-
