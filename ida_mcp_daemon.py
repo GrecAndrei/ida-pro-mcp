@@ -321,6 +321,112 @@ ida_pro.qexit(0)
                 "count": len(self.sessions),
                 "sessions": [asdict(s) for s in self.sessions.values()]
             }
+    
+    def call_tool(self, idb_path: str, tool_name: str, **kwargs) -> Dict[str, Any]:
+        """
+        Execute any tool from api_consolidated.py on an IDB file.
+        
+        Args:
+            idb_path: Path to the IDB file (or binary - will find/create IDB)
+            tool_name: Name of the tool function (idb, code, data, search, etc.)
+            **kwargs: Arguments to pass to the tool
+        
+        Returns:
+            dict: Tool result or error
+        """
+        start_time = time.time()
+        
+        # Find or create IDB
+        target = idb_path
+        if not idb_path.endswith(('.i64', '.idb')):
+            # Check for existing IDB
+            existing = self._check_idb_exists(idb_path)
+            if existing:
+                target = existing
+        
+        if not os.path.exists(target):
+            return {"error": f"File not found: {target}"}
+        
+        # Get path to api_consolidated
+        # This assumes the daemon is in the same repo as the MCP server
+        daemon_dir = os.path.dirname(os.path.abspath(__file__))
+        api_path = os.path.join(daemon_dir, "src", "ida_pro_mcp", "ida_mcp")
+        
+        # Escape paths for Windows
+        escaped_api_path = api_path.replace('\\', '\\\\')
+        escaped_target = target.replace('\\', '\\\\')
+        
+        # Serialize kwargs as JSON - safe for embedding in script
+        # json.dumps handles all escaping properly
+        args_json = json.dumps(kwargs)
+        
+        # Create output file path
+        output_file = os.path.join(self.config.cache_dir, f"tool_result_{os.getpid()}_{threading.get_ident()}.json")
+        escaped_output = output_file.replace('\\', '\\\\')
+        
+        # Generate script
+        script = f'''import json
+import sys
+
+# Add API path
+sys.path.insert(0, "{escaped_api_path}")
+
+# Import the tool
+from api_consolidated import {tool_name}
+
+# Execute the tool with arguments
+try:
+    kwargs = json.loads('{args_json}')
+    result = {tool_name}(**kwargs)
+except Exception as e:
+    result = {{"error": str(e), "traceback": __import__("traceback").format_exc()}}
+
+# Write output
+with open("{escaped_output}", "w") as f:
+    json.dump(result, f, default=str)
+
+import ida_pro
+ida_pro.qexit(0)
+'''
+        
+        # Write script to file
+        script_file = os.path.join(self.config.cache_dir, f"tool_script_{os.getpid()}_{threading.get_ident()}.py")
+        
+        try:
+            with open(script_file, 'w', encoding='utf-8') as f:
+                f.write(script)
+            
+            cmd = [self.idat_exe, "-A", f"-S{script_file}", target]
+            logger.info(f"Calling {tool_name}({kwargs}) on {os.path.basename(target)}")
+            
+            # Use longer timeout for complex tools
+            timeout = 120
+            proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+            
+            if os.path.exists(output_file):
+                with open(output_file, 'r') as f:
+                    result = json.load(f)
+                result["_execution_time"] = time.time() - start_time
+                return result
+            else:
+                return {
+                    "error": "Tool execution produced no output",
+                    "stdout": proc.stdout.decode()[:500] if proc.stdout else "",
+                    "stderr": proc.stderr.decode()[:500] if proc.stderr else "",
+                    "returncode": proc.returncode
+                }
+        
+        except subprocess.TimeoutExpired:
+            return {"error": f"Tool execution timed out ({timeout}s)"}
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            for f in [script_file, output_file]:
+                try:
+                    if os.path.exists(f):
+                        os.remove(f)
+                except:
+                    pass
 
 # =============================================================================
 # HTTP Server (Simple MCP-like interface)
@@ -385,8 +491,41 @@ class MCPHandler(BaseHTTPRequestHandler):
                     "status": "running",
                     "idat": self.manager.idat_exe,
                     "cache_dir": self.manager.config.cache_dir,
-                    "sessions": len(self.manager.sessions)
+                    "sessions": len(self.manager.sessions),
+                    "tools": ["idb", "code", "data", "search", "types", "memory", "modify", 
+                              "misc", "funcs", "segments", "files", "plugins", "trace",
+                              "fixups", "data_ops", "agent", "microcode", "graph", "bulk"]
                 })
+            
+            elif action == "tool":
+                # Generic tool call: {action: "tool", tool: "idb", idb: "path.i64", args: {action: "meta"}}
+                tool_name = request.get("tool", "")
+                idb_path = request.get("idb", "")
+                tool_args = request.get("args", {})
+                
+                if not tool_name:
+                    self.send_json({"error": "tool name required"}, 400)
+                    return
+                if not idb_path:
+                    self.send_json({"error": "idb path required"}, 400)
+                    return
+                
+                result = self.manager.call_tool(idb_path, tool_name, **tool_args)
+                self.send_json(result)
+            
+            # Direct tool shortcuts - each tool is its own action
+            elif action in ["idb", "code", "data", "search", "types", "memory", "modify",
+                            "misc", "funcs", "segments", "files", "plugins", "trace",
+                            "fixups", "data_ops", "agent", "microcode", "graph", "bulk"]:
+                idb_path = request.get("idb", "")
+                if not idb_path:
+                    self.send_json({"error": "idb path required"}, 400)
+                    return
+                
+                # Pass all other request fields as tool arguments
+                tool_args = {k: v for k, v in request.items() if k not in ["action", "idb"]}
+                result = self.manager.call_tool(idb_path, action, **tool_args)
+                self.send_json(result)
             
             else:
                 self.send_json({"error": f"Unknown action: {action}"}, 400)
