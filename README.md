@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/IDA%20Pro-9.0%2B-blue?style=for-the-badge" alt="IDA Pro 9.0+"/>
   <img src="https://img.shields.io/badge/Python-3.11%2B-green?style=for-the-badge" alt="Python 3.11+"/>
   <img src="https://img.shields.io/badge/MCP-2.0-purple?style=for-the-badge" alt="MCP 2.0"/>
-  <img src="https://img.shields.io/badge/Tools-29-orange?style=for-the-badge" alt="29 Tools"/>
+  <img src="https://img.shields.io/badge/Tools-35-orange?style=for-the-badge" alt="35 Tools"/>
   <img src="https://img.shields.io/badge/Standalone-Yes-brightgreen?style=for-the-badge" alt="Standalone"/>
 </p>
 
@@ -112,30 +112,34 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 
 ### Modification Tools
 
-| Tool       | Description            | Key Actions                                                   |
-| ---------- | ---------------------- | ------------------------------------------------------------- |
-| `modify`   | Rename, comment, patch | `rename`, `comment`, `set_type`, `patch`                      |
-| `funcs`    | Function management    | `create`, `delete`, `set_flags`, `add_comment`                |
-| `segments` | Segment management     | `list`, `add`, `delete`, `set_attr`                           |
-| `bulk`     | Batch operations       | `rename`, `comment`, `set_type`, `import_json`, `export_json` |
+| Tool          | Description            | Key Actions                                                   |
+| ------------- | ---------------------- | ------------------------------------------------------------- |
+| `modify`      | Rename, comment, patch | `rename`, `comment`, `set_type`, `patch`                      |
+| `funcs`       | Function management    | `create`, `delete`, `set_flags`, `add_comment`                |
+| `segments`    | Segment management     | `list`, `add`, `delete`, `set_attr`                           |
+| `bulk`        | Batch operations       | `rename`, `comment`, `set_type`, `import_json`, `export_json` |
+| `comments_ai` | AI-optimized comments  | `get_context`, `set_structured`, `bulk_set`, `export_md`      |
 
 ### Advanced Analysis Tools
 
-| Tool        | Description                | Key Actions                                                            |
-| ----------- | -------------------------- | ---------------------------------------------------------------------- |
-| `agent`     | High-level helpers         | `analyze_function`, `explore_address`, `find_references`, `search_all` |
-| `microcode` | Hex-Rays IR                | `get`, `blocks`, `instructions`                                        |
-| `graph`     | Graph export               | `callgraph`, `cfg`                                                     |
-| `memory`    | Memory read/write          | `read`, `write`                                                        |
-| `ctree`     | Hex-Rays AST access        | `get`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`    |
-| `diff`      | Binary diffing             | `functions`, `bytes`, `signatures`, `names`, `summary`                 |
-| `lumina`    | Cloud function recognition | `pull`, `push`, `status`, `history`, `search`                          |
-| `symbols`   | Debug symbols (PDB/DWARF)  | `load_pdb`, `load_dwarf`, `status`, `apply`, `export`                  |
-| `patterns`  | FLIRT pattern matching     | `generate`, `match`, `list_sigs`, `apply_sig`, `create_sig`            |
-| `structs`   | Struct recovery            | `recover`, `analyze_usage`, `list`, `create`, `apply`                  |
-| `emulate`   | Code emulation             | `snippet`, `appcall`, `trace`, `decrypt_strings`, `eval_expr`          |
-| `export`    | Multi-format export        | `listing`, `html`, `idc`, `json`, `binexport`, `headers`               |
-| `history`   | DB version control         | `undo`, `redo`, `list`, `snapshot`, `restore`, `diff`                  |
+| Tool           | Description                | Key Actions                                                            |
+| -------------- | -------------------------- | ---------------------------------------------------------------------- |
+| `agent`        | High-level helpers         | `analyze_function`, `explore_address`, `find_references`, `search_all` |
+| `microcode`    | Hex-Rays IR                | `get`, `blocks`, `instructions`                                        |
+| `graph`        | Graph export               | `callgraph`, `cfg`                                                     |
+| `memory`       | Memory read/write          | `read`, `write`                                                        |
+| `ctree`        | Hex-Rays AST access        | `get`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`    |
+| `diff`         | Binary diffing             | `functions`, `bytes`, `signatures`, `names`, `summary`                 |
+| `lumina`       | Cloud function recognition | `pull`, `push`, `status`, `history`, `search`                          |
+| `symbols`      | Debug symbols (PDB/DWARF)  | `load_pdb`, `load_dwarf`, `status`, `apply`, `export`                  |
+| `patterns`     | FLIRT pattern matching     | `generate`, `match`, `list_sigs`, `apply_sig`, `create_sig`            |
+| `structs`      | Struct recovery            | `recover`, `analyze_usage`, `list`, `create`, `apply`                  |
+| `emulate`      | Code emulation             | `snippet`, `appcall`, `trace`, `decrypt_strings`, `eval_expr`          |
+| `export`       | Multi-format export        | `listing`, `html`, `idc`, `json`, `binexport`, `headers`               |
+| `history`      | DB version control         | `undo`, `redo`, `list`, `snapshot`, `restore`, `diff`                  |
+| `strings_xref` | Advanced string analysis   | `analyze`, `xref_chain`, `detect_encoded`, `find_format`, `clusters`   |
+| `entropy`      | Entropy analysis           | `section`, `region`, `packed_detect`, `crypto_detect`, `compare`       |
+| `imports_deep` | Deep import analysis       | `thunks`, `delay`, `forwarded`, `ordinal`, `api_sets`, `resolve`       |
 
 ### Utility Tools
 
@@ -148,6 +152,8 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 | `fixups`   | Relocations             | `list`, `get`, `add`, `delete`                             |
 | `data_ops` | Data creation           | `make_data`, `make_array`, `make_string`, `make_code`      |
 | `debug`    | Debugger control        | `start`, `stop`, `continue`, `step`, `breakpoints`, `regs` |
+| `nav`      | Navigation helpers      | `bookmarks`, `goto`, `cursor`, `interesting`               |
+| `colorize` | Code coloring           | `set_func`, `set_range`, `get`, `clear`, `palette`         |
 
 ---
 
