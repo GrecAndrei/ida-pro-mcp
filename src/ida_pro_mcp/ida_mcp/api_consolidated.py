@@ -1,19 +1,7 @@
 """IDA Pro MCP - Consolidated API
 
-DESIGN: ~10 mega-tools covering all functionality, optimized for context efficiency.
+DESIGN: mega-tools covering all functionality, optimized for context efficiency.
 Each tool uses an 'action' parameter to access sub-operations.
-
-TOOLS:
-1. idb - database metadata, segments, cursor
-2. code - decompile, disassemble, xrefs, callgraph, basic blocks
-3. data - functions, globals, strings, imports, exports
-4. search - find bytes, patterns, instructions, strings, references
-5. types - local types, structs, enums, prototypes
-6. memory - read/write all data types
-7. modify - rename, set type, comments
-8. debug - all debugger operations
-9. analysis - reanalyze, auto_wait, comprehensive function analysis
-10. misc - python exec, signatures, bookmarks, undo
 """
 
 from typing import Annotated, Optional, Literal, Union, Any
@@ -4676,9 +4664,7 @@ def structs(
         return {"error": str(e), "traceback": traceback.format_exc()}
 
 
-# ============================================================================
-# SESSION A TOOLS (27-29)
-# ============================================================================
+
 
 # ============================================================================
 # 27. EMULATE - Code Emulation and Snippet Execution
@@ -5382,3 +5368,1437 @@ def history(
 # END OF SESSION A TOOLS (27-29)
 # Session B tools (30-35) should be added AFTER this line
 # ============================================================================
+
+
+# ============================================================================
+# 30. STRINGS_XREF - Advanced String Analysis
+# ============================================================================
+
+@tool
+@idaread
+def strings_xref(
+    action: Annotated[Literal["analyze", "xref_chain", "detect_encoded", "find_format", "clusters"],
+                      "Action: analyze|xref_chain|detect_encoded|find_format|clusters"],
+    addr: Annotated[Optional[str], "String address or function address"] = None,
+    query: Annotated[Optional[str], "String pattern to search"] = None,
+    depth: Annotated[int, "Xref chain depth"] = 3,
+) -> dict:
+    """
+    Advanced string analysis with xref chains, encoding detection, and clustering.
+    
+    ACTIONS:
+    
+    analyze - Deep analysis of a string at address
+        Params: addr
+        Returns: {string, encoding, xrefs, decryption_indicators}
+        
+    xref_chain - Trace string reference chain up through callers
+        Params: addr, depth
+        Returns: {chain: [{addr, func, caller}...]}
+        
+    detect_encoded - Find potentially encrypted/encoded strings
+        Returns: {suspicious: [{addr, string, entropy, reason}]}
+        
+    find_format - Find format strings and their argument usage
+        Params: query (optional filter)
+        Returns: {format_strings: [{addr, format, args_count}]}
+        
+    clusters - Group strings by their calling functions
+        Returns: {clusters: [{func, strings: [...]}]}
+    """
+    import math
+    
+    try:
+        def calc_entropy(data):
+            if not data:
+                return 0.0
+            freq = {}
+            for b in data:
+                freq[b] = freq.get(b, 0) + 1
+            entropy = 0.0
+            for count in freq.values():
+                p = count / len(data)
+                entropy -= p * math.log2(p)
+            return entropy / 8.0  # Normalize to 0-1
+        
+        if action == "analyze":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            # Get string at address
+            str_type = idc.get_str_type(ea)
+            if str_type is None:
+                return {"error": f"No string at {addr}"}
+            
+            string_val = idc.get_strlit_contents(ea, -1, str_type)
+            if string_val:
+                string_val = string_val.decode('utf-8', errors='replace')
+            
+            # Detect encoding
+            encoding = "ascii"
+            if str_type == idc.STRTYPE_C_16:
+                encoding = "utf-16"
+            elif str_type == idc.STRTYPE_C_32:
+                encoding = "utf-32"
+            
+            # Get xrefs to this string
+            xrefs = []
+            for xref in idautils.XrefsTo(ea):
+                func = ida_funcs.get_func(xref.frm)
+                xrefs.append({
+                    "from": hex(xref.frm),
+                    "func": idc.get_func_name(xref.frm) if func else None
+                })
+            
+            # Check for decryption indicators
+            indicators = []
+            raw_bytes = ida_bytes.get_bytes(ea, min(100, idc.get_item_size(ea)))
+            if raw_bytes:
+                ent = calc_entropy(raw_bytes)
+                if ent > 0.8:
+                    indicators.append("high_entropy")
+                if b'\x00' not in raw_bytes[:20] and len(raw_bytes) > 10:
+                    indicators.append("no_null_terminator_early")
+            
+            return {
+                "addr": hex(ea),
+                "string": string_val,
+                "encoding": encoding,
+                "size": idc.get_item_size(ea),
+                "xrefs": xrefs[:20],
+                "decryption_indicators": indicators
+            }
+        
+        elif action == "xref_chain":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            chain = []
+            visited = set()
+            
+            def trace_up(current_ea, current_depth):
+                if current_depth > depth or current_ea in visited:
+                    return
+                visited.add(current_ea)
+                
+                for xref in idautils.XrefsTo(current_ea):
+                    if xref.type in [1, 17, 18, 19, 20, 21]:
+                        func = ida_funcs.get_func(xref.frm)
+                        entry = {
+                            "addr": hex(xref.frm),
+                            "depth": current_depth
+                        }
+                        if func:
+                            entry["func"] = idc.get_func_name(func.start_ea)
+                            chain.append(entry)
+                            if current_depth < depth:
+                                trace_up(func.start_ea, current_depth + 1)
+            
+            trace_up(ea, 0)
+            return {"addr": hex(ea), "depth": depth, "chain": chain[:50]}
+        
+        elif action == "detect_encoded":
+            suspicious = []
+            
+            for s in idautils.Strings():
+                raw = ida_bytes.get_bytes(s.ea, s.length)
+                if not raw:
+                    continue
+                
+                ent = calc_entropy(raw)
+                reasons = []
+                
+                if ent > 0.85:
+                    reasons.append("high_entropy")
+                
+                # Check for XOR patterns
+                if raw and len(set(raw)) < len(raw) // 4:
+                    reasons.append("repetitive_pattern")
+                
+                # Check for base64-like
+                try:
+                    str_val = raw.decode('ascii', errors='strict')
+                    if all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in str_val):
+                        if len(str_val) > 20:
+                            reasons.append("base64_like")
+                except:
+                    pass
+                
+                if reasons:
+                    suspicious.append({
+                        "addr": hex(s.ea),
+                        "string": str(s)[:50],
+                        "entropy": round(ent, 3),
+                        "reasons": reasons
+                    })
+                
+                if len(suspicious) >= 100:
+                    break
+            
+            return {"suspicious": suspicious}
+        
+        elif action == "find_format":
+            format_strings = []
+            
+            for s in idautils.Strings():
+                try:
+                    str_val = idc.get_strlit_contents(s.ea, -1, s.strtype)
+                    if str_val:
+                        str_val = str_val.decode('utf-8', errors='replace')
+                        if '%' in str_val:
+                            if query and query.lower() not in str_val.lower():
+                                continue
+                            # Count format specifiers
+                            import re
+                            specs = re.findall(r'%[-+0 #]*\d*\.?\d*[hlL]*[diouxXeEfFgGcspn%]', str_val)
+                            if specs:
+                                format_strings.append({
+                                    "addr": hex(s.ea),
+                                    "format": str_val[:100],
+                                    "specifiers": specs[:10],
+                                    "args_count": len([s for s in specs if s != '%%'])
+                                })
+                except:
+                    continue
+                
+                if len(format_strings) >= 100:
+                    break
+            
+            return {"format_strings": format_strings}
+        
+        elif action == "clusters":
+            clusters = {}
+            
+            for s in idautils.Strings():
+                for xref in idautils.XrefsTo(s.ea):
+                    func = ida_funcs.get_func(xref.frm)
+                    if func:
+                        func_name = idc.get_func_name(func.start_ea)
+                        if func_name not in clusters:
+                            clusters[func_name] = {"addr": hex(func.start_ea), "strings": []}
+                        if len(clusters[func_name]["strings"]) < 20:
+                            clusters[func_name]["strings"].append({
+                                "addr": hex(s.ea),
+                                "string": str(s)[:50]
+                            })
+            
+            result = [{"func": k, **v} for k, v in list(clusters.items())[:50]]
+            return {"clusters": result}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 31. ENTROPY - Entropy Analysis
+# ============================================================================
+
+@tool
+@idaread
+def entropy(
+    action: Annotated[Literal["section", "region", "packed_detect", "crypto_detect", "compare"],
+                      "Action: section|region|packed_detect|crypto_detect|compare"],
+    addr: Annotated[Optional[str], "Start address for region analysis"] = None,
+    end_addr: Annotated[Optional[str], "End address for compare"] = None,
+    size: Annotated[int, "Region size in bytes"] = 256,
+    threshold: Annotated[float, "High entropy threshold (0.0-1.0)"] = 0.9,
+) -> dict:
+    """
+    Entropy analysis for detecting packed/encrypted regions.
+    
+    ACTIONS:
+    
+    section - Calculate entropy for each segment
+        Returns: {sections: [{name, start, end, entropy, is_high}]}
+        
+    region - Calculate entropy for specific address range
+        Params: addr, size
+        Returns: {addr, size, entropy, histogram}
+        
+    packed_detect - Detect packed/compressed sections
+        Params: threshold
+        Returns: {packed_sections: [...], overall_verdict}
+        
+    crypto_detect - Detect crypto constants and high-entropy regions
+        Returns: {crypto_indicators: [{addr, type, description}]}
+        
+    compare - Compare entropy of two regions
+        Params: addr, end_addr (second region start)
+        Returns: {region1, region2, difference}
+    """
+    import math
+    
+    try:
+        def calc_entropy(data):
+            if not data:
+                return 0.0
+            freq = {}
+            for b in data:
+                freq[b] = freq.get(b, 0) + 1
+            ent = 0.0
+            for count in freq.values():
+                p = count / len(data)
+                ent -= p * math.log2(p)
+            return ent / 8.0
+        
+        def calc_histogram(data):
+            hist = [0] * 256
+            for b in data:
+                hist[b] += 1
+            return hist
+        
+        if action == "section":
+            sections = []
+            
+            for seg_ea in idautils.Segments():
+                seg = ida_segment.getseg(seg_ea)
+                if not seg:
+                    continue
+                
+                seg_name = idc.get_segm_name(seg_ea)
+                seg_size = seg.end_ea - seg.start_ea
+                
+                # Sample entropy (don't read huge segments entirely)
+                sample_size = min(seg_size, 65536)
+                data = ida_bytes.get_bytes(seg.start_ea, sample_size)
+                
+                if data:
+                    ent = calc_entropy(data)
+                    sections.append({
+                        "name": seg_name,
+                        "start": hex(seg.start_ea),
+                        "end": hex(seg.end_ea),
+                        "size": seg_size,
+                        "entropy": round(ent, 4),
+                        "is_high": ent > threshold
+                    })
+            
+            return {"sections": sections, "threshold": threshold}
+        
+        elif action == "region":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            data = ida_bytes.get_bytes(ea, size)
+            
+            if not data:
+                return {"error": f"Could not read {size} bytes at {addr}"}
+            
+            ent = calc_entropy(data)
+            hist = calc_histogram(data)
+            
+            # Compress histogram for output
+            non_zero = {i: c for i, c in enumerate(hist) if c > 0}
+            
+            return {
+                "addr": hex(ea),
+                "size": len(data),
+                "entropy": round(ent, 4),
+                "is_high": ent > threshold,
+                "unique_bytes": len(non_zero),
+                "top_bytes": sorted(non_zero.items(), key=lambda x: -x[1])[:10]
+            }
+        
+        elif action == "packed_detect":
+            packed = []
+            code_sections = []
+            data_sections = []
+            
+            for seg_ea in idautils.Segments():
+                seg = ida_segment.getseg(seg_ea)
+                if not seg:
+                    continue
+                
+                seg_name = idc.get_segm_name(seg_ea)
+                seg_size = seg.end_ea - seg.start_ea
+                sample_size = min(seg_size, 65536)
+                data = ida_bytes.get_bytes(seg.start_ea, sample_size)
+                
+                if data:
+                    ent = calc_entropy(data)
+                    info = {
+                        "name": seg_name,
+                        "entropy": round(ent, 4),
+                        "size": seg_size
+                    }
+                    
+                    # Check segment type
+                    if seg.perm & ida_segment.SEGPERM_EXEC:
+                        code_sections.append(info)
+                        if ent > threshold:
+                            packed.append({**info, "reason": "high_entropy_code"})
+                    else:
+                        data_sections.append(info)
+            
+            # Verdict
+            avg_code_entropy = sum(s["entropy"] for s in code_sections) / len(code_sections) if code_sections else 0
+            verdict = "likely_packed" if avg_code_entropy > 0.85 else "likely_unpacked"
+            
+            return {
+                "packed_sections": packed,
+                "code_avg_entropy": round(avg_code_entropy, 4),
+                "verdict": verdict,
+                "threshold": threshold
+            }
+        
+        elif action == "crypto_detect":
+            indicators = []
+            
+            # Known crypto constants
+            crypto_patterns = [
+                (b'\x63\x7c\x77\x7b', "AES S-box"),
+                (b'\x67\x45\x23\x01', "MD5 init"),
+                (b'\x01\x23\x45\x67', "SHA1 init (BE)"),
+                (b'\xd7\x6a\xa4\x78', "SHA256 K constant"),
+            ]
+            
+            for seg_ea in idautils.Segments():
+                seg = ida_segment.getseg(seg_ea)
+                if not seg:
+                    continue
+                
+                seg_size = min(seg.end_ea - seg.start_ea, 1048576)
+                data = ida_bytes.get_bytes(seg.start_ea, seg_size)
+                
+                if not data:
+                    continue
+                
+                # Search for crypto constants
+                for pattern, name in crypto_patterns:
+                    offset = data.find(pattern)
+                    if offset != -1:
+                        indicators.append({
+                            "addr": hex(seg.start_ea + offset),
+                            "type": "crypto_constant",
+                            "description": name
+                        })
+                
+                # Look for high-entropy 256-byte blocks (potential S-boxes)
+                for i in range(0, len(data) - 256, 256):
+                    block = data[i:i+256]
+                    ent = calc_entropy(block)
+                    unique = len(set(block))
+                    if ent > 0.95 and unique > 200:
+                        indicators.append({
+                            "addr": hex(seg.start_ea + i),
+                            "type": "potential_sbox",
+                            "description": f"High entropy block ({unique} unique bytes)"
+                        })
+                        if len(indicators) > 50:
+                            break
+            
+            return {"crypto_indicators": indicators[:50]}
+        
+        elif action == "compare":
+            if not addr or not end_addr:
+                return {"error": "addr and end_addr required"}
+            
+            ea1 = parse_address(addr)
+            ea2 = parse_address(end_addr)
+            
+            data1 = ida_bytes.get_bytes(ea1, size)
+            data2 = ida_bytes.get_bytes(ea2, size)
+            
+            if not data1 or not data2:
+                return {"error": "Could not read data from one or both regions"}
+            
+            ent1 = calc_entropy(data1)
+            ent2 = calc_entropy(data2)
+            
+            return {
+                "region1": {"addr": hex(ea1), "entropy": round(ent1, 4)},
+                "region2": {"addr": hex(ea2), "entropy": round(ent2, 4)},
+                "difference": round(abs(ent1 - ent2), 4),
+                "more_random": "region1" if ent1 > ent2 else "region2"
+            }
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 32. IMPORTS_DEEP - Deep Import Analysis
+# ============================================================================
+
+@tool
+@idaread
+def imports_deep(
+    action: Annotated[Literal["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
+                      "Action: thunks|delay|forwarded|ordinal|api_sets|resolve"],
+    query: Annotated[Optional[str], "Import name or DLL to filter"] = None,
+    addr: Annotated[Optional[str], "Address for resolve action"] = None,
+) -> dict:
+    """
+    Deep import analysis with thunk resolution and delay import detection.
+    
+    ACTIONS:
+    
+    thunks - Resolve import thunks to actual API addresses
+        Params: query (optional DLL filter)
+        Returns: {thunks: [{thunk_addr, target, name, dll}]}
+        
+    delay - List delay-loaded imports
+        Returns: {delay_imports: [{dll, functions: [...]}]}
+        
+    forwarded - Detect forwarded exports in imported DLLs
+        Returns: {forwarded: [{from_dll, to_dll, name}]}
+        
+    ordinal - Resolve ordinal imports to named symbols
+        Params: query (DLL filter)
+        Returns: {ordinal_imports: [{dll, ordinal, resolved_name}]}
+        
+    api_sets - Resolve Windows API Set redirections
+        Returns: {api_sets: [{virtual_dll, actual_dll}]}
+        
+    resolve - Resolve import at specific address
+        Params: addr
+        Returns: {addr, dll, name, type}
+    """
+    try:
+        if action == "thunks":
+            thunks = []
+            
+            # Find IAT/thunk sections
+            for seg_ea in idautils.Segments():
+                seg_name = idc.get_segm_name(seg_ea)
+                if '.idata' in seg_name.lower() or 'iat' in seg_name.lower():
+                    seg = ida_segment.getseg(seg_ea)
+                    if not seg:
+                        continue
+                    
+                    ea = seg.start_ea
+                    while ea < seg.end_ea:
+                        target = idc.get_qword(ea) if idaapi.get_inf_structure().is_64bit() else idc.get_wide_dword(ea)
+                        name = idc.get_name(ea)
+                        
+                        if name and target:
+                            if query and query.lower() not in name.lower():
+                                ea += 8 if idaapi.get_inf_structure().is_64bit() else 4
+                                continue
+                            
+                            thunks.append({
+                                "thunk_addr": hex(ea),
+                                "target": hex(target) if target else None,
+                                "name": name
+                            })
+                        
+                        ea += 8 if idaapi.get_inf_structure().is_64bit() else 4
+                        
+                        if len(thunks) >= 200:
+                            break
+            
+            return {"thunks": thunks}
+        
+        elif action == "delay":
+            delay_imports = {}
+            
+            # Look for delay import directory
+            for seg_ea in idautils.Segments():
+                seg_name = idc.get_segm_name(seg_ea)
+                if 'delay' in seg_name.lower() or '.didat' in seg_name.lower():
+                    seg = ida_segment.getseg(seg_ea)
+                    if seg:
+                        # Parse delay import entries
+                        ea = seg.start_ea
+                        while ea < seg.end_ea:
+                            name = idc.get_name(ea)
+                            if name:
+                                # Extract DLL name from import name
+                                parts = name.split('_')
+                                if len(parts) >= 2:
+                                    dll = parts[0]
+                                    if dll not in delay_imports:
+                                        delay_imports[dll] = []
+                                    delay_imports[dll].append({
+                                        "addr": hex(ea),
+                                        "name": name
+                                    })
+                            ea = idc.next_head(ea, seg.end_ea)
+                            if ea == idaapi.BADADDR:
+                                break
+            
+            result = [{"dll": k, "functions": v[:20]} for k, v in delay_imports.items()]
+            return {"delay_imports": result}
+        
+        elif action == "forwarded":
+            # This requires parsing the actual DLL exports which IDA doesn't do directly
+            # We can detect forwarded imports by looking at import names that reference other DLLs
+            forwarded = []
+            
+            def imp_cb(ea, name, ordinal):
+                if name and '.' in name:
+                    # Might be a forwarded export reference
+                    parts = name.split('.')
+                    if len(parts) == 2:
+                        forwarded.append({
+                            "addr": hex(ea),
+                            "name": name,
+                            "forward_target": parts[1]
+                        })
+                return True
+            
+            nimps = ida_nalt.get_import_module_qty()
+            for i in range(nimps):
+                mod_name = ida_nalt.get_import_module_name(i)
+                if mod_name:
+                    ida_nalt.enum_import_names(i, imp_cb)
+            
+            return {"forwarded": forwarded[:50], "note": "Limited detection - full analysis requires DLL parsing"}
+        
+        elif action == "ordinal":
+            ordinal_imports = []
+            
+            def imp_cb(ea, name, ordinal):
+                if ordinal and ordinal > 0:
+                    entry = {
+                        "addr": hex(ea),
+                        "ordinal": ordinal,
+                        "name": name or f"Ordinal_{ordinal}"
+                    }
+                    ordinal_imports.append(entry)
+                return True
+            
+            nimps = ida_nalt.get_import_module_qty()
+            for i in range(nimps):
+                mod_name = ida_nalt.get_import_module_name(i)
+                if query and query.lower() not in mod_name.lower():
+                    continue
+                ida_nalt.enum_import_names(i, imp_cb)
+            
+            return {"ordinal_imports": ordinal_imports[:100]}
+        
+        elif action == "api_sets":
+            api_sets = []
+            
+            # Look for api-ms-* imports
+            nimps = ida_nalt.get_import_module_qty()
+            for i in range(nimps):
+                mod_name = ida_nalt.get_import_module_name(i)
+                if mod_name and mod_name.lower().startswith('api-ms-'):
+                    # These are API set DLLs that redirect to real DLLs
+                    actual = "kernel32.dll"  # Default guess
+                    if 'win-core' in mod_name.lower():
+                        actual = "kernelbase.dll"
+                    elif 'crt' in mod_name.lower():
+                        actual = "ucrtbase.dll"
+                    
+                    api_sets.append({
+                        "virtual_dll": mod_name,
+                        "actual_dll": actual,
+                        "note": "Actual target depends on Windows version"
+                    })
+            
+            return {"api_sets": api_sets}
+        
+        elif action == "resolve":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            name = idc.get_name(ea)
+            
+            # Check what module this belongs to
+            module = None
+            nimps = ida_nalt.get_import_module_qty()
+            for i in range(nimps):
+                mod_name = ida_nalt.get_import_module_name(i)
+                found = [False]
+                
+                def check_cb(imp_ea, imp_name, ordinal):
+                    if imp_ea == ea:
+                        found[0] = True
+                        return False
+                    return True
+                
+                ida_nalt.enum_import_names(i, check_cb)
+                if found[0]:
+                    module = mod_name
+                    break
+            
+            return {
+                "addr": hex(ea),
+                "name": name,
+                "dll": module,
+                "type": "import" if module else "unknown"
+            }
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 33. COMMENTS_AI - AI-Optimized Comment Management
+# ============================================================================
+
+@tool
+@idawrite
+def comments_ai(
+    action: Annotated[Literal["get_context", "set_structured", "bulk_set", "export_md", "import_md", "summary"],
+                      "Action: get_context|set_structured|bulk_set|export_md|import_md|summary"],
+    addr: Annotated[Optional[str], "Address for comment"] = None,
+    text: Annotated[Optional[str], "Comment text or markdown content"] = None,
+    items: Annotated[Optional[str], "JSON list of {addr, text} for bulk operations"] = None,
+    path: Annotated[Optional[str], "File path for import/export"] = None,
+    format: Annotated[str, "Comment format: plain|markdown|structured"] = "plain",
+) -> dict:
+    """
+    AI-optimized comment management with structured formats and bulk operations.
+    
+    ACTIONS:
+    
+    get_context - Get all comments around an address with context
+        Params: addr
+        Returns: {func_comment, inline_comments, repeatable, anterior, posterior}
+        
+    set_structured - Set a structured comment (key-value, tags, TODO)
+        Params: addr, text, format
+        Returns: {set, addr, format}
+        
+    bulk_set - Set multiple comments from JSON list
+        Params: items (JSON: [{"addr": "0x...", "text": "..."}])
+        Returns: {set_count, errors}
+        
+    export_md - Export all comments to markdown
+        Params: path
+        Returns: {exported, path, count}
+        
+    import_md - Import comments from markdown
+        Params: path
+        Returns: {imported, count}
+        
+    summary - Get commenting coverage statistics
+        Returns: {total_functions, commented, coverage_pct}
+    """
+    import json as json_module
+    
+    try:
+        if action == "get_context":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            
+            result = {
+                "addr": hex(ea),
+                "name": idc.get_name(ea)
+            }
+            
+            # Function comment
+            if func:
+                result["func_name"] = idc.get_func_name(func.start_ea)
+                result["func_comment"] = idc.get_func_cmt(func.start_ea, 0)
+                result["func_comment_repeatable"] = idc.get_func_cmt(func.start_ea, 1)
+            
+            # Inline comment at address
+            result["comment"] = idc.get_cmt(ea, 0)
+            result["comment_repeatable"] = idc.get_cmt(ea, 1)
+            
+            # Anterior/posterior comments
+            anterior = []
+            for i in range(10):
+                line = idc.get_extra_cmt(ea, idc.E_PREV + i)
+                if line:
+                    anterior.append(line)
+                else:
+                    break
+            result["anterior"] = anterior
+            
+            posterior = []
+            for i in range(10):
+                line = idc.get_extra_cmt(ea, idc.E_NEXT + i)
+                if line:
+                    posterior.append(line)
+                else:
+                    break
+            result["posterior"] = posterior
+            
+            # Nearby comments
+            nearby = []
+            if func:
+                curr = func.start_ea
+                while curr < func.end_ea and len(nearby) < 20:
+                    cmt = idc.get_cmt(curr, 0) or idc.get_cmt(curr, 1)
+                    if cmt:
+                        nearby.append({
+                            "addr": hex(curr),
+                            "comment": cmt[:100]
+                        })
+                    curr = idc.next_head(curr, func.end_ea)
+            result["nearby_comments"] = nearby
+            
+            return result
+        
+        elif action == "set_structured":
+            if not addr or not text:
+                return {"error": "addr and text required"}
+            
+            ea = parse_address(addr)
+            
+            # Format the comment based on format type
+            if format == "structured":
+                # Parse key:value pairs
+                formatted = "/* AI Analysis:\n"
+                for line in text.split('\n'):
+                    formatted += f" * {line}\n"
+                formatted += " */"
+            elif format == "markdown":
+                # Keep markdown but prefix lines
+                formatted = text
+            else:
+                formatted = text
+            
+            # Set the comment
+            idc.set_cmt(ea, formatted, 0)
+            
+            return {"set": True, "addr": hex(ea), "format": format}
+        
+        elif action == "bulk_set":
+            if not items:
+                return {"error": "items required (JSON list)"}
+            
+            try:
+                item_list = json_module.loads(items)
+            except:
+                return {"error": "Invalid JSON in items"}
+            
+            set_count = 0
+            errors = []
+            
+            for item in item_list:
+                try:
+                    item_addr = item.get("addr")
+                    item_text = item.get("text")
+                    if item_addr and item_text:
+                        ea = parse_address(item_addr)
+                        idc.set_cmt(ea, item_text, 0)
+                        set_count += 1
+                except Exception as e:
+                    errors.append({"addr": item.get("addr"), "error": str(e)})
+            
+            return {"set_count": set_count, "errors": errors[:10]}
+        
+        elif action == "export_md":
+            if not path:
+                return {"error": "path required"}
+            
+            lines = ["# IDA Comments Export\n\n"]
+            count = 0
+            
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    func_name = idc.get_func_name(func_ea)
+                    func_cmt = idc.get_func_cmt(func_ea, 0) or idc.get_func_cmt(func_ea, 1)
+                    
+                    func_comments = []
+                    if func_cmt:
+                        func_comments.append(f"**Function**: {func_cmt}")
+                        count += 1
+                    
+                    # Get inline comments
+                    func = ida_funcs.get_func(func_ea)
+                    if func:
+                        curr = func.start_ea
+                        while curr < func.end_ea:
+                            cmt = idc.get_cmt(curr, 0) or idc.get_cmt(curr, 1)
+                            if cmt:
+                                func_comments.append(f"- `{hex(curr)}`: {cmt}")
+                                count += 1
+                            curr = idc.next_head(curr, func.end_ea)
+                    
+                    if func_comments:
+                        lines.append(f"## {func_name} (`{hex(func_ea)}`)\n\n")
+                        lines.extend([c + "\n" for c in func_comments])
+                        lines.append("\n")
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+            
+            return {"exported": True, "path": path, "comment_count": count}
+        
+        elif action == "import_md":
+            if not path:
+                return {"error": "path required"}
+            
+            import re
+            
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Parse markdown for comments
+            imported = 0
+            
+            # Look for patterns like `0x12345`: comment
+            pattern = r'`(0x[0-9a-fA-F]+)`:\s*(.+?)(?:\n|$)'
+            for match in re.finditer(pattern, content):
+                addr_str = match.group(1)
+                comment = match.group(2).strip()
+                try:
+                    ea = parse_address(addr_str)
+                    idc.set_cmt(ea, comment, 0)
+                    imported += 1
+                except:
+                    pass
+            
+            return {"imported": True, "count": imported}
+        
+        elif action == "summary":
+            total = 0
+            commented = 0
+            inline_comments = 0
+            
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    total += 1
+                    func_cmt = idc.get_func_cmt(func_ea, 0) or idc.get_func_cmt(func_ea, 1)
+                    if func_cmt:
+                        commented += 1
+                    
+                    # Count inline comments
+                    func = ida_funcs.get_func(func_ea)
+                    if func:
+                        curr = func.start_ea
+                        while curr < func.end_ea:
+                            if idc.get_cmt(curr, 0) or idc.get_cmt(curr, 1):
+                                inline_comments += 1
+                            curr = idc.next_head(curr, func.end_ea)
+            
+            return {
+                "total_functions": total,
+                "functions_commented": commented,
+                "coverage_pct": round(commented / total * 100, 1) if total else 0,
+                "inline_comments": inline_comments
+            }
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 34. NAV - Navigation Helpers
+# ============================================================================
+
+@tool
+@idaread
+def nav(
+    action: Annotated[Literal["bookmarks", "add_bookmark", "del_bookmark", "goto", "history", "cursor", "interesting"],
+                      "Action: bookmarks|add_bookmark|del_bookmark|goto|history|cursor|interesting"],
+    addr: Annotated[Optional[str], "Address to navigate to or bookmark"] = None,
+    name: Annotated[Optional[str], "Bookmark name/label"] = None,
+    slot: Annotated[int, "Bookmark slot number (1-10)"] = 0,
+) -> dict:
+    """
+    Navigation helpers for bookmarks, cursor, and finding interesting addresses.
+    
+    ACTIONS:
+    
+    bookmarks - List all marked positions
+        Returns: {bookmarks: [{slot, addr, name, description}]}
+        
+    add_bookmark - Add a marked position
+        Params: addr, name (optional), slot (optional)
+        Returns: {added, addr, slot}
+        
+    del_bookmark - Remove a bookmark
+        Params: slot or addr
+        Returns: {deleted, slot}
+        
+    goto - Get navigation info for address (doesn't move GUI cursor in headless)
+        Params: addr
+        Returns: {addr, func, segment, context}
+        
+    history - Get pseudo navigation history from xref patterns
+        Returns: {note, suggestion}
+        
+    cursor - Get current analysis cursor position
+        Returns: {addr, func, segment}
+        
+    interesting - Find interesting addresses (crypto, unusual patterns)
+        Returns: {interesting: [{addr, reason, context}]}
+    """
+    try:
+        if action == "bookmarks":
+            bookmarks = []
+            
+            # IDA stores marked positions (bookmarks) in slots 1-1024
+            for i in range(1, 1025):
+                mark_ea = idc.get_bookmark(i)
+                if mark_ea != idaapi.BADADDR:
+                    mark_desc = idc.get_bookmark_desc(i)
+                    bookmarks.append({
+                        "slot": i,
+                        "addr": hex(mark_ea),
+                        "name": idc.get_name(mark_ea) or None,
+                        "description": mark_desc or None
+                    })
+                if len(bookmarks) >= 100:
+                    break
+            
+            return {"bookmarks": bookmarks}
+        
+        elif action == "add_bookmark":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            # Find an empty slot or use provided one
+            target_slot = slot if slot > 0 else 1
+            if slot == 0:
+                for i in range(1, 1025):
+                    if idc.get_bookmark(i) == idaapi.BADADDR:
+                        target_slot = i
+                        break
+            
+            # Set bookmark
+            idc.put_bookmark(ea, 0, 0, 0, target_slot, name or f"Bookmark at {hex(ea)}")
+            
+            return {"added": True, "addr": hex(ea), "slot": target_slot, "name": name}
+        
+        elif action == "del_bookmark":
+            if slot > 0:
+                # Delete by slot
+                idc.put_bookmark(idaapi.BADADDR, 0, 0, 0, slot, "")
+                return {"deleted": True, "slot": slot}
+            elif addr:
+                # Find and delete by address
+                ea = parse_address(addr)
+                for i in range(1, 1025):
+                    if idc.get_bookmark(i) == ea:
+                        idc.put_bookmark(idaapi.BADADDR, 0, 0, 0, i, "")
+                        return {"deleted": True, "slot": i, "addr": hex(ea)}
+                return {"error": f"No bookmark at {addr}"}
+            else:
+                return {"error": "slot or addr required"}
+        
+        elif action == "goto":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            seg = ida_segment.getseg(ea)
+            
+            result = {
+                "addr": hex(ea),
+                "name": idc.get_name(ea),
+                "segment": idc.get_segm_name(ea) if seg else None
+            }
+            
+            if func:
+                result["function"] = idc.get_func_name(func.start_ea)
+                result["offset_in_func"] = ea - func.start_ea
+            
+            # Disassembly context
+            result["disasm"] = idc.GetDisasm(ea)
+            
+            # What's at this address?
+            flags = idc.get_full_flags(ea)
+            if idc.is_code(flags):
+                result["type"] = "code"
+            elif idc.is_data(flags):
+                result["type"] = "data"
+            else:
+                result["type"] = "unknown"
+            
+            return result
+        
+        elif action == "history":
+            # IDA headless doesn't maintain navigation history
+            # But we can suggest interesting navigation targets
+            return {
+                "note": "Navigation history not available in headless mode",
+                "suggestion": "Use 'interesting' action to find notable addresses"
+            }
+        
+        elif action == "cursor":
+            # In headless mode, we report the entry point or first function
+            cursor_ea = idc.get_screen_ea()
+            if cursor_ea == idaapi.BADADDR:
+                # Fallback to entry point
+                cursor_ea = idc.get_inf_attr(idc.INF_START_EA)
+            
+            func = ida_funcs.get_func(cursor_ea)
+            seg = ida_segment.getseg(cursor_ea)
+            
+            return {
+                "addr": hex(cursor_ea),
+                "name": idc.get_name(cursor_ea),
+                "segment": idc.get_segm_name(cursor_ea) if seg else None,
+                "function": idc.get_func_name(func.start_ea) if func else None,
+                "note": "In headless mode, cursor position may not reflect GUI state"
+            }
+        
+        elif action == "interesting":
+            interesting = []
+            
+            # Look for interesting patterns
+            for seg_ea in idautils.Segments():
+                seg = ida_segment.getseg(seg_ea)
+                if not seg:
+                    continue
+                
+                seg_name = idc.get_segm_name(seg_ea)
+                
+                # Check for unusual segment names
+                if any(x in seg_name.lower() for x in ['upx', 'aspack', 'themida', 'vmprotect']):
+                    interesting.append({
+                        "addr": hex(seg_ea),
+                        "reason": "packer_segment",
+                        "context": f"Segment name suggests packer: {seg_name}"
+                    })
+            
+            # Find functions with interesting names
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if name:
+                        name_lower = name.lower()
+                        if any(x in name_lower for x in ['crypt', 'decrypt', 'encode', 'decode', 'xor', 'rc4', 'aes']):
+                            interesting.append({
+                                "addr": hex(func_ea),
+                                "reason": "crypto_function",
+                                "context": f"Function name suggests crypto: {name}"
+                            })
+                        elif any(x in name_lower for x in ['anti', 'debug', 'detect', 'vm', 'sandbox']):
+                            interesting.append({
+                                "addr": hex(func_ea),
+                                "reason": "anti_analysis",
+                                "context": f"Function name suggests anti-analysis: {name}"
+                            })
+                    
+                    if len(interesting) >= 50:
+                        break
+            
+            return {"interesting": interesting[:50]}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 35. COLORIZE - Code Region Coloring
+# ============================================================================
+
+@tool
+@idawrite
+def colorize(
+    action: Annotated[Literal["set_func", "set_range", "set_insn", "get", "clear", "palette", "highlight_pattern"],
+                      "Action: set_func|set_range|set_insn|get|clear|palette|highlight_pattern"],
+    addr: Annotated[Optional[str], "Address or start of range"] = None,
+    end_addr: Annotated[Optional[str], "End of range for set_range"] = None,
+    color: Annotated[Optional[str], "Color as RGB hex (e.g., 'FF0000') or name"] = None,
+    pattern: Annotated[Optional[str], "Byte pattern to highlight"] = None,
+) -> dict:
+    """
+    Code region coloring and highlighting for visual analysis.
+    
+    ACTIONS:
+    
+    set_func - Color an entire function
+        Params: addr (any address in function), color
+        Returns: {colored, func, color}
+        
+    set_range - Color an address range
+        Params: addr, end_addr, color
+        Returns: {colored, start, end, color}
+        
+    set_insn - Color a single instruction
+        Params: addr, color
+        Returns: {colored, addr, color}
+        
+    get - Get color at address
+        Params: addr
+        Returns: {addr, color, color_hex}
+        
+    clear - Remove coloring from address/range/function
+        Params: addr, end_addr (optional for range)
+        Returns: {cleared, addr}
+        
+    palette - Get named color palette
+        Returns: {colors: {name: hex_value}}
+        
+    highlight_pattern - Highlight all occurrences of a byte pattern
+        Params: pattern, color
+        Returns: {highlighted, count, addresses}
+    """
+    try:
+        # Named colors palette (IDA uses BGR format internally)
+        COLORS = {
+            "red": 0x0000FF,
+            "green": 0x00FF00,
+            "blue": 0xFF0000,
+            "yellow": 0x00FFFF,
+            "cyan": 0xFFFF00,
+            "magenta": 0xFF00FF,
+            "orange": 0x0080FF,
+            "pink": 0x8080FF,
+            "lightblue": 0xFFD0A0,
+            "lightgreen": 0x80FF80,
+            "lightyellow": 0x80FFFF,
+            "white": 0xFFFFFF,
+            "black": 0x000000,
+            "gray": 0x808080,
+            "default": 0xFFFFFFFF  # No color / reset
+        }
+        
+        def parse_color(color_str):
+            if not color_str:
+                return COLORS["yellow"]  # Default highlight color
+            
+            color_str = color_str.lower().strip()
+            
+            # Named color
+            if color_str in COLORS:
+                return COLORS[color_str]
+            
+            # Hex color (RGB format, convert to BGR for IDA)
+            if color_str.startswith('#'):
+                color_str = color_str[1:]
+            
+            try:
+                if len(color_str) == 6:
+                    r = int(color_str[0:2], 16)
+                    g = int(color_str[2:4], 16)
+                    b = int(color_str[4:6], 16)
+                    return (b << 16) | (g << 8) | r  # BGR format for IDA
+            except:
+                pass
+            
+            return COLORS["yellow"]
+        
+        def color_to_hex(bgr_color):
+            if bgr_color == 0xFFFFFFFF:
+                return None
+            r = bgr_color & 0xFF
+            g = (bgr_color >> 8) & 0xFF
+            b = (bgr_color >> 16) & 0xFF
+            return f"#{r:02X}{g:02X}{b:02X}"
+        
+        if action == "set_func":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            bgr_color = parse_color(color)
+            
+            # Color all instructions in function
+            curr = func.start_ea
+            count = 0
+            while curr < func.end_ea:
+                idc.set_color(curr, idc.CIC_ITEM, bgr_color)
+                count += 1
+                curr = idc.next_head(curr, func.end_ea)
+            
+            return {
+                "colored": True,
+                "func": idc.get_func_name(func.start_ea),
+                "addr": hex(func.start_ea),
+                "instructions": count,
+                "color": color or "yellow"
+            }
+        
+        elif action == "set_range":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            end_ea = parse_address(end_addr) if end_addr else ea + 1
+            
+            bgr_color = parse_color(color)
+            
+            count = 0
+            curr = ea
+            while curr < end_ea:
+                idc.set_color(curr, idc.CIC_ITEM, bgr_color)
+                count += 1
+                next_ea = idc.next_head(curr, end_ea)
+                if next_ea == idaapi.BADADDR:
+                    break
+                curr = next_ea
+            
+            return {
+                "colored": True,
+                "start": hex(ea),
+                "end": hex(end_ea),
+                "instructions": count,
+                "color": color or "yellow"
+            }
+        
+        elif action == "set_insn":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            bgr_color = parse_color(color)
+            
+            idc.set_color(ea, idc.CIC_ITEM, bgr_color)
+            
+            return {
+                "colored": True,
+                "addr": hex(ea),
+                "color": color or "yellow"
+            }
+        
+        elif action == "get":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            bgr_color = idc.get_color(ea, idc.CIC_ITEM)
+            
+            return {
+                "addr": hex(ea),
+                "color_bgr": hex(bgr_color) if bgr_color != 0xFFFFFFFF else None,
+                "color_hex": color_to_hex(bgr_color),
+                "has_color": bgr_color != 0xFFFFFFFF
+            }
+        
+        elif action == "clear":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            if end_addr:
+                # Clear range
+                end_ea = parse_address(end_addr)
+                count = 0
+                curr = ea
+                while curr < end_ea:
+                    idc.set_color(curr, idc.CIC_ITEM, 0xFFFFFFFF)
+                    count += 1
+                    next_ea = idc.next_head(curr, end_ea)
+                    if next_ea == idaapi.BADADDR:
+                        break
+                    curr = next_ea
+                return {"cleared": True, "start": hex(ea), "end": hex(end_ea), "count": count}
+            else:
+                # Check if in function - clear whole function
+                func = ida_funcs.get_func(ea)
+                if func:
+                    curr = func.start_ea
+                    count = 0
+                    while curr < func.end_ea:
+                        idc.set_color(curr, idc.CIC_ITEM, 0xFFFFFFFF)
+                        count += 1
+                        curr = idc.next_head(curr, func.end_ea)
+                    return {"cleared": True, "func": idc.get_func_name(func.start_ea), "count": count}
+                else:
+                    # Just clear single address
+                    idc.set_color(ea, idc.CIC_ITEM, 0xFFFFFFFF)
+                    return {"cleared": True, "addr": hex(ea)}
+        
+        elif action == "palette":
+            # Return RGB hex values (not BGR)
+            palette = {}
+            for name, bgr in COLORS.items():
+                if bgr == 0xFFFFFFFF:
+                    palette[name] = "default"
+                else:
+                    r = bgr & 0xFF
+                    g = (bgr >> 8) & 0xFF
+                    b = (bgr >> 16) & 0xFF
+                    palette[name] = f"#{r:02X}{g:02X}{b:02X}"
+            
+            return {"palette": palette}
+        
+        elif action == "highlight_pattern":
+            if not pattern:
+                return {"error": "pattern required"}
+            
+            bgr_color = parse_color(color)
+            
+            # Parse pattern
+            pattern_bytes = []
+            mask = []
+            for part in pattern.split():
+                if part == "??" or part == "?":
+                    pattern_bytes.append(0)
+                    mask.append(False)
+                else:
+                    pattern_bytes.append(int(part, 16))
+                    mask.append(True)
+            
+            if not pattern_bytes:
+                return {"error": "Invalid pattern"}
+            
+            # Search and highlight
+            addresses = []
+            
+            for seg_ea in idautils.Segments():
+                seg = ida_segment.getseg(seg_ea)
+                if not seg:
+                    continue
+                
+                ea = seg.start_ea
+                end_ea = seg.end_ea
+                
+                while ea < end_ea - len(pattern_bytes):
+                    data = ida_bytes.get_bytes(ea, len(pattern_bytes))
+                    if data:
+                        match = True
+                        for i in range(len(pattern_bytes)):
+                            if mask[i] and data[i] != pattern_bytes[i]:
+                                match = False
+                                break
+                        
+                        if match:
+                            idc.set_color(ea, idc.CIC_ITEM, bgr_color)
+                            addresses.append(hex(ea))
+                            if len(addresses) >= 100:
+                                break
+                    
+                    ea = idc.next_head(ea, end_ea)
+                    if ea == idaapi.BADADDR:
+                        break
+                
+                if len(addresses) >= 100:
+                    break
+            
+            return {
+                "highlighted": True,
+                "pattern": pattern,
+                "count": len(addresses),
+                "addresses": addresses[:20],
+                "color": color or "yellow"
+            }
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+

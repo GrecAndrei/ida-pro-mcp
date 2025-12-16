@@ -40,12 +40,14 @@ warnings.filterwarnings("ignore")
 # Redirect stderr to devnull to prevent any stray output
 sys.stderr = io.StringIO()
 
-# List of available tools (29 total - Session A complete)
+# List of available tools (32 total)
 TOOLS = [
     "idb", "code", "data", "search", "types", "memory", "modify",
     "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
     "fixups", "data_ops", "agent", "microcode", "graph", "bulk",
     "ctree", "diff", "lumina", "symbols", "patterns", "structs",
+    # Session B tools (30-35)
+    "strings_xref", "entropy", "imports_deep", "comments_ai", "nav", "colorize",
     "emulate", "export", "history"
 ]
 
@@ -155,6 +157,30 @@ Required: idb, action. For generate/create_sig: addr. For match: pattern (hex wi
 Actions: recover (recover struct from function usage), analyze_usage (analyze memory accesses), list (list all structs), create (create from C declaration), apply (apply struct at address).
 Required: idb, action. For recover/apply: addr. For create: decl (C code). For apply: name (struct name).""",
 
+    # Session B tools (30-35)
+    "strings_xref": """Advanced string analysis with xref chains and encoding detection.
+Actions: analyze (deep analysis of string at address), xref_chain (trace string references through callers), detect_encoded (find encrypted/encoded strings), find_format (find format strings with args), clusters (group strings by calling function).
+Required: idb, action. For analyze/xref_chain: addr. Optional: query, depth.""",
+
+    "entropy": """Entropy analysis for detecting packed/encrypted regions.
+Actions: section (entropy for each segment), region (entropy for address range), packed_detect (detect packed sections), crypto_detect (find crypto constants/S-boxes), compare (compare entropy of two regions).
+Required: idb, action. For region/compare: addr. Optional: size, threshold, end_addr.""",
+
+    "imports_deep": """Deep import analysis with thunk resolution and delay imports.
+Actions: thunks (resolve import thunks), delay (list delay-loaded imports), forwarded (detect forwarded exports), ordinal (resolve ordinal imports), api_sets (resolve API Set redirections), resolve (resolve import at address).
+Required: idb, action. Optional: query (DLL filter), addr.""",
+
+    "comments_ai": """AI-optimized comment management with structured formats.
+Actions: get_context (all comments around address), set_structured (set formatted comment), bulk_set (set multiple from JSON), export_md (export to markdown), import_md (import from markdown), summary (commenting coverage stats).
+Required: idb, action. For set: addr, text. For bulk: items (JSON). For export/import: path.""",
+
+    "nav": """Navigation helpers for bookmarks and interesting addresses.
+Actions: bookmarks (list marked positions), add_bookmark (add mark), del_bookmark (remove mark), goto (get address context), history (navigation history), cursor (current position), interesting (find crypto/packer/anti-analysis).
+Required: idb, action. For bookmark ops: addr, slot. For goto: addr.""",
+
+    "colorize": """Code region coloring and highlighting.
+Actions: set_func (color entire function), set_range (color address range), set_insn (color single instruction), get (get color at address), clear (remove coloring), palette (get color names), highlight_pattern (highlight byte pattern matches).
+Required: idb, action. For set ops: addr, color. For range: end_addr. For pattern: pattern.""",
     "emulate": """Code emulation and snippet execution.
 Actions: snippet (trace code from address), appcall (call function with args - needs debugger), trace (static trace through function), decrypt_strings (find encrypted string patterns), eval_expr (evaluate value at address).
 Required: idb, action. For snippet/trace: addr, max_steps. For appcall: func_name or addr, args.""",
