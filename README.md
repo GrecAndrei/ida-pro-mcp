@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/IDA%20Pro-9.0%2B-blue?style=for-the-badge" alt="IDA Pro 9.0+"/>
   <img src="https://img.shields.io/badge/Python-3.11%2B-green?style=for-the-badge" alt="Python 3.11+"/>
   <img src="https://img.shields.io/badge/MCP-2.0-purple?style=for-the-badge" alt="MCP 2.0"/>
-  <img src="https://img.shields.io/badge/Tools-23-orange?style=for-the-badge" alt="23 Tools"/>
+  <img src="https://img.shields.io/badge/Tools-26-orange?style=for-the-badge" alt="26 Tools"/>
   <img src="https://img.shields.io/badge/Standalone-Yes-brightgreen?style=for-the-badge" alt="Standalone"/>
 </p>
 
@@ -93,7 +93,7 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 
 - **Fully Standalone**: No IDA GUI required - uses headless `idat.exe`
 - **MCP Stdio Protocol**: Works with any MCP-compatible client
-- **23 Comprehensive Tools**: Covers all reverse engineering needs
+- **26 Comprehensive Tools**: Covers all reverse engineering needs
 - **IDB Caching**: Reuses existing IDB files for fast repeat analysis
 
 ---
@@ -122,14 +122,17 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 ### Advanced Analysis Tools
 
 | Tool        | Description                | Key Actions                                                            |
-| ----------- | -------------------------- | ---------------------------------------------------------------------- | --- |
+| ----------- | -------------------------- | ---------------------------------------------------------------------- |
 | `agent`     | High-level helpers         | `analyze_function`, `explore_address`, `find_references`, `search_all` |
 | `microcode` | Hex-Rays IR                | `get`, `blocks`, `instructions`                                        |
 | `graph`     | Graph export               | `callgraph`, `cfg`                                                     |
 | `memory`    | Memory read/write          | `read`, `write`                                                        |
 | `ctree`     | Hex-Rays AST access        | `get`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`    |
 | `diff`      | Binary diffing             | `functions`, `bytes`, `signatures`, `names`, `summary`                 |
-| `lumina`    | Cloud function recognition | `pull`, `push`, `status`, `history`, `search`                          |     |
+| `lumina`    | Cloud function recognition | `pull`, `push`, `status`, `history`, `search`                          |
+| `symbols`   | Debug symbols (PDB/DWARF)  | `load_pdb`, `load_dwarf`, `status`, `apply`, `export`                  |
+| `patterns`  | FLIRT pattern matching     | `generate`, `match`, `list_sigs`, `apply_sig`, `create_sig`            |
+| `structs`   | Struct recovery            | `recover`, `analyze_usage`, `list`, `create`, `apply`                  |
 
 ### Utility Tools
 
