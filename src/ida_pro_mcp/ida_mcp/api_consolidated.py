@@ -29,6 +29,7 @@ import ida_segment
 import ida_funcs
 import ida_kernwin
 import ida_frame
+import ida_lines
 
 # Support both package mode (MCP server) and standalone mode (idat daemon)
 try:
@@ -3362,3 +3363,1314 @@ def bulk(
     
     except Exception as e:
         return {"error": str(e)}
+
+
+# ============================================================================
+# 21. CTREE - Hex-Rays AST/CTree Access for Deep Decompiler Analysis
+# ============================================================================
+
+@tool
+@idaread
+def ctree(
+    action: Annotated[Literal["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions"],
+                      "Action: get|traverse|find_calls|find_vars|find_strings|find_conditions"],
+    addr: Annotated[str, "Address of function to analyze"],
+    query: Annotated[Optional[str], "Filter pattern (for find_* actions)"] = None,
+    depth: Annotated[int, "Max traversal depth"] = 10,
+) -> dict:
+    """
+    Access Hex-Rays CTree (decompiler AST) for deep code analysis.
+    
+    ACTIONS:
+    
+    get - Get full CTree structure for function
+        Returns: {func, items: [{op, ea, type, text}]}
+        
+    traverse - Traverse CTree with structure info
+        Returns: {nodes: [{op, ea, children}]}
+        
+    find_calls - Find all function calls in decompiled code
+        Params: query (optional filter)
+        Returns: {calls: [{func, ea, args}]}
+        
+    find_vars - Find all variable usages
+        Returns: {vars: [{name, type, refs}]}
+        
+    find_strings - Find string references in function
+        Returns: {strings: [{value, ea}]}
+        
+    find_conditions - Find all if/while/for conditions
+        Returns: {conditions: [{type, ea, expr}]}
+    """
+    try:
+        ea = parse_address(addr)
+        
+        # Get decompiled function
+        cfunc = None
+        try:
+            cfunc = ida_hexrays.decompile(ea)
+        except ida_hexrays.DecompilationFailure:
+            return {"error": f"Decompilation failed for {addr}"}
+        
+        if not cfunc:
+            return {"error": f"Could not decompile function at {addr}"}
+        
+        func_name = idc.get_func_name(ea) or hex(ea)
+        
+        if action == "get":
+            # Collect all CTree items
+            items = []
+            
+            class CtreeVisitor(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                    self.items = []
+                
+                def visit_expr(self, e):
+                    self.items.append({
+                        "op": ida_hexrays.get_ctype_name(e.op),
+                        "ea": hex(e.ea) if e.ea != idaapi.BADADDR else None,
+                        "type": str(e.type) if hasattr(e, 'type') else None,
+                        "is_expr": True
+                    })
+                    return 0
+                
+                def visit_insn(self, i):
+                    self.items.append({
+                        "op": ida_hexrays.get_ctype_name(i.op),
+                        "ea": hex(i.ea) if i.ea != idaapi.BADADDR else None,
+                        "is_expr": False
+                    })
+                    return 0
+            
+            visitor = CtreeVisitor()
+            visitor.apply_to(cfunc.body, None)
+            
+            return {
+                "func": func_name,
+                "items": visitor.items[:500],  # Limit for context
+                "total": len(visitor.items)
+            }
+        
+        elif action == "find_calls":
+            calls = []
+            
+            class CallFinder(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                
+                def visit_expr(self, e):
+                    if e.op == ida_hexrays.cot_call:
+                        call_info = {
+                            "ea": hex(e.ea) if e.ea != idaapi.BADADDR else None,
+                            "args_count": e.a.size() if hasattr(e, 'a') else 0
+                        }
+                        # Get called function name
+                        if hasattr(e, 'x') and e.x:
+                            if e.x.op == ida_hexrays.cot_obj:
+                                call_info["target"] = idc.get_name(e.x.obj_ea) or hex(e.x.obj_ea)
+                            elif e.x.op == ida_hexrays.cot_helper:
+                                call_info["target"] = e.x.helper
+                        
+                        if not query or (call_info.get("target", "").lower().find(query.lower()) >= 0):
+                            calls.append(call_info)
+                    return 0
+            
+            finder = CallFinder()
+            finder.apply_to(cfunc.body, None)
+            
+            return {"func": func_name, "calls": calls}
+        
+        elif action == "find_vars":
+            lvars = []
+            for i, lvar in enumerate(cfunc.lvars):
+                lvars.append({
+                    "name": lvar.name,
+                    "type": str(lvar.type()),
+                    "is_arg": lvar.is_arg_var,
+                    "is_result": lvar.is_result_var if hasattr(lvar, 'is_result_var') else False,
+                    "width": lvar.width
+                })
+            return {"func": func_name, "vars": lvars}
+        
+        elif action == "find_strings":
+            strings = []
+            
+            class StringFinder(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                
+                def visit_expr(self, e):
+                    if e.op == ida_hexrays.cot_str:
+                        strings.append({
+                            "value": e.string,
+                            "ea": hex(e.ea) if e.ea != idaapi.BADADDR else None
+                        })
+                    elif e.op == ida_hexrays.cot_obj:
+                        # Check if it's a string reference
+                        str_type = idc.get_str_type(e.obj_ea)
+                        if str_type is not None and str_type >= 0:
+                            s = idc.get_strlit_contents(e.obj_ea)
+                            if s:
+                                strings.append({
+                                    "value": s.decode('utf-8', errors='replace') if isinstance(s, bytes) else s,
+                                    "ea": hex(e.obj_ea)
+                                })
+                    return 0
+            
+            finder = StringFinder()
+            finder.apply_to(cfunc.body, None)
+            
+            return {"func": func_name, "strings": strings}
+        
+        elif action == "find_conditions":
+            conditions = []
+            
+            class CondFinder(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                
+                def visit_insn(self, i):
+                    if i.op in [ida_hexrays.cit_if, ida_hexrays.cit_while, 
+                               ida_hexrays.cit_do, ida_hexrays.cit_for]:
+                        cond_type = {
+                            ida_hexrays.cit_if: "if",
+                            ida_hexrays.cit_while: "while",
+                            ida_hexrays.cit_do: "do-while",
+                            ida_hexrays.cit_for: "for"
+                        }.get(i.op, "unknown")
+                        
+                        conditions.append({
+                            "type": cond_type,
+                            "ea": hex(i.ea) if i.ea != idaapi.BADADDR else None
+                        })
+                    return 0
+            
+            finder = CondFinder()
+            finder.apply_to(cfunc.body, None)
+            
+            return {"func": func_name, "conditions": conditions}
+        
+        elif action == "traverse":
+            # Build tree structure
+            nodes = []
+            
+            def traverse_node(item, current_depth=0):
+                if current_depth > depth:
+                    return None
+                
+                node = {
+                    "op": ida_hexrays.get_ctype_name(item.op),
+                    "ea": hex(item.ea) if item.ea != idaapi.BADADDR else None
+                }
+                
+                # Get children for compound statements
+                children = []
+                if hasattr(item, 'cblock') and item.cblock:
+                    for child in item.cblock:
+                        c = traverse_node(child, current_depth + 1)
+                        if c:
+                            children.append(c)
+                
+                if children:
+                    node["children"] = children
+                
+                return node
+            
+            root = traverse_node(cfunc.body)
+            return {"func": func_name, "tree": root}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 22. DIFF - Binary Comparison and Diffing
+# ============================================================================
+
+@tool
+@idaread
+def diff(
+    action: Annotated[Literal["functions", "bytes", "signatures", "names", "summary"],
+                      "Action: functions|bytes|signatures|names|summary"],
+    addr1: Annotated[Optional[str], "First address/function"] = None,
+    addr2: Annotated[Optional[str], "Second address/function (or path to second IDB)"] = None,
+    idb2: Annotated[Optional[str], "Path to second IDB for cross-database comparison"] = None,
+    threshold: Annotated[float, "Similarity threshold (0.0-1.0)"] = 0.8,
+) -> dict:
+    """
+    Compare functions, bytes, or databases for diffing/patch analysis.
+    
+    ACTIONS:
+    
+    functions - Compare two functions by decompilation
+        Params: addr1, addr2 (addresses in current IDB)
+        Returns: {similarity, diff_lines, added, removed}
+        
+    bytes - Compare raw bytes between two ranges
+        Params: addr1 (start1:end1), addr2 (start2:end2)
+        Returns: {similarity, changed_bytes}
+        
+    signatures - Find similar functions by code signature
+        Params: addr1 (function to match), threshold
+        Returns: {matches: [{addr, name, similarity}]}
+        
+    names - Compare named functions/globals between current and reference
+        Returns: {added, removed, renamed, stats}
+        
+    summary - Get overall database statistics for comparison
+        Returns: {functions, strings, imports, exports, segments}
+    """
+    try:
+        if action == "functions":
+            if not addr1 or not addr2:
+                return {"error": "addr1 and addr2 required for function comparison"}
+            
+            ea1 = parse_address(addr1)
+            ea2 = parse_address(addr2)
+            
+            # Decompile both functions
+            try:
+                cfunc1 = ida_hexrays.decompile(ea1)
+                cfunc2 = ida_hexrays.decompile(ea2)
+            except ida_hexrays.DecompilationFailure as e:
+                return {"error": f"Decompilation failed: {e}"}
+            
+            if not cfunc1 or not cfunc2:
+                return {"error": "Could not decompile one or both functions"}
+            
+            # Get pseudocode
+            lines1 = []
+            lines2 = []
+            
+            sv1 = cfunc1.get_pseudocode()
+            sv2 = cfunc2.get_pseudocode()
+            
+            for line in sv1:
+                lines1.append(ida_lines.tag_remove(line.line))
+            for line in sv2:
+                lines2.append(ida_lines.tag_remove(line.line))
+            
+            # Simple diff
+            import difflib
+            differ = difflib.unified_diff(lines1, lines2, lineterm='')
+            diff_lines = list(differ)
+            
+            # Calculate similarity
+            matcher = difflib.SequenceMatcher(None, lines1, lines2)
+            similarity = matcher.ratio()
+            
+            # Count changes
+            added = len([l for l in diff_lines if l.startswith('+')])
+            removed = len([l for l in diff_lines if l.startswith('-')])
+            
+            return {
+                "func1": idc.get_func_name(ea1) or hex(ea1),
+                "func2": idc.get_func_name(ea2) or hex(ea2),
+                "similarity": round(similarity, 3),
+                "added_lines": added,
+                "removed_lines": removed,
+                "diff": diff_lines[:100]  # Limit output
+            }
+        
+        elif action == "bytes":
+            if not addr1:
+                return {"error": "addr1 required (format: start:end or start,size)"}
+            
+            # Parse addr1 as start:end or start,size
+            if ':' in addr1:
+                start1, end1 = addr1.split(':')
+                ea1_start = parse_address(start1)
+                ea1_end = parse_address(end1)
+            else:
+                ea1_start = parse_address(addr1)
+                ea1_end = ea1_start + 256  # Default size
+            
+            if addr2:
+                if ':' in addr2:
+                    start2, end2 = addr2.split(':')
+                    ea2_start = parse_address(start2)
+                    ea2_end = parse_address(end2)
+                else:
+                    ea2_start = parse_address(addr2)
+                    ea2_end = ea2_start + (ea1_end - ea1_start)
+            else:
+                return {"error": "addr2 required for byte comparison"}
+            
+            # Read bytes
+            bytes1 = ida_bytes.get_bytes(ea1_start, ea1_end - ea1_start)
+            bytes2 = ida_bytes.get_bytes(ea2_start, ea2_end - ea2_start)
+            
+            if not bytes1 or not bytes2:
+                return {"error": "Could not read bytes"}
+            
+            # Compare
+            changes = []
+            min_len = min(len(bytes1), len(bytes2))
+            matching = 0
+            
+            for i in range(min_len):
+                if bytes1[i] == bytes2[i]:
+                    matching += 1
+                else:
+                    changes.append({
+                        "offset": i,
+                        "addr1": hex(ea1_start + i),
+                        "addr2": hex(ea2_start + i),
+                        "byte1": f"{bytes1[i]:02x}",
+                        "byte2": f"{bytes2[i]:02x}"
+                    })
+            
+            similarity = matching / max(len(bytes1), len(bytes2)) if bytes1 and bytes2 else 0
+            
+            return {
+                "range1": f"{hex(ea1_start)}:{hex(ea1_end)}",
+                "range2": f"{hex(ea2_start)}:{hex(ea2_end)}",
+                "size1": len(bytes1),
+                "size2": len(bytes2),
+                "similarity": round(similarity, 3),
+                "changes": changes[:100]  # Limit
+            }
+        
+        elif action == "signatures":
+            if not addr1:
+                return {"error": "addr1 required (function to match)"}
+            
+            ea = parse_address(addr1)
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return {"error": f"No function at {addr1}"}
+            
+            # Get target function bytes for signature
+            target_bytes = ida_bytes.get_bytes(func.start_ea, min(256, func.end_ea - func.start_ea))
+            if not target_bytes:
+                return {"error": "Could not read function bytes"}
+            
+            matches = []
+            
+            # Compare with all other functions
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    if func_ea == func.start_ea:
+                        continue
+                    
+                    other_func = ida_funcs.get_func(func_ea)
+                    if not other_func:
+                        continue
+                    
+                    other_bytes = ida_bytes.get_bytes(other_func.start_ea, 
+                                                      min(256, other_func.end_ea - other_func.start_ea))
+                    if not other_bytes:
+                        continue
+                    
+                    # Calculate similarity
+                    import difflib
+                    matcher = difflib.SequenceMatcher(None, target_bytes, other_bytes)
+                    similarity = matcher.ratio()
+                    
+                    if similarity >= threshold:
+                        matches.append({
+                            "addr": hex(func_ea),
+                            "name": idc.get_func_name(func_ea) or hex(func_ea),
+                            "size": other_func.end_ea - other_func.start_ea,
+                            "similarity": round(similarity, 3)
+                        })
+            
+            # Sort by similarity
+            matches.sort(key=lambda x: x["similarity"], reverse=True)
+            
+            return {
+                "target": idc.get_func_name(ea) or hex(ea),
+                "matches": matches[:50],  # Limit
+                "threshold": threshold
+            }
+        
+        elif action == "summary":
+            # Collect database statistics for comparison
+            stats = {
+                "functions": 0,
+                "named_functions": 0,
+                "imports": 0,
+                "exports": 0,
+                "strings": 0,
+                "segments": []
+            }
+            
+            # Count functions
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    stats["functions"] += 1
+                    name = idc.get_func_name(func_ea)
+                    if name and not name.startswith("sub_"):
+                        stats["named_functions"] += 1
+            
+            # Count imports
+            for i in range(ida_nalt.get_import_module_qty()):
+                def imp_cb(ea, name, ordinal):
+                    stats["imports"] += 1
+                    return True
+                ida_nalt.enum_import_names(i, imp_cb)
+            
+            # Count exports
+            for i in range(idaapi.get_entry_qty()):
+                stats["exports"] += 1
+            
+            # Count strings
+            for s in idautils.Strings():
+                stats["strings"] += 1
+            
+            # Segments
+            for seg_ea in idautils.Segments():
+                seg = ida_segment.getseg(seg_ea)
+                if seg:
+                    stats["segments"].append({
+                        "name": ida_segment.get_segm_name(seg),
+                        "start": hex(seg.start_ea),
+                        "end": hex(seg.end_ea),
+                        "size": seg.end_ea - seg.start_ea
+                    })
+            
+            return stats
+        
+        elif action == "names":
+            # List all named items for export/comparison
+            names = []
+            
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if name and not name.startswith("sub_"):
+                        names.append({
+                            "addr": hex(func_ea),
+                            "name": name,
+                            "type": "function"
+                        })
+            
+            # Named data
+            for ea in range(idaapi.cvar.inf.min_ea, idaapi.cvar.inf.max_ea):
+                name = idc.get_name(ea)
+                if name and not name.startswith(("loc_", "unk_", "byte_", "word_", "dword_", "qword_")):
+                    if not ida_funcs.get_func(ea):  # Skip functions
+                        names.append({
+                            "addr": hex(ea),
+                            "name": name,
+                            "type": "data"
+                        })
+                        if len(names) > 5000:
+                            break
+            
+            return {"names": names, "total": len(names)}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 23. LUMINA - Cloud-Based Function Recognition
+# ============================================================================
+
+@tool
+@idaread
+def lumina(
+    action: Annotated[Literal["pull", "push", "status", "history", "search"],
+                      "Action: pull|push|status|history|search"],
+    addr: Annotated[Optional[str], "Address of function"] = None,
+    query: Annotated[Optional[str], "Search query for function names"] = None,
+    push_all: Annotated[bool, "Push all functions (for push action)"] = False,
+) -> dict:
+    """
+    Interact with Hex-Rays Lumina server for function recognition.
+    
+    ACTIONS:
+    
+    pull - Pull function metadata from Lumina
+        Params: addr (specific function) or none (pull all)
+        Returns: {pulled: count, functions: [{addr, name, source}]}
+        
+    push - Push function metadata to Lumina
+        Params: addr (specific function) or push_all=True
+        Returns: {pushed: count, status}
+        
+    status - Check Lumina connection status
+        Returns: {connected, server, user}
+        
+    history - Get Lumina history for function
+        Params: addr
+        Returns: {history: [{date, user, name}]}
+        
+    search - Search Lumina for function by name/pattern
+        Params: query
+        Returns: {results: [{name, matches}]}
+    """
+    try:
+        # Check if Lumina is available
+        if not hasattr(ida_hexrays, 'LUMINA_ENABLED'):
+            # Try using the lumina module directly
+            try:
+                import ida_lumina
+            except ImportError:
+                return {"error": "Lumina module not available in this IDA version"}
+        
+        if action == "status":
+            # Check connection status
+            try:
+                import ida_lumina
+                
+                # Try to get status
+                status = {
+                    "available": True,
+                    "module": "ida_lumina",
+                    "note": "Use pull/push actions to interact with Lumina server"
+                }
+                
+                # Check if authenticated
+                if hasattr(ida_lumina, 'get_lumina_user'):
+                    status["user"] = ida_lumina.get_lumina_user()
+                
+                return status
+            except Exception as e:
+                return {
+                    "available": False,
+                    "error": str(e),
+                    "note": "Lumina requires IDA Pro license with Lumina access"
+                }
+        
+        elif action == "pull":
+            try:
+                import ida_lumina
+                
+                if addr:
+                    # Pull for specific function
+                    ea = parse_address(addr)
+                    func = ida_funcs.get_func(ea)
+                    if not func:
+                        return {"error": f"No function at {addr}"}
+                    
+                    # Request metadata from Lumina
+                    if hasattr(ida_lumina, 'pull_md'):
+                        result = ida_lumina.pull_md(ea)
+                        return {
+                            "addr": hex(ea),
+                            "pulled": 1 if result else 0,
+                            "name": idc.get_func_name(ea)
+                        }
+                    else:
+                        return {"error": "pull_md not available"}
+                else:
+                    # Pull all
+                    if hasattr(ida_lumina, 'pull_all_mds'):
+                        count = ida_lumina.pull_all_mds()
+                        return {"pulled": count}
+                    else:
+                        return {"error": "pull_all_mds not available"}
+            
+            except Exception as e:
+                return {"error": str(e), "note": "Lumina server may not be reachable"}
+        
+        elif action == "push":
+            try:
+                import ida_lumina
+                
+                if push_all:
+                    if hasattr(ida_lumina, 'push_all_mds'):
+                        count = ida_lumina.push_all_mds()
+                        return {"pushed": count}
+                    else:
+                        return {"error": "push_all_mds not available"}
+                elif addr:
+                    ea = parse_address(addr)
+                    if hasattr(ida_lumina, 'push_md'):
+                        result = ida_lumina.push_md(ea)
+                        return {
+                            "addr": hex(ea),
+                            "pushed": 1 if result else 0,
+                            "name": idc.get_func_name(ea)
+                        }
+                    else:
+                        return {"error": "push_md not available"}
+                else:
+                    return {"error": "addr or push_all=True required"}
+            
+            except Exception as e:
+                return {"error": str(e)}
+        
+        elif action == "history":
+            if not addr:
+                return {"error": "addr required for history"}
+            
+            ea = parse_address(addr)
+            
+            try:
+                import ida_lumina
+                
+                if hasattr(ida_lumina, 'get_func_history'):
+                    history = ida_lumina.get_func_history(ea)
+                    return {
+                        "addr": hex(ea),
+                        "name": idc.get_func_name(ea),
+                        "history": history or []
+                    }
+                else:
+                    return {"error": "Function history not available in this IDA version"}
+            except Exception as e:
+                return {"error": str(e)}
+        
+        elif action == "search":
+            if not query:
+                return {"error": "query required for search"}
+            
+            try:
+                import ida_lumina
+                
+                if hasattr(ida_lumina, 'search_funcs'):
+                    results = ida_lumina.search_funcs(query)
+                    return {
+                        "query": query,
+                        "results": results or []
+                    }
+                else:
+                    return {"error": "Lumina search not available in this IDA version"}
+            except Exception as e:
+                return {"error": str(e)}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 24. SYMBOLS - Debug Symbol Loading (PDB, DWARF, COFF)
+# ============================================================================
+
+@tool
+@idawrite
+def symbols(
+    action: Annotated[Literal["load_pdb", "load_dwarf", "status", "apply", "export"],
+                      "Action: load_pdb|load_dwarf|status|apply|export"],
+    path: Annotated[Optional[str], "Path to symbol file (PDB, DWARF, etc.)"] = None,
+    addr: Annotated[Optional[str], "Address to apply symbols to"] = None,
+    force: Annotated[bool, "Force reload even if symbols exist"] = False,
+) -> dict:
+    """
+    Load and manage debug symbols (PDB, DWARF, COFF).
+    
+    ACTIONS:
+    
+    load_pdb - Load PDB file for Windows binaries
+        Params: path (to .pdb file, or None to auto-detect)
+        Returns: {loaded, functions_named, types_imported}
+        
+    load_dwarf - Parse DWARF debug info from ELF binaries
+        Returns: {loaded, functions_named, types_imported}
+        
+    status - Check current symbol status
+        Returns: {has_symbols, source, loaded_types}
+        
+    apply - Apply type info from loaded symbols to address
+        Params: addr
+        Returns: {applied, type}
+        
+    export - Export current symbol information
+        Params: path
+        Returns: {exported, count}
+    """
+    try:
+        import ida_dbg
+        import ida_auto
+        
+        if action == "load_pdb":
+            try:
+                import ida_pdb
+            except ImportError:
+                # Fallback for older IDA
+                pass
+            
+            # Try loading PDB
+            if path:
+                # Load specific PDB
+                import ida_netnode
+                import ida_loader
+                
+                # Use IDA's PDB loader
+                result = ida_loader.load_and_run_plugin("pdb", 0)
+                if result:
+                    return {"loaded": True, "path": path}
+                else:
+                    return {"error": "PDB loading failed", "path": path}
+            else:
+                # Auto-detect PDB
+                input_path = idaapi.get_input_file_path()
+                if input_path:
+                    pdb_path = input_path.replace(".exe", ".pdb").replace(".dll", ".pdb")
+                    import os
+                    if os.path.exists(pdb_path):
+                        return {"found": pdb_path, "note": "Call again with path to load"}
+                    else:
+                        return {"error": "No PDB found", "searched": pdb_path}
+                return {"error": "Could not determine input file path"}
+        
+        elif action == "load_dwarf":
+            # DWARF is typically embedded in ELF
+            # Check if we have DWARF info
+            try:
+                import ida_dirtree
+                import ida_loader
+                
+                # Try loading DWARF plugin
+                result = ida_loader.load_and_run_plugin("dwarf", 0)
+                if result:
+                    return {"loaded": True, "type": "DWARF"}
+                else:
+                    return {"note": "DWARF info processed during initial analysis if present"}
+            except:
+                return {"note": "DWARF processing handled by IDA during initial analysis"}
+        
+        elif action == "status":
+            # Check symbol status
+            status = {
+                "has_debug_info": False,
+                "type_count": 0,
+                "named_functions": 0
+            }
+            
+            # Count named functions (non-sub_)
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if name and not name.startswith("sub_"):
+                        status["named_functions"] += 1
+            
+            # Check for loaded type libraries
+            til = ida_typeinf.get_idati()
+            if til:
+                status["type_count"] = ida_typeinf.get_ordinal_count(til)
+                status["has_debug_info"] = status["named_functions"] > 10
+            
+            return status
+        
+        elif action == "apply":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            # Try to apply type from type library
+            tinfo = ida_typeinf.tinfo_t()
+            if ida_typeinf.guess_tinfo(tinfo, ea):
+                # Apply the guessed type
+                if ida_typeinf.apply_tinfo(ea, tinfo, ida_typeinf.TINFO_DEFINITE):
+                    return {"applied": True, "addr": hex(ea), "type": str(tinfo)}
+            
+            return {"applied": False, "addr": hex(ea), "note": "Could not infer type"}
+        
+        elif action == "export":
+            if not path:
+                return {"error": "path required"}
+            
+            # Export all named items to a simple format
+            import json
+            
+            export_data = {
+                "functions": [],
+                "types": []
+            }
+            
+            # Export named functions
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if name and not name.startswith("sub_"):
+                        func_info = {
+                            "addr": hex(func_ea),
+                            "name": name
+                        }
+                        # Try to get type
+                        tinfo = ida_typeinf.tinfo_t()
+                        if ida_typeinf.get_tinfo(tinfo, func_ea):
+                            func_info["type"] = str(tinfo)
+                        export_data["functions"].append(func_info)
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2)
+            
+            return {"exported": True, "path": path, "functions": len(export_data["functions"])}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 25. PATTERNS - FLIRT-Like Pattern Generation and Matching
+# ============================================================================
+
+@tool
+@idaread
+def patterns(
+    action: Annotated[Literal["generate", "match", "list_sigs", "apply_sig", "create_sig"],
+                      "Action: generate|match|list_sigs|apply_sig|create_sig"],
+    addr: Annotated[Optional[str], "Function address for pattern operations"] = None,
+    pattern: Annotated[Optional[str], "Pattern to match (hex with ?? wildcards)"] = None,
+    name: Annotated[Optional[str], "Signature name"] = None,
+    length: Annotated[int, "Pattern length in bytes"] = 32,
+) -> dict:
+    """
+    Generate and match function signatures (FLIRT-like patterns).
+    
+    ACTIONS:
+    
+    generate - Generate a pattern from a function
+        Params: addr, length
+        Returns: {pattern, mask, name}
+        
+    match - Find functions matching a pattern
+        Params: pattern (hex with ?? wildcards)
+        Returns: {matches: [{addr, name, confidence}]}
+        
+    list_sigs - List available FLIRT signatures
+        Returns: {signatures: [name, ...]}
+        
+    apply_sig - Apply a FLIRT signature file
+        Params: name (signature file name without .sig)
+        Returns: {applied, matched}
+        
+    create_sig - Create a signature for a function (pattern + metadata)
+        Params: addr, name (function name to store)
+        Returns: {signature: {pattern, name, crc}}
+    """
+    try:
+        if action == "generate":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            # Read function bytes
+            func_size = min(length, func.end_ea - func.start_ea)
+            func_bytes = ida_bytes.get_bytes(func.start_ea, func_size)
+            
+            if not func_bytes:
+                return {"error": "Could not read function bytes"}
+            
+            # Generate pattern with wildcards for relocations
+            pattern_parts = []
+            mask_parts = []
+            
+            for i, b in enumerate(func_bytes):
+                curr_ea = func.start_ea + i
+                
+                # Check if this byte has a relocation/fixup
+                has_fixup = False
+                if hasattr(ida_fixup, 'get_fixup'):
+                    fixup = ida_fixup.fixup_data_t()
+                    has_fixup = ida_fixup.get_fixup(fixup, curr_ea)
+                
+                if has_fixup:
+                    pattern_parts.append("??")
+                    mask_parts.append("0")
+                else:
+                    pattern_parts.append(f"{b:02X}")
+                    mask_parts.append("1")
+            
+            return {
+                "addr": hex(func.start_ea),
+                "name": idc.get_func_name(ea) or hex(ea),
+                "pattern": " ".join(pattern_parts),
+                "mask": "".join(mask_parts),
+                "length": func_size
+            }
+        
+        elif action == "match":
+            if not pattern:
+                return {"error": "pattern required"}
+            
+            # Parse pattern
+            pattern_bytes = []
+            mask = []
+            for part in pattern.split():
+                if part == "??" or part == "?":
+                    pattern_bytes.append(0)
+                    mask.append(False)
+                else:
+                    pattern_bytes.append(int(part, 16))
+                    mask.append(True)
+            
+            if not pattern_bytes:
+                return {"error": "Invalid pattern"}
+            
+            matches = []
+            
+            # Search all functions
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    func = ida_funcs.get_func(func_ea)
+                    if not func:
+                        continue
+                    
+                    # Read function bytes
+                    func_size = min(len(pattern_bytes), func.end_ea - func.start_ea)
+                    if func_size < len(pattern_bytes):
+                        continue
+                    
+                    func_bytes = ida_bytes.get_bytes(func.start_ea, len(pattern_bytes))
+                    if not func_bytes:
+                        continue
+                    
+                    # Match with mask
+                    match = True
+                    matching_bytes = 0
+                    for i in range(len(pattern_bytes)):
+                        if mask[i]:
+                            if func_bytes[i] == pattern_bytes[i]:
+                                matching_bytes += 1
+                            else:
+                                match = False
+                                break
+                        else:
+                            matching_bytes += 1  # Wildcards always match
+                    
+                    if match:
+                        confidence = matching_bytes / len(pattern_bytes)
+                        matches.append({
+                            "addr": hex(func_ea),
+                            "name": idc.get_func_name(func_ea) or hex(func_ea),
+                            "confidence": round(confidence, 3)
+                        })
+            
+            return {"pattern": pattern, "matches": matches[:100]}
+        
+        elif action == "list_sigs":
+            import os
+            sig_dir = idc.idadir("sig")
+            sigs = []
+            
+            if sig_dir and os.path.exists(sig_dir):
+                for root, dirs, files in os.walk(sig_dir):
+                    for f in files:
+                        if f.lower().endswith(".sig"):
+                            rel_path = os.path.relpath(os.path.join(root, f), sig_dir)
+                            sigs.append(os.path.splitext(rel_path)[0])
+            
+            return {"signatures": sorted(sigs), "sig_dir": sig_dir}
+        
+        elif action == "apply_sig":
+            if not name:
+                return {"error": "name required (signature name without .sig)"}
+            
+            import ida_funcs
+            
+            # Count functions before
+            before_count = 0
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    if not idc.get_func_name(func_ea).startswith("sub_"):
+                        before_count += 1
+            
+            # Apply signature
+            try:
+                import ida_libfuncs
+                ida_libfuncs.plan_to_apply_ldes(name)
+                idaapi.auto_wait()
+            except:
+                return {"error": f"Could not apply signature: {name}"}
+            
+            # Count after
+            after_count = 0
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    if not idc.get_func_name(func_ea).startswith("sub_"):
+                        after_count += 1
+            
+            return {
+                "applied": True,
+                "name": name,
+                "functions_matched": after_count - before_count
+            }
+        
+        elif action == "create_sig":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            # Generate signature data
+            func_size = min(64, func.end_ea - func.start_ea)
+            func_bytes = ida_bytes.get_bytes(func.start_ea, func_size)
+            
+            if not func_bytes:
+                return {"error": "Could not read function bytes"}
+            
+            # Calculate CRC16 of first 32 bytes (FLIRT-style)
+            import zlib
+            crc = zlib.crc32(func_bytes[:min(32, len(func_bytes))]) & 0xFFFF
+            
+            # Build pattern
+            pattern_parts = []
+            for b in func_bytes[:32]:
+                pattern_parts.append(f"{b:02X}")
+            
+            return {
+                "signature": {
+                    "name": name or idc.get_func_name(ea) or hex(ea),
+                    "addr": hex(func.start_ea),
+                    "pattern": " ".join(pattern_parts),
+                    "crc16": hex(crc),
+                    "size": func.end_ea - func.start_ea
+                }
+            }
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# Need ida_fixup import for patterns tool
+try:
+    import ida_fixup
+except ImportError:
+    pass
+
+
+# ============================================================================
+# 26. STRUCTS - Automatic Structure Recovery and Analysis
+# ============================================================================
+
+@tool
+@idaread
+def structs(
+    action: Annotated[Literal["recover", "analyze_usage", "list", "create", "add_member", "apply"],
+                      "Action: recover|analyze_usage|list|create|add_member|apply"],
+    addr: Annotated[Optional[str], "Address for struct operations"] = None,
+    name: Annotated[Optional[str], "Structure name"] = None,
+    decl: Annotated[Optional[str], "C declaration for struct creation"] = None,
+    member_name: Annotated[Optional[str], "Member name for add_member"] = None,
+    member_type: Annotated[Optional[str], "Member type for add_member"] = "int",
+    offset: Annotated[int, "Member offset for add_member"] = 0,
+) -> dict:
+    """
+    Automatic structure recovery and struct management.
+    
+    ACTIONS:
+    
+    recover - Attempt automatic struct recovery from function usage
+        Params: addr (function that uses a struct pointer)
+        Returns: {recovered_struct: {name, members: [{offset, name, type}]}}
+        
+    analyze_usage - Analyze how an address/register is used as struct
+        Params: addr
+        Returns: {accesses: [{offset, size, operation}]}
+        
+    list - List all structures in the database
+        Returns: {structs: [{name, size, members_count}]}
+        
+    create - Create a new structure from C declaration
+        Params: decl (e.g., "struct Foo { int x; char y[16]; };")
+        Returns: {created, name, size}
+        
+    add_member - Add a member to an existing structure
+        Params: name (struct name), member_name, member_type, offset
+        Returns: {added, struct, member}
+        
+    apply - Apply a structure type to an address
+        Params: addr, name (struct name)
+        Returns: {applied, addr, struct}
+    """
+    try:
+        if action == "recover":
+            if not addr:
+                return {"error": "addr required (function address)"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            # Try to recover struct from decompilation
+            try:
+                cfunc = ida_hexrays.decompile(ea)
+                if not cfunc:
+                    return {"error": "Could not decompile function"}
+                
+                # Analyze local variables that might be struct pointers
+                struct_candidates = []
+                
+                for lvar in cfunc.lvars:
+                    if lvar.type().is_ptr():
+                        # This is a pointer - might be a struct pointer
+                        pointed_type = lvar.type().get_pointed_object()
+                        if pointed_type and not pointed_type.is_scalar():
+                            struct_candidates.append({
+                                "var_name": lvar.name,
+                                "type": str(lvar.type()),
+                                "pointed_type": str(pointed_type)
+                            })
+                
+                # Look for field accesses
+                accesses = []
+                
+                class AccessFinder(ida_hexrays.ctree_visitor_t):
+                    def __init__(self):
+                        ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                    
+                    def visit_expr(self, e):
+                        if e.op == ida_hexrays.cot_memptr or e.op == ida_hexrays.cot_memref:
+                            accesses.append({
+                                "ea": hex(e.ea) if e.ea != idaapi.BADADDR else None,
+                                "op": ida_hexrays.get_ctype_name(e.op),
+                                "offset": e.m if hasattr(e, 'm') else None
+                            })
+                        return 0
+                
+                finder = AccessFinder()
+                finder.apply_to(cfunc.body, None)
+                
+                return {
+                    "function": idc.get_func_name(ea) or hex(ea),
+                    "struct_candidates": struct_candidates,
+                    "field_accesses": accesses[:50]
+                }
+                
+            except ida_hexrays.DecompilationFailure:
+                return {"error": "Decompilation failed"}
+        
+        elif action == "analyze_usage":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            # Analyze memory accesses from this point
+            accesses = []
+            
+            # Get xrefs from this address
+            for xref in idautils.XrefsFrom(ea):
+                size = idc.get_item_size(xref.to)
+                accesses.append({
+                    "target": hex(xref.to),
+                    "type": "code" if xref.type in [1, 17, 18, 19, 20, 21] else "data",
+                    "size": size
+                })
+            
+            return {"addr": hex(ea), "accesses": accesses[:100]}
+        
+        elif action == "list":
+            structs_list = []
+            
+            # Iterate through all local types
+            til = ida_typeinf.get_idati()
+            if til:
+                count = ida_typeinf.get_ordinal_count(til)
+                for ordinal in range(1, count + 1):
+                    tinfo = ida_typeinf.tinfo_t()
+                    if ida_typeinf.get_numbered_type(til, ordinal, tinfo):
+                        if tinfo.is_struct() or tinfo.is_union():
+                            type_name = tinfo.get_type_name() or f"struct_{ordinal}"
+                            structs_list.append({
+                                "name": type_name,
+                                "ordinal": ordinal,
+                                "size": tinfo.get_size(),
+                                "is_union": tinfo.is_union()
+                            })
+            
+            return {"structs": structs_list}
+        
+        elif action == "create":
+            if not decl:
+                return {"error": "decl required (C structure declaration)"}
+            
+            # Parse the declaration
+            til = ida_typeinf.get_idati()
+            tinfo = ida_typeinf.tinfo_t()
+            
+            result = ida_typeinf.parse_decl(tinfo, til, decl, ida_typeinf.PT_TYP)
+            if result is None:
+                return {"error": f"Failed to parse declaration: {decl}"}
+            
+            # Get the name
+            struct_name = tinfo.get_type_name()
+            if not struct_name:
+                # Try to extract from declaration
+                import re
+                match = re.search(r'struct\s+(\w+)', decl)
+                if match:
+                    struct_name = match.group(1)
+            
+            # Save to til
+            ordinal = ida_typeinf.alloc_type_ordinal(til)
+            if ida_typeinf.set_numbered_type(til, ordinal, ida_typeinf.NTF_TYPE, struct_name, tinfo):
+                return {
+                    "created": True,
+                    "name": struct_name,
+                    "ordinal": ordinal,
+                    "size": tinfo.get_size()
+                }
+            
+            return {"error": "Failed to save structure to type library"}
+        
+        elif action == "add_member":
+            if not name:
+                return {"error": "name (struct name) required"}
+            if not member_name:
+                return {"error": "member_name required"}
+            
+            # This is complex in IDA 9 with new type system
+            # For now, suggest using create with full declaration
+            return {
+                "error": "add_member not fully supported in IDA 9",
+                "suggestion": "Use create action with full C declaration instead",
+                "example": f"structs(action='create', decl='struct {name} {{ int {member_name}; }};')"
+            }
+        
+        elif action == "apply":
+            if not addr:
+                return {"error": "addr required"}
+            if not name:
+                return {"error": "name (struct name) required"}
+            
+            ea = parse_address(addr)
+            
+            # Get the struct type
+            tinfo = ida_typeinf.tinfo_t()
+            if not tinfo.get_named_type(ida_typeinf.get_idati(), name):
+                return {"error": f"Structure '{name}' not found"}
+            
+            # Apply to address
+            if ida_typeinf.apply_tinfo(ea, tinfo, ida_typeinf.TINFO_DEFINITE):
+                return {
+                    "applied": True,
+                    "addr": hex(ea),
+                    "struct": name,
+                    "size": tinfo.get_size()
+                }
+            
+            return {"error": f"Failed to apply struct '{name}' at {hex(ea)}"}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}

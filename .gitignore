@@ -13,7 +13,7 @@ venv*/
 # Logs
 *.log
 
-# Test files
+# IDA database files
 *.idb
 *.i64
 *.nam
@@ -25,3 +25,13 @@ venv*/
 
 # Generated server files
 server_generated.py
+
+# MCP cache and temp files
+.ida_mcp_cache/
+mcp_script_*.py
+mcp_result_*.json
+
+# IDE files
+.idea/
+.vscode/
+*.swp
