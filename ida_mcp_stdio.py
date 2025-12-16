@@ -40,12 +40,13 @@ warnings.filterwarnings("ignore")
 # Redirect stderr to devnull to prevent any stray output
 sys.stderr = io.StringIO()
 
-# List of available tools (26 total)
+# List of available tools (29 total - Session A complete)
 TOOLS = [
     "idb", "code", "data", "search", "types", "memory", "modify",
     "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
     "fixups", "data_ops", "agent", "microcode", "graph", "bulk",
-    "ctree", "diff", "lumina", "symbols", "patterns", "structs"
+    "ctree", "diff", "lumina", "symbols", "patterns", "structs",
+    "emulate", "export", "history"
 ]
 
 # Tool descriptions for MCP discovery - detailed for LLM comprehension
@@ -152,7 +153,19 @@ Required: idb, action. For generate/create_sig: addr. For match: pattern (hex wi
 
     "structs": """Automatic structure recovery and struct management.
 Actions: recover (recover struct from function usage), analyze_usage (analyze memory accesses), list (list all structs), create (create from C declaration), apply (apply struct at address).
-Required: idb, action. For recover/apply: addr. For create: decl (C code). For apply: name (struct name)."""
+Required: idb, action. For recover/apply: addr. For create: decl (C code). For apply: name (struct name).""",
+
+    "emulate": """Code emulation and snippet execution.
+Actions: snippet (trace code from address), appcall (call function with args - needs debugger), trace (static trace through function), decrypt_strings (find encrypted string patterns), eval_expr (evaluate value at address).
+Required: idb, action. For snippet/trace: addr, max_steps. For appcall: func_name or addr, args.""",
+
+    "export": """Export IDB data in various formats.
+Actions: listing (assembly listing), html (HTML report), idc (IDC script), json (JSON metadata), binexport (BinDiff format), headers (C headers).
+Required: idb, action. For listing/html/idc/json/headers: path (output file).""",
+
+    "history": """Database version control and undo management.
+Actions: undo (undo operations), redo (redo operations), list (show undo/redo status), snapshot (create named checkpoint), restore (restore from snapshot), diff (show changes).
+Required: idb, action. For undo/redo: count. For snapshot/restore: name."""
 }
 
 
