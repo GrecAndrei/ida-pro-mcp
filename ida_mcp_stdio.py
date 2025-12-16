@@ -140,7 +140,19 @@ Required: idb, action. For functions: addr1, addr2. For bytes: addr1 (start:end)
 
     "lumina": """Interact with Hex-Rays Lumina cloud for function recognition.
 Actions: pull (pull function names from Lumina), push (push annotations to Lumina), status (check connection), history (function history), search (search Lumina by name).
-Required: idb, action. For pull/push: addr (specific) or push_all=True. For search: query. Note: Requires Lumina license."""
+Required: idb, action. For pull/push: addr (specific) or push_all=True. For search: query. Note: Requires Lumina license.""",
+
+    "symbols": """Load and manage debug symbols (PDB, DWARF, COFF).
+Actions: load_pdb (load PDB file), load_dwarf (parse DWARF info), status (check symbol status), apply (apply type at address), export (export symbols to file).
+Required: idb, action. For load_pdb: path (optional, auto-detects). For export: path.""",
+
+    "patterns": """FLIRT-like pattern generation and matching.
+Actions: generate (create pattern from function), match (find functions by pattern), list_sigs (list available FLIRT sigs), apply_sig (apply signature file), create_sig (create signature metadata).
+Required: idb, action. For generate/create_sig: addr. For match: pattern (hex with ?? wildcards). For apply_sig: name.""",
+
+    "structs": """Automatic structure recovery and struct management.
+Actions: recover (recover struct from function usage), analyze_usage (analyze memory accesses), list (list all structs), create (create from C declaration), apply (apply struct at address).
+Required: idb, action. For recover/apply: addr. For create: decl (C code). For apply: name (struct name)."""
 }
 
 
