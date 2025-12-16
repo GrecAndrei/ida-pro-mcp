@@ -40,34 +40,94 @@ warnings.filterwarnings("ignore")
 # Redirect stderr to devnull to prevent any stray output
 sys.stderr = io.StringIO()
 
-# List of available tools
+# List of available tools (20 total)
 TOOLS = [
     "idb", "code", "data", "search", "types", "memory", "modify",
-    "misc", "funcs", "segments", "files", "plugins", "trace",
+    "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
     "fixups", "data_ops", "agent", "microcode", "graph", "bulk"
 ]
 
-# Tool descriptions for MCP discovery
+# Tool descriptions for MCP discovery - detailed for LLM comprehension
 TOOL_DESCRIPTIONS = {
-    "idb": "Get IDB metadata, segments, cursor position, entrypoints",
-    "code": "Decompile, disassemble, get xrefs, basic blocks, call graph",
-    "data": "List functions, globals, strings, imports, exports",
-    "search": "Find bytes, patterns, strings, references, instructions",
-    "types": "Manage types, structs, enums, function prototypes",
-    "memory": "Read/write memory at addresses",
-    "modify": "Rename, comment, set types, patch assembly",
-    "misc": "Execute Python/IDC, load signatures, manage bookmarks",
-    "funcs": "Create, delete, modify function definitions",
-    "segments": "List, add, delete, modify segments",
-    "files": "Open, save, close databases, batch analysis",
-    "plugins": "List and run IDA plugins",
-    "trace": "Get/clear execution traces",
-    "fixups": "Manage relocations/fixups",
-    "data_ops": "Create data, arrays, strings, code",
-    "agent": "High-level analysis helpers",
-    "microcode": "Access Hex-Rays intermediate representation",
-    "graph": "Export call graphs and CFGs",
-    "bulk": "Bulk rename, comment, type operations"
+    "idb": """IDB database metadata and navigation.
+Actions: meta (get file path, module name, base address, size, MD5/SHA256 hashes), segments (list all binary segments with permissions), cursor (get current address in IDA), entrypoints (list program entry points).
+Required: idb (path to IDB or binary file), action (one of the above).""",
+
+    "code": """Decompilation, disassembly, and code flow analysis.
+Actions: decompile (get Hex-Rays pseudocode), disassemble (get assembly), xrefs_to (find references TO an address), xrefs_from (find references FROM an address), basic_blocks (get control flow blocks), graph (get call graph).
+Required: idb, action. Optional: addrs (address or list of addresses), depth (for graph traversal).""",
+
+    "data": """List and query binary data structures.
+Actions: functions (list all functions with addr/name/size), globals (list global variables), strings (list all strings with addresses), imports (list imported functions), exports (list exported symbols).
+Required: idb, action. Optional: query (filter pattern), offset/count (pagination).""",
+
+    "search": """Search for patterns, bytes, and references in the binary.
+Actions: bytes (search hex pattern like '90 90 ??'), string (search text), immediate (find numeric constants), name (search symbol names), pattern (search with wildcards).
+Required: idb, action. Optional: query (search pattern), start/end (address range).""",
+
+    "types": """Manage type information, structures, and enums.
+Actions: list (list all local types), get (get type definition), define (create new type from C declaration), get_members (get struct fields), apply (apply type to address), search_structs (find structs by field name).
+Required: idb, action. Optional: name (type name), decl (C declaration), addr (for apply).""",
+
+    "memory": """Read and write raw memory at addresses.
+Actions: read (read bytes from address), write (write bytes to address).
+Required: idb, action, addr (hex address). For read: size (bytes to read). For write: data (hex bytes).""",
+
+    "modify": """Modify IDB annotations - rename, comment, patch.
+Actions: rename (rename function/variable), comment (add comment), set_type (set type annotation), patch (patch bytes/assembly).
+Required: idb, action, addr. For rename: name. For comment: text. For set_type: type_str. For patch: data or asm.""",
+
+    "misc": """Miscellaneous utilities - Python execution, signatures, bookmarks.
+Actions: python (execute Python code in IDA), idc (run IDC script), load_sig (load FLIRT signature), bookmarks (manage IDA bookmarks).
+Required: idb, action. For python/idc: code. For load_sig: path or name.""",
+
+    "debug": """Debugger control: process state, breakpoints, registers, memory.
+Actions: start (launch debugger), stop (terminate process), continue (resume execution), step (single step), step_into, step_over, run_to (run to address), get_regs (get registers), set_reg (set register), read_mem (read debugger memory), write_mem (write debugger memory), add_bp (add breakpoint), del_bp (delete breakpoint), list_bp (list breakpoints), enable_bp (enable/disable breakpoint), threads (list threads).
+Required: idb, action. Optional: addr, reg, value, size, data, enabled, tid.""",
+
+    "funcs": """Create and modify function definitions.
+Actions: create (define new function at address), delete (undefine function), set_flags (set function flags like FUNC_NORET), set_name (rename function), add_comment (add function comment).
+Required: idb, action, addr. Optional: name, flags, comment.""",
+
+    "segments": """Manage binary segments.
+Actions: list (list all segments), add (create segment), delete (remove segment), set_attr (modify segment attribute).
+Required: idb, action. For add: start, end, name, sclass. For set_attr: attr, value.""",
+
+    "files": """Database and file I/O operations.
+Actions: save (save IDB), close (close database), open (open file in IDA), batch (analyze multiple files), export (export to file).
+Required: idb, action. For batch: paths (list of files). For open: path.""",
+
+    "plugins": """IDA plugin management.
+Actions: list (list available plugins), run (execute a plugin).
+Required: idb, action. For run: name (plugin name).""",
+
+    "trace": """Debugger trace management.
+Actions: get (get execution trace), clear (clear trace buffer), set_options (configure tracing).
+Required: idb, action. For set_options: enable_insn, enable_func, enable_bblk (booleans).""",
+
+    "fixups": """Relocation and fixup management.
+Actions: list (list all fixups/relocations), get (get fixup at address), add (create fixup), delete (remove fixup).
+Required: idb, action. For get/add/delete: addr. For add: target, fixup_type.""",
+
+    "data_ops": """Create data items in the database.
+Actions: make_data (define data at address), make_array (create array), make_string (define string), undefine (remove definition), make_code (convert to code).
+Required: idb, action, addr. Optional: size, count (for array), str_type (string encoding).""",
+
+    "agent": """High-level analysis helpers for comprehensive exploration.
+Actions: analyze_function (get full function analysis with decompilation, xrefs, strings), explore_address (get context around an address), find_references (trace data/code references), search_all (universal search across names, strings, bytes).
+Required: idb, action. Optional: addr, query, depth.""",
+
+    "microcode": """Access Hex-Rays microcode intermediate representation.
+Actions: get (get microcode overview), blocks (get micro-blocks), instructions (get micro-instructions).
+Required: idb, action, addr (function address). Optional: maturity (optimization level 0-7).""",
+
+    "graph": """Export control flow and call graphs.
+Actions: callgraph (generate function call graph), cfg (generate function CFG).
+Required: idb, action, addr. Optional: depth, direction (down/up/both), format (json/dot).""",
+
+    "bulk": """Bulk operations for batch modifications.
+Actions: rename (batch rename from list), comment (batch add comments), set_type (batch set types), import_json (import annotations from file), export_json (export annotations).
+Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path."""
 }
 
 
