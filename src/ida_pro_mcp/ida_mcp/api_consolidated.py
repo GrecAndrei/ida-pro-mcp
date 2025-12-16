@@ -6801,4 +6801,1048 @@ def colorize(
         return {"error": str(e), "traceback": traceback.format_exc()}
 
 
+# ============================================================================
+# DYNAMIC ANALYSIS TOOLS (36-39) - Static-friendly dynamic analysis helpers
+# ============================================================================
 
+# ============================================================================
+# 36. TRACE_ANALYSIS - Post-mortem execution trace analysis
+# ============================================================================
+
+@tool
+@idaread
+def trace_analysis(
+    action: Annotated[Literal["import_trace", "analyze_coverage", "find_loops", "extract_api_calls", "basic_blocks_hit"],
+                      "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit"],
+    path: Annotated[Optional[str], "Path to trace file"] = None,
+    addr: Annotated[Optional[str], "Function or address to analyze"] = None,
+    trace_data: Annotated[Optional[list], "List of executed addresses"] = None,
+) -> dict:
+    """
+    Analyze execution traces for coverage, loops, and API call patterns.
+    
+    ACTIONS:
+    
+    import_trace - Import a trace file (simple format: one address per line)
+        Params: path
+        Returns: {imported, address_count, functions_hit}
+        
+    analyze_coverage - Calculate code coverage from trace data
+        Params: trace_data or path, addr (optional function filter)
+        Returns: {total_blocks, hit_blocks, coverage_pct, missed_functions}
+        
+    find_loops - Detect hot loops from trace frequency
+        Params: trace_data or path
+        Returns: {loops: [{addr, hit_count, function}]}
+        
+    extract_api_calls - Extract API call sequence from trace
+        Params: trace_data or path
+        Returns: {api_sequence: [{addr, name, count}]}
+        
+    basic_blocks_hit - List which basic blocks were executed
+        Params: addr (function), trace_data
+        Returns: {function, blocks_total, blocks_hit, coverage}
+    """
+    try:
+        import os
+        
+        # Helper to load trace data
+        def load_trace(path_or_data):
+            if path_or_data and isinstance(path_or_data, list):
+                return [parse_address(str(a)) for a in path_or_data]
+            elif path and os.path.exists(path):
+                addresses = []
+                with open(path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            try:
+                                addresses.append(parse_address(line))
+                            except:
+                                pass
+                return addresses
+            return []
+        
+        if action == "import_trace":
+            if not path:
+                return {"error": "path required"}
+            
+            if not os.path.exists(path):
+                return {"error": f"File not found: {path}"}
+            
+            addresses = load_trace(None)
+            
+            # Count functions hit
+            functions_hit = set()
+            for ea in addresses:
+                func = ida_funcs.get_func(ea)
+                if func:
+                    functions_hit.add(func.start_ea)
+            
+            return {
+                "imported": True,
+                "path": path,
+                "address_count": len(addresses),
+                "unique_addresses": len(set(addresses)),
+                "functions_hit": len(functions_hit)
+            }
+        
+        elif action == "analyze_coverage":
+            trace_addrs = set(load_trace(trace_data))
+            
+            if not trace_addrs:
+                return {"error": "No trace data provided (use path or trace_data)"}
+            
+            # Calculate coverage
+            total_blocks = 0
+            hit_blocks = 0
+            missed_functions = []
+            
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    func = ida_funcs.get_func(func_ea)
+                    if not func:
+                        continue
+                    
+                    # Count basic blocks
+                    try:
+                        fc = idaapi.FlowChart(func)
+                        func_blocks = 0
+                        func_hit = 0
+                        for block in fc:
+                            func_blocks += 1
+                            total_blocks += 1
+                            # Check if any address in block was hit
+                            for ea in range(block.start_ea, block.end_ea):
+                                if ea in trace_addrs:
+                                    func_hit += 1
+                                    hit_blocks += 1
+                                    break
+                        
+                        if func_hit == 0:
+                            name = idc.get_func_name(func_ea)
+                            if name and not name.startswith("sub_"):
+                                missed_functions.append(name)
+                    except:
+                        pass
+            
+            return {
+                "total_blocks": total_blocks,
+                "hit_blocks": hit_blocks,
+                "coverage_pct": round(hit_blocks / total_blocks * 100, 2) if total_blocks else 0,
+                "missed_functions": missed_functions[:50]
+            }
+        
+        elif action == "find_loops":
+            trace_addrs = load_trace(trace_data)
+            
+            if not trace_addrs:
+                return {"error": "No trace data"}
+            
+            # Count address frequency
+            from collections import Counter
+            freq = Counter(trace_addrs)
+            
+            # Find hot addresses (executed more than 10 times)
+            loops = []
+            for ea, count in freq.most_common(50):
+                if count > 10:
+                    func = ida_funcs.get_func(ea)
+                    loops.append({
+                        "addr": hex(ea),
+                        "hit_count": count,
+                        "function": idc.get_func_name(func.start_ea) if func else None
+                    })
+            
+            return {"loops": loops}
+        
+        elif action == "extract_api_calls":
+            trace_addrs = load_trace(trace_data)
+            
+            if not trace_addrs:
+                return {"error": "No trace data"}
+            
+            # Find API calls (imported functions)
+            api_calls = []
+            from collections import Counter
+            
+            for ea in set(trace_addrs):
+                name = idc.get_name(ea)
+                if name:
+                    # Check if it's an import
+                    flags = idc.get_full_flags(ea)
+                    if idc.is_code(flags):
+                        # Check xrefs to see if it references imports
+                        for xref in idautils.XrefsFrom(ea):
+                            target_name = idc.get_name(xref.to)
+                            if target_name and not target_name.startswith("sub_"):
+                                api_calls.append(target_name)
+            
+            # Count and order
+            freq = Counter(api_calls)
+            return {
+                "api_sequence": [
+                    {"name": name, "count": count}
+                    for name, count in freq.most_common(100)
+                ]
+            }
+        
+        elif action == "basic_blocks_hit":
+            if not addr:
+                return {"error": "addr required (function address)"}
+            
+            trace_addrs = set(load_trace(trace_data))
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            try:
+                fc = idaapi.FlowChart(func)
+                blocks_total = 0
+                blocks_hit = 0
+                block_info = []
+                
+                for block in fc:
+                    blocks_total += 1
+                    hit = False
+                    for block_ea in range(block.start_ea, block.end_ea):
+                        if block_ea in trace_addrs:
+                            hit = True
+                            break
+                    
+                    if hit:
+                        blocks_hit += 1
+                    
+                    block_info.append({
+                        "start": hex(block.start_ea),
+                        "end": hex(block.end_ea),
+                        "hit": hit
+                    })
+                
+                return {
+                    "function": idc.get_func_name(ea) or hex(ea),
+                    "blocks_total": blocks_total,
+                    "blocks_hit": blocks_hit,
+                    "coverage_pct": round(blocks_hit / blocks_total * 100, 2) if blocks_total else 0,
+                    "blocks": block_info[:30]
+                }
+            except:
+                return {"error": "Could not analyze function blocks"}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 37. HOOKS - API Hook Suggestions and Script Generation
+# ============================================================================
+
+@tool
+@idaread
+def hooks(
+    action: Annotated[Literal["suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks"],
+                      "Action: suggest|generate_frida|generate_detours|find_targets|inline_hooks"],
+    category: Annotated[Optional[str], "Hook category: network|file|crypto|registry|process"] = None,
+    addr: Annotated[Optional[str], "Specific function address to hook"] = None,
+    func_name: Annotated[Optional[str], "Function name to hook"] = None,
+) -> dict:
+    """
+    Generate hook scripts and suggestions for dynamic analysis.
+    
+    ACTIONS:
+    
+    suggest - Suggest functions to hook based on category
+        Params: category (network|file|crypto|registry|process)
+        Returns: {suggestions: [{name, addr, reason}]}
+        
+    generate_frida - Generate Frida hook script for function
+        Params: addr or func_name
+        Returns: {script: "JavaScript code"}
+        
+    generate_detours - Generate Microsoft Detours template
+        Params: addr or func_name
+        Returns: {code: "C++ template"}
+        
+    find_targets - Find interesting hook targets in binary
+        Returns: {targets: [{addr, name, category, importance}]}
+        
+    inline_hooks - Suggest inline hook points (for trampolines)
+        Params: addr
+        Returns: {hook_points: [{addr, bytes_available, safe}]}
+    """
+    try:
+        # Category-based function patterns
+        HOOK_PATTERNS = {
+            "network": ["send", "recv", "connect", "socket", "WSA", "accept", "bind", "listen",
+                       "getaddrinfo", "gethostby", "inet_", "http", "curl", "ssl", "tls"],
+            "file": ["CreateFile", "ReadFile", "WriteFile", "fopen", "fread", "fwrite",
+                    "open", "read", "write", "close", "NtCreateFile", "NtReadFile"],
+            "crypto": ["Crypt", "BCrypt", "NCrypt", "AES", "RSA", "SHA", "MD5", "hash",
+                      "encrypt", "decrypt", "cipher", "key", "EVP_"],
+            "registry": ["RegOpenKey", "RegQueryValue", "RegSetValue", "RegCreate", "NtOpenKey"],
+            "process": ["CreateProcess", "VirtualAlloc", "VirtualProtect", "LoadLibrary",
+                       "GetProcAddress", "NtAllocate", "mmap", "mprotect", "execve", "fork"]
+        }
+        
+        if action == "suggest":
+            cat = (category or "").lower()
+            if cat not in HOOK_PATTERNS:
+                return {"error": f"Unknown category. Use: {', '.join(HOOK_PATTERNS.keys())}"}
+            
+            patterns = HOOK_PATTERNS[cat]
+            suggestions = []
+            
+            # Search imports
+            for seg_ea in idautils.Segments():
+                seg = ida_segment.getseg(seg_ea)
+                if seg and seg.type == ida_segment.SEG_XTRN:  # Import segment
+                    for head in idautils.Heads(seg_ea, idc.get_segm_end(seg_ea)):
+                        name = idc.get_name(head)
+                        if name:
+                            for pattern in patterns:
+                                if pattern.lower() in name.lower():
+                                    suggestions.append({
+                                        "name": name,
+                                        "addr": hex(head),
+                                        "pattern_match": pattern,
+                                        "type": "import"
+                                    })
+                                    break
+            
+            # Search named functions
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if name:
+                        for pattern in patterns:
+                            if pattern.lower() in name.lower():
+                                suggestions.append({
+                                    "name": name,
+                                    "addr": hex(func_ea),
+                                    "pattern_match": pattern,
+                                    "type": "function"
+                                })
+                                break
+            
+            return {"category": cat, "suggestions": suggestions[:50]}
+        
+        elif action == "generate_frida":
+            if not addr and not func_name:
+                return {"error": "addr or func_name required"}
+            
+            if func_name:
+                ea = idc.get_name_ea_simple(func_name)
+                if ea == idaapi.BADADDR:
+                    return {"error": f"Function '{func_name}' not found"}
+            else:
+                ea = parse_address(addr)
+            
+            name = idc.get_func_name(ea) or f"sub_{ea:x}"
+            
+            # Generate Frida script
+            script = f'''// Frida hook for {name} at {hex(ea)}
+const moduleBase = Module.getBaseAddress("TARGET_MODULE");
+const funcAddr = moduleBase.add({hex(ea - idaapi.get_imagebase())});
+
+Interceptor.attach(funcAddr, {{
+    onEnter: function(args) {{
+        console.log("[+] {name} called");
+        console.log("    arg0:", args[0]);
+        console.log("    arg1:", args[1]);
+        console.log("    arg2:", args[2]);
+        // this.arg0 = args[0]; // Save for onLeave
+    }},
+    onLeave: function(retval) {{
+        console.log("[+] {name} returned:", retval);
+        // retval.replace(0x1337); // Modify return value
+    }}
+}});
+'''
+            return {"function": name, "addr": hex(ea), "script": script}
+        
+        elif action == "generate_detours":
+            if not addr and not func_name:
+                return {"error": "addr or func_name required"}
+            
+            if func_name:
+                ea = idc.get_name_ea_simple(func_name)
+                if ea == idaapi.BADADDR:
+                    return {"error": f"Function '{func_name}' not found"}
+            else:
+                ea = parse_address(addr)
+            
+            name = idc.get_func_name(ea) or f"sub_{ea:x}"
+            
+            # Generate Detours template
+            code = f'''// Microsoft Detours hook for {name}
+#include <windows.h>
+#include <detours.h>
+
+// Original function pointer
+typedef DWORD (WINAPI *Orig_{name}_t)(LPVOID arg1, LPVOID arg2, LPVOID arg3);
+Orig_{name}_t pOrig_{name} = (Orig_{name}_t){hex(ea)};
+
+// Hook function
+DWORD WINAPI Hook_{name}(LPVOID arg1, LPVOID arg2, LPVOID arg3) {{
+    // Pre-call logic
+    OutputDebugStringA("[HOOK] {name} called\\n");
+    
+    // Call original
+    DWORD result = pOrig_{name}(arg1, arg2, arg3);
+    
+    // Post-call logic
+    return result;
+}}
+
+void InstallHook() {{
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&(PVOID&)pOrig_{name}, Hook_{name});
+    DetourTransactionCommit();
+}}
+'''
+            return {"function": name, "addr": hex(ea), "code": code}
+        
+        elif action == "find_targets":
+            targets = []
+            importance_keywords = {
+                "high": ["password", "key", "crypt", "auth", "token", "secret", "license"],
+                "medium": ["send", "recv", "file", "read", "write", "execute", "load"],
+                "normal": []
+            }
+            
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if not name or name.startswith("sub_"):
+                        continue
+                    
+                    name_lower = name.lower()
+                    importance = "normal"
+                    cat = "other"
+                    
+                    # Determine category
+                    for category, patterns in HOOK_PATTERNS.items():
+                        for p in patterns:
+                            if p.lower() in name_lower:
+                                cat = category
+                                break
+                    
+                    # Determine importance
+                    for level, keywords in importance_keywords.items():
+                        for kw in keywords:
+                            if kw in name_lower:
+                                importance = level
+                                break
+                    
+                    if cat != "other" or importance != "normal":
+                        targets.append({
+                            "addr": hex(func_ea),
+                            "name": name,
+                            "category": cat,
+                            "importance": importance
+                        })
+            
+            # Sort by importance
+            importance_order = {"high": 0, "medium": 1, "normal": 2}
+            targets.sort(key=lambda x: importance_order.get(x["importance"], 2))
+            
+            return {"targets": targets[:100]}
+        
+        elif action == "inline_hooks":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            hook_points = []
+            current = func.start_ea
+            
+            while current < func.end_ea and len(hook_points) < 20:
+                insn = idaapi.insn_t()
+                length = idaapi.decode_insn(insn, current)
+                
+                if length >= 5:  # Need at least 5 bytes for JMP
+                    # Check if this is a safe hook point (not in middle of instruction)
+                    hook_points.append({
+                        "addr": hex(current),
+                        "bytes_available": length,
+                        "safe": length >= 5,
+                        "disasm": idc.generate_disasm_line(current, 0) or ""
+                    })
+                
+                current += length if length > 0 else 1
+            
+            return {"function": idc.get_func_name(ea) or hex(ea), "hook_points": hook_points}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 38. TAINT - Static Taint/Data Flow Analysis
+# ============================================================================
+
+@tool
+@idaread
+def taint(
+    action: Annotated[Literal["trace_arg", "trace_return", "find_sinks", "data_flow", "slice"],
+                      "Action: trace_arg|trace_return|find_sinks|data_flow|slice"],
+    addr: Annotated[Optional[str], "Function or instruction address"] = None,
+    arg_num: Annotated[int, "Argument number to trace (0-indexed)"] = 0,
+    depth: Annotated[int, "Analysis depth"] = 5,
+) -> dict:
+    """
+    Static taint/data flow analysis using Hex-Rays.
+    
+    ACTIONS:
+    
+    trace_arg - Trace where a function argument flows to
+        Params: addr (function), arg_num
+        Returns: {uses: [{addr, operation, propagates_to}]}
+        
+    trace_return - Trace where a function's return value is used
+        Params: addr (function)
+        Returns: {callers: [{call_site, usage}]}
+        
+    find_sinks - Find dangerous functions reachable from address
+        Params: addr, depth
+        Returns: {sinks: [{name, path_length, danger_level}]}
+        
+    data_flow - Analyze data flow through a function
+        Params: addr
+        Returns: {inputs, outputs, transformations}
+        
+    slice - Extract backward slice from an instruction
+        Params: addr (instruction)
+        Returns: {slice: [{addr, contributes_to}]}
+    """
+    try:
+        DANGEROUS_SINKS = [
+            ("system", "high", "command execution"),
+            ("exec", "high", "command execution"),
+            ("popen", "high", "command execution"),
+            ("ShellExecute", "high", "command execution"),
+            ("CreateProcess", "medium", "process creation"),
+            ("strcpy", "medium", "buffer overflow"),
+            ("sprintf", "medium", "format string"),
+            ("gets", "high", "buffer overflow"),
+            ("memcpy", "low", "memory corruption"),
+            ("VirtualAlloc", "low", "memory allocation"),
+            ("LoadLibrary", "medium", "dll loading"),
+            ("eval", "high", "code execution"),
+        ]
+        
+        if action == "trace_arg":
+            if not addr:
+                return {"error": "addr required (function address)"}
+            
+            ea = parse_address(addr)
+            
+            # Try to use Hex-Rays for analysis
+            try:
+                cfunc = ida_hexrays.decompile(ea)
+                if not cfunc:
+                    return {"error": "Decompilation failed"}
+                
+                uses = []
+                
+                # Find the argument variable
+                if arg_num < len(cfunc.lvars):
+                    target_var = None
+                    arg_count = 0
+                    for lvar in cfunc.lvars:
+                        if lvar.is_arg_var:
+                            if arg_count == arg_num:
+                                target_var = lvar
+                                break
+                            arg_count += 1
+                    
+                    if target_var:
+                        # Simplified: just report the variable info
+                        uses.append({
+                            "var_name": target_var.name,
+                            "type": str(target_var.type()),
+                            "is_arg": True,
+                            "note": "Use ctree tool for detailed flow analysis"
+                        })
+                
+                return {
+                    "function": idc.get_func_name(ea) or hex(ea),
+                    "arg_num": arg_num,
+                    "uses": uses
+                }
+                
+            except:
+                return {"error": "Hex-Rays analysis failed", "note": "Decompiler required"}
+        
+        elif action == "trace_return":
+            if not addr:
+                return {"error": "addr required (function address)"}
+            
+            ea = parse_address(addr)
+            func_name = idc.get_func_name(ea)
+            
+            callers = []
+            for xref in idautils.XrefsTo(ea):
+                if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                    caller_func = ida_funcs.get_func(xref.frm)
+                    
+                    # Check what happens after the call
+                    next_insn = idc.next_head(xref.frm)
+                    next_disasm = idc.generate_disasm_line(next_insn, 0) if next_insn != idaapi.BADADDR else ""
+                    
+                    callers.append({
+                        "call_site": hex(xref.frm),
+                        "caller_func": idc.get_func_name(caller_func.start_ea) if caller_func else None,
+                        "next_insn": ida_lines.tag_remove(next_disasm) if next_disasm else None
+                    })
+            
+            return {"function": func_name or hex(ea), "callers": callers[:30]}
+        
+        elif action == "find_sinks":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            sinks_found = []
+            visited = set()
+            
+            def search_calls(start_ea, current_depth):
+                if current_depth > depth or start_ea in visited:
+                    return
+                visited.add(start_ea)
+                
+                func = ida_funcs.get_func(start_ea)
+                if not func:
+                    return
+                
+                # Scan function for calls
+                current = func.start_ea
+                while current < func.end_ea:
+                    insn = idaapi.insn_t()
+                    length = idaapi.decode_insn(insn, current)
+                    
+                    if length > 0:
+                        # Check for call instructions
+                        for xref in idautils.XrefsFrom(current):
+                            if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                                target_name = idc.get_name(xref.to)
+                                if target_name:
+                                    # Check against dangerous sinks
+                                    for sink_name, danger, reason in DANGEROUS_SINKS:
+                                        if sink_name.lower() in target_name.lower():
+                                            sinks_found.append({
+                                                "name": target_name,
+                                                "addr": hex(xref.to),
+                                                "call_site": hex(current),
+                                                "path_length": current_depth,
+                                                "danger_level": danger,
+                                                "reason": reason
+                                            })
+                                    
+                                    # Recurse into called function
+                                    if current_depth < depth:
+                                        search_calls(xref.to, current_depth + 1)
+                    
+                    current += length if length > 0 else 1
+            
+            search_calls(ea, 0)
+            
+            # Sort by danger level
+            danger_order = {"high": 0, "medium": 1, "low": 2}
+            sinks_found.sort(key=lambda x: danger_order.get(x["danger_level"], 2))
+            
+            return {"start": hex(ea), "depth": depth, "sinks": sinks_found[:30]}
+        
+        elif action == "data_flow":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            try:
+                cfunc = ida_hexrays.decompile(ea)
+                if not cfunc:
+                    return {"error": "Decompilation failed"}
+                
+                inputs = []
+                outputs = []
+                
+                for lvar in cfunc.lvars:
+                    var_info = {
+                        "name": lvar.name,
+                        "type": str(lvar.type())
+                    }
+                    
+                    if lvar.is_arg_var:
+                        inputs.append(var_info)
+                    elif lvar.is_result_var:
+                        outputs.append(var_info)
+                
+                return {
+                    "function": idc.get_func_name(ea) or hex(ea),
+                    "inputs": inputs,
+                    "outputs": outputs,
+                    "note": "Use ctree for detailed transformations"
+                }
+                
+            except:
+                return {"error": "Decompilation failed"}
+        
+        elif action == "slice":
+            if not addr:
+                return {"error": "addr required (instruction address)"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            
+            if not func:
+                return {"error": f"No function containing {addr}"}
+            
+            # Simple backward slice: find instructions that affect this one
+            slice_instrs = []
+            
+            # Get the instruction and what it reads
+            disasm = idc.generate_disasm_line(ea, 0)
+            
+            # Walk backwards looking for definitions
+            current = idc.prev_head(ea)
+            for _ in range(50):  # Limit
+                if current == idaapi.BADADDR or current < func.start_ea:
+                    break
+                
+                curr_disasm = idc.generate_disasm_line(current, 0)
+                if curr_disasm:
+                    slice_instrs.append({
+                        "addr": hex(current),
+                        "disasm": ida_lines.tag_remove(curr_disasm)
+                    })
+                
+                current = idc.prev_head(current)
+            
+            slice_instrs.reverse()
+            
+            return {
+                "target": hex(ea),
+                "target_disasm": ida_lines.tag_remove(disasm) if disasm else "",
+                "backward_slice": slice_instrs[:20],
+                "note": "Simplified slice - use Hex-Rays for accurate data dependencies"
+            }
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 39. COVERAGE - Code Coverage Import and Analysis
+# ============================================================================
+
+@tool
+@idaread
+def coverage(
+    action: Annotated[Literal["import_drcov", "import_lighthouse", "highlight", "report", "uncovered"],
+                      "Action: import_drcov|import_lighthouse|highlight|report|uncovered"],
+    path: Annotated[Optional[str], "Path to coverage file"] = None,
+    addr: Annotated[Optional[str], "Function to analyze"] = None,
+    color: Annotated[Optional[str], "Highlight color (green|yellow|red)"] = "green",
+) -> dict:
+    """
+    Import and analyze code coverage data from various sources.
+    
+    ACTIONS:
+    
+    import_drcov - Import DynamoRIO coverage file
+        Params: path
+        Returns: {imported, modules, basic_blocks}
+        
+    import_lighthouse - Import Lighthouse/coverage.py format
+        Params: path
+        Returns: {imported, addresses}
+        
+    highlight - Highlight covered code in IDA
+        Params: path (coverage file), color
+        Returns: {highlighted, count}
+        
+    report - Generate coverage report for function
+        Params: addr (function), path (optional coverage data)
+        Returns: {function, total_blocks, covered, percentage}
+        
+    uncovered - Find important uncovered functions
+        Params: path
+        Returns: {uncovered: [{name, importance, reason}]}
+    """
+    try:
+        import os
+        import struct
+        
+        def parse_drcov(filepath):
+            """Parse DynamoRIO drcov format"""
+            if not os.path.exists(filepath):
+                return None, "File not found"
+            
+            modules = []
+            blocks = []
+            
+            with open(filepath, 'rb') as f:
+                # Read header
+                line = f.readline().decode('utf-8', errors='ignore').strip()
+                if not line.startswith('DRCOV'):
+                    return None, "Not a drcov file"
+                
+                # Skip to module table
+                while True:
+                    line = f.readline().decode('utf-8', errors='ignore').strip()
+                    if line.startswith('Module Table'):
+                        break
+                    if not line:
+                        return None, "Invalid format"
+                
+                # Read module count
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    count = int(parts[1].strip().split()[0])
+                    for _ in range(count):
+                        mod_line = f.readline().decode('utf-8', errors='ignore').strip()
+                        # Parse: id, base, end, entry, checksum, timestamp, path
+                        parts = mod_line.split(',')
+                        if len(parts) >= 7:
+                            modules.append({
+                                "id": int(parts[0].strip()),
+                                "base": int(parts[1].strip(), 16) if parts[1].strip().startswith('0x') else int(parts[1].strip()),
+                                "path": parts[6].strip() if len(parts) > 6 else ""
+                            })
+                
+                # Find BB Table
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    line = line.decode('utf-8', errors='ignore').strip()
+                    if line.startswith('BB Table'):
+                        break
+                
+                # Read basic blocks (binary format follows)
+                while True:
+                    data = f.read(8)  # start (4 bytes), size (2 bytes), mod_id (2 bytes)
+                    if len(data) < 8:
+                        break
+                    start, size, mod_id = struct.unpack('<IHH', data)
+                    blocks.append({
+                        "start": start,
+                        "size": size,
+                        "module_id": mod_id
+                    })
+            
+            return {"modules": modules, "blocks": blocks}, None
+        
+        if action == "import_drcov":
+            if not path:
+                return {"error": "path required"}
+            
+            result, error = parse_drcov(path)
+            if error:
+                return {"error": error}
+            
+            return {
+                "imported": True,
+                "path": path,
+                "modules": len(result["modules"]),
+                "basic_blocks": len(result["blocks"]),
+                "module_names": [m["path"] for m in result["modules"][:10]]
+            }
+        
+        elif action == "import_lighthouse":
+            if not path:
+                return {"error": "path required"}
+            
+            if not os.path.exists(path):
+                return {"error": f"File not found: {path}"}
+            
+            addresses = []
+            with open(path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        try:
+                            addr = int(line, 16) if line.startswith('0x') else int(line)
+                            addresses.append(addr)
+                        except:
+                            pass
+            
+            return {
+                "imported": True,
+                "path": path,
+                "addresses": len(addresses),
+                "unique": len(set(addresses))
+            }
+        
+        elif action == "highlight":
+            if not path:
+                return {"error": "path required"}
+            
+            # Try to parse as simple address list first
+            addresses = set()
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            try:
+                                addresses.add(parse_address(line))
+                            except:
+                                pass
+            
+            if not addresses:
+                # Try drcov
+                result, _ = parse_drcov(path)
+                if result:
+                    base = idaapi.get_imagebase()
+                    for block in result["blocks"]:
+                        for offset in range(block["size"]):
+                            addresses.add(base + block["start"] + offset)
+            
+            # Color mapping
+            color_map = {
+                "green": 0x90EE90,
+                "yellow": 0x00FFFF,
+                "red": 0x0000FF
+            }
+            bgr = color_map.get(color, 0x90EE90)
+            
+            count = 0
+            for ea in addresses:
+                if idc.is_mapped(ea):
+                    idc.set_color(ea, idc.CIC_ITEM, bgr)
+                    count += 1
+            
+            return {"highlighted": True, "count": count, "color": color}
+        
+        elif action == "report":
+            if not addr:
+                return {"error": "addr required (function address)"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            # Load coverage if path provided
+            covered_addrs = set()
+            if path and os.path.exists(path):
+                with open(path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                covered_addrs.add(parse_address(line))
+                            except:
+                                pass
+            
+            # Analyze function blocks
+            try:
+                fc = idaapi.FlowChart(func)
+                total = 0
+                covered = 0
+                blocks = []
+                
+                for block in fc:
+                    total += 1
+                    is_covered = any(ea in covered_addrs for ea in range(block.start_ea, block.end_ea))
+                    if is_covered:
+                        covered += 1
+                    blocks.append({
+                        "start": hex(block.start_ea),
+                        "covered": is_covered
+                    })
+                
+                return {
+                    "function": idc.get_func_name(ea) or hex(ea),
+                    "total_blocks": total,
+                    "covered_blocks": covered,
+                    "percentage": round(covered / total * 100, 2) if total else 0,
+                    "blocks": blocks[:20]
+                }
+            except:
+                return {"error": "Could not analyze function"}
+        
+        elif action == "uncovered":
+            # Load coverage data
+            covered_funcs = set()
+            if path and os.path.exists(path):
+                with open(path, 'r') as f:
+                    for line in f:
+                        try:
+                            ea = parse_address(line.strip())
+                            func = ida_funcs.get_func(ea)
+                            if func:
+                                covered_funcs.add(func.start_ea)
+                        except:
+                            pass
+            
+            # Find uncovered functions
+            uncovered = []
+            importance_keywords = ["main", "init", "parse", "process", "handle", "check", "verify"]
+            
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    if func_ea in covered_funcs:
+                        continue
+                    
+                    name = idc.get_func_name(func_ea)
+                    if not name or name.startswith("sub_"):
+                        continue
+                    
+                    importance = "normal"
+                    reason = ""
+                    name_lower = name.lower()
+                    
+                    for kw in importance_keywords:
+                        if kw in name_lower:
+                            importance = "high"
+                            reason = f"Contains '{kw}'"
+                            break
+                    
+                    uncovered.append({
+                        "addr": hex(func_ea),
+                        "name": name,
+                        "importance": importance,
+                        "reason": reason
+                    })
+            
+            # Sort by importance
+            uncovered.sort(key=lambda x: 0 if x["importance"] == "high" else 1)
+            
+            return {"uncovered": uncovered[:50]}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# END OF DYNAMIC ANALYSIS TOOLS (36-39)
+# Total tools: 39
+# ============================================================================

@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/IDA%20Pro-9.0%2B-blue?style=for-the-badge" alt="IDA Pro 9.0+"/>
   <img src="https://img.shields.io/badge/Python-3.11%2B-green?style=for-the-badge" alt="Python 3.11+"/>
   <img src="https://img.shields.io/badge/MCP-2.0-purple?style=for-the-badge" alt="MCP 2.0"/>
-  <img src="https://img.shields.io/badge/Tools-35-orange?style=for-the-badge" alt="35 Tools"/>
+  <img src="https://img.shields.io/badge/Tools-39-orange?style=for-the-badge" alt="39 Tools"/>
   <img src="https://img.shields.io/badge/Standalone-Yes-brightgreen?style=for-the-badge" alt="Standalone"/>
 </p>
 
@@ -122,24 +122,28 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 
 ### Advanced Analysis Tools
 
-| Tool           | Description                | Key Actions                                                            |
-| -------------- | -------------------------- | ---------------------------------------------------------------------- |
-| `agent`        | High-level helpers         | `analyze_function`, `explore_address`, `find_references`, `search_all` |
-| `microcode`    | Hex-Rays IR                | `get`, `blocks`, `instructions`                                        |
-| `graph`        | Graph export               | `callgraph`, `cfg`                                                     |
-| `memory`       | Memory read/write          | `read`, `write`                                                        |
-| `ctree`        | Hex-Rays AST access        | `get`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`    |
-| `diff`         | Binary diffing             | `functions`, `bytes`, `signatures`, `names`, `summary`                 |
-| `lumina`       | Cloud function recognition | `pull`, `push`, `status`, `history`, `search`                          |
-| `symbols`      | Debug symbols (PDB/DWARF)  | `load_pdb`, `load_dwarf`, `status`, `apply`, `export`                  |
-| `patterns`     | FLIRT pattern matching     | `generate`, `match`, `list_sigs`, `apply_sig`, `create_sig`            |
-| `structs`      | Struct recovery            | `recover`, `analyze_usage`, `list`, `create`, `apply`                  |
-| `emulate`      | Code emulation             | `snippet`, `appcall`, `trace`, `decrypt_strings`, `eval_expr`          |
-| `export`       | Multi-format export        | `listing`, `html`, `idc`, `json`, `binexport`, `headers`               |
-| `history`      | DB version control         | `undo`, `redo`, `list`, `snapshot`, `restore`, `diff`                  |
-| `strings_xref` | Advanced string analysis   | `analyze`, `xref_chain`, `detect_encoded`, `find_format`, `clusters`   |
-| `entropy`      | Entropy analysis           | `section`, `region`, `packed_detect`, `crypto_detect`, `compare`       |
-| `imports_deep` | Deep import analysis       | `thunks`, `delay`, `forwarded`, `ordinal`, `api_sets`, `resolve`       |
+| Tool             | Description                | Key Actions                                                             |
+| ---------------- | -------------------------- | ----------------------------------------------------------------------- |
+| `agent`          | High-level helpers         | `analyze_function`, `explore_address`, `find_references`, `search_all`  |
+| `microcode`      | Hex-Rays IR                | `get`, `blocks`, `instructions`                                         |
+| `graph`          | Graph export               | `callgraph`, `cfg`                                                      |
+| `memory`         | Memory read/write          | `read`, `write`                                                         |
+| `ctree`          | Hex-Rays AST access        | `get`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`     |
+| `diff`           | Binary diffing             | `functions`, `bytes`, `signatures`, `names`, `summary`                  |
+| `lumina`         | Cloud function recognition | `pull`, `push`, `status`, `history`, `search`                           |
+| `symbols`        | Debug symbols (PDB/DWARF)  | `load_pdb`, `load_dwarf`, `status`, `apply`, `export`                   |
+| `patterns`       | FLIRT pattern matching     | `generate`, `match`, `list_sigs`, `apply_sig`, `create_sig`             |
+| `structs`        | Struct recovery            | `recover`, `analyze_usage`, `list`, `create`, `apply`                   |
+| `emulate`        | Code emulation             | `snippet`, `appcall`, `trace`, `decrypt_strings`, `eval_expr`           |
+| `export`         | Multi-format export        | `listing`, `html`, `idc`, `json`, `binexport`, `headers`                |
+| `history`        | DB version control         | `undo`, `redo`, `list`, `snapshot`, `restore`, `diff`                   |
+| `strings_xref`   | Advanced string analysis   | `analyze`, `xref_chain`, `detect_encoded`, `find_format`, `clusters`    |
+| `entropy`        | Entropy analysis           | `section`, `region`, `packed_detect`, `crypto_detect`, `compare`        |
+| `imports_deep`   | Deep import analysis       | `thunks`, `delay`, `forwarded`, `ordinal`, `api_sets`, `resolve`        |
+| `trace_analysis` | Execution trace analysis   | `import_trace`, `analyze_coverage`, `find_loops`, `extract_api_calls`   |
+| `hooks`          | Hook script generation     | `suggest`, `generate_frida`, `generate_detours`, `find_targets`         |
+| `taint`          | Static taint analysis      | `trace_arg`, `trace_return`, `find_sinks`, `data_flow`, `slice`         |
+| `coverage`       | Code coverage analysis     | `import_drcov`, `import_lighthouse`, `highlight`, `report`, `uncovered` |
 
 ### Utility Tools
 

@@ -40,15 +40,17 @@ warnings.filterwarnings("ignore")
 # Redirect stderr to devnull to prevent any stray output
 sys.stderr = io.StringIO()
 
-# List of available tools (32 total)
+# List of available tools (39 total)
 TOOLS = [
     "idb", "code", "data", "search", "types", "memory", "modify",
     "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
     "fixups", "data_ops", "agent", "microcode", "graph", "bulk",
     "ctree", "diff", "lumina", "symbols", "patterns", "structs",
+    "emulate", "export", "history",
     # Session B tools (30-35)
     "strings_xref", "entropy", "imports_deep", "comments_ai", "nav", "colorize",
-    "emulate", "export", "history"
+    # Dynamic analysis tools (36-39)
+    "trace_analysis", "hooks", "taint", "coverage"
 ]
 
 # Tool descriptions for MCP discovery - detailed for LLM comprehension
@@ -191,7 +193,24 @@ Required: idb, action. For listing/html/idc/json/headers: path (output file)."""
 
     "history": """Database version control and undo management.
 Actions: undo (undo operations), redo (redo operations), list (show undo/redo status), snapshot (create named checkpoint), restore (restore from snapshot), diff (show changes).
-Required: idb, action. For undo/redo: count. For snapshot/restore: name."""
+Required: idb, action. For undo/redo: count. For snapshot/restore: name.""",
+
+    # Dynamic analysis tools (36-39)
+    "trace_analysis": """Post-mortem execution trace analysis.
+Actions: import_trace (load trace file), analyze_coverage (calculate coverage from trace), find_loops (detect hot loops), extract_api_calls (API call sequence), basic_blocks_hit (per-function block coverage).
+Required: idb, action. For most actions: path or trace_data (list of addresses).""",
+
+    "hooks": """API hook suggestions and script generation.
+Actions: suggest (category-based hook suggestions), generate_frida (Frida JS script), generate_detours (MS Detours C++ template), find_targets (interesting hook points), inline_hooks (trampoline points).
+Required: idb, action. For suggest: category (network|file|crypto|registry|process). For generate: addr or func_name.""",
+
+    "taint": """Static taint/data flow analysis using Hex-Rays.
+Actions: trace_arg (follow argument flow), trace_return (find return value usage), find_sinks (reachable dangerous functions), data_flow (function inputs/outputs), slice (backward slice from instruction).
+Required: idb, action, addr. For trace_arg: arg_num. For find_sinks: depth.""",
+
+    "coverage": """Code coverage import and analysis.
+Actions: import_drcov (DynamoRIO format), import_lighthouse (simple address list), highlight (color covered code), report (function coverage), uncovered (find important missed functions).
+Required: idb, action. For import/highlight: path. For report: addr. Optional: color (green|yellow|red)."""
 }
 
 
