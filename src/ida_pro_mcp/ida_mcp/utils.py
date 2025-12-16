@@ -27,7 +27,12 @@ import idaapi
 import idautils
 import idc
 
-from .sync import IDAError
+# Support both package mode and standalone mode
+try:
+    from .sync import IDAError
+except ImportError:
+    class IDAError(Exception):
+        pass
 
 # ============================================================================
 # TypedDict Definitions for API Parameters
@@ -801,7 +806,10 @@ def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
 def get_stack_frame_variables_internal(
     fn_addr: int, raise_error: bool
 ) -> list[StackFrameVariable]:
-    from .sync import ida_major
+    try:
+        from .sync import ida_major
+    except ImportError:
+        ida_major = 9  # Assume IDA 9+ in standalone mode
 
     if ida_major < 9:
         return []

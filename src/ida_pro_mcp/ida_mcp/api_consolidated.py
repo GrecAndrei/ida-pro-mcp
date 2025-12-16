@@ -30,13 +30,39 @@ import ida_funcs
 import ida_kernwin
 import ida_frame
 
-from .rpc import tool, unsafe
-from .sync import idaread, idawrite, IDAError
-from .utils import (
-    parse_address, normalize_list_input, normalize_dict_list,
-    get_function, get_prototype, get_image_size, looks_like_address,
-    get_stack_frame_variables_internal, get_type_by_name,
-)
+# Support both package mode (MCP server) and standalone mode (idat daemon)
+try:
+    from .rpc import tool, unsafe
+    from .sync import idaread, idawrite, IDAError
+    from .utils import (
+        parse_address, normalize_list_input, normalize_dict_list,
+        get_function, get_prototype, get_image_size, looks_like_address,
+        get_stack_frame_variables_internal, get_type_by_name,
+    )
+except ImportError:
+    # Standalone mode - define no-op decorators
+    def tool(func):
+        return func
+    def unsafe(func):
+        return func
+    def idaread(func):
+        return func
+    def idawrite(func):
+        return func
+    class IDAError(Exception):
+        pass
+    
+    # Import utils functions directly (they should be in same directory)
+    import os
+    import sys
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    if _this_dir not in sys.path:
+        sys.path.insert(0, _this_dir)
+    from utils import (
+        parse_address, normalize_list_input, normalize_dict_list,
+        get_function, get_prototype, get_image_size, looks_like_address,
+        get_stack_frame_variables_internal, get_type_by_name,
+    )
 
 
 # ============================================================================
