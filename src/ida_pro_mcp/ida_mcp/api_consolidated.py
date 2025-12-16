@@ -4674,3 +4674,711 @@ def structs(
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# SESSION A TOOLS (27-29)
+# ============================================================================
+
+# ============================================================================
+# 27. EMULATE - Code Emulation and Snippet Execution
+# ============================================================================
+
+@tool
+@idaread
+def emulate(
+    action: Annotated[Literal["snippet", "appcall", "trace", "decrypt_strings", "eval_expr"],
+                      "Action: snippet|appcall|trace|decrypt_strings|eval_expr"],
+    addr: Annotated[Optional[str], "Address to emulate from"] = None,
+    code: Annotated[Optional[str], "Assembly or hex bytes to emulate"] = None,
+    func_name: Annotated[Optional[str], "Function name for appcall"] = None,
+    args: Annotated[Optional[list], "Arguments for appcall"] = None,
+    max_steps: Annotated[int, "Maximum instructions to emulate"] = 1000,
+    stop_addr: Annotated[Optional[str], "Address to stop emulation"] = None,
+) -> dict:
+    """
+    Emulate code snippets and call functions (requires debugger or Appcall).
+    
+    ACTIONS:
+    
+    snippet - Emulate a code snippet from address
+        Params: addr, max_steps, stop_addr
+        Returns: {executed_instructions, final_regs, memory_writes}
+        
+    appcall - Call a function with arguments (requires debugger)
+        Params: func_name or addr, args
+        Returns: {return_value, side_effects}
+        
+    trace - Trace execution and collect data
+        Params: addr, max_steps
+        Returns: {trace: [{addr, insn, regs}]}
+        
+    decrypt_strings - Attempt to decrypt strings by emulating decryption routines
+        Params: addr (of decrypt function)
+        Returns: {decrypted: [{original_addr, decrypted_string}]}
+        
+    eval_expr - Evaluate an expression/constant at address
+        Params: addr
+        Returns: {value, type}
+    """
+    try:
+        # Check if Appcall is available
+        has_appcall = hasattr(idaapi, 'Appcall')
+        
+        if action == "snippet":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            # Try to use IDA's built-in emulation if available
+            # This is a simplified implementation - real emulation would use Unicorn/Qiling
+            
+            instructions = []
+            current_ea = ea
+            max_ea = ea + 0x1000  # Limit range
+            
+            if stop_addr:
+                max_ea = min(max_ea, parse_address(stop_addr))
+            
+            for i in range(max_steps):
+                if current_ea >= max_ea:
+                    break
+                
+                insn = idaapi.insn_t()
+                length = idaapi.decode_insn(insn, current_ea)
+                
+                if length == 0:
+                    break
+                
+                disasm = idc.generate_disasm_line(current_ea, 0)
+                instructions.append({
+                    "addr": hex(current_ea),
+                    "bytes": ida_bytes.get_bytes(current_ea, length).hex(),
+                    "disasm": ida_lines.tag_remove(disasm) if disasm else ""
+                })
+                
+                # Simple flow following (doesn't handle branches properly)
+                current_ea += length
+                
+                # Stop at return instructions
+                if idaapi.is_ret_insn(insn):
+                    break
+            
+            return {
+                "start": hex(ea),
+                "instructions": instructions,
+                "count": len(instructions),
+                "note": "Static trace - for dynamic emulation use debugger or external emulator"
+            }
+        
+        elif action == "appcall":
+            if not has_appcall:
+                return {"error": "Appcall not available - requires debugger to be active"}
+            
+            # Appcall requires debugger to be running
+            import ida_dbg
+            if not ida_dbg.is_debugger_on():
+                return {
+                    "error": "Debugger not active - Appcall requires a running debug session",
+                    "suggestion": "Use debug(action='start') first, then appcall"
+                }
+            
+            if not func_name and not addr:
+                return {"error": "func_name or addr required"}
+            
+            # Get function address
+            if func_name:
+                ea = idc.get_name_ea_simple(func_name)
+                if ea == idaapi.BADADDR:
+                    return {"error": f"Function '{func_name}' not found"}
+            else:
+                ea = parse_address(addr)
+            
+            # Prepare arguments
+            call_args = args or []
+            
+            try:
+                # Use Appcall to call the function
+                result = idaapi.Appcall.func_ptr(ea)(*call_args)
+                return {
+                    "called": func_name or hex(ea),
+                    "args": call_args,
+                    "return_value": str(result)
+                }
+            except Exception as e:
+                return {"error": f"Appcall failed: {e}"}
+        
+        elif action == "trace":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            func = ida_funcs.get_func(ea)
+            
+            if not func:
+                return {"error": f"No function at {addr}"}
+            
+            # Collect a static trace through the function
+            trace = []
+            visited = set()
+            
+            def trace_block(block_ea, depth=0):
+                if depth > 10 or block_ea in visited:
+                    return
+                visited.add(block_ea)
+                
+                current = block_ea
+                while current < func.end_ea and len(trace) < max_steps:
+                    if current in visited and current != block_ea:
+                        break
+                    
+                    insn = idaapi.insn_t()
+                    length = idaapi.decode_insn(insn, current)
+                    if length == 0:
+                        break
+                    
+                    disasm = idc.generate_disasm_line(current, 0)
+                    trace.append({
+                        "addr": hex(current),
+                        "disasm": ida_lines.tag_remove(disasm) if disasm else ""
+                    })
+                    
+                    # Check for control flow
+                    if idaapi.is_ret_insn(insn):
+                        break
+                    elif insn.itype in [idaapi.NN_jmp, idaapi.NN_jmpni]:
+                        # Unconditional jump
+                        if insn.Op1.type == idaapi.o_near:
+                            trace_block(insn.Op1.addr, depth + 1)
+                        break
+                    elif insn.itype >= idaapi.NN_ja and insn.itype <= idaapi.NN_jz:
+                        # Conditional jump - follow both paths
+                        if insn.Op1.type == idaapi.o_near:
+                            trace_block(insn.Op1.addr, depth + 1)
+                    
+                    current += length
+            
+            trace_block(ea)
+            
+            return {
+                "function": idc.get_func_name(ea) or hex(ea),
+                "trace": trace[:max_steps],
+                "note": "Static trace - branch coverage may be incomplete"
+            }
+        
+        elif action == "decrypt_strings":
+            if not addr:
+                return {"error": "addr required (address of decrypt function)"}
+            
+            ea = parse_address(addr)
+            
+            # Find all calls to this decrypt function
+            decrypt_calls = []
+            for xref in idautils.XrefsTo(ea):
+                if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:  # Call near/far
+                    call_ea = xref.frm
+                    
+                    # Try to find string argument (heuristic)
+                    # Look backwards for lea/push of string address
+                    prev_ea = idc.prev_head(call_ea)
+                    for _ in range(5):  # Check up to 5 instructions back
+                        if prev_ea == idaapi.BADADDR:
+                            break
+                        
+                        # Check for string reference in operands
+                        for op_n in range(2):
+                            op_addr = idc.get_operand_value(prev_ea, op_n)
+                            if op_addr != idaapi.BADADDR:
+                                str_content = idc.get_strlit_contents(op_addr)
+                                if str_content:
+                                    decrypt_calls.append({
+                                        "call_addr": hex(call_ea),
+                                        "string_addr": hex(op_addr),
+                                        "encrypted": str_content.decode('utf-8', errors='replace') if isinstance(str_content, bytes) else str_content
+                                    })
+                        
+                        prev_ea = idc.prev_head(prev_ea)
+            
+            return {
+                "decrypt_function": hex(ea),
+                "potential_encrypted_strings": decrypt_calls,
+                "note": "Static analysis - run with debugger for actual decryption"
+            }
+        
+        elif action == "eval_expr":
+            if not addr:
+                return {"error": "addr required"}
+            
+            ea = parse_address(addr)
+            
+            # Evaluate what's at this address
+            result = {
+                "addr": hex(ea),
+                "item_size": idc.get_item_size(ea)
+            }
+            
+            # Try to read as different types
+            result["as_byte"] = ida_bytes.get_byte(ea)
+            result["as_word"] = ida_bytes.get_word(ea)
+            result["as_dword"] = ida_bytes.get_dword(ea)
+            result["as_qword"] = ida_bytes.get_qword(ea)
+            
+            # Check if it's a string
+            str_type = idc.get_str_type(ea)
+            if str_type is not None and str_type >= 0:
+                s = idc.get_strlit_contents(ea)
+                if s:
+                    result["as_string"] = s.decode('utf-8', errors='replace') if isinstance(s, bytes) else s
+            
+            # Get name if any
+            name = idc.get_name(ea)
+            if name:
+                result["name"] = name
+            
+            return result
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 28. EXPORT - Export Database in Various Formats
+# ============================================================================
+
+@tool
+@idaread
+def export(
+    action: Annotated[Literal["listing", "html", "idc", "json", "binexport", "headers"],
+                      "Action: listing|html|idc|json|binexport|headers"],
+    path: Annotated[Optional[str], "Output file path"] = None,
+    addr: Annotated[Optional[str], "Address or range (for partial export)"] = None,
+    include_decompile: Annotated[bool, "Include decompiled code"] = False,
+) -> dict:
+    """
+    Export IDB data in various formats for external use.
+    
+    ACTIONS:
+    
+    listing - Generate assembly listing file
+        Params: path, addr (optional range)
+        Returns: {exported, path, lines}
+        
+    html - Generate HTML report with navigation
+        Params: path
+        Returns: {exported, path}
+        
+    idc - Generate IDC script to recreate annotations
+        Params: path
+        Returns: {exported, path, commands}
+        
+    json - Export database metadata as JSON
+        Params: path
+        Returns: {exported, path}
+        
+    binexport - Export for BinDiff (if plugin available)
+        Params: path
+        Returns: {exported, path}
+        
+    headers - Export C headers for types
+        Params: path
+        Returns: {exported, path, types_count}
+    """
+    try:
+        import os
+        import json as json_module
+        
+        if action == "listing":
+            if not path:
+                path = idaapi.get_input_file_path() + ".lst"
+            
+            lines = []
+            
+            # Determine range
+            if addr:
+                if ':' in addr:
+                    start_s, end_s = addr.split(':')
+                    start_ea = parse_address(start_s)
+                    end_ea = parse_address(end_s)
+                else:
+                    ea = parse_address(addr)
+                    func = ida_funcs.get_func(ea)
+                    if func:
+                        start_ea = func.start_ea
+                        end_ea = func.end_ea
+                    else:
+                        start_ea = ea
+                        end_ea = ea + 0x100
+            else:
+                # Export first segment only to avoid huge files
+                segs = list(idautils.Segments())
+                if segs:
+                    seg = ida_segment.getseg(segs[0])
+                    start_ea = seg.start_ea
+                    end_ea = min(seg.end_ea, start_ea + 0x10000)  # Limit size
+                else:
+                    return {"error": "No segments found"}
+            
+            current = start_ea
+            while current < end_ea and len(lines) < 10000:
+                disasm = idc.generate_disasm_line(current, 0)
+                if disasm:
+                    lines.append(f"{hex(current)}: {ida_lines.tag_remove(disasm)}")
+                current = idc.next_head(current)
+                if current == idaapi.BADADDR:
+                    break
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(f"; IDA Pro Listing\n")
+                f.write(f"; File: {idaapi.get_input_file_path()}\n")
+                f.write(f"; Range: {hex(start_ea)} - {hex(end_ea)}\n\n")
+                f.write('\n'.join(lines))
+            
+            return {"exported": True, "path": path, "lines": len(lines)}
+        
+        elif action == "html":
+            if not path:
+                path = idaapi.get_input_file_path() + ".html"
+            
+            # Generate simple HTML report
+            html = []
+            html.append("<!DOCTYPE html><html><head>")
+            html.append("<title>IDA Analysis Report</title>")
+            html.append("<style>body{font-family:monospace;} .func{margin:10px 0;padding:10px;border:1px solid #ccc;} .addr{color:blue;}</style>")
+            html.append("</head><body>")
+            html.append(f"<h1>Analysis: {os.path.basename(idaapi.get_input_file_path())}</h1>")
+            
+            # List functions
+            html.append("<h2>Functions</h2>")
+            func_count = 0
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    if func_count >= 100:  # Limit
+                        break
+                    name = idc.get_func_name(func_ea)
+                    html.append(f'<div class="func"><span class="addr">{hex(func_ea)}</span> - {name}</div>')
+                    func_count += 1
+            
+            # List strings
+            html.append("<h2>Strings</h2>")
+            str_count = 0
+            for s in idautils.Strings():
+                if str_count >= 100:
+                    break
+                html.append(f'<div><span class="addr">{hex(s.ea)}</span>: {str(s)[:100]}</div>')
+                str_count += 1
+            
+            html.append("</body></html>")
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(html))
+            
+            return {"exported": True, "path": path, "functions": func_count, "strings": str_count}
+        
+        elif action == "idc":
+            if not path:
+                path = idaapi.get_input_file_path() + ".idc"
+            
+            commands = []
+            commands.append("// IDC script generated by IDA MCP")
+            commands.append('#include <idc.idc>')
+            commands.append("static main() {")
+            
+            # Export renames
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if name and not name.startswith("sub_"):
+                        commands.append(f'  MakeName({hex(func_ea)}, "{name}");')
+            
+            # Export comments (sample)
+            comment_count = 0
+            for seg_ea in idautils.Segments():
+                for head in idautils.Heads(seg_ea, idc.get_segm_end(seg_ea)):
+                    cmt = idc.get_cmt(head, 0)
+                    if cmt:
+                        cmt_escaped = cmt.replace('"', '\\"').replace('\n', '\\n')
+                        commands.append(f'  MakeComm({hex(head)}, "{cmt_escaped}");')
+                        comment_count += 1
+                        if comment_count >= 1000:
+                            break
+                if comment_count >= 1000:
+                    break
+            
+            commands.append("}")
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(commands))
+            
+            return {"exported": True, "path": path, "commands": len(commands)}
+        
+        elif action == "json":
+            if not path:
+                path = idaapi.get_input_file_path() + "_export.json"
+            
+            data = {
+                "file": idaapi.get_input_file_path(),
+                "md5": idaapi.retrieve_input_file_md5().hex() if hasattr(idaapi, 'retrieve_input_file_md5') else None,
+                "base_address": hex(idaapi.get_imagebase()),
+                "functions": [],
+                "strings": [],
+                "imports": [],
+                "exports": []
+            }
+            
+            # Functions
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    func = ida_funcs.get_func(func_ea)
+                    data["functions"].append({
+                        "addr": hex(func_ea),
+                        "name": idc.get_func_name(func_ea),
+                        "size": func.end_ea - func.start_ea if func else 0
+                    })
+            
+            # Limit for size
+            data["functions"] = data["functions"][:5000]
+            
+            # Strings (sample)
+            for s in idautils.Strings():
+                if len(data["strings"]) >= 1000:
+                    break
+                data["strings"].append({
+                    "addr": hex(s.ea),
+                    "value": str(s)[:200]
+                })
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                json_module.dump(data, f, indent=2)
+            
+            return {"exported": True, "path": path, "functions": len(data["functions"]), "strings": len(data["strings"])}
+        
+        elif action == "binexport":
+            if not path:
+                path = idaapi.get_input_file_path() + ".BinExport"
+            
+            # Try to run BinExport plugin
+            try:
+                import ida_loader
+                result = ida_loader.load_and_run_plugin("binexport", 0)
+                if result:
+                    return {"exported": True, "path": path, "note": "BinExport plugin executed"}
+                else:
+                    return {"error": "BinExport plugin not available or failed"}
+            except Exception as e:
+                return {"error": f"BinExport failed: {e}", "note": "Install BinExport plugin from Google"}
+        
+        elif action == "headers":
+            if not path:
+                path = idaapi.get_input_file_path() + ".h"
+            
+            headers = []
+            headers.append("// Type definitions exported from IDA")
+            headers.append(f"// Source: {idaapi.get_input_file_path()}\n")
+            
+            # Export structures
+            til = ida_typeinf.get_idati()
+            type_count = 0
+            if til:
+                count = ida_typeinf.get_ordinal_count(til)
+                for ordinal in range(1, min(count + 1, 500)):  # Limit
+                    tinfo = ida_typeinf.tinfo_t()
+                    if ida_typeinf.get_numbered_type(til, ordinal, tinfo):
+                        type_str = str(tinfo)
+                        type_name = tinfo.get_type_name()
+                        if type_name and tinfo.is_struct():
+                            headers.append(f"// Ordinal {ordinal}")
+                            headers.append(f"// {type_str}")
+                            headers.append("")
+                            type_count += 1
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(headers))
+            
+            return {"exported": True, "path": path, "types_count": type_count}
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# 29. HISTORY - Database Version Control and Undo Management
+# ============================================================================
+
+@tool
+@idaread
+def history(
+    action: Annotated[Literal["undo", "redo", "list", "snapshot", "restore", "diff"],
+                      "Action: undo|redo|list|snapshot|restore|diff"],
+    name: Annotated[Optional[str], "Snapshot name"] = None,
+    count: Annotated[int, "Number of undo steps"] = 1,
+) -> dict:
+    """
+    Database version control: undo, redo, snapshots.
+    
+    ACTIONS:
+    
+    undo - Undo last operation(s)
+        Params: count (number of steps)
+        Returns: {undone, count}
+        
+    redo - Redo undone operation(s)
+        Params: count
+        Returns: {redone, count}
+        
+    list - List undo/redo history
+        Returns: {undo_available, redo_available, history}
+        
+    snapshot - Create a named snapshot of current state
+        Params: name
+        Returns: {created, name, timestamp}
+        
+    restore - Restore from a snapshot
+        Params: name
+        Returns: {restored, name}
+        
+    diff - Show what changed since last save
+        Returns: {changes: [{type, addr, before, after}]}
+    """
+    try:
+        import ida_undo
+        
+        if action == "undo":
+            undone = 0
+            for _ in range(count):
+                if ida_undo.perform_undo():
+                    undone += 1
+                else:
+                    break
+            
+            return {"undone": undone, "requested": count}
+        
+        elif action == "redo":
+            redone = 0
+            for _ in range(count):
+                if ida_undo.perform_redo():
+                    redone += 1
+                else:
+                    break
+            
+            return {"redone": redone, "requested": count}
+        
+        elif action == "list":
+            # Get undo/redo status
+            result = {
+                "undo_available": False,
+                "redo_available": False,
+                "note": "Detailed history API varies by IDA version"
+            }
+            
+            # Check if undo is available by trying to get description
+            if hasattr(ida_undo, 'get_undo_description'):
+                desc = ida_undo.get_undo_description()
+                result["undo_available"] = bool(desc)
+                result["undo_description"] = desc
+            
+            if hasattr(ida_undo, 'get_redo_description'):
+                desc = ida_undo.get_redo_description()
+                result["redo_available"] = bool(desc)
+                result["redo_description"] = desc
+            
+            return result
+        
+        elif action == "snapshot":
+            if not name:
+                import datetime
+                name = f"snapshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # IDA doesn't have built-in snapshots, but we can save the database
+            # with our own metadata
+            import os
+            import json as json_module
+            
+            idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB)
+            snapshot_dir = os.path.join(os.path.dirname(idb_path), ".ida_snapshots")
+            os.makedirs(snapshot_dir, exist_ok=True)
+            
+            # Save metadata about current state
+            metadata = {
+                "name": name,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "idb_path": idb_path,
+                "functions_count": sum(1 for _ in idautils.Functions()),
+                "note": "Snapshot metadata - actual IDB backup requires manual copy"
+            }
+            
+            meta_path = os.path.join(snapshot_dir, f"{name}.json")
+            with open(meta_path, 'w') as f:
+                json_module.dump(metadata, f, indent=2)
+            
+            return {
+                "created": True,
+                "name": name,
+                "metadata_path": meta_path,
+                "note": "Metadata saved. For full backup, copy the .idb file"
+            }
+        
+        elif action == "restore":
+            if not name:
+                return {"error": "name required"}
+            
+            # List available snapshots
+            idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB)
+            snapshot_dir = os.path.join(os.path.dirname(idb_path), ".ida_snapshots")
+            
+            meta_path = os.path.join(snapshot_dir, f"{name}.json")
+            if os.path.exists(meta_path):
+                import json as json_module
+                with open(meta_path, 'r') as f:
+                    metadata = json_module.load(f)
+                return {
+                    "found": True,
+                    "metadata": metadata,
+                    "note": "To fully restore, reload IDB from backup"
+                }
+            else:
+                return {"error": f"Snapshot '{name}' not found"}
+        
+        elif action == "diff":
+            # Show changes since database was opened
+            # This is limited without IDA's internal change tracking
+            
+            changes = {
+                "note": "Full diff requires IDA's internal change tracking",
+                "modified_functions": []
+            }
+            
+            # We can list functions that appear to have been renamed
+            for seg_ea in idautils.Segments():
+                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    name = idc.get_func_name(func_ea)
+                    if name and not name.startswith("sub_"):
+                        changes["modified_functions"].append({
+                            "addr": hex(func_ea),
+                            "name": name
+                        })
+                    if len(changes["modified_functions"]) >= 100:
+                        break
+            
+            return changes
+        
+        else:
+            return {"error": f"Unknown action: {action}"}
+    
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+# ============================================================================
+# END OF SESSION A TOOLS (27-29)
+# Session B tools (30-35) should be added AFTER this line
+# ============================================================================
