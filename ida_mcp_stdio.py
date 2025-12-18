@@ -89,6 +89,11 @@ class SimpleLock:
         """Check if the file is currently locked."""
         return os.path.exists(self.lock_file)
     
+    def is_owned_by_self(self) -> bool:
+        """True if the lock exists and is held by this PID."""
+        info = self.get_owner_info()
+        return bool(info and info.get("pid") == self.pid)
+    
     def _is_stale(self) -> bool:
         """Check if lock is stale (older than 5 minutes)."""
         try:
@@ -341,15 +346,15 @@ For switch/close: session_id.
 Returns session info with lock status.""",
 
     "idb": """IDB database metadata and navigation.
-Actions: meta (get file path, module name, base address, size, MD5/SHA256 hashes), segments (list all binary segments with permissions), cursor (get current address in IDA), entrypoints (list program entry points).
+Actions: meta (get file path, module name, base address, size, MD5/SHA256 hashes), segments (list all binary segments with permissions), cursor (get current address in IDA), entrypoints (list program [...]
 Required: idb (path to IDB or binary file), action (one of the above).""",
 
     "code": """Decompilation, disassembly, and code flow analysis.
-Actions: decompile (get Hex-Rays pseudocode), disassemble (get assembly), xrefs_to (find references TO an address), xrefs_from (find references FROM an address), basic_blocks (get control flow blocks), graph (get call graph).
+Actions: decompile (get Hex-Rays pseudocode), disassemble (get assembly), xrefs_to (find references TO an address), xrefs_from (find references FROM an address), basic_blocks (get control flow blocks)[...]
 Required: idb, action. Optional: addrs (address or list of addresses), depth (for graph traversal).""",
 
     "data": """List and query binary data structures.
-Actions: functions (list all functions with addr/name/size), globals (list global variables), strings (list all strings with addresses), imports (list imported functions), exports (list exported symbols).
+Actions: functions (list all functions with addr/name/size), globals (list global variables), strings (list all strings with addresses), imports (list imported functions), exports (list exported symbo[...]
 Required: idb, action. Optional: query (filter pattern), offset/count (pagination).""",
 
     "search": """Search for patterns, bytes, and references in the binary.
@@ -357,7 +362,7 @@ Actions: bytes (search hex pattern like '90 90 ??'), string (search text), immed
 Required: idb, action. Optional: query (search pattern), start/end (address range).""",
 
     "types": """Manage type information, structures, and enums.
-Actions: list (list all local types), get (get type definition), define (create new type from C declaration), get_members (get struct fields), apply (apply type to address), search_structs (find structs by field name).
+Actions: list (list all local types), get (get type definition), define (create new type from C declaration), get_members (get struct fields), apply (apply type to address), search_structs (find struc[...]
 Required: idb, action. Optional: name (type name), decl (C declaration), addr (for apply).""",
 
     "memory": """Read and write raw memory at addresses.
@@ -373,7 +378,7 @@ Actions: python (execute Python code in IDA), idc (run IDC script), load_sig (lo
 Required: idb, action. For python/idc: code. For load_sig: path or name.""",
 
     "debug": """Debugger control: process state, breakpoints, registers, memory.
-Actions: start (launch debugger), stop (terminate process), continue (resume execution), step (single step), step_into, step_over, run_to (run to address), get_regs (get registers), set_reg (set register), read_mem (read debugger memory), write_mem (write debugger memory), add_bp (add breakpoint), del_bp (delete breakpoint), list_bp (list breakpoints), enable_bp (enable/disable breakpoint), threads (list threads).
+Actions: start (launch debugger), stop (terminate process), continue (resume execution), step (single step), step_into, step_over, run_to (run to address), get_regs (get registers), set_reg (set regis[...]
 Required: idb, action. Optional: addr, reg, value, size, data, enabled, tid.""",
 
     "funcs": """Create and modify function definitions.
@@ -405,7 +410,7 @@ Actions: make_data (define data at address), make_array (create array), make_str
 Required: idb, action, addr. Optional: size, count (for array), str_type (string encoding).""",
 
     "agent": """High-level analysis helpers for comprehensive exploration.
-Actions: analyze_function (get full function analysis with decompilation, xrefs, strings), explore_address (get context around an address), find_references (trace data/code references), search_all (universal search across names, strings, bytes).
+Actions: analyze_function (get full function analysis with decompilation, xrefs, strings), explore_address (get context around an address), find_references (trace data/code references), search_all (un[...]
 Required: idb, action. Optional: addr, query, depth.""",
 
     "microcode": """Access Hex-Rays microcode intermediate representation.
@@ -421,11 +426,11 @@ Actions: rename (batch rename from list), comment (batch add comments), set_type
 Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path.""",
 
     "ctree": """Access Hex-Rays CTree (decompiler AST) for deep code analysis.
-Actions: get (get full CTree structure), traverse (tree structure with depth), find_calls (find function calls with optional filter), find_vars (list local variables/args), find_strings (string references in function), find_conditions (if/while/for statements).
+Actions: get (get full CTree structure), traverse (tree structure with depth), find_calls (find function calls with optional filter), find_vars (list local variables/args), find_strings (string refere[...]
 Required: idb, action, addr (function address). Optional: query (filter for find_calls), depth (traversal depth).""",
 
     "diff": """Binary comparison and diffing for patch analysis.
-Actions: functions (compare two functions by decompilation), bytes (compare byte ranges), signatures (find similar functions by code signature), names (list all named items for export), summary (database statistics for comparison).
+Actions: functions (compare two functions by decompilation), bytes (compare byte ranges), signatures (find similar functions by code signature), names (list all named items for export), summary (datab[...]
 Required: idb, action. For functions: addr1, addr2. For bytes: addr1 (start:end), addr2. For signatures: addr1, threshold (0.0-1.0).""",
 
     "lumina": """Interact with Hex-Rays Lumina cloud for function recognition.
@@ -445,31 +450,31 @@ Actions: recover (recover struct from function usage), analyze_usage (analyze me
 Required: idb, action. For recover/apply: addr. For create: decl (C code). For apply: name (struct name).""",
 
     "strings_xref": """Advanced string analysis with xref chains and encoding detection.
-Actions: analyze (deep analysis of string at address), xref_chain (trace string references through callers), detect_encoded (find encrypted/encoded strings), find_format (find format strings with args), clusters (group strings by calling function).
+Actions: analyze (deep analysis of string at address), xref_chain (trace string references through callers), detect_encoded (find encrypted/encoded strings), find_format (find format strings with args[...]
 Required: idb, action. For analyze/xref_chain: addr. Optional: query, depth.""",
 
     "entropy": """Entropy analysis for detecting packed/encrypted regions.
-Actions: section (entropy for each segment), region (entropy for address range), packed_detect (detect packed sections), crypto_detect (find crypto constants/S-boxes), compare (compare entropy of two regions).
+Actions: section (entropy for each segment), region (entropy for address range), packed_detect (detect packed sections), crypto_detect (find crypto constants/S-boxes), compare (compare entropy of two [...]
 Required: idb, action. For region/compare: addr. Optional: size, threshold, end_addr.""",
 
     "imports_deep": """Deep import analysis with thunk resolution and delay imports.
-Actions: thunks (resolve import thunks), delay (list delay-loaded imports), forwarded (detect forwarded exports), ordinal (resolve ordinal imports), api_sets (resolve API Set redirections), resolve (resolve import at address).
+Actions: thunks (resolve import thunks), delay (list delay-loaded imports), forwarded (detect forwarded exports), ordinal (resolve ordinal imports), api_sets (resolve API Set redirections), resolve (r[...]
 Required: idb, action. Optional: query (DLL filter), addr.""",
 
     "comments_ai": """AI-optimized comment management with structured formats.
-Actions: get_context (all comments around address), set_structured (set formatted comment), bulk_set (set multiple from JSON), export_md (export to markdown), import_md (import from markdown), summary (commenting coverage stats).
+Actions: get_context (all comments around address), set_structured (set formatted comment), bulk_set (set multiple from JSON), export_md (export to markdown), import_md (import from markdown), summary[...]
 Required: idb, action. For set: addr, text. For bulk: items (JSON). For export/import: path.""",
 
     "nav": """Navigation helpers for bookmarks and interesting addresses.
-Actions: bookmarks (list marked positions), add_bookmark (add mark), del_bookmark (remove mark), goto (get address context), history (navigation history), cursor (current position), interesting (find crypto/packer/anti-analysis).
+Actions: bookmarks (list marked positions), add_bookmark (add mark), del_bookmark (remove mark), goto (get address context), history (navigation history), cursor (current position), interesting (find [...]
 Required: idb, action. For bookmark ops: addr, slot. For goto: addr.""",
 
     "colorize": """Code region coloring and highlighting.
-Actions: set_func (color entire function), set_range (color address range), set_insn (color single instruction), get (get color at address), clear (remove coloring), palette (get color names), highlight_pattern (highlight byte pattern matches).
+Actions: set_func (color entire function), set_range (color address range), set_insn (color single instruction), get (get color at address), clear (remove coloring), palette (get color names), highlig[...]
 Required: idb, action. For set ops: addr, color. For range: end_addr. For pattern: pattern.""",
 
     "emulate": """Code emulation and snippet execution.
-Actions: snippet (trace code from address), appcall (call function with args - needs debugger), trace (static trace through function), decrypt_strings (find encrypted string patterns), eval_expr (evaluate value at address).
+Actions: snippet (trace code from address), appcall (call function with args - needs debugger), trace (static trace through function), decrypt_strings (find encrypted string patterns), eval_expr (eval[...]
 Required: idb, action. For snippet/trace: addr, max_steps. For appcall: func_name or addr, args.""",
 
     "export": """Export IDB data in various formats.
@@ -481,15 +486,15 @@ Actions: undo (undo operations), redo (redo operations), list (show undo/redo st
 Required: idb, action. For undo/redo: count. For snapshot/restore: name.""",
 
     "trace_analysis": """Post-mortem execution trace analysis.
-Actions: import_trace (load trace file), analyze_coverage (calculate coverage from trace), find_loops (detect hot loops), extract_api_calls (API call sequence), basic_blocks_hit (per-function block coverage).
+Actions: import_trace (load trace file), analyze_coverage (calculate coverage from trace), find_loops (detect hot loops), extract_api_calls (API call sequence), basic_blocks_hit (per-function block co[...]
 Required: idb, action. For most actions: path or trace_data (list of addresses).""",
 
     "hooks": """API hook suggestions and script generation.
-Actions: suggest (category-based hook suggestions), generate_frida (Frida JS script), generate_detours (MS Detours C++ template), find_targets (interesting hook points), inline_hooks (trampoline points).
+Actions: suggest (category-based hook suggestions), generate_frida (Frida JS script), generate_detours (MS Detours C++ template), find_targets (interesting hook points), inline_hooks (trampoline point[...]
 Required: idb, action. For suggest: category (network|file|crypto|registry|process). For generate: addr or func_name.""",
 
     "taint": """Static taint/data flow analysis using Hex-Rays.
-Actions: trace_arg (follow argument flow), trace_return (find return value usage), find_sinks (reachable dangerous functions), data_flow (function inputs/outputs), slice (backward slice from instruction).
+Actions: trace_arg (follow argument flow), trace_return (find return value usage), find_sinks (reachable dangerous functions), data_flow (function inputs/outputs), slice (backward slice from instructi[...]
 Required: idb, action, addr. For trace_arg: arg_num. For find_sinks: depth.""",
 
     "coverage": """Code coverage import and analysis.
@@ -580,10 +585,11 @@ class IDAMCPServer:
             if not os.path.exists(binary_path):
                 return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {binary_path}")
             
-            # Check if use_existing is locked
             if use_existing:
+                if not os.path.exists(use_existing):
+                    return make_error(MCPError.FILE_NOT_FOUND, f"IDB not found: {use_existing}")
                 lock = SimpleLock(use_existing)
-                if lock.is_locked():
+                if lock.is_locked() and not lock.is_owned_by_self():
                     owner = lock.get_owner_info()
                     return make_error(
                         MCPError.FILE_LOCKED,
@@ -649,29 +655,56 @@ class IDAMCPServer:
         """Execute a tool from api_consolidated.py on an IDB file."""
         start_time = time.time()
         
-        # Find or create IDB
         target = idb_path
-        if not idb_path.endswith(('.i64', '.idb')):
-            existing = self._check_idb_exists(idb_path)
+        binary_for_new = None
+        
+        # If not an IDB path, try to find an existing one
+        if not target.endswith(('.i64', '.idb')):
+            existing = self._check_idb_exists(target)
             if existing:
                 target = existing
         
+        # If target doesn't exist, see if we are in a session that owns it
         if not os.path.exists(target):
-            return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {target}")
+            if self.current_session and self.current_session.idb_path == idb_path:
+                binary_for_new = self.current_session.binary_path
+                if not os.path.exists(binary_for_new):
+                    return make_error(MCPError.FILE_NOT_FOUND, f"Binary not found: {binary_for_new}")
+                # Ensure directory exists for session IDB
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+            else:
+                return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {target}")
         
         if not self.idat_exe:
             return make_error(MCPError.IDA_NOT_FOUND, "idat.exe not found. Set IDADIR environment variable.")
         
-        # Acquire lock for this IDB
         lock = SimpleLock(target)
-        if lock.is_locked() and not lock.acquire(timeout=30):
-            owner = lock.get_owner_info()
-            return make_error(
-                MCPError.FILE_LOCKED,
-                f"IDB is locked by another process",
-                recoverable=True,
-                details={"owner": owner}
-            )
+        acquired_here = False
+        # Locking policy:
+        # - If already locked by us, proceed.
+        # - If unlocked, acquire.
+        # - If locked by others, try acquire (wait); else error.
+        if lock.is_locked():
+            if not lock.is_owned_by_self():
+                if not lock.acquire(timeout=30):
+                    owner = lock.get_owner_info()
+                    return make_error(
+                        MCPError.FILE_LOCKED,
+                        f"IDB is locked by another process",
+                        recoverable=True,
+                        details={"owner": owner}
+                    )
+                acquired_here = True
+        else:
+            if not lock.acquire(timeout=30):
+                owner = lock.get_owner_info()
+                return make_error(
+                    MCPError.FILE_LOCKED,
+                    f"IDB is locked by another process",
+                    recoverable=True,
+                    details={"owner": owner}
+                )
+            acquired_here = True
         
         try:
             # Escape paths for Windows
@@ -711,7 +744,10 @@ ida_pro.qexit(0)
             with open(script_file, 'w', encoding='utf-8') as f:
                 f.write(script)
             
-            cmd = [self.idat_exe, "-A", f"-S{script_file}", target]
+            if binary_for_new:
+                cmd = [self.idat_exe, "-A", f"-S{script_file}", f"-o{target}", binary_for_new]
+            else:
+                cmd = [self.idat_exe, "-A", f"-S{script_file}", target]
             
             proc = subprocess.run(cmd, capture_output=True, timeout=120)
             
@@ -751,8 +787,9 @@ ida_pro.qexit(0)
                         os.remove(f)
                 except:
                     pass
-            # Release lock if we acquired it
-            lock.release()
+            # Release lock only if we acquired it here
+            if acquired_here:
+                lock.release()
     
     def get_tools_list(self) -> list:
         """Return list of available tools in MCP format."""
@@ -880,13 +917,17 @@ ida_pro.qexit(0)
     
     def run(self):
         """Main event loop - read from stdin, write to stdout."""
-        # Use binary mode to avoid Windows encoding issues
-        import msvcrt
-        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
-        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
-        
         stdin = sys.stdin.buffer
         stdout = sys.stdout.buffer
+        
+        # Windows-only binary mode tweak; skip on non-Windows
+        if os.name == "nt":
+            try:
+                import msvcrt
+                msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+                msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
+            except Exception:
+                pass
         
         while True:
             try:
@@ -894,7 +935,11 @@ ida_pro.qexit(0)
                 if not line:
                     break
                 
-                line = line.decode('utf-8').strip()
+                try:
+                    line = line.decode('utf-8').strip()
+                except Exception:
+                    continue
+                
                 if not line:
                     continue
                 
