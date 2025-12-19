@@ -193,6 +193,7 @@ def code(
         "find_paths", "strings_in_func"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
+    addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,  # Alias for compatibility
     max_items: Annotated[int, "Max items to return"] = 1000,
     max_depth: Annotated[int, "Max depth for callgraph/find_paths"] = 5,
     format: Annotated[Literal["json", "c_header", "prototypes"], "Export format"] = "json",
@@ -262,8 +263,11 @@ def code(
         Example: code(action="strings_in_func", addrs="main")
     """
     try:
+        # Support both addr (singular) and addrs (plural) for compatibility
+        if not addrs and addr:
+            addrs = addr
         if not addrs:
-            return {"error": "addrs required"}
+            return {"error": "addrs or addr parameter required"}
         addrs = normalize_list_input(addrs)
         results = []
         
@@ -273,7 +277,19 @@ def code(
             if action == "decompile":
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    # Find nearest function for better error
+                    prev_func = idaapi.get_prev_func(ea)
+                    next_func = idaapi.get_next_func(ea)
+                    suggestion = ""
+                    if prev_func:
+                        suggestion = f" Try {hex(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
+                    elif next_func:
+                        suggestion = f" Try {hex(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
+                    results.append({
+                        "addr": addr, 
+                        "error": f"No function at {addr}.{suggestion}",
+                        "hint": "Use 'data functions' to list all functions, or 'funcs create' to define a new function"
+                    })
                     continue
                 try:
                     cfunc = ida_hexrays.decompile(func.start_ea)
@@ -283,12 +299,27 @@ def code(
                         "code": str(cfunc)
                     })
                 except Exception as e:
-                    results.append({"addr": addr, "error": str(e)})
+                    results.append({"addr": addr, "error": str(e), "hint": "Hex-Rays decompiler may have failed. Try 'disasm' action instead."})
             
             elif action == "disasm":
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    # Disassemble raw bytes even without function
+                    insns = []
+                    curr = ea
+                    for _ in range(50):  # Show 50 lines anyway
+                        line = idc.generate_disasm_line(curr, 0)
+                        if line:
+                            insns.append({"addr": hex(curr), "text": line})
+                        next_ea = idc.next_head(curr, ea + 0x1000)
+                        if next_ea == idaapi.BADADDR or next_ea <= curr:
+                            break
+                        curr = next_ea
+                    results.append({
+                        "addr": addr, 
+                        "warning": "Address is not within a defined function. Showing raw disassembly.",
+                        "instructions": insns
+                    })
                     continue
                 insns = []
                 curr = func.start_ea
@@ -563,7 +594,10 @@ def data(
                         funcs.append({"addr": hex(ea), "name": name, "size": hex(fn.end_ea - fn.start_ea)})
             total = len(funcs)
             funcs = funcs[offset:offset+count] if count else funcs[offset:]
-            return {"functions": funcs, "total": total}
+            result = {"functions": funcs, "total": total}
+            if total == 0:
+                result["warning"] = "No functions found. Binary may not be auto-analyzed yet. Try loading IDB in IDA GUI first, or the binary has no recognized code."
+            return result
         
         elif action == "globals":
             globs = []
@@ -585,8 +619,21 @@ def data(
                         content = idc.get_strlit_contents(sc.ea)
                         if content:
                             s = content.decode("utf-8", errors="replace")
-                            if not query or query.lower() in s.lower():
-                                strings.append({"addr": hex(sc.ea), "string": s, "length": sc.length})
+                            # Filter out garbage:
+                            # 1. Min 8 chars (real strings are usually longer)
+                            # 2. Check for meaningful content
+                            # 3. Skip strings in executable sections
+                            if len(s) >= 8:
+                                # Skip strings in code sections (likely misidentified bytes)
+                                seg = idaapi.getseg(sc.ea)
+                                if seg and (seg.perm & idaapi.SEGPERM_EXEC):
+                                    continue  # Skip executable segments
+                                
+                                # Check for meaningful content (letters + common chars)
+                                alnum_count = sum(1 for c in s if c.isalnum() or c in ' ._-/:=()[]{}\\n\\t')
+                                if alnum_count / len(s) >= 0.7:  # At least 70% meaningful
+                                    if not query or query.lower() in s.lower():
+                                        strings.append({"addr": hex(sc.ea), "string": s[:200], "length": sc.length})  # Truncate long strings
                     except:
                         pass
             total = len(strings)
