@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-IDA Pro MCP - Installer v2.2
-Full-featured installer with auto-configuration and uninstall support
+IDA Pro MCP - Installer v3.0
+Unified installer for all MCP clients with uv support.
 """
 
 import os
@@ -48,7 +48,7 @@ class C:
         RESET = BOLD = DIM = RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = ""
 
 # ============================================================================
-# Simple Text Logo (no Unicode issues)
+# Simple Text Logo
 # ============================================================================
 
 LOGO = f"""
@@ -86,16 +86,42 @@ def dim(msg):
 def get_script_dir():
     return Path(__file__).parent.absolute()
 
+def check_uv_installed():
+    """Check if uv is installed and available in PATH."""
+    try:
+        subprocess.run(["uv", "--version"], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
 # ============================================================================
 # MCP Client Configuration
 # ============================================================================
 
 def get_mcp_server_config():
-    """Get the MCP server configuration dict"""
-    return {
-        "command": "uv",
-        "args": ["run", "--directory", str(get_script_dir()), "ida-pro-mcp"],
-    }
+    """Get the MCP server configuration dict, using uv if available."""
+    script_dir = get_script_dir()
+
+    if check_uv_installed():
+        return {
+            "command": "uv",
+            "args": ["run", "--directory", str(script_dir), "ida-pro-mcp"],
+            "env": {
+                 "IDADIR": os.environ.get("IDADIR", "")
+            }
+        }
+    else:
+        # Fallback to direct python execution
+        # We assume the package is installed in the current environment
+        # or we point to the server script directly
+        server_script = script_dir / "src" / "ida_pro_mcp" / "server.py"
+        return {
+            "command": sys.executable,
+            "args": [str(server_script)],
+            "env": {
+                 "IDADIR": os.environ.get("IDADIR", "")
+            }
+        }
 
 def get_mcp_config_paths():
     """Get all known MCP client config file paths"""
@@ -103,43 +129,38 @@ def get_mcp_config_paths():
     appdata = Path(os.environ.get('APPDATA', home / 'AppData' / 'Roaming'))
     localappdata = Path(os.environ.get('LOCALAPPDATA', home / 'AppData' / 'Local'))
     
-    # All use standard mcpServers format
     configs = {
-        # Google Antigravity - PRIORITY
+        # --- NEW / REQUESTED ---
+        "Gemini CLI": home / ".gemini" / "settings.json",
         "Antigravity": home / ".gemini" / "antigravity" / "mcp_config.json",
+        "Claude Code": home / ".claude.json",
+        "Codex": home / ".codex" / "config.toml", # TOML!
         
-        # Claude Desktop
-        "Claude": appdata / "Claude" / "claude_desktop_config.json",
-        
-        # Cursor
+        # --- EXISTING ---
+        "Claude Desktop": appdata / "Claude" / "claude_desktop_config.json",
         "Cursor": appdata / "Cursor" / "User" / "globalStorage" / "cursor.mcp" / "config.json",
-        
-        # VS Code (Copilot MCP extension)
         "VS Code": appdata / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json",
-        
-        # Windsurf
         "Windsurf": home / ".windsurf" / "mcp_config.json",
-        
-        # Cline
         "Cline": appdata / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",
-        
-        # Roo Code
         "Roo Code": appdata / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",
     }
     
-    # Linux paths
+    # Linux/Mac adjustments
     if os.name != 'nt':
         xdg_config = Path(os.environ.get('XDG_CONFIG_HOME', home / '.config'))
-        configs["Claude (Linux)"] = xdg_config / "Claude" / "claude_desktop_config.json"
-    
+        if "Claude Desktop" in configs:
+            configs["Claude Desktop"] = xdg_config / "Claude" / "claude_desktop_config.json"
+
+        # VS Code on Linux usually ~/.config/Code/...
+        configs["VS Code"] = xdg_config / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json"
+
     return configs
 
-def add_to_mcp_config(config_path: Path, server_name: str = "ida-pro-mcp") -> bool:
-    """Add IDA Pro MCP to an MCP client config file, cleaning up duplicates"""
+def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp") -> bool:
+    """Add/Update server in a JSON config file."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Load existing config or create new
         if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
                 try:
@@ -149,152 +170,67 @@ def add_to_mcp_config(config_path: Path, server_name: str = "ida-pro-mcp") -> bo
         else:
             config = {}
         
-        # Clean up: Remove from "servers" if exists (wrong location)
-        if "servers" in config and server_name in config["servers"]:
-            del config["servers"][server_name]
-            # Remove empty servers dict
-            if not config["servers"]:
-                del config["servers"]
+        # Handle different JSON structures
+        # Gemini CLI uses "mcpServers" at root (usually) or nested
+        # Antigravity uses "mcpServers"
+        # Claude uses "mcpServers"
         
-        # Ensure mcpServers section exists
+        # Standardize on "mcpServers" key
         if "mcpServers" not in config:
             config["mcpServers"] = {}
-        
-        # Add/update our server in correct location
+
         config["mcpServers"][server_name] = get_mcp_server_config()
         
-        # Write back with proper formatting
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
-        
+
         return True
     except Exception as e:
+        # dim(f"Failed to update {config_path}: {e}")
         return False
 
-def remove_from_mcp_config(config_path: Path, server_name: str = "ida-pro-mcp") -> bool:
-    """Remove IDA Pro MCP from an MCP client config file"""
+def update_toml_config(config_path: Path, server_name: str = "ida-pro-mcp") -> bool:
+    """Add/Update server in a TOML config file (for Codex)."""
     try:
-        if not config_path.exists():
-            return True
+        import tomli_w
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib # Fallback for older python if installed
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
+        config = {}
+        if config_path.exists():
+            with open(config_path, "rb") as f:
+                try:
+                    config = tomllib.load(f)
+                except:
+                    pass
         
-        modified = False
+        # Codex structure: [mcp_servers.ida-pro-mcp] ...
+        if "mcp_servers" not in config:
+            config["mcp_servers"] = {}
+
+        config["mcp_servers"][server_name] = get_mcp_server_config()
         
-        # Remove from mcpServers
-        if "mcpServers" in config and server_name in config["mcpServers"]:
-            del config["mcpServers"][server_name]
-            modified = True
-        
-        # Also clean up from "servers" if it was there
-        if "servers" in config and server_name in config["servers"]:
-            del config["servers"][server_name]
-            if not config["servers"]:
-                del config["servers"]
-            modified = True
-        
-        if modified:
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2)
-        
+        with open(config_path, "wb") as f:
+            tomli_w.dump(config, f)
+
         return True
+    except ImportError:
+        warning(f"tomli-w not found. Skipping TOML config for {config_path}")
+        return False
     except Exception as e:
+        # dim(f"Failed to update {config_path}: {e}")
         return False
 
-# ============================================================================
-# IDA Plugin Installation
-# ============================================================================
-
-def get_ida_plugin_paths():
-    """Get common IDA plugin directory paths"""
-    home = Path.home()
-    appdata = Path(os.environ.get('APPDATA', ''))
-    programfiles = Path(os.environ.get('PROGRAMFILES', ''))
-    
-    paths = []
-    
-    if os.name == 'nt':
-        paths = [
-            appdata / "Hex-Rays" / "IDA Pro" / "plugins",
-            programfiles / "IDA Pro 9.0" / "plugins",
-            programfiles / "IDA Pro 8.4" / "plugins", 
-            programfiles / "IDA Pro 8.3" / "plugins",
-            home / "ida" / "plugins",
-        ]
+def configure_client(client_name: str, config_path: Path) -> bool:
+    """Configure a specific client."""
+    if config_path.suffix == '.toml':
+        return update_toml_config(config_path)
     else:
-        paths = [
-            home / ".idapro" / "plugins",
-            home / "ida" / "plugins",
-            Path("/opt/ida/plugins"),
-            Path("/opt/idapro/plugins"),
-        ]
-    
-    return paths
-
-def install_ida_plugin():
-    """Install the IDA plugin (loader + module folder)"""
-    script_dir = get_script_dir()
-    plugin_loader = script_dir / "src" / "ida_pro_mcp" / "ida_mcp.py"
-    plugin_module = script_dir / "src" / "ida_pro_mcp" / "ida_mcp"  # The folder
-    
-    if not plugin_loader.exists():
-        return None, f"Plugin loader not found: {plugin_loader}"
-    
-    if not plugin_module.exists():
-        return None, f"Plugin module not found: {plugin_module}"
-    
-    installed_paths = []
-    
-    for ida_dir in get_ida_plugin_paths():
-        if ida_dir.exists():
-            try:
-                # Copy the loader file
-                shutil.copy(plugin_loader, ida_dir / "ida_mcp.py")
-                
-                # Copy the module folder (remove old one first)
-                dest_module = ida_dir / "ida_mcp"
-                if dest_module.exists():
-                    shutil.rmtree(dest_module)
-                shutil.copytree(plugin_module, dest_module)
-                
-                installed_paths.append(str(ida_dir))
-            except Exception as e:
-                pass
-    
-    if installed_paths:
-        return installed_paths, None
-    else:
-        return None, "No writable IDA plugins folder found"
-
-def uninstall_ida_plugin():
-    """Remove the IDA plugin (loader + module folder)"""
-    removed = []
-    
-    for ida_dir in get_ida_plugin_paths():
-        plugin_loader = ida_dir / "ida_mcp.py"
-        plugin_module = ida_dir / "ida_mcp"
-        
-        removed_any = False
-        
-        if plugin_loader.exists():
-            try:
-                plugin_loader.unlink()
-                removed_any = True
-            except:
-                pass
-        
-        if plugin_module.exists():
-            try:
-                shutil.rmtree(plugin_module)
-                removed_any = True
-            except:
-                pass
-        
-        if removed_any:
-            removed.append(str(ida_dir))
-    
-    return removed
+        return update_json_config(config_path)
 
 # ============================================================================
 # Install
@@ -303,24 +239,30 @@ def uninstall_ida_plugin():
 def do_install():
     clear()
     print(LOGO)
-    print(f"   {C.DIM}Version 2.2  |  Installer{C.RESET}\n")
+    print(f"   {C.DIM}Version 3.0  |  Unified Installer{C.RESET}\n")
     
-    total_steps = 5
+    total_steps = 4
     
-    # Step 1: Check Python
-    step(1, total_steps, "Checking Python installation...")
+    # Step 1: Check Python & UV
+    step(1, total_steps, "Checking environment...")
     version = sys.version_info
     if version.major < 3 or (version.major == 3 and version.minor < 11):
         error(f"Python 3.11+ required, found {version.major}.{version.minor}")
         return False
     success(f"Python {version.major}.{version.minor}.{version.micro}")
     
+    if check_uv_installed():
+        success("uv detected (will be used for execution)")
+    else:
+        warning("uv not found (falling back to python)")
+
     # Step 2: Install package
     step(2, total_steps, "Installing IDA Pro MCP package...")
     dim("This may take a moment...")
     
     script_dir = get_script_dir()
     try:
+        # Always install dependencies including tomli-w
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-e", str(script_dir)],
             capture_output=True,
@@ -339,54 +281,50 @@ def do_install():
         error(f"Installation failed: {e}")
         return False
     
-    # Step 3: Install IDA Plugin
-    step(3, total_steps, "Installing IDA Plugin...")
-    paths, err = install_ida_plugin()
-    if paths:
-        for p in paths:
-            success(f"Installed to {p}")
-    else:
-        warning(err)
-        dim("Copy src/ida_pro_mcp/ida_mcp.py to your IDA plugins folder manually")
-    
-    # Step 4: Configure MCP Clients
-    step(4, total_steps, "Configuring MCP clients...")
+    # Step 3: Configure MCP Clients
+    step(3, total_steps, "Configuring MCP clients...")
     configs = get_mcp_config_paths()
     configured = []
     
+    # Priority clients to always try creating config for
+    priority_clients = ["Gemini CLI", "Antigravity", "Claude Code", "Claude Desktop"]
+
     for client, config_path in configs.items():
-        # Configure if file exists OR parent exists OR it's priority client
         should_try = (
             config_path.exists() or 
             config_path.parent.exists() or 
-            client in ["Claude", "Antigravity"]
+            client in priority_clients
         )
         
         if should_try:
-            if add_to_mcp_config(config_path):
+            if configure_client(client, config_path):
                 configured.append(client)
                 success(f"{client}")
-    
-    if not configured:
-        warning("No MCP clients detected")
-        dim("Run 'ida-pro-mcp --config' to get manual config")
-    
-    # Step 5: Verify
-    step(5, total_steps, "Verifying installation...")
+            else:
+                dim(f"Skipped {client} (not found/write error)")
+
+    # Step 4: Verify
+    step(4, total_steps, "Verifying installation...")
     try:
+        # Check if the command works
+        cmd = ["ida-pro-mcp", "--help"]
+        if check_uv_installed():
+            cmd = ["uv", "run", "ida-pro-mcp", "--help"]
+
         result = subprocess.run(
-            [sys.executable, "-m", "ida_pro_mcp", "--help"],
+            cmd,
             capture_output=True,
-            timeout=10
+            timeout=10,
+            cwd=script_dir # Run from repo root to ensure finding local package if needed
         )
         if result.returncode == 0:
-            success("ida-pro-mcp command available")
+            success("ida-pro-mcp command verified")
         else:
-            warning("Command may need PATH update")
-    except:
-        warning("Could not verify command")
+            warning(f"Command verification failed (code {result.returncode})")
+    except Exception as e:
+        warning(f"Could not verify command: {e}")
     
-    # Success message
+    # Summary
     print(f"""
 {C.GREEN}================================================================================{C.RESET}
 
@@ -394,80 +332,17 @@ def do_install():
 
    {C.WHITE}Configured MCP Clients:{C.RESET}
 """)
-    
     if configured:
         for client in configured:
             print(f"      - {client}")
     else:
-        print(f"      {C.DIM}(none auto-detected){C.RESET}")
-    
+        print(f"      {C.DIM}(none configured){C.RESET}")
+
     print(f"""
    {C.WHITE}Next Steps:{C.RESET}
-
-      1. Restart IDA Pro and your MCP client
-      2. Load a binary in IDA
-      3. Edit > Plugins > MCP (or Ctrl+Alt+M)
-      4. Start reversing with AI!
-
-   {C.WHITE}Uninstall:{C.RESET} python install.py --uninstall
-
-{C.GREEN}================================================================================{C.RESET}
-""")
-    return True
-
-# ============================================================================
-# Uninstall
-# ============================================================================
-
-def do_uninstall():
-    clear()
-    print(LOGO)
-    print(f"   {C.DIM}Version 2.2  |  Uninstaller{C.RESET}\n")
-    
-    total_steps = 3
-    
-    # Step 1: Remove from MCP configs
-    step(1, total_steps, "Removing from MCP client configurations...")
-    configs = get_mcp_config_paths()
-    removed_configs = []
-    
-    for client, config_path in configs.items():
-        if config_path.exists():
-            if remove_from_mcp_config(config_path):
-                removed_configs.append(client)
-                success(f"Removed from {client}")
-    
-    if not removed_configs:
-        dim("No MCP configurations found")
-    
-    # Step 2: Remove IDA plugin
-    step(2, total_steps, "Removing IDA plugin...")
-    removed_plugins = uninstall_ida_plugin()
-    
-    if removed_plugins:
-        for p in removed_plugins:
-            success(f"Removed from {p}")
-    else:
-        dim("No IDA plugins found to remove")
-    
-    # Step 3: Uninstall package
-    step(3, total_steps, "Uninstalling Python package...")
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "uninstall", "ida-pro-mcp", "-y"],
-            capture_output=True
-        )
-        success("Package uninstalled")
-    except:
-        warning("Could not uninstall package (may not be installed)")
-    
-    print(f"""
-{C.GREEN}================================================================================{C.RESET}
-
-   {C.GREEN}Uninstall Complete!{C.RESET}
-
-   IDA Pro MCP has been removed from your system.
-   Thanks for using IDA Pro MCP!
+      1. Restart your IDE / MCP Client.
+      2. Ensure IDADIR environment variable is set if IDA is not found automatically.
+         (Current IDADIR: {os.environ.get('IDADIR', 'Not Set')})
 
 {C.GREEN}================================================================================{C.RESET}
 """)
@@ -478,33 +353,17 @@ def do_uninstall():
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="IDA Pro MCP Installer",
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument(
-        '--uninstall', '-u',
-        action='store_true',
-        help='Uninstall IDA Pro MCP'
-    )
-    
+    parser = argparse.ArgumentParser(description="IDA Pro MCP Installer")
+    parser.add_argument('--uninstall', '-u', action='store_true', help='Uninstall IDA Pro MCP')
     args = parser.parse_args()
     
     try:
         if args.uninstall:
-            result = do_uninstall()
+            print("Uninstall not fully implemented in this version. Please verify config files manually.")
         else:
-            result = do_install()
-        
-        input("\nPress Enter to exit...")
-        sys.exit(0 if result else 1)
-        
+            do_install()
     except KeyboardInterrupt:
-        print(f"\n\n{C.YELLOW}Cancelled by user.{C.RESET}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n{C.RED}Error: {e}{C.RESET}")
-        input("\nPress Enter to exit...")
+        print("\nCancelled.")
         sys.exit(1)
 
 if __name__ == "__main__":
