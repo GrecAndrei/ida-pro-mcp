@@ -721,7 +721,8 @@ def data(
 def search(
     action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "data_ref", "code_ref"],
                       "Action: bytes|string|immediate|name|insns|data_ref|code_ref"],
-    pattern: Annotated[str, "Pattern to search for"],
+    pattern: Annotated[Optional[str], "Pattern to search for"] = None,
+    query: Annotated[Optional[str], "Alias for pattern (for compatibility)"] = None,
     limit: Annotated[int, "Max results"] = 100,
 ) -> dict:
     """
@@ -737,10 +738,16 @@ def search(
     - code_ref: Find all code references TO a specific address/name.
     
     Arguments:
-    - pattern: The search query (hex string, text, glob, or comma-separated mnemonics).
+    - pattern (or query): The search query (hex string, text, glob, or comma-separated mnemonics).
     - limit: Max number of results (default 100).
     """
     try:
+        # Support both pattern and query for compatibility
+        if not pattern and query:
+            pattern = query
+        if not pattern:
+            return {"error": "pattern or query parameter required"}
+            
         import ida_search
         import fnmatch
         
@@ -1276,7 +1283,12 @@ def modify(
     action: Annotated[Literal["rename", "comment", "set_type", "patch_asm"], 
                       "Action: rename|comment|set_type|patch_asm"],
     addr: Annotated[str, "Address"],
-    value: Annotated[str, "New name, comment text, type declaration, or assembly instruction"],
+    value: Annotated[Optional[str], "New name, comment text, type declaration, or assembly instruction"] = None,
+    # Aliases for compatibility
+    name: Annotated[Optional[str], "Alias for value (when action=rename)"] = None,
+    text: Annotated[Optional[str], "Alias for value (when action=comment)"] = None,
+    type_str: Annotated[Optional[str], "Alias for value (when action=set_type)"] = None,
+    asm: Annotated[Optional[str], "Alias for value (when action=patch_asm)"] = None,
     comment_type: Annotated[Literal["regular", "repeatable", "anterior", "posterior"], 
                             "Comment type (for action=comment)"] = "regular",
 ) -> dict:
@@ -1290,10 +1302,24 @@ def modify(
     - patch_asm: Assemble and patch instructions at `addr` (e.g. "mov eax, 1").
     
     Arguments:
-    - value: The content to apply (new name, comment text, type string, or assembly code).
+    - value (or name/text/type_str/asm): The content to apply.
     - comment_type: One of 'regular', 'repeatable', 'anterior', 'posterior'.
     """
     try:
+        # Support multiple parameter names for compatibility
+        if not value:
+            if action == "rename" and name:
+                value = name
+            elif action == "comment" and text:
+                value = text
+            elif action == "set_type" and type_str:
+                value = type_str
+            elif action == "patch_asm" and asm:
+                value = asm
+        
+        if not value:
+            return {"error": f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)"}
+        
         ea = parse_address(addr)
         
         if action == "rename":
