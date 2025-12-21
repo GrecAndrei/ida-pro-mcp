@@ -556,10 +556,12 @@ class IDAMCPServer:
     def handle_session_tool(self, action: str, arguments: dict) -> dict:
         """Handle session management actions."""
         
+        # Support multiple param names for binary path
+        binary_path = arguments.get("binary_path") or arguments.get("idb") or arguments.get("path") or ""
+        
         if action == "discover":
-            binary_path = arguments.get("binary_path", "")
             if not binary_path:
-                return make_error(MCPError.INVALID_ARGS, "binary_path required")
+                return make_error(MCPError.INVALID_ARGS, "binary_path (or idb/path) required")
             if not os.path.exists(binary_path):
                 return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {binary_path}")
             
@@ -572,11 +574,10 @@ class IDAMCPServer:
             }
         
         elif action == "create":
-            binary_path = arguments.get("binary_path", "")
             use_existing = arguments.get("use_existing")
             
             if not binary_path:
-                return make_error(MCPError.INVALID_ARGS, "binary_path required")
+                return make_error(MCPError.INVALID_ARGS, "binary_path (or idb/path) required")
             if not os.path.exists(binary_path):
                 return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {binary_path}")
             
