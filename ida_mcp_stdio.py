@@ -32,6 +32,7 @@ import time
 import warnings
 import hashlib
 import glob
+import uuid
 from typing import Any, Dict, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -679,10 +680,11 @@ class IDAMCPServer:
         output_file = None
         args_file = None
         log_file = None
+        cwd = None
         
         try:
-            # Create unique temp files (collision-safe)
-            unique_id = f"{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000000)}"
+            # Create unique temp files (collision-safe using UUID)
+            unique_id = f"{os.getpid()}_{threading.get_ident()}_{uuid.uuid4().hex[:12]}"
             script_file = os.path.join(self.cache_dir, f"mcp_script_{unique_id}.py")
             output_file = os.path.join(self.cache_dir, f"mcp_result_{unique_id}.json")
             args_file = os.path.join(self.cache_dir, f"mcp_args_{unique_id}.json")
@@ -796,7 +798,7 @@ ida_pro.qexit(0)
             details = {
                 "timeout": 120,
                 "idat_exe": self.idat_exe,
-                "cwd": cwd if 'cwd' in locals() else None,
+                "cwd": cwd,
                 "idadir_set": bool(self.ida_dir)
             }
             return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (120s)", recoverable=True, details=details)
