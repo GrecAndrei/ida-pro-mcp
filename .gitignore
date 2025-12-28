@@ -35,3 +35,4 @@ mcp_result_*.json
 .idea/
 .vscode/
 *.swp
+configuration.md

@@ -99,29 +99,20 @@ def check_uv_installed():
 # ============================================================================
 
 def get_mcp_server_config():
-    """Get the MCP server configuration dict, using uv if available."""
+    """Get the MCP server configuration dict for the STDIO-based headless server."""
     script_dir = get_script_dir()
-
-    if check_uv_installed():
-        return {
-            "command": "uv",
-            "args": ["run", "--directory", str(script_dir), "ida-pro-mcp"],
-            "env": {
-                 "IDADIR": os.environ.get("IDADIR", "")
-            }
-        }
-    else:
-        # Fallback to direct python execution
-        # We assume the package is installed in the current environment
-        # or we point to the server script directly
-        server_script = script_dir / "src" / "ida_pro_mcp" / "server.py"
-        return {
-            "command": sys.executable,
-            "args": [str(server_script)],
-            "env": {
-                 "IDADIR": os.environ.get("IDADIR", "")
-            }
-        }
+    
+    # Always use ida_mcp_stdio.py - the headless STDIO server with session support
+    server_script = script_dir / "ida_mcp_stdio.py"
+    
+    return {
+        "command": sys.executable,
+        "args": [str(server_script)],
+        "env": {
+            "IDADIR": os.environ.get("IDADIR", "")
+        },
+        "description": "IDA Pro reverse engineering tools: decompile, disassemble, search, types, debug"
+    }
 
 def get_mcp_config_paths():
     """Get all known MCP client config file paths"""
@@ -130,13 +121,14 @@ def get_mcp_config_paths():
     localappdata = Path(os.environ.get('LOCALAPPDATA', home / 'AppData' / 'Local'))
     
     configs = {
-        # --- NEW / REQUESTED ---
+        # --- Priority Clients ---
         "Gemini CLI": home / ".gemini" / "settings.json",
         "Antigravity": home / ".gemini" / "antigravity" / "mcp_config.json",
         "Claude Code": home / ".claude.json",
         "Codex": home / ".codex" / "config.toml", # TOML!
+        "Copilot CLI": home / ".copilot" / "mcp-config.json",  # NEW: Uses 'servers' key
         
-        # --- EXISTING ---
+        # --- Other Clients ---
         "Claude Desktop": appdata / "Claude" / "claude_desktop_config.json",
         "Cursor": appdata / "Cursor" / "User" / "globalStorage" / "cursor.mcp" / "config.json",
         "VS Code": appdata / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json",
@@ -156,7 +148,7 @@ def get_mcp_config_paths():
 
     return configs
 
-def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp") -> bool:
+def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", client_name: str = "") -> bool:
     """Add/Update server in a JSON config file."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -170,16 +162,21 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp") -> b
         else:
             config = {}
         
-        # Handle different JSON structures
-        # Gemini CLI uses "mcpServers" at root (usually) or nested
-        # Antigravity uses "mcpServers"
-        # Claude uses "mcpServers"
+        # Get server config
+        server_config = get_mcp_server_config()
         
-        # Standardize on "mcpServers" key
-        if "mcpServers" not in config:
-            config["mcpServers"] = {}
-
-        config["mcpServers"][server_name] = get_mcp_server_config()
+        # GitHub Copilot CLI uses "servers" key and requires "type: stdio"
+        if client_name == "Copilot CLI":
+            if "servers" not in config:
+                config["servers"] = {}
+            # Add type for Copilot CLI format
+            server_config["type"] = "stdio"
+            config["servers"][server_name] = server_config
+        else:
+            # Standard clients use "mcpServers"
+            if "mcpServers" not in config:
+                config["mcpServers"] = {}
+            config["mcpServers"][server_name] = server_config
         
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
@@ -230,7 +227,7 @@ def configure_client(client_name: str, config_path: Path) -> bool:
     if config_path.suffix == '.toml':
         return update_toml_config(config_path)
     else:
-        return update_json_config(config_path)
+        return update_json_config(config_path, client_name=client_name)
 
 # ============================================================================
 # Install
@@ -287,7 +284,7 @@ def do_install():
     configured = []
     
     # Priority clients to always try creating config for
-    priority_clients = ["Gemini CLI", "Antigravity", "Claude Code", "Claude Desktop"]
+    priority_clients = ["Gemini CLI", "Antigravity", "Claude Code", "Claude Desktop", "Copilot CLI"]
 
     for client, config_path in configs.items():
         should_try = (
@@ -305,24 +302,11 @@ def do_install():
 
     # Step 4: Verify
     step(4, total_steps, "Verifying installation...")
-    try:
-        # Check if the command works
-        cmd = ["ida-pro-mcp", "--help"]
-        if check_uv_installed():
-            cmd = ["uv", "run", "ida-pro-mcp", "--help"]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=10,
-            cwd=script_dir # Run from repo root to ensure finding local package if needed
-        )
-        if result.returncode == 0:
-            success("ida-pro-mcp command verified")
-        else:
-            warning(f"Command verification failed (code {result.returncode})")
-    except Exception as e:
-        warning(f"Could not verify command: {e}")
+    server_script = script_dir / "ida_mcp_stdio.py"
+    if server_script.exists():
+        success(f"ida_mcp_stdio.py found at {server_script}")
+    else:
+        error(f"Server script not found: {server_script}")
     
     # Summary
     print(f"""
