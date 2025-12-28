@@ -165,15 +165,27 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", clie
         # Get server config
         server_config = get_mcp_server_config()
         
-        # GitHub Copilot CLI uses "servers" key and requires "type: stdio"
+        # GitHub Copilot CLI uses "mcpServers" with type: stdio
         if client_name == "Copilot CLI":
-            if "servers" not in config:
-                config["servers"] = {}
-            # Add type for Copilot CLI format
-            server_config["type"] = "stdio"
-            config["servers"][server_name] = server_config
+            # Remove stale "servers" entry if exists
+            if "servers" in config and server_name in config["servers"]:
+                del config["servers"][server_name]
+            if "servers" in config and not config["servers"]:
+                del config["servers"]
+            
+            if "mcpServers" not in config:
+                config["mcpServers"] = {}
+            # Copilot CLI format: type "local", tools required
+            copilot_config = {
+                "type": "local",
+                "command": server_config["command"],
+                "args": server_config["args"],
+                "env": server_config["env"],
+                "tools": ["*"]  # Required by Copilot CLI, "*" means all tools
+            }
+            config["mcpServers"][server_name] = copilot_config
         else:
-            # Standard clients use "mcpServers"
+            # Standard clients use "mcpServers" without type field
             if "mcpServers" not in config:
                 config["mcpServers"] = {}
             config["mcpServers"][server_name] = server_config
