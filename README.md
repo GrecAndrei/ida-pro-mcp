@@ -240,6 +240,36 @@ set IDADIR=C:\Program Files\IDA Professional 9.2
 
 ---
 
+## 🔧 Advanced Configuration
+
+### Debug Mode
+
+Enable detailed IDA execution logging for troubleshooting by setting the `IDA_MCP_DEBUG` environment variable:
+
+```bash
+# Windows
+set IDA_MCP_DEBUG=1
+
+# Linux/macOS
+export IDA_MCP_DEBUG=1
+```
+
+When enabled, the server will:
+- Capture IDA console output to log files
+- Include detailed diagnostics in error messages:
+  - Exit codes and stderr output
+  - Last 50 lines of IDA log on failures
+  - Resolved paths (idat.exe, working directory, IDADIR)
+  - Environment configuration status
+
+This helps diagnose issues such as:
+- "Can't initialize help system" errors
+- Missing resource files even when they exist
+- IDA crashes or initialization failures
+- Problems with specific tool arguments
+
+---
+
 ## 📝 License
 
 MIT License
