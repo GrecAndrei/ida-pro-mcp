@@ -189,8 +189,16 @@ class SessionManager:
         target = idb_path or filepath
         timeout = self.config.cache_timeout if idb_path else self.config.analysis_timeout
         
-        # Create analysis script
-        output_file = os.path.join(self.config.cache_dir, f"result_{os.getpid()}_{threading.get_ident()}.json")
+        # Create unique temp files (collision-safe)
+        unique_id = f"{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000000)}"
+        script_file = os.path.join(self.config.cache_dir, f"script_{unique_id}.py")
+        output_file = os.path.join(self.config.cache_dir, f"result_{unique_id}.json")
+        
+        # Enable IDA logging if IDA_MCP_DEBUG env var is set
+        log_file = None
+        enable_logging = os.environ.get("IDA_MCP_DEBUG", "").lower() in ("1", "true", "yes")
+        if enable_logging:
+            log_file = os.path.join(self.config.cache_dir, f"ida_{unique_id}.log")
         
         # Escape backslashes for Windows paths
         escaped_filepath = filepath.replace('\\', '\\\\')
@@ -209,23 +217,40 @@ try:
 except Exception as e:
     result = {{"path": "{escaped_filepath}", "success": False, "error": str(e)}}
 
-with open("{escaped_output}", "w") as f:
+with open("{escaped_output}", "w", encoding="utf-8") as f:
     json.dump(result, f)
 
 ida_pro.qexit(0)
 '''
         
-        script_file = os.path.join(self.config.cache_dir, f"script_{os.getpid()}_{threading.get_ident()}.py")
-        
         try:
             with open(script_file, 'w', encoding='utf-8') as f:
                 f.write(script)
             
-            cmd = [self.idat_exe, "-A", f"-S{script_file}", target]
+            # Determine working directory (stable environment)
+            ida_dir = self.config.ida_dir if self.config.ida_dir else os.path.dirname(self.idat_exe)
+            cwd = ida_dir if os.path.isdir(ida_dir) else None
+            
+            # Build explicit environment
+            env = os.environ.copy()
+            if self.config.ida_dir:
+                env["IDADIR"] = self.config.ida_dir
+                # Ensure ida_dir is in PATH
+                path_entries = env.get("PATH", "").split(os.pathsep)
+                if self.config.ida_dir not in path_entries:
+                    env["PATH"] = self.config.ida_dir + os.pathsep + env.get("PATH", "")
+            
+            # Build command with optional logging
+            cmd = [self.idat_exe, "-A"]
+            if log_file:
+                cmd.append(f"-L{log_file}")
+            cmd.extend([f"-S{script_file}", target])
+            
             logger.info(f"Analyzing: {filepath} (cached IDB: {bool(idb_path)})")
             logger.debug(f"Command: {' '.join(cmd)}")
+            logger.debug(f"CWD: {cwd}")
             
-            proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+            proc = subprocess.run(cmd, capture_output=True, timeout=timeout, cwd=cwd, env=env)
             
             logger.debug(f"Return code: {proc.returncode}")
             logger.debug(f"Stdout: {proc.stdout[:200] if proc.stdout else 'empty'}")
@@ -233,7 +258,7 @@ ida_pro.qexit(0)
             logger.debug(f"Output file exists: {os.path.exists(output_file)}")
             
             if os.path.exists(output_file):
-                with open(output_file, 'r') as f:
+                with open(output_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 result = AnalysisResult(
@@ -255,10 +280,26 @@ ida_pro.qexit(0)
                 
                 return result
             else:
+                # Build detailed error with diagnostics
+                stderr_text = proc.stderr.decode('utf-8', errors='ignore') if proc.stderr else ""
+                error_msg = f"Analysis produced no output (exit code: {proc.returncode})"
+                if stderr_text:
+                    error_msg += f"\nStderr: {stderr_text[:500]}"
+                
+                # Include last N lines of IDA log if enabled
+                if log_file and os.path.exists(log_file):
+                    try:
+                        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            lines = f.readlines()
+                            log_tail = "".join(lines[-30:])
+                            error_msg += f"\nIDA log tail:\n{log_tail}"
+                    except:
+                        pass
+                
                 return AnalysisResult(
                     path=filepath, 
                     success=False, 
-                    error="Analysis produced no output",
+                    error=error_msg,
                     analysis_time=time.time() - start_time
                 )
         
@@ -278,12 +319,13 @@ ida_pro.qexit(0)
             )
         finally:
             # Cleanup temporary files
-            for f in [script_file, output_file]:
-                try:
-                    if os.path.exists(f):
-                        os.remove(f)
-                except:
-                    pass
+            for f in [script_file, output_file, log_file]:
+                if f:
+                    try:
+                        if os.path.exists(f):
+                            os.remove(f)
+                    except:
+                        pass
     
     def analyze_batch(self, paths: List[str], force_fresh: bool = False) -> Dict[str, Any]:
         """Analyze multiple files in parallel"""
@@ -352,20 +394,30 @@ ida_pro.qexit(0)
         daemon_dir = os.path.dirname(os.path.abspath(__file__))
         api_path = os.path.join(daemon_dir, "src", "ida_pro_mcp", "ida_mcp")
         
-        # Escape paths for Windows
-        escaped_api_path = api_path.replace('\\', '\\\\')
-        escaped_target = target.replace('\\', '\\\\')
+        # Create unique temp files (collision-safe)
+        unique_id = f"{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000000)}"
+        script_file = os.path.join(self.config.cache_dir, f"tool_script_{unique_id}.py")
+        output_file = os.path.join(self.config.cache_dir, f"tool_result_{unique_id}.json")
+        args_file = os.path.join(self.config.cache_dir, f"tool_args_{unique_id}.json")
         
-        # Serialize kwargs as JSON - safe for embedding in script
-        # json.dumps handles all escaping properly
-        args_json = json.dumps(kwargs)
+        # Enable IDA logging if IDA_MCP_DEBUG env var is set
+        log_file = None
+        enable_logging = os.environ.get("IDA_MCP_DEBUG", "").lower() in ("1", "true", "yes")
+        if enable_logging:
+            log_file = os.path.join(self.config.cache_dir, f"tool_ida_{unique_id}.log")
         
-        # Create output file path
-        output_file = os.path.join(self.config.cache_dir, f"tool_result_{os.getpid()}_{threading.get_ident()}.json")
-        escaped_output = output_file.replace('\\', '\\\\')
-        
-        # Generate script
-        script = f'''import json
+        try:
+            # Write arguments to separate JSON file (UTF-8, safe from escaping issues)
+            with open(args_file, 'w', encoding='utf-8') as f:
+                json.dump(kwargs, f, ensure_ascii=False, indent=2)
+            
+            # Escape paths for Windows
+            escaped_api_path = api_path.replace('\\', '\\\\')
+            escaped_output = output_file.replace('\\', '\\\\')
+            escaped_args = args_file.replace('\\', '\\\\')
+            
+            # Generate script that reads args from file
+            script = f'''import json
 import sys
 
 # Add API path
@@ -376,57 +428,100 @@ from api_consolidated import {tool_name}
 
 # Execute the tool with arguments
 try:
-    kwargs = json.loads('{args_json}')
+    # Read arguments from JSON file (safe from escaping issues)
+    with open("{escaped_args}", "r", encoding="utf-8") as f:
+        kwargs = json.load(f)
     result = {tool_name}(**kwargs)
 except Exception as e:
     result = {{"error": str(e), "traceback": __import__("traceback").format_exc()}}
 
 # Write output
-with open("{escaped_output}", "w") as f:
+with open("{escaped_output}", "w", encoding="utf-8") as f:
     json.dump(result, f, default=str)
 
 import ida_pro
 ida_pro.qexit(0)
 '''
-        
-        # Write script to file
-        script_file = os.path.join(self.config.cache_dir, f"tool_script_{os.getpid()}_{threading.get_ident()}.py")
-        
-        try:
+            
+            # Write script to file
             with open(script_file, 'w', encoding='utf-8') as f:
                 f.write(script)
             
-            cmd = [self.idat_exe, "-A", f"-S{script_file}", target]
+            # Determine working directory (stable environment)
+            ida_dir = self.config.ida_dir if self.config.ida_dir else os.path.dirname(self.idat_exe)
+            cwd = ida_dir if os.path.isdir(ida_dir) else None
+            
+            # Build explicit environment
+            env = os.environ.copy()
+            if self.config.ida_dir:
+                env["IDADIR"] = self.config.ida_dir
+                # Ensure ida_dir is in PATH
+                path_entries = env.get("PATH", "").split(os.pathsep)
+                if self.config.ida_dir not in path_entries:
+                    env["PATH"] = self.config.ida_dir + os.pathsep + env.get("PATH", "")
+            
+            # Build command with optional logging
+            cmd = [self.idat_exe, "-A"]
+            if log_file:
+                cmd.append(f"-L{log_file}")
+            cmd.extend([f"-S{script_file}", target])
+            
             logger.info(f"Calling {tool_name}({kwargs}) on {os.path.basename(target)}")
+            logger.debug(f"CWD: {cwd}")
             
             # Use longer timeout for complex tools
             timeout = 120
-            proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+            proc = subprocess.run(cmd, capture_output=True, timeout=timeout, cwd=cwd, env=env)
             
             if os.path.exists(output_file):
-                with open(output_file, 'r') as f:
+                with open(output_file, 'r', encoding='utf-8') as f:
                     result = json.load(f)
                 result["_execution_time"] = time.time() - start_time
                 return result
             else:
-                return {
+                # Build detailed error with diagnostics
+                stderr_text = proc.stderr.decode('utf-8', errors='ignore') if proc.stderr else ""
+                stdout_text = proc.stdout.decode('utf-8', errors='ignore') if proc.stdout else ""
+                
+                details = {
                     "error": "Tool execution produced no output",
-                    "stdout": proc.stdout.decode()[:500] if proc.stdout else "",
-                    "stderr": proc.stderr.decode()[:500] if proc.stderr else "",
-                    "returncode": proc.returncode
+                    "returncode": proc.returncode,
+                    "idat_exe": self.idat_exe,
+                    "cwd": cwd,
+                    "idadir_set": bool(self.config.ida_dir),
+                    "stderr": stderr_text[:500] if stderr_text else "",
+                    "stdout": stdout_text[:500] if stdout_text else ""
                 }
+                
+                # Include last N lines of IDA log if enabled
+                if log_file and os.path.exists(log_file):
+                    try:
+                        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            lines = f.readlines()
+                            details["ida_log_tail"] = "".join(lines[-50:])
+                    except:
+                        pass
+                
+                return details
         
         except subprocess.TimeoutExpired:
-            return {"error": f"Tool execution timed out ({timeout}s)"}
+            return {
+                "error": f"Tool execution timed out ({timeout}s)",
+                "idat_exe": self.idat_exe,
+                "cwd": cwd if 'cwd' in locals() else None,
+                "idadir_set": bool(self.config.ida_dir)
+            }
         except Exception as e:
             return {"error": str(e)}
         finally:
-            for f in [script_file, output_file]:
-                try:
-                    if os.path.exists(f):
-                        os.remove(f)
-                except:
-                    pass
+            # Cleanup all temp files
+            for f in [script_file, output_file, args_file, log_file]:
+                if f:
+                    try:
+                        if os.path.exists(f):
+                            os.remove(f)
+                    except:
+                        pass
 
 # =============================================================================
 # HTTP Server (Simple MCP-like interface)
