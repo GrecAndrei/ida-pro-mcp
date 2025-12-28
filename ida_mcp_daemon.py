@@ -28,6 +28,7 @@ import threading
 import hashlib
 import argparse
 import logging
+import uuid
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, List, Optional, Any
@@ -189,8 +190,8 @@ class SessionManager:
         target = idb_path or filepath
         timeout = self.config.cache_timeout if idb_path else self.config.analysis_timeout
         
-        # Create unique temp files (collision-safe)
-        unique_id = f"{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000000)}"
+        # Create unique temp files (collision-safe using UUID)
+        unique_id = f"{os.getpid()}_{threading.get_ident()}_{uuid.uuid4().hex[:12]}"
         script_file = os.path.join(self.config.cache_dir, f"script_{unique_id}.py")
         output_file = os.path.join(self.config.cache_dir, f"result_{unique_id}.json")
         
@@ -394,8 +395,8 @@ ida_pro.qexit(0)
         daemon_dir = os.path.dirname(os.path.abspath(__file__))
         api_path = os.path.join(daemon_dir, "src", "ida_pro_mcp", "ida_mcp")
         
-        # Create unique temp files (collision-safe)
-        unique_id = f"{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000000)}"
+        # Create unique temp files (collision-safe using UUID)
+        unique_id = f"{os.getpid()}_{threading.get_ident()}_{uuid.uuid4().hex[:12]}"
         script_file = os.path.join(self.config.cache_dir, f"tool_script_{unique_id}.py")
         output_file = os.path.join(self.config.cache_dir, f"tool_result_{unique_id}.json")
         args_file = os.path.join(self.config.cache_dir, f"tool_args_{unique_id}.json")
@@ -406,6 +407,7 @@ ida_pro.qexit(0)
         if enable_logging:
             log_file = os.path.join(self.config.cache_dir, f"tool_ida_{unique_id}.log")
         
+        cwd = None
         try:
             # Write arguments to separate JSON file (UTF-8, safe from escaping issues)
             with open(args_file, 'w', encoding='utf-8') as f:
@@ -508,7 +510,7 @@ ida_pro.qexit(0)
             return {
                 "error": f"Tool execution timed out ({timeout}s)",
                 "idat_exe": self.idat_exe,
-                "cwd": cwd if 'cwd' in locals() else None,
+                "cwd": cwd,
                 "idadir_set": bool(self.config.ida_dir)
             }
         except Exception as e:
