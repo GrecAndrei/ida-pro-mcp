@@ -32,6 +32,7 @@ import time
 import warnings
 import hashlib
 import glob
+import uuid
 from typing import Any, Dict, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -674,18 +675,35 @@ class IDAMCPServer:
                 details={"owner": owner}
             )
         
+        # Initialize temp file paths
+        script_file = None
+        output_file = None
+        args_file = None
+        log_file = None
+        cwd = None
+        
         try:
+            # Create unique temp files (collision-safe using UUID)
+            unique_id = f"{os.getpid()}_{threading.get_ident()}_{uuid.uuid4().hex[:12]}"
+            script_file = os.path.join(self.cache_dir, f"mcp_script_{unique_id}.py")
+            output_file = os.path.join(self.cache_dir, f"mcp_result_{unique_id}.json")
+            args_file = os.path.join(self.cache_dir, f"mcp_args_{unique_id}.json")
+            
+            # Enable IDA logging if IDA_MCP_DEBUG env var is set
+            enable_logging = os.environ.get("IDA_MCP_DEBUG", "").lower() in ("1", "true", "yes")
+            if enable_logging:
+                log_file = os.path.join(self.cache_dir, f"mcp_ida_{unique_id}.log")
+            
+            # Write arguments to separate JSON file (UTF-8, safe from escaping issues)
+            with open(args_file, 'w', encoding='utf-8') as f:
+                json.dump(kwargs, f, ensure_ascii=False, indent=2)
+            
             # Escape paths for Windows
             escaped_api_path = self.api_path.replace('\\', '\\\\')
-            
-            # Serialize kwargs as JSON
-            args_json = json.dumps(kwargs)
-            
-            # Create output file path
-            output_file = os.path.join(self.cache_dir, f"mcp_result_{os.getpid()}_{threading.get_ident()}.json")
             escaped_output = output_file.replace('\\', '\\\\')
+            escaped_args = args_file.replace('\\', '\\\\')
             
-            # Generate script
+            # Generate script that reads args from file
             script = f'''import json
 import sys
 
@@ -694,12 +712,14 @@ sys.path.insert(0, "{escaped_api_path}")
 from api_consolidated import {tool_name}
 
 try:
-    kwargs = json.loads('{args_json}')
+    # Read arguments from JSON file (safe from escaping issues)
+    with open("{escaped_args}", "r", encoding="utf-8") as f:
+        kwargs = json.load(f)
     result = {tool_name}(**kwargs)
 except Exception as e:
     result = {{"error": str(e), "traceback": __import__("traceback").format_exc()}}
 
-with open("{escaped_output}", "w") as f:
+with open("{escaped_output}", "w", encoding="utf-8") as f:
     json.dump(result, f, default=str)
 
 import ida_pro
@@ -707,51 +727,92 @@ ida_pro.qexit(0)
 '''
             
             # Write script to file
-            script_file = os.path.join(self.cache_dir, f"mcp_script_{os.getpid()}_{threading.get_ident()}.py")
-            
             with open(script_file, 'w', encoding='utf-8') as f:
                 f.write(script)
             
-            cmd = [self.idat_exe, "-A", f"-S{script_file}", target]
+            # Determine working directory (stable environment)
+            ida_dir = self.ida_dir if self.ida_dir else os.path.dirname(self.idat_exe)
+            cwd = ida_dir if os.path.isdir(ida_dir) else None
             
-            proc = subprocess.run(cmd, capture_output=True, timeout=120)
+            # Build explicit environment
+            env = os.environ.copy()
+            if self.ida_dir:
+                env["IDADIR"] = self.ida_dir
+                # Ensure ida_dir is in PATH
+                path_entries = env.get("PATH", "").split(os.pathsep)
+                if self.ida_dir not in path_entries:
+                    env["PATH"] = self.ida_dir + os.pathsep + env.get("PATH", "")
+            
+            # Build command with optional logging
+            cmd = [self.idat_exe, "-A"]
+            if log_file:
+                cmd.append(f"-L{log_file}")
+            cmd.extend([f"-S{script_file}", target])
+            
+            proc = subprocess.run(cmd, capture_output=True, timeout=120, cwd=cwd, env=env)
             
             # Check for common error patterns in stderr
-            stderr = proc.stderr.decode('utf-8', errors='ignore').lower()
+            stderr_text = proc.stderr.decode('utf-8', errors='ignore')
+            stderr_lower = stderr_text.lower()
             
             if proc.returncode != 0:
-                if "license" in stderr:
+                if "license" in stderr_lower:
                     return make_error(MCPError.IDA_LICENSE, "IDA license issue detected")
-                elif "access denied" in stderr or "locked" in stderr:
+                elif "access denied" in stderr_lower or "locked" in stderr_lower:
                     return make_error(MCPError.FILE_LOCKED, "File access denied", recoverable=True)
-                elif "corrupt" in stderr:
+                elif "corrupt" in stderr_lower:
                     return make_error(MCPError.FILE_CORRUPT, "IDB appears to be corrupt")
             
             if os.path.exists(output_file):
-                with open(output_file, 'r') as f:
+                with open(output_file, 'r', encoding='utf-8') as f:
                     result = json.load(f)
                 result["_execution_time"] = round(time.time() - start_time, 2)
                 result["_session"] = self.current_session.session_id if self.current_session else None
                 return result
             else:
+                # Build detailed error with diagnostics
+                details = {
+                    "returncode": proc.returncode,
+                    "stderr": stderr_text[:1000] if stderr_text else "",
+                    "idat_exe": self.idat_exe,
+                    "cwd": cwd,
+                    "idadir_set": bool(self.ida_dir)
+                }
+                
+                # Include last N lines of IDA log if enabled
+                if log_file and os.path.exists(log_file):
+                    try:
+                        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            lines = f.readlines()
+                            details["ida_log_tail"] = "".join(lines[-50:])
+                    except:
+                        pass
+                
                 return make_error(
                     MCPError.IDA_CRASHED,
                     "IDA crashed or produced no output",
-                    details={"returncode": proc.returncode}
+                    details=details
                 )
         
         except subprocess.TimeoutExpired:
-            return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (120s)", recoverable=True)
+            details = {
+                "timeout": 120,
+                "idat_exe": self.idat_exe,
+                "cwd": cwd,
+                "idadir_set": bool(self.ida_dir)
+            }
+            return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (120s)", recoverable=True, details=details)
         except Exception as e:
             return make_error(MCPError.IDA_CRASHED, str(e))
         finally:
-            # Cleanup
-            for f in [script_file, output_file]:
-                try:
-                    if os.path.exists(f):
-                        os.remove(f)
-                except:
-                    pass
+            # Cleanup all temp files
+            for f in [script_file, output_file, args_file, log_file]:
+                if f:
+                    try:
+                        if os.path.exists(f):
+                            os.remove(f)
+                    except:
+                        pass
             # Release lock if we acquired it
             lock.release()
     
