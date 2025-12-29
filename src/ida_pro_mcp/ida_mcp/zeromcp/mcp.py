@@ -414,8 +414,25 @@ class McpServer:
         # Check for error response
         if "error" in tool_response:
             error = tool_response["error"]
+            message = error.get("message") or "Unknown error"
+            code = error.get("code")
+            data = error.get("data")
+
+            # Build a richer, LLM-friendly error payload with code + details
+            text_parts = []
+            if code is not None:
+                text_parts.append(f"[code {code}] {message}")
+            else:
+                text_parts.append(message)
+            if data:
+                try:
+                    text_parts.append(json.dumps(data, indent=2))
+                except TypeError:  # json.dumps raises TypeError on non-serializable objects
+                    text_parts.append(str(data))
+
             return {
-                "content": [{"type": "text", "text": error["message"] or "Unknown error"}],
+                "content": [{"type": "text", "text": "\n".join(text_parts)}],
+                "structuredContent": {"error": error},
                 "isError": True,
             }
 
