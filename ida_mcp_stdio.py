@@ -507,9 +507,18 @@ class IDAMCPServer:
     """MCP server with session management and multi-instance support."""
     
     def __init__(self):
-        self.ida_dir = r"C:\Program Files\IDA Professional 9.2"
+        # Get IDA directory from environment or auto-detect
+        self.ida_dir = os.environ.get("IDADIR", "")
+        if not self.ida_dir:
+            self.ida_dir = self._detect_ida_dir()
+        
         self.idat_exe = self._find_idat()
-        self.cache_dir = r"C:\Users\Alexander\.ida_mcp_cache"
+        
+        # Use user-specific cache directory (cross-platform)
+        self.cache_dir = os.environ.get(
+            "IDA_MCP_CACHE", 
+            os.path.join(os.path.expanduser("~"), ".ida_mcp_cache")
+        )
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.api_path = os.path.join(self.script_dir, "src", "ida_pro_mcp", "ida_mcp")
         
@@ -522,23 +531,56 @@ class IDAMCPServer:
         # Current active session
         self.current_session: Optional[Session] = None
     
+    def _detect_ida_dir(self) -> str:
+        """Auto-detect IDA installation directory."""
+        if sys.platform == "win32":
+            candidates = [
+                r"C:\Program Files\IDA Professional 9.2",
+                r"C:\Program Files\IDA Pro 9.2",
+                r"C:\Program Files\IDA Professional 9.1",
+                r"C:\Program Files\IDA Professional 9.0",
+                r"C:\Program Files (x86)\IDA Pro",
+            ]
+        elif sys.platform == "darwin":
+            candidates = [
+                "/Applications/IDA Pro 9.2/ida.app/Contents/MacOS",
+                "/Applications/IDA Pro.app/Contents/MacOS",
+            ]
+        else:  # Linux
+            candidates = [
+                "/opt/ida",
+                "/opt/idapro",
+                os.path.expanduser("~/ida"),
+            ]
+        
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return ""
+    
     def _find_idat(self) -> str:
-        """Find idat.exe executable."""
+        """Find idat executable (headless IDA)."""
+        if sys.platform == "win32":
+            exe_names = ["idat.exe", "idat64.exe"]
+        else:
+            exe_names = ["idat64", "idat"]
+        
         if self.ida_dir:
-            for name in ["idat.exe", "idat64.exe", "idat"]:
+            for name in exe_names:
                 path = os.path.join(self.ida_dir, name)
                 if os.path.exists(path):
                     return path
         
-        # Try common paths
-        candidates = [
-            r"C:\Program Files\IDA Professional 9.2\idat.exe",
-            r"C:\Program Files\IDA Pro 9.2\idat.exe",
-            r"C:\Program Files\IDA Professional 9.0\idat.exe",
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                return c
+        # Fallback: try common Windows paths if on Windows
+        if sys.platform == "win32":
+            win_candidates = [
+                r"C:\Program Files\IDA Professional 9.2\idat.exe",
+                r"C:\Program Files\IDA Pro 9.2\idat.exe",
+                r"C:\Program Files\IDA Professional 9.0\idat.exe",
+            ]
+            for c in win_candidates:
+                if os.path.exists(c):
+                    return c
         
         return ""
     
@@ -749,7 +791,8 @@ ida_pro.qexit(0)
                 cmd.append(f"-L{log_file}")
             cmd.extend([f"-S{script_file}", target])
             
-            proc = subprocess.run(cmd, capture_output=True, timeout=300, cwd=cwd, env=env, shell=True)
+            # Note: shell=False is used for security. If paths have spaces, they're handled as list elements.
+            proc = subprocess.run(cmd, capture_output=True, timeout=300, cwd=cwd, env=env)
             
             # Check for common error patterns in stderr
             stderr_text = proc.stderr.decode('utf-8', errors='ignore')
@@ -953,10 +996,11 @@ ida_pro.qexit(0)
     
     def run(self):
         """Main event loop - read from stdin, write to stdout."""
-        # Use binary mode to avoid Windows encoding issues
-        import msvcrt
-        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
-        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
+        # Use binary mode to avoid encoding issues
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+            msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
         
         stdin = sys.stdin.buffer
         stdout = sys.stdout.buffer

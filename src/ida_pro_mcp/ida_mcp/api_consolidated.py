@@ -518,12 +518,12 @@ def code(
                     func = idaapi.get_func(curr) # if callgraph
                     if func:
                         # Intra-procedural flow? Or callgraph? Let's do callgraph for now as it's more useful typically
-                         for item in idautils.FuncItems(func.start_ea):
+                        for item in idautils.FuncItems(func.start_ea):
                             for xref in idautils.XrefsFrom(item, 0):
                                 if xref.iscode:
                                     tf = idaapi.get_func(xref.to)
                                     if tf and tf.start_ea != func.start_ea:
-                                         succs.append(tf.start_ea)
+                                        succs.append(tf.start_ea)
                     
                     for s in succs:
                         if s not in visited:
