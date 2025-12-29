@@ -30,7 +30,6 @@ import threading
 import subprocess
 import time
 import warnings
-import hashlib
 import glob
 import uuid
 from typing import Any, Dict, Optional, List
@@ -45,67 +44,138 @@ sys.stderr = io.StringIO()
 
 
 # =============================================================================
+# CONSTANTS - Avoid magic numbers scattered throughout code
+# =============================================================================
+
+# Timeouts (in seconds)
+LOCK_TIMEOUT_DEFAULT = 10
+LOCK_TIMEOUT_EXTENDED = 30
+LOCK_STALE_THRESHOLD = 300  # 5 minutes
+IDA_EXECUTION_TIMEOUT = 300  # 5 minutes
+
+# Limits
+LOG_TAIL_LINES = 50
+ERROR_STDERR_LIMIT = 1000
+SESSION_ID_LENGTH = 8
+
+# Cache management
+CACHE_MAX_SIZE_MB = 500  # Maximum cache directory size in MB
+CACHE_CLEANUP_AGE_HOURS = 24  # Remove temp files older than this
+TEMP_FILE_MAX_AGE = 3600  # 1 hour in seconds
+
+# Retry intervals (in seconds)
+LOCK_RETRY_INTERVAL = 0.1
+ERROR_RETRY_AFTER = 5
+
+
+# =============================================================================
 # SESSION MANAGEMENT
 # =============================================================================
 
 class SimpleLock:
-    """Cross-platform file lock without external dependencies."""
+    """Cross-platform file lock without external dependencies.
+    
+    Uses atomic file creation for locking. Handles stale locks from crashed processes.
+    
+    Thread Safety:
+        This class is NOT thread-safe. Each thread should create its own SimpleLock instance.
+        The lock is process-level (file-based), not thread-level.
+        For thread safety within a process, use threading.Lock in addition to this.
+    """
     
     def __init__(self, path: str):
         self.lock_file = path + ".mcp.lock"
         self.locked = False
         self.pid = os.getpid()
+        self._fd = None  # File descriptor for atomic operations
     
-    def acquire(self, timeout: int = 10) -> bool:
-        """Acquire the lock. Returns True if successful."""
+    def acquire(self, timeout: int = LOCK_TIMEOUT_DEFAULT) -> bool:
+        """Acquire the lock. Returns True if successful.
+        
+        Uses atomic file creation (O_CREAT | O_EXCL) to prevent race conditions.
+        Handles stale locks from crashed processes by checking modification time.
+        """
         start = time.time()
         while time.time() - start < timeout:
             try:
-                # Atomic create - fails if exists
+                # Atomic create - fails if file exists
                 fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, f"{self.pid}:{time.time()}".encode())
-                os.close(fd)
+                try:
+                    os.write(fd, f"{self.pid}:{time.time()}".encode())
+                finally:
+                    os.close(fd)
                 self.locked = True
                 return True
             except FileExistsError:
-                # Check if lock is stale (older than 5 minutes)
-                if self._is_stale():
-                    self._force_release()
+                # Lock file exists - check if it's stale
+                if self._check_and_remove_stale():
+                    # Stale lock was removed, retry immediately
                     continue
-                time.sleep(0.1)
-            except Exception:
-                time.sleep(0.1)
+                time.sleep(LOCK_RETRY_INTERVAL)
+            except OSError as e:
+                # Handle other OS errors (permission denied, etc.)
+                time.sleep(LOCK_RETRY_INTERVAL)
         return False
     
     def release(self):
-        """Release the lock."""
-        if self.locked and os.path.exists(self.lock_file):
+        """Release the lock by removing the lock file."""
+        if self.locked:
             try:
-                os.remove(self.lock_file)
-            except:
-                pass
-            self.locked = False
+                if os.path.exists(self.lock_file):
+                    os.remove(self.lock_file)
+            except OSError:
+                pass  # Ignore errors during cleanup
+            finally:
+                self.locked = False
     
     def is_locked(self) -> bool:
-        """Check if the file is currently locked."""
+        """Check if the file is currently locked (lock file exists)."""
         return os.path.exists(self.lock_file)
     
-    def _is_stale(self) -> bool:
-        """Check if lock is stale (older than 5 minutes)."""
+    def _check_and_remove_stale(self) -> bool:
+        """Check if lock is stale and remove it atomically.
+        
+        Returns True if:
+          - The lock file doesn't exist (can proceed with acquisition)
+          - A stale lock was successfully removed
+        Returns False if:
+          - The lock exists and is not stale
+          - The lock is stale but removal failed
+          
+        Uses atomic rename-to-temp + delete pattern to avoid TOCTOU races.
+        """
         try:
-            if os.path.exists(self.lock_file):
-                mtime = os.path.getmtime(self.lock_file)
-                return time.time() - mtime > 300  # 5 minutes
-        except:
-            pass
-        return False
-    
-    def _force_release(self):
-        """Force release a stale lock."""
-        try:
-            os.remove(self.lock_file)
-        except:
-            pass
+            if not os.path.exists(self.lock_file):
+                # No lock file - caller can proceed with acquisition
+                return True
+            
+            mtime = os.path.getmtime(self.lock_file)
+            if time.time() - mtime <= LOCK_STALE_THRESHOLD:
+                return False  # Lock is not stale
+            
+            # Lock appears stale - try to remove it atomically
+            # Generate a unique temp name to avoid collisions
+            temp_name = f"{self.lock_file}.stale.{os.getpid()}.{time.time()}"
+            try:
+                # Atomic rename - if this succeeds, we "own" the stale lock
+                os.rename(self.lock_file, temp_name)
+                # Now safely delete the renamed file
+                os.remove(temp_name)
+                return True
+            except FileNotFoundError:
+                # Another process already removed it - we can proceed
+                return True
+            except OSError:
+                # Rename failed (another process may have grabbed it)
+                # Clean up temp file if it exists
+                try:
+                    if os.path.exists(temp_name):
+                        os.remove(temp_name)
+                except OSError:
+                    pass
+                return False
+        except OSError:
+            return False
     
     def get_owner_info(self) -> Optional[Dict]:
         """Get info about who holds the lock."""
@@ -119,9 +189,20 @@ class SimpleLock:
                             "pid": int(parts[0]),
                             "locked_at": datetime.fromtimestamp(float(parts[1])).isoformat()
                         }
-        except:
+        except (OSError, ValueError, IndexError):
             pass
         return None
+    
+    def force_release(self):
+        """Force release a lock, even if we don't own it.
+        
+        Use with caution - only for cleaning up stale locks.
+        """
+        try:
+            if os.path.exists(self.lock_file):
+                os.remove(self.lock_file)
+        except OSError:
+            pass
     
     def __enter__(self):
         if not self.acquire():
@@ -171,7 +252,7 @@ class SessionManager:
         """Generate a unique session ID."""
         import random
         import string
-        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=SESSION_ID_LENGTH))
     
     def _get_session_idb_path(self, binary_path: str, session_id: str) -> str:
         """Get the IDB path for a session."""
@@ -294,9 +375,96 @@ class MCPError:
     TOOL_NOT_FOUND = "TOOL_NOT_FOUND"
     INVALID_ARGS = "INVALID_ARGS"
     DECOMPILE_FAILED = "DECOMPILE_FAILED"
+    PATH_TRAVERSAL = "PATH_TRAVERSAL"
+    INTEGER_OVERFLOW = "INTEGER_OVERFLOW"
+
+
+def validate_path(path: str, base_allowed: Optional[List[str]] = None) -> Optional[str]:
+    """Validate a file path against directory traversal attacks.
+    
+    Args:
+        path: Path to validate
+        base_allowed: Optional list of allowed base directories
+        
+    Returns:
+        Normalized path if valid, None if invalid
+    """
+    if not path:
+        return None
+    
+    # Normalize the path
+    try:
+        normalized = os.path.normpath(os.path.abspath(path))
+    except (ValueError, OSError):
+        return None
+    
+    # Check for null byte injection
+    if '\x00' in path:
+        return None
+    
+    # Check for directory traversal - after normpath, ".." should be resolved
+    # If the original path had ".." and the resolved path goes outside the
+    # current directory tree, we should reject it
+    if '..' in path:
+        # Ensure resolved path doesn't escape to parent directories
+        # by checking if the resolved path starts with the current working dir
+        # or is an absolute path that was intended
+        cwd = os.path.abspath(os.getcwd())
+        if not normalized.startswith(cwd) and not os.path.isabs(path):
+            return None
+    
+    # If base directories specified, ensure path is within one of them
+    if base_allowed:
+        in_allowed = any(normalized.startswith(os.path.normpath(base)) for base in base_allowed)
+        if not in_allowed:
+            return None
+    
+    return normalized
+
+
+def validate_address(addr_str: str) -> Optional[int]:
+    """Validate and parse an address string, checking for integer overflow.
+    
+    Args:
+        addr_str: Address as hex string, decimal string, or name
+        
+    Returns:
+        Integer address if valid, None if invalid
+    """
+    if not addr_str:
+        return None
+    
+    try:
+        # Try hex format
+        if addr_str.lower().startswith('0x'):
+            val = int(addr_str, 16)
+        elif addr_str.isdigit():
+            val = int(addr_str)
+        else:
+            # Could be a symbol name - let IDA resolve it
+            return 0  # Special marker for "needs IDA resolution"
+        
+        # Check for 64-bit overflow
+        if val < 0 or val > 0xFFFFFFFFFFFFFFFF:
+            return None
+        
+        return val
+    except (ValueError, OverflowError):
+        return None
+
 
 def make_error(code: str, message: str, recoverable: bool = False, details: dict = None) -> dict:
-    """Create a structured error response."""
+    """Create a structured error response.
+    
+    Args:
+        code: Error code from MCPError class
+        message: Human-readable error message
+        recoverable: If True, suggests the operation can be retried
+        details: Optional dict with additional context
+    
+    Returns:
+        Structured error dict with consistent format
+    """
     result = {
         "error": True,
         "code": code,
@@ -304,7 +472,7 @@ def make_error(code: str, message: str, recoverable: bool = False, details: dict
         "recoverable": recoverable
     }
     if recoverable:
-        result["retry_after_seconds"] = 5
+        result["retry_after_seconds"] = ERROR_RETRY_AFTER
     if details:
         result["details"] = details
     return result
@@ -314,9 +482,9 @@ def make_error(code: str, message: str, recoverable: bool = False, details: dict
 # TOOLS LIST
 # =============================================================================
 
-# List of available tools (40 total - includes session_manager)
+# List of available tools (40 total - includes session)
 TOOLS = [
-    "session",  # NEW: Session management tool
+    "session",  # Session management tool
     "idb", "code", "data", "search", "types", "memory", "modify",
     "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
     "fixups", "data_ops", "agent", "microcode", "graph", "bulk",
@@ -346,16 +514,76 @@ Actions: meta (get file path, module name, base address, size, MD5/SHA256 hashes
 Required: idb (path to IDB or binary file), action (one of the above).""",
 
     "code": """Decompilation, disassembly, and code flow analysis.
-Actions: decompile (get Hex-Rays pseudocode), disassemble (get assembly), xrefs_to (find references TO an address), xrefs_from (find references FROM an address), basic_blocks (get control flow blocks), graph (get call graph).
-Required: idb, action. Optional: addrs (address or list of addresses), depth (for graph traversal).""",
+
+WHEN TO USE: Prefer this over raw IDAPython when you need:
+- Hex-Rays decompilation with automatic error handling
+- Clean xref enumeration (no manual iterator management)
+- Callgraph traversal with depth limits (prevents infinite loops)
+
+Actions:
+- decompile: Get Hex-Rays pseudocode for function(s)
+- disasm: Get assembly listing with comments
+- xrefs_to: Find all references TO an address (callers, data refs)
+- xrefs_from: Find all references FROM an address (callees)
+- xrefs_to_field: Find references to a struct field (format: "struct.field")
+- callees: Get functions called by target function
+- callers: Get functions that call target function  
+- blocks: Get basic blocks in function
+- analyze: Comprehensive analysis (decompile + xrefs + strings)
+- callgraph: Generate function call graph (use max_depth to limit)
+- find_paths: Find call paths between two functions
+- strings_in_func: Get string references in function
+
+Required: idb, action.
+Optional: addrs/addr (hex like "0x401000", decimal, or symbol name), max_depth (default 5), max_items (default 1000).
+
+RESPONSE FORMAT:
+- Lists return array of dicts with 'addr', 'name', etc.
+- Addresses are hex strings like "0x401000"
+- Errors include 'error' key with message""",
 
     "data": """List and query binary data structures.
-Actions: functions (list all functions with addr/name/size), globals (list global variables), strings (list all strings with addresses), imports (list imported functions), exports (list exported symbols).
-Required: idb, action. Optional: query (filter pattern), offset/count (pagination).""",
+
+WHEN TO USE: Prefer this over raw IDAPython when you need:
+- Paginated results that fit in context window
+- Filtered results without writing filter code
+- Consistent JSON output format
+
+Actions:
+- functions: List all functions with addr/name/size
+- globals: List global variables
+- strings: List all strings with addresses
+- imports: List imported functions (by DLL)
+- exports: List exported symbols
+
+Required: idb, action.
+Optional: query (filter pattern with * wildcards), offset (pagination start), count (items per page, default 100).
+
+RESPONSE FORMAT:
+- Returns dict with action name as key (e.g., {"functions": [...]})
+- Each item has 'addr' (hex string), 'name', 'size'
+- Paginated responses include 'total' count""",
 
     "search": """Search for patterns, bytes, and references in the binary.
-Actions: bytes (search hex pattern like '90 90 ??'), string (search text), immediate (find numeric constants), name (search symbol names), pattern (search with wildcards).
-Required: idb, action. Optional: query (search pattern), start/end (address range).""",
+
+WHEN TO USE: Prefer this over raw IDAPython when you need:
+- Byte pattern search with wildcards (like "48 83 EC ?? 48 8B")
+- Cross-reference searches without iterator boilerplate
+- String literal searches across the binary
+
+Actions:
+- bytes: Search hex byte pattern (use ?? for wildcards)
+- string: Search for text literals
+- immediate: Find numeric constant values
+- name: Search symbol names (supports * wildcards)
+- pattern: IDA-style pattern search
+- data_ref: Find data references to address
+- code_ref: Find code references to address
+
+Required: idb, action.
+Optional: query/pattern (search term), start/end (address range to search).
+
+BYTE PATTERN FORMAT: "48 83 EC ?? 48 8B" - use ?? for single-byte wildcards""",
 
     "types": """Manage type information, structures, and enums.
 Actions: list (list all local types), get (get type definition), define (create new type from C declaration), get_members (get struct fields), apply (apply type to address), search_structs (find structs by field name).
@@ -370,6 +598,9 @@ Actions: rename (rename function/variable), comment (add comment), set_type (set
 Required: idb, action, addr. For rename: name. For comment: text. For set_type: type_str. For patch: data or asm.""",
 
     "misc": """Miscellaneous utilities - Python execution, signatures, bookmarks.
+
+WARNING: The 'python' action executes arbitrary code. Use only when no other tool suffices.
+
 Actions: python (execute Python code in IDA), idc (run IDC script), load_sig (load FLIRT signature), bookmarks (manage IDA bookmarks).
 Required: idb, action. For python/idc: code. For load_sig: path or name.""",
 
@@ -405,9 +636,36 @@ Required: idb, action. For get/add/delete: addr. For add: target, fixup_type."""
 Actions: make_data (define data at address), make_array (create array), make_string (define string), undefine (remove definition), make_code (convert to code).
 Required: idb, action, addr. Optional: size, count (for array), str_type (string encoding).""",
 
-    "agent": """High-level analysis helpers for comprehensive exploration.
-Actions: analyze_function (get full function analysis with decompilation, xrefs, strings), explore_address (get context around an address), find_references (trace data/code references), search_all (universal search across names, strings, bytes).
-Required: idb, action. Optional: addr, query, depth.""",
+    "agent": """High-level analysis helpers designed for LLM workflows.
+
+WHEN TO USE: Prefer this for first-pass analysis or comprehensive exploration.
+This tool combines multiple operations into context-efficient responses.
+Ideal for: "Tell me everything about function X" or "What's interesting in this binary?"
+
+Actions:
+- analyze_function: Get full analysis (decompile + xrefs + strings + comments)
+- explore_address: Get context around an address (surrounding code, data refs)
+- find_references: Trace reference chains (who calls this? what does it call?)
+- search_all: Universal search across names, strings, and bytes in one call
+
+EXAMPLES:
+  # Comprehensive function analysis - best for first look at a function
+  agent(idb="sample.i64", action="analyze_function", addr="0x401234")
+  # Returns: {decompiled_code, callers, callees, strings_used, comments, signature}
+
+  # Quick context around an unknown address
+  agent(idb="sample.i64", action="explore_address", addr="0x405000")
+  # Returns: {type (code/data/unknown), surrounding_bytes, xrefs_in, xrefs_out}
+
+  # Universal search - searches names, strings, and bytes at once
+  agent(idb="sample.i64", action="search_all", query="password")
+  # Returns: {name_matches, string_matches, comment_matches}
+
+Required: idb, action.
+Optional: addr (target address), query (search term), depth (for reference tracing, default 3).
+
+RESPONSE FORMAT: Returns comprehensive dict with multiple analysis sections.
+Responses are optimized for LLM context windows.""",
 
     "microcode": """Access Hex-Rays microcode intermediate representation.
 Actions: get (get microcode overview), blocks (get micro-blocks), instructions (get micro-instructions).
@@ -418,8 +676,23 @@ Actions: callgraph (generate function call graph), cfg (generate function CFG).
 Required: idb, action, addr. Optional: depth, direction (down/up/both), format (json/dot).""",
 
     "bulk": """Bulk operations for batch modifications.
+
+WHEN TO USE: Prefer this when making multiple similar changes instead of calling
+modify() repeatedly. Saves context tokens and provides partial failure handling.
+
 Actions: rename (batch rename from list), comment (batch add comments), set_type (batch set types), import_json (import annotations from file), export_json (export annotations).
-Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path.""",
+
+EXAMPLES:
+  # Batch rename multiple functions at once
+  bulk(idb="sample.i64", action="rename", items=[
+    {"addr": "0x401000", "value": "init_config"},
+    {"addr": "0x401100", "value": "parse_data"},
+    {"addr": "0x401200", "value": "cleanup"}
+  ])
+
+Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path.
+
+RESPONSE FORMAT: Returns {success: [...], failed: [...]} with partial success support.""",
 
     "ctree": """Access Hex-Rays CTree (decompiler AST) for deep code analysis.
 Actions: get (get full CTree structure), traverse (tree structure with depth), find_calls (find function calls with optional filter), find_vars (list local variables/args), find_strings (string references in function), find_conditions (if/while/for statements).
@@ -507,9 +780,18 @@ class IDAMCPServer:
     """MCP server with session management and multi-instance support."""
     
     def __init__(self):
-        self.ida_dir = r"C:\Program Files\IDA Professional 9.2"
+        # Get IDA directory from environment or auto-detect
+        self.ida_dir = os.environ.get("IDADIR", "")
+        if not self.ida_dir:
+            self.ida_dir = self._detect_ida_dir()
+        
         self.idat_exe = self._find_idat()
-        self.cache_dir = r"C:\Users\Alexander\.ida_mcp_cache"
+        
+        # Use user-specific cache directory (cross-platform)
+        self.cache_dir = os.environ.get(
+            "IDA_MCP_CACHE", 
+            os.path.join(os.path.expanduser("~"), ".ida_mcp_cache")
+        )
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.api_path = os.path.join(self.script_dir, "src", "ida_pro_mcp", "ida_mcp")
         
@@ -522,23 +804,55 @@ class IDAMCPServer:
         # Current active session
         self.current_session: Optional[Session] = None
     
+    def _detect_ida_dir(self) -> str:
+        """Auto-detect IDA installation directory."""
+        if sys.platform == "win32":
+            candidates = [
+                r"C:\Program Files\IDA Professional 9.2",
+                r"C:\Program Files\IDA Pro 9.2",
+                r"C:\Program Files\IDA Professional 9.1",
+                r"C:\Program Files\IDA Professional 9.0",
+                r"C:\Program Files (x86)\IDA Pro",
+            ]
+        elif sys.platform == "darwin":
+            candidates = [
+                "/Applications/IDA Pro 9.2/ida.app/Contents/MacOS",
+                "/Applications/IDA Pro.app/Contents/MacOS",
+            ]
+        else:  # Linux
+            candidates = [
+                "/opt/ida",
+                "/opt/idapro",
+                os.path.expanduser("~/ida"),
+            ]
+        
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return ""
+    
     def _find_idat(self) -> str:
-        """Find idat.exe executable."""
+        """Find idat executable (headless IDA)."""
+        if sys.platform == "win32":
+            exe_names = ["idat.exe", "idat64.exe"]
+        else:
+            exe_names = ["idat64", "idat"]
+        
+        # Search in configured ida_dir first
         if self.ida_dir:
-            for name in ["idat.exe", "idat64.exe", "idat"]:
+            for name in exe_names:
                 path = os.path.join(self.ida_dir, name)
                 if os.path.exists(path):
                     return path
         
-        # Try common paths
-        candidates = [
-            r"C:\Program Files\IDA Professional 9.2\idat.exe",
-            r"C:\Program Files\IDA Pro 9.2\idat.exe",
-            r"C:\Program Files\IDA Professional 9.0\idat.exe",
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                return c
+        # Fallback: search in auto-detected directories
+        # Reuse the detection logic to avoid duplication
+        detected_dir = self._detect_ida_dir()
+        if detected_dir and detected_dir != self.ida_dir:
+            for name in exe_names:
+                path = os.path.join(detected_dir, name)
+                if os.path.exists(path):
+                    return path
         
         return ""
     
@@ -648,13 +962,27 @@ class IDAMCPServer:
             return make_error(MCPError.INVALID_ARGS, f"Unknown session action: {action}")
     
     def call_tool(self, tool_name: str, idb_path: str, **kwargs) -> Dict[str, Any]:
-        """Execute a tool from api_consolidated.py on an IDB file."""
+        """Execute a tool from api_consolidated.py on an IDB file.
+        
+        Args:
+            tool_name: Name of the tool function to call
+            idb_path: Path to IDB file or binary
+            **kwargs: Arguments to pass to the tool
+            
+        Returns:
+            Result dict from tool, or structured error dict
+        """
         start_time = time.time()
         
+        # Input validation: validate idb_path against path traversal
+        validated_path = validate_path(idb_path)
+        if validated_path is None:
+            return make_error(MCPError.PATH_TRAVERSAL, f"Invalid path: {idb_path}")
+        
         # Find or create IDB
-        target = idb_path
-        if not idb_path.endswith(('.i64', '.idb')):
-            existing = self._check_idb_exists(idb_path)
+        target = validated_path
+        if not validated_path.endswith(('.i64', '.idb')):
+            existing = self._check_idb_exists(validated_path)
             if existing:
                 target = existing
         
@@ -664,9 +992,27 @@ class IDAMCPServer:
         if not self.idat_exe:
             return make_error(MCPError.IDA_NOT_FOUND, "idat.exe not found. Set IDADIR environment variable.")
         
-        # Acquire lock for this IDB
+        # Validate address parameters if present
+        for addr_param in ['addr', 'addrs', 'start', 'end', 'target']:
+            if addr_param in kwargs:
+                addr_val = kwargs[addr_param]
+                if isinstance(addr_val, str):
+                    validated = validate_address(addr_val)
+                    if validated is None:
+                        return make_error(MCPError.INTEGER_OVERFLOW, f"Invalid address in {addr_param}: {addr_val}")
+                elif isinstance(addr_val, list):
+                    for a in addr_val:
+                        if isinstance(a, str):
+                            validated = validate_address(a)
+                            if validated is None:
+                                return make_error(MCPError.INTEGER_OVERFLOW, f"Invalid address: {a}")
+        
+        # Try to acquire lock for this IDB
+        # The acquire() method handles stale lock detection internally
         lock = SimpleLock(target)
-        if lock.is_locked() and not lock.acquire(timeout=30):
+        lock_acquired = lock.acquire(timeout=LOCK_TIMEOUT_EXTENDED)
+        
+        if not lock_acquired:
             owner = lock.get_owner_info()
             return make_error(
                 MCPError.FILE_LOCKED,
@@ -681,6 +1027,7 @@ class IDAMCPServer:
         args_file = None
         log_file = None
         cwd = None
+        success = False
         
         try:
             # Create unique temp files (collision-safe using UUID)
@@ -689,10 +1036,8 @@ class IDAMCPServer:
             output_file = os.path.join(self.cache_dir, f"mcp_result_{unique_id}.json")
             args_file = os.path.join(self.cache_dir, f"mcp_args_{unique_id}.json")
             
-            # Enable IDA logging
-            enable_logging = True
-            if enable_logging:
-                log_file = os.path.join(self.cache_dir, f"mcp_ida_{unique_id}.log")
+            # Enable IDA logging for debugging
+            log_file = os.path.join(self.cache_dir, f"mcp_ida_{unique_id}.log")
             
             # Write arguments to separate JSON file (UTF-8, safe from escaping issues)
             with open(args_file, 'w', encoding='utf-8') as f:
@@ -749,7 +1094,10 @@ ida_pro.qexit(0)
                 cmd.append(f"-L{log_file}")
             cmd.extend([f"-S{script_file}", target])
             
-            proc = subprocess.run(cmd, capture_output=True, timeout=300, cwd=cwd, env=env, shell=True)
+            # Using shell=False (default) for security - paths with spaces are handled
+            # correctly because subprocess passes list elements as separate arguments,
+            # unlike shell mode which would require quoting
+            proc = subprocess.run(cmd, capture_output=True, timeout=IDA_EXECUTION_TIMEOUT, cwd=cwd, env=env)
             
             # Check for common error patterns in stderr
             stderr_text = proc.stderr.decode('utf-8', errors='ignore')
@@ -768,12 +1116,13 @@ ida_pro.qexit(0)
                     result = json.load(f)
                 result["_execution_time"] = round(time.time() - start_time, 2)
                 result["_session"] = self.current_session.session_id if self.current_session else None
+                success = True
                 return result
             else:
                 # Build detailed error with diagnostics
                 details = {
                     "returncode": proc.returncode,
-                    "stderr": stderr_text[:1000] if stderr_text else "",
+                    "stderr": stderr_text[:ERROR_STDERR_LIMIT] if stderr_text else "",
                     "idat_exe": self.idat_exe,
                     "cwd": cwd,
                     "idadir_set": bool(self.ida_dir)
@@ -784,8 +1133,8 @@ ida_pro.qexit(0)
                     try:
                         with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                             lines = f.readlines()
-                            details["ida_log_tail"] = "".join(lines[-50:])
-                    except:
+                            details["ida_log_tail"] = "".join(lines[-LOG_TAIL_LINES:])
+                    except OSError:
                         pass
                 
                 return make_error(
@@ -796,58 +1145,132 @@ ida_pro.qexit(0)
         
         except subprocess.TimeoutExpired:
             details = {
-                "timeout": 300,
+                "timeout": IDA_EXECUTION_TIMEOUT,
                 "idat_exe": self.idat_exe,
                 "cwd": cwd,
                 "idadir_set": bool(self.ida_dir)
             }
-            return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (300s)", recoverable=True, details=details)
+            return make_error(MCPError.IDA_TIMEOUT, f"Operation timed out ({IDA_EXECUTION_TIMEOUT}s)", recoverable=True, details=details)
+        except OSError as e:
+            return make_error(MCPError.IDA_CRASHED, f"OS error: {e}")
         except Exception as e:
-            return make_error(MCPError.IDA_CRASHED, str(e))
+            return make_error(MCPError.IDA_CRASHED, f"Unexpected error: {e}")
         finally:
-            # Cleanup all temp files (except log file on error)
-            for f in [script_file, output_file, args_file]:
-                if f:
-                    try:
-                        if os.path.exists(f):
-                            os.remove(f)
-                    except:
-                        pass
+            # Always clean up temp files
+            self._cleanup_temp_files(
+                script_file, output_file, args_file, log_file,
+                keep_log_on_failure=not success
+            )
             
-            if log_file and os.path.exists(log_file) and not os.path.exists(output_file):
-                # Keep log file for debugging if it failed
-                pass
-            elif log_file:
+            # Release lock if we acquired it
+            if lock_acquired:
+                lock.release()
+    
+    def _cleanup_temp_files(self, script_file: str, output_file: str, args_file: str, 
+                           log_file: str, keep_log_on_failure: bool = True):
+        """Clean up temporary files created during tool execution.
+        
+        Args:
+            script_file: Path to temporary script file
+            output_file: Path to output JSON file
+            args_file: Path to arguments JSON file
+            log_file: Path to IDA log file
+            keep_log_on_failure: If True, keep log file when operation failed
+        """
+        # Always clean these files
+        for f in [script_file, output_file, args_file]:
+            if f:
+                try:
+                    if os.path.exists(f):
+                        os.remove(f)
+                except OSError:
+                    pass
+        
+        # Conditionally clean log file
+        if log_file:
+            # Determine if operation succeeded (output file was created)
+            operation_succeeded = output_file and os.path.exists(output_file)
+            # Keep log file only on failure if requested
+            should_keep_log = keep_log_on_failure and not operation_succeeded
+            
+            if not should_keep_log:
                 try:
                     if os.path.exists(log_file):
                         os.remove(log_file)
-                except:
+                except OSError:
                     pass
-            
-            # Release lock if we acquired it
-            lock.release()
     
     def get_tools_list(self) -> list:
-        """Return list of available tools in MCP format."""
+        """Return list of available tools in MCP format with action enums."""
+        # Define valid actions for each tool (Issue #31 - Missing enum for actions)
+        TOOL_ACTIONS = {
+            "session": ["discover", "create", "list", "switch", "close"],
+            "idb": ["meta", "segments", "cursor", "entrypoints"],
+            "code": ["decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "analyze", "callgraph", "find_paths", "strings_in_func"],
+            "data": ["functions", "globals", "strings", "imports", "exports"],
+            "search": ["bytes", "string", "immediate", "name", "pattern", "data_ref", "code_ref"],
+            "types": ["list", "get", "define", "get_members", "apply", "search_structs"],
+            "memory": ["read", "write"],
+            "modify": ["rename", "comment", "set_type", "patch"],
+            "misc": ["python", "idc", "load_sig", "bookmarks"],
+            "debug": ["start", "stop", "continue", "step", "step_into", "step_over", "run_to", "get_regs", "set_reg", "read_mem", "write_mem", "add_bp", "del_bp", "list_bp", "enable_bp", "threads"],
+            "funcs": ["create", "delete", "set_flags", "set_name", "add_comment"],
+            "segments": ["list", "add", "delete", "set_attr"],
+            "files": ["save", "close", "open", "batch", "export"],
+            "plugins": ["list", "run"],
+            "trace": ["get", "clear", "set_options"],
+            "fixups": ["list", "get", "add", "delete"],
+            "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code"],
+            "agent": ["analyze_function", "explore_address", "find_references", "search_all"],
+            "microcode": ["get", "blocks", "instructions"],
+            "graph": ["callgraph", "cfg"],
+            "bulk": ["rename", "comment", "set_type", "import_json", "export_json"],
+            "ctree": ["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions"],
+            "diff": ["functions", "bytes", "signatures", "names", "summary"],
+            "lumina": ["pull", "push", "status", "history", "search"],
+            "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
+            "patterns": ["generate", "match", "list_sigs", "apply_sig", "create_sig"],
+            "structs": ["recover", "analyze_usage", "list", "create", "apply"],
+            "strings_xref": ["analyze", "xref_chain", "detect_encoded", "find_format", "clusters"],
+            "entropy": ["section", "region", "packed_detect", "crypto_detect", "compare"],
+            "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
+            "comments_ai": ["get_context", "set_structured", "bulk_set", "export_md", "import_md", "summary"],
+            "nav": ["bookmarks", "add_bookmark", "del_bookmark", "goto", "history", "cursor", "interesting"],
+            "colorize": ["set_func", "set_range", "set_insn", "get", "clear", "palette", "highlight_pattern"],
+            "emulate": ["snippet", "appcall", "trace", "decrypt_strings", "eval_expr"],
+            "export": ["listing", "html", "idc", "json", "binexport", "headers"],
+            "history": ["undo", "redo", "list", "snapshot", "restore", "diff"],
+            "trace_analysis": ["import_trace", "analyze_coverage", "find_loops", "extract_api_calls", "basic_blocks_hit"],
+            "hooks": ["suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks"],
+            "taint": ["trace_arg", "trace_return", "find_sinks", "data_flow", "slice"],
+            "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered"],
+        }
+        
         tools = []
         for tool_name in TOOLS:
+            schema = {
+                "type": "object",
+                "properties": {
+                    "idb": {
+                        "type": "string",
+                        "description": "Path to IDB file or binary (optional if session is active)"
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "Action to perform within this tool"
+                    }
+                },
+                "required": ["action"] if tool_name == "session" else ["idb", "action"]
+            }
+            
+            # Add enum for valid actions if available
+            if tool_name in TOOL_ACTIONS:
+                schema["properties"]["action"]["enum"] = TOOL_ACTIONS[tool_name]
+            
             tools.append({
                 "name": tool_name,
                 "description": TOOL_DESCRIPTIONS.get(tool_name, f"IDA Pro {tool_name} tool"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "idb": {
-                            "type": "string",
-                            "description": "Path to IDB file or binary (optional if session is active)"
-                        },
-                        "action": {
-                            "type": "string",
-                            "description": "Action to perform within this tool"
-                        }
-                    },
-                    "required": ["action"] if tool_name == "session" else ["idb", "action"]
-                }
+                "inputSchema": schema
             })
         return tools
     
@@ -953,10 +1376,11 @@ ida_pro.qexit(0)
     
     def run(self):
         """Main event loop - read from stdin, write to stdout."""
-        # Use binary mode to avoid Windows encoding issues
-        import msvcrt
-        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
-        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
+        # Use binary mode to avoid encoding issues
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+            msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
         
         stdin = sys.stdin.buffer
         stdout = sys.stdout.buffer
@@ -980,15 +1404,65 @@ ida_pro.qexit(0)
                     stdout.flush()
             
             except json.JSONDecodeError:
+                # Invalid JSON - skip this request
                 continue
             except KeyboardInterrupt:
+                # User requested shutdown
                 break
+            except UnicodeDecodeError:
+                # Invalid UTF-8 input - skip
+                continue
+            except IOError:
+                # I/O error (pipe closed, etc.) - exit
+                break
+            except Exception:
+                # Log other errors but continue processing
+                # In production, this could log to a file
+                pass
+        
+        # Cleanup: release all session locks and clean up stale lock files
+        self._cleanup_on_exit()
+    
+    def _cleanup_on_exit(self):
+        """Clean up resources when the server exits."""
+        # Release all session locks
+        for session in self.session_mgr.sessions.values():
+            try:
+                session.lock.release()
             except Exception:
                 pass
         
-        # Cleanup: release all session locks
-        for session in self.session_mgr.sessions.values():
-            session.lock.release()
+        # Clean up stale lock files in the cache directory
+        try:
+            lock_pattern = os.path.join(self.cache_dir, "*.mcp.lock")
+            for lock_file in glob.glob(lock_pattern):
+                try:
+                    # Only remove stale locks (older than threshold)
+                    if os.path.exists(lock_file):
+                        mtime = os.path.getmtime(lock_file)
+                        if time.time() - mtime > LOCK_STALE_THRESHOLD:
+                            os.remove(lock_file)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        
+        # Clean up old temp files (older than configured age)
+        # Use os.listdir for better performance than multiple glob calls
+        try:
+            temp_prefixes = ("mcp_script_", "mcp_result_", "mcp_args_", "mcp_ida_")
+            cutoff_time = time.time() - TEMP_FILE_MAX_AGE
+            
+            for filename in os.listdir(self.cache_dir):
+                if filename.startswith(temp_prefixes):
+                    filepath = os.path.join(self.cache_dir, filename)
+                    try:
+                        if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff_time:
+                            os.remove(filepath)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
