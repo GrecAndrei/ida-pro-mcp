@@ -632,6 +632,7 @@ Required: idb, action, addr. Optional: size, count (for array), str_type (string
 
 WHEN TO USE: Prefer this for first-pass analysis or comprehensive exploration.
 This tool combines multiple operations into context-efficient responses.
+Ideal for: "Tell me everything about function X" or "What's interesting in this binary?"
 
 Actions:
 - analyze_function: Get full analysis (decompile + xrefs + strings + comments)
@@ -639,10 +640,24 @@ Actions:
 - find_references: Trace reference chains (who calls this? what does it call?)
 - search_all: Universal search across names, strings, and bytes in one call
 
-Required: idb, action.
-Optional: addr (target address), query (search term), depth (for reference tracing).
+EXAMPLES:
+  # Comprehensive function analysis - best for first look at a function
+  agent(idb="sample.i64", action="analyze_function", addr="0x401234")
+  # Returns: {decompiled_code, callers, callees, strings_used, comments, signature}
 
-RESPONSE FORMAT: Returns comprehensive dict with multiple analysis sections.""",
+  # Quick context around an unknown address
+  agent(idb="sample.i64", action="explore_address", addr="0x405000")
+  # Returns: {type (code/data/unknown), surrounding_bytes, xrefs_in, xrefs_out}
+
+  # Universal search - searches names, strings, and bytes at once
+  agent(idb="sample.i64", action="search_all", query="password")
+  # Returns: {name_matches, string_matches, comment_matches}
+
+Required: idb, action.
+Optional: addr (target address), query (search term), depth (for reference tracing, default 3).
+
+RESPONSE FORMAT: Returns comprehensive dict with multiple analysis sections.
+Responses are optimized for LLM context windows.""",
 
     "microcode": """Access Hex-Rays microcode intermediate representation.
 Actions: get (get microcode overview), blocks (get micro-blocks), instructions (get micro-instructions).
@@ -653,8 +668,23 @@ Actions: callgraph (generate function call graph), cfg (generate function CFG).
 Required: idb, action, addr. Optional: depth, direction (down/up/both), format (json/dot).""",
 
     "bulk": """Bulk operations for batch modifications.
+
+WHEN TO USE: Prefer this when making multiple similar changes instead of calling
+modify() repeatedly. Saves context tokens and provides partial failure handling.
+
 Actions: rename (batch rename from list), comment (batch add comments), set_type (batch set types), import_json (import annotations from file), export_json (export annotations).
-Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path.""",
+
+EXAMPLES:
+  # Batch rename multiple functions at once
+  bulk(idb="sample.i64", action="rename", items=[
+    {"addr": "0x401000", "value": "init_config"},
+    {"addr": "0x401100", "value": "parse_data"},
+    {"addr": "0x401200", "value": "cleanup"}
+  ])
+
+Required: idb, action. For rename/comment/set_type: items (list of {addr, value} dicts). For import/export: path.
+
+RESPONSE FORMAT: Returns {success: [...], failed: [...]} with partial success support.""",
 
     "ctree": """Access Hex-Rays CTree (decompiler AST) for deep code analysis.
 Actions: get (get full CTree structure), traverse (tree structure with depth), find_calls (find function calls with optional filter), find_vars (list local variables/args), find_strings (string references in function), find_conditions (if/while/for statements).
