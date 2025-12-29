@@ -515,10 +515,11 @@ def code(
                                     for member in udt:
                                         if member.name == actual_field:
                                             # Found the field, now find xrefs to addresses using this struct
+                                            # member.offset is already in bytes in IDA 9
                                             xrefs_found.append({
                                                 "struct": type_name,
                                                 "field": actual_field,
-                                                "offset": member.offset // 8,  # Convert bits to bytes
+                                                "offset": member.offset,
                                                 "field_type": str(member.type)
                                             })
                     

@@ -398,12 +398,20 @@ def validate_path(path: str, base_allowed: Optional[List[str]] = None) -> Option
     except (ValueError, OSError):
         return None
     
-    # Check for directory traversal patterns
-    suspicious_patterns = ['..', '~', '$', '%', '\x00']
-    for pattern in suspicious_patterns:
-        if pattern in path and pattern in normalized:
-            # Allow .. only if it's resolved within allowed directories
-            pass
+    # Check for null byte injection
+    if '\x00' in path:
+        return None
+    
+    # Check for directory traversal - after normpath, ".." should be resolved
+    # If the original path had ".." and the resolved path goes outside the
+    # current directory tree, we should reject it
+    if '..' in path:
+        # Ensure resolved path doesn't escape to parent directories
+        # by checking if the resolved path starts with the current working dir
+        # or is an absolute path that was intended
+        cwd = os.path.abspath(os.getcwd())
+        if not normalized.startswith(cwd) and not os.path.isabs(path):
+            return None
     
     # If base directories specified, ensure path is within one of them
     if base_allowed:
@@ -474,7 +482,7 @@ def make_error(code: str, message: str, recoverable: bool = False, details: dict
 # TOOLS LIST
 # =============================================================================
 
-# List of available tools (39 total - includes session_manager)
+# List of available tools (40 total - includes session)
 TOOLS = [
     "session",  # Session management tool
     "idb", "code", "data", "search", "types", "memory", "modify",
