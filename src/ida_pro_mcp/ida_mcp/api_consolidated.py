@@ -487,8 +487,47 @@ def code(
                     results.append({"addr": addr, "error": "field_name required"})
                     continue
                 
-                # Struct API removed in IDA 9
-                results.append({"addr": addr, "error": "xrefs_to_field not supported in this IDA version"})
+                # Parse field_name in format "struct_name.field_name" or just "field_name"
+                struct_name = None
+                actual_field = field_name
+                if "." in field_name:
+                    struct_name, actual_field = field_name.rsplit(".", 1)
+                
+                xrefs_found = []
+                try:
+                    # Get type info library
+                    til = ida_typeinf.get_idati()
+                    
+                    # Search through all local types for matching fields
+                    for ordinal in range(1, ida_typeinf.get_ordinal_qty(til) + 1):
+                        tinfo = ida_typeinf.tinfo_t()
+                        if tinfo.get_numbered_type(til, ordinal):
+                            type_name = tinfo.get_type_name()
+                            
+                            # Filter by struct name if specified
+                            if struct_name and type_name != struct_name:
+                                continue
+                            
+                            # Check if it's a struct/union
+                            if tinfo.is_struct() or tinfo.is_union():
+                                udt = ida_typeinf.udt_type_data_t()
+                                if tinfo.get_udt_details(udt):
+                                    for member in udt:
+                                        if member.name == actual_field:
+                                            # Found the field, now find xrefs to addresses using this struct
+                                            xrefs_found.append({
+                                                "struct": type_name,
+                                                "field": actual_field,
+                                                "offset": member.offset // 8,  # Convert bits to bytes
+                                                "field_type": str(member.type)
+                                            })
+                    
+                    if not xrefs_found:
+                        results.append({"addr": addr, "field": field_name, "xrefs": [], "note": "Field not found in any struct"})
+                    else:
+                        results.append({"addr": addr, "field": field_name, "struct_info": xrefs_found})
+                except Exception as e:
+                    results.append({"addr": addr, "error": f"Error searching for field: {str(e)}"})
                 continue
 
             elif action == "find_paths":

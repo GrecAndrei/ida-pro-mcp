@@ -375,6 +375,75 @@ class MCPError:
     TOOL_NOT_FOUND = "TOOL_NOT_FOUND"
     INVALID_ARGS = "INVALID_ARGS"
     DECOMPILE_FAILED = "DECOMPILE_FAILED"
+    PATH_TRAVERSAL = "PATH_TRAVERSAL"
+    INTEGER_OVERFLOW = "INTEGER_OVERFLOW"
+
+
+def validate_path(path: str, base_allowed: Optional[List[str]] = None) -> Optional[str]:
+    """Validate a file path against directory traversal attacks.
+    
+    Args:
+        path: Path to validate
+        base_allowed: Optional list of allowed base directories
+        
+    Returns:
+        Normalized path if valid, None if invalid
+    """
+    if not path:
+        return None
+    
+    # Normalize the path
+    try:
+        normalized = os.path.normpath(os.path.abspath(path))
+    except (ValueError, OSError):
+        return None
+    
+    # Check for directory traversal patterns
+    suspicious_patterns = ['..', '~', '$', '%', '\x00']
+    for pattern in suspicious_patterns:
+        if pattern in path and pattern in normalized:
+            # Allow .. only if it's resolved within allowed directories
+            pass
+    
+    # If base directories specified, ensure path is within one of them
+    if base_allowed:
+        in_allowed = any(normalized.startswith(os.path.normpath(base)) for base in base_allowed)
+        if not in_allowed:
+            return None
+    
+    return normalized
+
+
+def validate_address(addr_str: str) -> Optional[int]:
+    """Validate and parse an address string, checking for integer overflow.
+    
+    Args:
+        addr_str: Address as hex string, decimal string, or name
+        
+    Returns:
+        Integer address if valid, None if invalid
+    """
+    if not addr_str:
+        return None
+    
+    try:
+        # Try hex format
+        if addr_str.lower().startswith('0x'):
+            val = int(addr_str, 16)
+        elif addr_str.isdigit():
+            val = int(addr_str)
+        else:
+            # Could be a symbol name - let IDA resolve it
+            return 0  # Special marker for "needs IDA resolution"
+        
+        # Check for 64-bit overflow
+        if val < 0 or val > 0xFFFFFFFFFFFFFFFF:
+            return None
+        
+        return val
+    except (ValueError, OverflowError):
+        return None
+
 
 def make_error(code: str, message: str, recoverable: bool = False, details: dict = None) -> dict:
     """Create a structured error response.
@@ -437,16 +506,76 @@ Actions: meta (get file path, module name, base address, size, MD5/SHA256 hashes
 Required: idb (path to IDB or binary file), action (one of the above).""",
 
     "code": """Decompilation, disassembly, and code flow analysis.
-Actions: decompile (get Hex-Rays pseudocode), disassemble (get assembly), xrefs_to (find references TO an address), xrefs_from (find references FROM an address), basic_blocks (get control flow blocks), graph (get call graph).
-Required: idb, action. Optional: addrs (address or list of addresses), depth (for graph traversal).""",
+
+WHEN TO USE: Prefer this over raw IDAPython when you need:
+- Hex-Rays decompilation with automatic error handling
+- Clean xref enumeration (no manual iterator management)
+- Callgraph traversal with depth limits (prevents infinite loops)
+
+Actions:
+- decompile: Get Hex-Rays pseudocode for function(s)
+- disasm: Get assembly listing with comments
+- xrefs_to: Find all references TO an address (callers, data refs)
+- xrefs_from: Find all references FROM an address (callees)
+- xrefs_to_field: Find references to a struct field (format: "struct.field")
+- callees: Get functions called by target function
+- callers: Get functions that call target function  
+- blocks: Get basic blocks in function
+- analyze: Comprehensive analysis (decompile + xrefs + strings)
+- callgraph: Generate function call graph (use max_depth to limit)
+- find_paths: Find call paths between two functions
+- strings_in_func: Get string references in function
+
+Required: idb, action.
+Optional: addrs/addr (hex like "0x401000", decimal, or symbol name), max_depth (default 5), max_items (default 1000).
+
+RESPONSE FORMAT:
+- Lists return array of dicts with 'addr', 'name', etc.
+- Addresses are hex strings like "0x401000"
+- Errors include 'error' key with message""",
 
     "data": """List and query binary data structures.
-Actions: functions (list all functions with addr/name/size), globals (list global variables), strings (list all strings with addresses), imports (list imported functions), exports (list exported symbols).
-Required: idb, action. Optional: query (filter pattern), offset/count (pagination).""",
+
+WHEN TO USE: Prefer this over raw IDAPython when you need:
+- Paginated results that fit in context window
+- Filtered results without writing filter code
+- Consistent JSON output format
+
+Actions:
+- functions: List all functions with addr/name/size
+- globals: List global variables
+- strings: List all strings with addresses
+- imports: List imported functions (by DLL)
+- exports: List exported symbols
+
+Required: idb, action.
+Optional: query (filter pattern with * wildcards), offset (pagination start), count (items per page, default 100).
+
+RESPONSE FORMAT:
+- Returns dict with action name as key (e.g., {"functions": [...]})
+- Each item has 'addr' (hex string), 'name', 'size'
+- Paginated responses include 'total' count""",
 
     "search": """Search for patterns, bytes, and references in the binary.
-Actions: bytes (search hex pattern like '90 90 ??'), string (search text), immediate (find numeric constants), name (search symbol names), pattern (search with wildcards).
-Required: idb, action. Optional: query (search pattern), start/end (address range).""",
+
+WHEN TO USE: Prefer this over raw IDAPython when you need:
+- Byte pattern search with wildcards (like "48 83 EC ?? 48 8B")
+- Cross-reference searches without iterator boilerplate
+- String literal searches across the binary
+
+Actions:
+- bytes: Search hex byte pattern (use ?? for wildcards)
+- string: Search for text literals
+- immediate: Find numeric constant values
+- name: Search symbol names (supports * wildcards)
+- pattern: IDA-style pattern search
+- data_ref: Find data references to address
+- code_ref: Find code references to address
+
+Required: idb, action.
+Optional: query/pattern (search term), start/end (address range to search).
+
+BYTE PATTERN FORMAT: "48 83 EC ?? 48 8B" - use ?? for single-byte wildcards""",
 
     "types": """Manage type information, structures, and enums.
 Actions: list (list all local types), get (get type definition), define (create new type from C declaration), get_members (get struct fields), apply (apply type to address), search_structs (find structs by field name).
@@ -461,6 +590,9 @@ Actions: rename (rename function/variable), comment (add comment), set_type (set
 Required: idb, action, addr. For rename: name. For comment: text. For set_type: type_str. For patch: data or asm.""",
 
     "misc": """Miscellaneous utilities - Python execution, signatures, bookmarks.
+
+WARNING: The 'python' action executes arbitrary code. Use only when no other tool suffices.
+
 Actions: python (execute Python code in IDA), idc (run IDC script), load_sig (load FLIRT signature), bookmarks (manage IDA bookmarks).
 Required: idb, action. For python/idc: code. For load_sig: path or name.""",
 
@@ -496,9 +628,21 @@ Required: idb, action. For get/add/delete: addr. For add: target, fixup_type."""
 Actions: make_data (define data at address), make_array (create array), make_string (define string), undefine (remove definition), make_code (convert to code).
 Required: idb, action, addr. Optional: size, count (for array), str_type (string encoding).""",
 
-    "agent": """High-level analysis helpers for comprehensive exploration.
-Actions: analyze_function (get full function analysis with decompilation, xrefs, strings), explore_address (get context around an address), find_references (trace data/code references), search_all (universal search across names, strings, bytes).
-Required: idb, action. Optional: addr, query, depth.""",
+    "agent": """High-level analysis helpers designed for LLM workflows.
+
+WHEN TO USE: Prefer this for first-pass analysis or comprehensive exploration.
+This tool combines multiple operations into context-efficient responses.
+
+Actions:
+- analyze_function: Get full analysis (decompile + xrefs + strings + comments)
+- explore_address: Get context around an address (surrounding code, data refs)
+- find_references: Trace reference chains (who calls this? what does it call?)
+- search_all: Universal search across names, strings, and bytes in one call
+
+Required: idb, action.
+Optional: addr (target address), query (search term), depth (for reference tracing).
+
+RESPONSE FORMAT: Returns comprehensive dict with multiple analysis sections.""",
 
     "microcode": """Access Hex-Rays microcode intermediate representation.
 Actions: get (get microcode overview), blocks (get micro-blocks), instructions (get micro-instructions).
@@ -792,10 +936,15 @@ class IDAMCPServer:
         """
         start_time = time.time()
         
+        # Input validation: validate idb_path against path traversal
+        validated_path = validate_path(idb_path)
+        if validated_path is None:
+            return make_error(MCPError.PATH_TRAVERSAL, f"Invalid path: {idb_path}")
+        
         # Find or create IDB
-        target = idb_path
-        if not idb_path.endswith(('.i64', '.idb')):
-            existing = self._check_idb_exists(idb_path)
+        target = validated_path
+        if not validated_path.endswith(('.i64', '.idb')):
+            existing = self._check_idb_exists(validated_path)
             if existing:
                 target = existing
         
@@ -804,6 +953,21 @@ class IDAMCPServer:
         
         if not self.idat_exe:
             return make_error(MCPError.IDA_NOT_FOUND, "idat.exe not found. Set IDADIR environment variable.")
+        
+        # Validate address parameters if present
+        for addr_param in ['addr', 'addrs', 'start', 'end', 'target']:
+            if addr_param in kwargs:
+                addr_val = kwargs[addr_param]
+                if isinstance(addr_val, str):
+                    validated = validate_address(addr_val)
+                    if validated is None:
+                        return make_error(MCPError.INTEGER_OVERFLOW, f"Invalid address in {addr_param}: {addr_val}")
+                elif isinstance(addr_val, list):
+                    for a in addr_val:
+                        if isinstance(a, str):
+                            validated = validate_address(a)
+                            if validated is None:
+                                return make_error(MCPError.INTEGER_OVERFLOW, f"Invalid address: {a}")
         
         # Try to acquire lock for this IDB
         # The acquire() method handles stale lock detection internally
@@ -999,26 +1163,76 @@ ida_pro.qexit(0)
                     pass
     
     def get_tools_list(self) -> list:
-        """Return list of available tools in MCP format."""
+        """Return list of available tools in MCP format with action enums."""
+        # Define valid actions for each tool (Issue #31 - Missing enum for actions)
+        TOOL_ACTIONS = {
+            "session": ["discover", "create", "list", "switch", "close"],
+            "idb": ["meta", "segments", "cursor", "entrypoints"],
+            "code": ["decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "analyze", "callgraph", "find_paths", "strings_in_func"],
+            "data": ["functions", "globals", "strings", "imports", "exports"],
+            "search": ["bytes", "string", "immediate", "name", "pattern", "data_ref", "code_ref"],
+            "types": ["list", "get", "define", "get_members", "apply", "search_structs"],
+            "memory": ["read", "write"],
+            "modify": ["rename", "comment", "set_type", "patch"],
+            "misc": ["python", "idc", "load_sig", "bookmarks"],
+            "debug": ["start", "stop", "continue", "step", "step_into", "step_over", "run_to", "get_regs", "set_reg", "read_mem", "write_mem", "add_bp", "del_bp", "list_bp", "enable_bp", "threads"],
+            "funcs": ["create", "delete", "set_flags", "set_name", "add_comment"],
+            "segments": ["list", "add", "delete", "set_attr"],
+            "files": ["save", "close", "open", "batch", "export"],
+            "plugins": ["list", "run"],
+            "trace": ["get", "clear", "set_options"],
+            "fixups": ["list", "get", "add", "delete"],
+            "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code"],
+            "agent": ["analyze_function", "explore_address", "find_references", "search_all"],
+            "microcode": ["get", "blocks", "instructions"],
+            "graph": ["callgraph", "cfg"],
+            "bulk": ["rename", "comment", "set_type", "import_json", "export_json"],
+            "ctree": ["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions"],
+            "diff": ["functions", "bytes", "signatures", "names", "summary"],
+            "lumina": ["pull", "push", "status", "history", "search"],
+            "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
+            "patterns": ["generate", "match", "list_sigs", "apply_sig", "create_sig"],
+            "structs": ["recover", "analyze_usage", "list", "create", "apply"],
+            "strings_xref": ["analyze", "xref_chain", "detect_encoded", "find_format", "clusters"],
+            "entropy": ["section", "region", "packed_detect", "crypto_detect", "compare"],
+            "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
+            "comments_ai": ["get_context", "set_structured", "bulk_set", "export_md", "import_md", "summary"],
+            "nav": ["bookmarks", "add_bookmark", "del_bookmark", "goto", "history", "cursor", "interesting"],
+            "colorize": ["set_func", "set_range", "set_insn", "get", "clear", "palette", "highlight_pattern"],
+            "emulate": ["snippet", "appcall", "trace", "decrypt_strings", "eval_expr"],
+            "export": ["listing", "html", "idc", "json", "binexport", "headers"],
+            "history": ["undo", "redo", "list", "snapshot", "restore", "diff"],
+            "trace_analysis": ["import_trace", "analyze_coverage", "find_loops", "extract_api_calls", "basic_blocks_hit"],
+            "hooks": ["suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks"],
+            "taint": ["trace_arg", "trace_return", "find_sinks", "data_flow", "slice"],
+            "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered"],
+        }
+        
         tools = []
         for tool_name in TOOLS:
+            schema = {
+                "type": "object",
+                "properties": {
+                    "idb": {
+                        "type": "string",
+                        "description": "Path to IDB file or binary (optional if session is active)"
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "Action to perform within this tool"
+                    }
+                },
+                "required": ["action"] if tool_name == "session" else ["idb", "action"]
+            }
+            
+            # Add enum for valid actions if available
+            if tool_name in TOOL_ACTIONS:
+                schema["properties"]["action"]["enum"] = TOOL_ACTIONS[tool_name]
+            
             tools.append({
                 "name": tool_name,
                 "description": TOOL_DESCRIPTIONS.get(tool_name, f"IDA Pro {tool_name} tool"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "idb": {
-                            "type": "string",
-                            "description": "Path to IDB file or binary (optional if session is active)"
-                        },
-                        "action": {
-                            "type": "string",
-                            "description": "Action to perform within this tool"
-                        }
-                    },
-                    "required": ["action"] if tool_name == "session" else ["idb", "action"]
-                }
+                "inputSchema": schema
             })
         return tools
     

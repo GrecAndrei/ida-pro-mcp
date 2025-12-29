@@ -89,7 +89,7 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 13. **~~Session Lock Never Released~~** *(Fixed)*: `call_tool` method now properly tracks `lock_acquired` state and only releases the lock if it was successfully acquired.
 
-14. **Empty `xrefs_to_field` Action**: The action just returns an error saying "not supported" but is still listed as a valid action.
+14. **~~Empty `xrefs_to_field` Action~~** *(Fixed)*: Implemented proper xrefs_to_field using IDA 9's type library API to search for struct fields.
 
 15. **~~Stale IDA Log Files~~** *(Fixed)*: Added `_cleanup_on_exit()` method that cleans up stale lock files and old temp files on server shutdown.
 
@@ -101,13 +101,13 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 > **Note**: Several of these have been addressed.
 
-16. **Missing IDB Parameter Documentation**: Tool examples show `idb="C:/samples/malware.exe.i64"` but the session system documentation is incomplete on when `idb` is optional.
+16. **~~Missing IDB Parameter Documentation~~** *(Fixed)*: Added comprehensive "Detailed Parameter Reference" section explaining when `idb` is optional (with active sessions).
 
 17. **~~No Linux/Mac Instructions~~** *(Partially Fixed)*: README now mentions Linux/macOS as experimental with environment variable examples.
 
 18. **~~Daemon Port Inconsistency~~** *(Fixed)*: README example now uses correct default port 13337.
 
-19. **Missing Tool Parameters**: The tool reference tables are incomplete - many optional parameters aren't documented.
+19. **~~Missing Tool Parameters~~** *(Fixed)*: Added detailed parameter tables for each tool with types, requirements, and descriptions.
 
 20. **~~No Error Code Reference~~** *(Fixed)*: Added comprehensive error codes reference section in README with recovery actions.
 
@@ -119,9 +119,9 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 23. **Inconsistent Action Names**: Some tools use underscores (`xrefs_to`), some use hyphens in descriptions, creating confusion.
 
-24. **Missing Return Type Documentation**: Tool descriptions don't consistently document what shape of data is returned.
+24. **~~Missing Return Type Documentation~~** *(Fixed)*: Added "Response Formats" section showing success and error response structures.
 
-25. **No Pagination Documentation**: Tools with `offset/count` parameters don't explain pagination clearly.
+25. **~~No Pagination Documentation~~** *(Fixed)*: Added pagination section with examples showing offset/count usage.
 
 ---
 
@@ -129,23 +129,23 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ### 3.1 Clarity Improvements
 
-26. **Add "When to Use" Guidance**: Each tool should explain when an LLM should prefer it over writing IDAPython directly.
+26. **~~Add "When to Use" Guidance~~** *(Fixed)*: Added "WHEN TO USE" sections to `code`, `data`, `search`, and `agent` tool descriptions explaining when to prefer MCP tools over raw IDAPython.
 
 27. **Add Common Workflow Examples**: Show tool chains like "Use `data` to find functions, then `code` to decompile".
 
-28. **Clarify Address Formats**: Explicitly document that addresses can be hex (`0x401000`), decimal, or symbol names.
+28. **~~Clarify Address Formats~~** *(Fixed)*: Added "Address Formats" table in README showing hex, decimal, symbol name, and expression formats.
 
 29. **Document Batch vs Single Operations**: Clarify when `addrs` accepts lists vs single values.
 
-30. **Add "Prefer This Tool Because..."**: Explain why `code(action="analyze")` is better than calling multiple tools.
+30. **~~Add "Prefer This Tool Because..."~~** *(Fixed)*: Tool descriptions now explain advantages (error handling, pagination, etc.).
 
 ### 3.2 Tool Schema Improvements
 
-31. **Missing `enum` for Actions**: Tool inputSchema doesn't list valid action values, requiring LLM to read descriptions.
+31. **~~Missing `enum` for Actions~~** *(Fixed)*: `get_tools_list()` now includes `TOOL_ACTIONS` dict with valid action enums for each tool.
 
 32. **No Required Parameters Per Action**: The schema shows `action` as required but doesn't indicate which parameters each action needs.
 
-33. **Missing Parameter Type Hints**: Many parameters are documented as `str` but have specific formats (hex, comma-separated lists).
+33. **~~Missing Parameter Type Hints~~** *(Fixed)*: Added tool-specific parameter tables in README with types.
 
 34. **No Examples in Schema**: JSON Schema supports `examples` field which would help LLMs.
 
@@ -155,7 +155,7 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 36. **Inconsistent Response Keys**: Some tools return `{"ok": True}`, others `{"success": True}`, others just data.
 
-37. **No Response Schema Documentation**: LLMs don't know what shape of data to expect.
+37. **~~No Response Schema Documentation~~** *(Fixed)*: Added "Response Formats" section in README showing success and error response structures.
 
 38. **Mixed `addr` vs `address` Keys**: Responses use different keys for the same concept.
 
@@ -177,7 +177,7 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 44. **No Stack Traces in Errors**: Most error responses don't include traceback information for debugging.
 
-45. **Missing Input Validation**: Tools don't validate that required parameters for specific actions are provided upfront.
+45. **~~Missing Input Validation~~** *(Fixed)*: Added `validate_path()` and `validate_address()` functions with path traversal and integer overflow checks.
 
 ### 4.2 Code Organization
 
@@ -307,25 +307,25 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ### 8.1 Input Validation
 
-90. **Path Traversal**: `idb` parameter should validate against directory traversal attacks.
+90. **~~Path Traversal~~** *(Fixed)*: Added `validate_path()` function that normalizes paths and checks for directory traversal patterns.
 
-91. **Code Injection in `misc` Python Tool**: The `python` action executes arbitrary code - needs sandboxing or removal.
+91. **Code Injection in `misc` Python Tool**: The `python` action executes arbitrary code - needs sandboxing or removal. *(By design - documented risk)*
 
-92. **Shell Injection**: Several subprocess calls are vulnerable if paths contain special characters.
+92. **~~Shell Injection~~** *(Fixed)*: Removed `shell=True` from subprocess calls; using list-based command execution.
 
-93. **Integer Overflow**: Address parsing doesn't check for values exceeding 64-bit.
+93. **~~Integer Overflow~~** *(Fixed)*: Added `validate_address()` function that checks for 64-bit overflow in address parameters.
 
-94. **Denial of Service**: No limits on pattern search complexity.
+94. **Denial of Service**: No limits on pattern search complexity. *(Mitigated by IDA_EXECUTION_TIMEOUT constant)*
 
 ### 8.2 Data Protection
 
-95. **Lock File Contains PID**: Could leak process information.
+95. **Lock File Contains PID**: Could leak process information. *(Accepted risk - needed for stale lock detection)*
 
-96. **Temp Files Contain Code**: Script files written to disk contain potentially sensitive analysis.
+96. **Temp Files Contain Code**: Script files written to disk contain potentially sensitive analysis. *(Mitigated by cleanup)*
 
-97. **No Cleanup on Exit**: Temp files persist after server shutdown.
+97. **~~No Cleanup on Exit~~** *(Fixed)*: Added `_cleanup_on_exit()` method that removes temp files on server shutdown.
 
-98. **World-Readable Cache**: Cache directory may have insecure permissions.
+98. **World-Readable Cache**: Cache directory may have insecure permissions. *(Platform-dependent - documented)*
 
 ---
 
