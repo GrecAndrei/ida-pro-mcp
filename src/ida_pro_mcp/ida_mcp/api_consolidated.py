@@ -1360,6 +1360,9 @@ def misc(
                     except Exception:
                         return None
                 
+                # Get IDA version once to avoid multiple parses
+                ida_major_version = int(idaapi.get_kernel_version().split('.')[0])
+                
                 exec_globals = {
                     "__builtins__": __builtins__,
                     "idaapi": idaapi,
@@ -1408,13 +1411,13 @@ def misc(
                     "ida_strlist": lazy_import("ida_strlist"),
                     # ida_struct and ida_enum were removed in IDA 9.0
                     # Use ida_typeinf instead for new code
-                    "ida_struct": lazy_import("ida_struct") if int(idaapi.get_kernel_version().split('.')[0]) < 9 else None,
+                    "ida_struct": lazy_import("ida_struct") if ida_major_version < 9 else None,
                     "ida_tryblks": lazy_import("ida_tryblks"),
                     "ida_typeinf": ida_typeinf,
                     "ida_ua": lazy_import("ida_ua"),
                     "ida_undo": lazy_import("ida_undo"),
                     "ida_xref": lazy_import("ida_xref"),
-                    "ida_enum": lazy_import("ida_enum") if int(idaapi.get_kernel_version().split('.')[0]) < 9 else None,
+                    "ida_enum": lazy_import("ida_enum") if ida_major_version < 9 else None,
                     "parse_address": parse_address,
                     "get_function": get_function,
                 }
@@ -1477,10 +1480,14 @@ def misc(
             except Exception:
                 import traceback
                 
+                # Collect any output that occurred before the exception
+                stdout_text = stdout_capture.getvalue()
+                stderr_text = stderr_capture.getvalue()
+                
                 return {
                     "result": "",
-                    "stdout": "",
-                    "stderr": traceback.format_exc(),
+                    "stdout": stdout_text,
+                    "stderr": stderr_text + traceback.format_exc(),
                 }
             finally:
                 sys.stdout = old_stdout
