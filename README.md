@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/IDA%20Pro-9.0%2B-blue?style=for-the-badge" alt="IDA Pro 9.0+"/>
   <img src="https://img.shields.io/badge/Python-3.11%2B-green?style=for-the-badge" alt="Python 3.11+"/>
   <img src="https://img.shields.io/badge/MCP-2.0-purple?style=for-the-badge" alt="MCP 2.0"/>
-  <img src="https://img.shields.io/badge/Tools-39-orange?style=for-the-badge" alt="39 Tools"/>
+  <img src="https://img.shields.io/badge/Tools-40-orange?style=for-the-badge" alt="39 Tools"/>
   <img src="https://img.shields.io/badge/Sessions-Yes-brightgreen?style=for-the-badge" alt="Session Support"/>
 </p>
 
@@ -15,7 +15,7 @@
 
 <p align="center">
   <strong>AI-powered reverse engineering without launching IDA Pro GUI.</strong><br>
-  39 comprehensive tools for binary analysis, decompilation, and annotation.<br>
+  40 comprehensive tools for binary analysis, decompilation, and annotation.<br>
   <strong>Multi-session support</strong> - multiple LLMs can analyze the same binary simultaneously.<br>
   Works with Claude, Gemini, Cursor, VS Code, and any MCP-compatible client.
 </p>
@@ -117,7 +117,7 @@ agent(idb="sample.i64", action="analyze_function", addr="main")
                                                   ▼
                                          ┌──────────────────┐
                                          │  api_consolidated│
-                                         │   39 tools       │
+                                         │   40 tools       │
                                          └──────────────────┘
 ```
 
@@ -125,7 +125,7 @@ agent(idb="sample.i64", action="analyze_function", addr="main")
 
 - **Fully Standalone**: No IDA GUI required - uses headless `idat.exe`
 - **MCP Stdio Protocol**: Works with any MCP-compatible client
-- **39 Comprehensive Tools**: Covers all reverse engineering needs
+- **40 comprehensive tools**: Covers all reverse engineering needs
 - **Session Management**: Multiple LLMs can analyze the same binary with separate IDBs
 - **File Locking**: Automatic lock detection prevents conflicts
 - **Structured Errors**: Clear error codes for LLM understanding
@@ -359,7 +359,7 @@ ida-pro-mcp/
 ├── ida_mcp_daemon.py       # HTTP daemon (alternative mode)
 ├── src/ida_pro_mcp/
 │   └── ida_mcp/
-│       ├── api_consolidated.py  # All 39 tool implementations
+│       ├── api_consolidated.py  # All 40 tool implementations
 │       ├── utils.py             # Helper functions
 │       └── zeromcp/             # MCP protocol library
 ├── archive/                # Legacy files (tests, docs)
