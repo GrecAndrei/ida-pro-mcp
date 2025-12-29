@@ -771,6 +771,194 @@ Actions: import_drcov (DynamoRIO format), import_lighthouse (simple address list
 Required: idb, action. For import/highlight: path. For report: addr. Optional: color (green|yellow|red)."""
 }
 
+# Minimal per-action required parameter hints used for validation and LLM-facing docs
+ACTION_REQUIRED_PARAMS = {
+    "session": {
+        "discover": ["binary_path"],
+        "create": ["binary_path"],
+        "switch": ["session_id"],
+        "close": ["session_id"],
+    },
+    "code": {
+        "decompile": ["addrs"],
+        "disasm": ["addrs"],
+        "xrefs_to": ["addrs"],
+        "xrefs_from": ["addrs"],
+        "xrefs_to_field": ["addrs", "field_name"],
+        "callees": ["addrs"],
+        "callers": ["addrs"],
+        "blocks": ["addrs"],
+        "analyze": ["addrs"],
+        "callgraph": ["addrs"],
+        "find_paths": ["addr", "target"],
+        "strings_in_func": ["addrs"],
+    },
+    "data": {},
+    "search": {
+        "bytes": ["pattern"],
+        "string": ["query"],
+        "immediate": ["query"],
+        "name": ["query"],
+        "pattern": ["pattern"],
+        "data_ref": ["addr"],
+        "code_ref": ["addr"],
+    },
+    "types": {
+        "get": ["name"],
+        "define": ["decl"],
+        "get_members": ["name"],
+        "apply": ["addr", "name"],
+        "search_structs": ["query"],
+    },
+    "memory": {"read": ["addr", "size"], "write": ["addr", "data"]},
+    "modify": {
+        "rename": ["addr", "name"],
+        "comment": ["addr", "text"],
+        "set_type": ["addr", "type_str"],
+        "patch": ["addr", "data"],
+    },
+    "misc": {"python": ["code"], "idc": ["code"], "load_sig": ["path"], "bookmarks": []},
+    "debug": {
+        "start": ["path"],
+        "run_to": ["addr"],
+        "add_bp": ["addr"],
+        "del_bp": ["addr"],
+        "enable_bp": ["addr"],
+        "set_reg": ["reg", "value"],
+        "read_mem": ["addr", "size"],
+        "write_mem": ["addr", "data"],
+    },
+    "funcs": {
+        "create": ["addr"],
+        "delete": ["addr"],
+        "set_flags": ["addr"],
+        "set_name": ["addr", "name"],
+        "add_comment": ["addr", "comment"],
+    },
+    "segments": {"add": ["start", "end", "name"], "delete": ["name"], "set_attr": ["name", "attr", "value"]},
+    "files": {"open": ["path"], "batch": ["paths"], "export": ["path"]},
+    "plugins": {"run": ["name"]},
+    "trace": {},
+    "fixups": {"get": ["addr"], "add": ["addr", "target", "fixup_type"], "delete": ["addr"]},
+    "data_ops": {
+        "make_data": ["addr"],
+        "make_array": ["addr", "count"],
+        "make_string": ["addr"],
+        "undefine": ["addr"],
+        "make_code": ["addr"],
+    },
+    "agent": {
+        "analyze_function": ["addr"],
+        "explore_address": ["addr"],
+        "find_references": ["addr"],
+        "search_all": ["query"],
+    },
+    "microcode": {"get": ["addr"], "blocks": ["addr"], "instructions": ["addr"]},
+    "graph": {"callgraph": ["addr"], "cfg": ["addr"]},
+    "bulk": {
+        "rename": ["items"],
+        "comment": ["items"],
+        "set_type": ["items"],
+        "import_json": ["path"],
+        "export_json": ["path"],
+    },
+    "ctree": {
+        "get": ["addr"],
+        "traverse": ["addr"],
+        "find_calls": ["addr"],
+        "find_vars": ["addr"],
+        "find_strings": ["addr"],
+        "find_conditions": ["addr"],
+    },
+    "diff": {"functions": ["addr1", "addr2"], "bytes": ["addr1", "addr2"], "signatures": ["addr1"]},
+    "lumina": {"pull": ["addr"], "push": ["addr"], "history": ["addr"], "search": ["query"]},
+    "symbols": {"apply": ["addr", "name"], "export": ["path"]},
+    "patterns": {"generate": ["addr"], "match": ["pattern"], "apply_sig": ["name"], "create_sig": ["addr"]},
+    "structs": {"recover": ["addr"], "analyze_usage": ["addr"], "create": ["decl"], "apply": ["addr", "name"]},
+    "strings_xref": {"analyze": ["addr"], "xref_chain": ["addr"]},
+    "entropy": {"region": ["addr", "size"], "compare": ["addr", "target"]},
+    "imports_deep": {"resolve": ["addr"]},
+    "comments_ai": {"get_context": ["addr"], "set_structured": ["addr", "text"], "bulk_set": ["items"], "export_md": ["path"], "import_md": ["path"]},
+    "nav": {"add_bookmark": ["addr"], "del_bookmark": ["addr"], "goto": ["addr"]},
+    "colorize": {"set_func": ["addr", "color"], "set_range": ["addr", "end_addr", "color"], "set_insn": ["addr", "color"], "get": ["addr"], "clear": ["addr"], "highlight_pattern": ["pattern"]},
+    "emulate": {"snippet": ["addr"], "appcall": ["addr"], "trace": ["addr"], "eval_expr": ["addr"]},
+    "export": {"listing": ["path"], "html": ["path"], "idc": ["path"], "json": ["path"], "binexport": ["path"], "headers": ["path"]},
+    "history": {"snapshot": ["name"], "restore": ["name"]},
+    "hooks": {"suggest": ["category"], "generate_frida": ["addr"], "generate_detours": ["addr"], "inline_hooks": ["addr"]},
+    "taint": {"trace_arg": ["addr", "arg_num"], "trace_return": ["addr"], "find_sinks": ["addr"], "data_flow": ["addr"], "slice": ["addr"]},
+    "coverage": {"import_drcov": ["path"], "import_lighthouse": ["path"], "highlight": ["path"], "report": ["addr"]},
+}
+
+PLACEHOLDER_VALUES = {
+    "idb": "sample.i64",
+    "binary_path": "/path/to/binary.exe",
+    "session_id": "SESSION1234",
+    "addr": "0x401000",
+    "addr1": "0x401000",
+    "addr2": "0x402000",
+    "addrs": ["0x401000"],
+    "target": "0x402000",
+    "pattern": "48 8B ??",
+    "query": "*main*",
+    "path": "/tmp/output.json",
+    "paths": ["/tmp/a.bin", "/tmp/b.bin"],
+    "items": [{"addr": "0x401000", "value": "new_name"}],
+    "name": "symbol_name",
+    "decl": "int foo(int a);",
+    "text": "comment",
+    "comment": "comment",
+    "data": "90 90",
+    "size": 16,
+    "count": 1,
+    "arg_num": 0,
+    "color": "0x66ff66",
+    "category": "network",
+    "field_name": "struct.field",
+    "fixup_type": "off32",
+    "start": "0x400000",
+    "end": "0x401000",
+    "end_addr": "0x401000",
+}
+
+COMMON_PROPERTIES = {
+    "binary_path": {"type": "string", "description": "Path to binary to analyze or discover sessions for."},
+    "session_id": {"type": "string", "description": "Session identifier returned by the session tool."},
+    "idb": {"type": "string", "description": "Path to IDB or input binary. Optional when a session is active."},
+    "action": {"type": "string", "description": "Action to perform within the tool."},
+    "addr": {"type": "string", "description": "Single address (hex string like 0x401000 or symbol name)."},
+    "addrs": {
+        "oneOf": [
+            {"type": "string", "description": "Single address."},
+            {"type": "array", "items": {"type": "string"}, "description": "List of addresses."},
+        ]
+    },
+    "target": {"type": "string", "description": "Secondary address/target for path searches or comparisons."},
+    "addr1": {"type": "string", "description": "First address for diff/compare actions."},
+    "addr2": {"type": "string", "description": "Second address for diff/compare actions."},
+    "start": {"type": "string", "description": "Start address for segment or range operations."},
+    "end": {"type": "string", "description": "End address for segment or range operations."},
+    "end_addr": {"type": "string", "description": "End address for color/range operations."},
+    "path": {"type": "string", "description": "File path used by export/import actions."},
+    "paths": {"type": "array", "items": {"type": "string"}, "description": "List of file paths (batch/open/import)."},
+    "items": {"type": "array", "items": {"type": "object"}, "description": "Batch payload (e.g., rename/comment lists)."},
+    "pattern": {"type": "string", "description": "Byte or search pattern (supports ?? wildcards for bytes)."},
+    "query": {"type": "string", "description": "Search/filter text (supports * wildcards in many actions)."},
+    "name": {"type": "string", "description": "Symbol/type/struct name depending on action."},
+    "decl": {"type": "string", "description": "C declaration or definition text."},
+    "text": {"type": "string", "description": "Comment or structured text payload."},
+    "data": {"type": "string", "description": "Hex-encoded bytes for write/patch operations."},
+    "size": {"type": "integer", "description": "Size in bytes (reads, entropy regions, etc.)."},
+    "count": {"type": "integer", "description": "Pagination count or item count depending on action."},
+    "offset": {"type": "integer", "description": "Pagination offset or starting index."},
+    "field_name": {"type": "string", "description": "Struct field name (e.g., MyStruct.field) for xrefs_to_field."},
+    "fixup_type": {"type": "string", "description": "Fixup/relocation type when creating fixups."},
+    "color": {"type": "string", "description": "RGB color (hex) for colorize actions."},
+    "category": {"type": "string", "description": "Category hint (network/file/crypto/registry/process) for hooks."},
+    "arg_num": {"type": "integer", "description": "Argument index for taint/trace_arg actions."},
+    "reg": {"type": "string", "description": "Register name for debugger register actions."},
+    "value": {"type": ["string", "integer"], "description": "Value used for register or attribute setters."},
+}
+
 
 # =============================================================================
 # MCP SERVER
@@ -1245,27 +1433,91 @@ ida_pro.qexit(0)
             "taint": ["trace_arg", "trace_return", "find_sinks", "data_flow", "slice"],
             "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered"],
         }
-        
+
+        def build_action_hint(tool: str) -> str:
+            actions = TOOL_ACTIONS.get(tool, [])
+            required = ACTION_REQUIRED_PARAMS.get(tool, {})
+            hints = []
+            for action in actions:
+                reqs = required.get(action, [])
+                if reqs:
+                    hints.append(f"{action} (requires: {', '.join(reqs)})")
+                else:
+                    hints.append(f"{action} (no extra params)")
+            return "; ".join(hints)
+
+        def build_examples(tool: str) -> list:
+            examples = []
+            actions = TOOL_ACTIONS.get(tool, [])
+            required = ACTION_REQUIRED_PARAMS.get(tool, {})
+            for action in actions[:2]:
+                example = {"action": action}
+                if tool != "session":
+                    example["idb"] = PLACEHOLDER_VALUES["idb"]
+                for param in required.get(action, []):
+                    example[param] = PLACEHOLDER_VALUES.get(param, "<value>")
+                examples.append(example)
+            return examples
+
         tools = []
         for tool_name in TOOLS:
             schema = {
                 "type": "object",
                 "properties": {
-                    "idb": {
-                        "type": "string",
-                        "description": "Path to IDB file or binary (optional if session is active)"
-                    },
-                    "action": {
-                        "type": "string",
-                        "description": "Action to perform within this tool"
+                    key: value
+                    for key, value in COMMON_PROPERTIES.items()
+                    if key
+                    in {
+                        "idb",
+                        "action",
+                        "binary_path",
+                        "session_id",
+                        "addr",
+                        "addrs",
+                        "addr1",
+                        "addr2",
+                        "target",
+                        "start",
+                        "end",
+                        "end_addr",
+                        "path",
+                        "paths",
+                        "items",
+                        "pattern",
+                        "query",
+                        "name",
+                        "decl",
+                        "text",
+                        "data",
+                        "size",
+                        "count",
+                        "offset",
+                        "field_name",
+                        "fixup_type",
+                        "color",
+                        "category",
+                        "arg_num",
+                        "reg",
+                        "value",
                     }
                 },
-                "required": ["action"] if tool_name == "session" else ["idb", "action"]
+                "required": ["action"] if tool_name == "session" else ["idb", "action"],
             }
+
+            # Add per-action hints to the action description
+            action_hint = build_action_hint(tool_name)
+            if action_hint and "action" in schema["properties"]:
+                base_desc = schema["properties"]["action"].get("description", "Action to perform within this tool")
+                schema["properties"]["action"]["description"] = f"{base_desc} Supported: {action_hint}"
             
             # Add enum for valid actions if available
             if tool_name in TOOL_ACTIONS:
                 schema["properties"]["action"]["enum"] = TOOL_ACTIONS[tool_name]
+
+            # Provide lightweight examples so LLMs see the expected shape quickly
+            examples = build_examples(tool_name)
+            if examples:
+                schema["examples"] = examples
             
             tools.append({
                 "name": tool_name,
@@ -1279,6 +1531,24 @@ ida_pro.qexit(0)
         method = request.get("method", "")
         req_id = request.get("id")
         params = request.get("params", {})
+
+        def wrap_result(payload: dict | list | str) -> dict:
+            structured = payload if isinstance(payload, dict) else {"result": payload}
+            is_error = isinstance(payload, dict) and bool(payload.get("error"))
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(payload, indent=2, default=str),
+                        }
+                    ],
+                    "structuredContent": structured,
+                    "isError": is_error,
+                },
+            }
         
         if method == "initialize":
             return {
@@ -1325,8 +1595,33 @@ ida_pro.qexit(0)
             # Handle session tool specially
             if tool_name == "session":
                 action = arguments.get("action", "")
+                if not action:
+                    return wrap_result(make_error(MCPError.INVALID_ARGS, "action is required for session tool"))
+                required_params = ACTION_REQUIRED_PARAMS.get("session", {}).get(action, [])
+                missing = [p for p in required_params if arguments.get(p) in (None, "", [])]
+                if missing:
+                    return wrap_result(
+                        make_error(
+                            MCPError.INVALID_ARGS,
+                            f"Missing required parameters for session.{action}: {', '.join(missing)}",
+                        )
+                    )
                 result = self.handle_session_tool(action, arguments)
             else:
+                action = arguments.get("action", "")
+                if not action:
+                    return wrap_result(make_error(MCPError.INVALID_ARGS, "action is required"))
+
+                required_params = ACTION_REQUIRED_PARAMS.get(tool_name, {}).get(action, [])
+                missing = [p for p in required_params if arguments.get(p) in (None, "", [])]
+                if missing:
+                    return wrap_result(
+                        make_error(
+                            MCPError.INVALID_ARGS,
+                            f"Missing required parameters for {tool_name}.{action}: {', '.join(missing)}",
+                        )
+                    )
+
                 # Get IDB path - from args, current session, or error
                 idb_path = arguments.pop("idb", None)
                 
@@ -1334,35 +1629,17 @@ ida_pro.qexit(0)
                     if self.current_session:
                         idb_path = self.current_session.idb_path
                     else:
-                        return {
-                            "jsonrpc": "2.0",
-                            "id": req_id,
-                            "result": {
-                                "content": [{
-                                    "type": "text",
-                                    "text": json.dumps(make_error(
-                                        MCPError.SESSION_REQUIRED,
-                                        "No IDB specified and no active session. Use 'session' tool to create one, or specify 'idb' parameter."
-                                    ), indent=2)
-                                }]
-                            }
-                        }
+                        return wrap_result(
+                            make_error(
+                                MCPError.SESSION_REQUIRED,
+                                "No IDB specified and no active session. Use 'session' tool to create one, or specify 'idb' parameter.",
+                            )
+                        )
                 
                 # Execute tool
                 result = self.call_tool(tool_name, idb_path, **arguments)
             
-            return {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(result, indent=2, default=str)
-                        }
-                    ]
-                }
-            }
+            return wrap_result(result)
         
         else:
             return {
