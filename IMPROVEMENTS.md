@@ -75,8 +75,7 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 7. **~~Missing IDADIR Environment Variable Check~~** *(Fixed)*: Environment variable is now checked first.
 
-8. **~~`msvcrt` Import at Runtime~~** *(Fixed)*: Now wrapped in platform check.
-   ```
+8. **~~`msvcrt` Import at Runtime~~** *(Fixed)*: Now wrapped in platform check (`if sys.platform == "win32"`).
 
 9. **~~Indentation Bug in api_consolidated.py~~** *(Fixed)*: Line 521 indentation corrected.
 
