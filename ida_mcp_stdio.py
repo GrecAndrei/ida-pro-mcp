@@ -959,6 +959,42 @@ COMMON_PROPERTIES = {
     "value": {"type": ["string", "integer"], "description": "Value used for register or attribute setters."},
 }
 
+SCHEMA_PROPERTY_KEYS = {
+    "idb",
+    "action",
+    "binary_path",
+    "session_id",
+    "addr",
+    "addrs",
+    "addr1",
+    "addr2",
+    "target",
+    "start",
+    "end",
+    "end_addr",
+    "path",
+    "paths",
+    "items",
+    "pattern",
+    "query",
+    "name",
+    "decl",
+    "text",
+    "data",
+    "size",
+    "count",
+    "offset",
+    "field_name",
+    "fixup_type",
+    "color",
+    "category",
+    "arg_num",
+    "reg",
+    "value",
+}
+
+MAX_EXAMPLES_PER_TOOL = 2
+
 
 # =============================================================================
 # MCP SERVER
@@ -1450,12 +1486,12 @@ ida_pro.qexit(0)
             examples = []
             actions = TOOL_ACTIONS.get(tool, [])
             required = ACTION_REQUIRED_PARAMS.get(tool, {})
-            for action in actions[:2]:
+            for action in actions[:MAX_EXAMPLES_PER_TOOL]:
                 example = {"action": action}
                 if tool != "session":
                     example["idb"] = PLACEHOLDER_VALUES["idb"]
                 for param in required.get(action, []):
-                    example[param] = PLACEHOLDER_VALUES.get(param, "<value>")
+                    example[param] = PLACEHOLDER_VALUES.get(param, f"<{param}>")
                 examples.append(example)
             return examples
 
@@ -1466,40 +1502,7 @@ ida_pro.qexit(0)
                 "properties": {
                     key: value
                     for key, value in COMMON_PROPERTIES.items()
-                    if key
-                    in {
-                        "idb",
-                        "action",
-                        "binary_path",
-                        "session_id",
-                        "addr",
-                        "addrs",
-                        "addr1",
-                        "addr2",
-                        "target",
-                        "start",
-                        "end",
-                        "end_addr",
-                        "path",
-                        "paths",
-                        "items",
-                        "pattern",
-                        "query",
-                        "name",
-                        "decl",
-                        "text",
-                        "data",
-                        "size",
-                        "count",
-                        "offset",
-                        "field_name",
-                        "fixup_type",
-                        "color",
-                        "category",
-                        "arg_num",
-                        "reg",
-                        "value",
-                    }
+                    if key in SCHEMA_PROPERTY_KEYS
                 },
                 "required": ["action"] if tool_name == "session" else ["idb", "action"],
             }
@@ -1534,7 +1537,10 @@ ida_pro.qexit(0)
 
         def wrap_result(payload: dict | list | str) -> dict:
             structured = payload if isinstance(payload, dict) else {"result": payload}
-            is_error = isinstance(payload, dict) and bool(payload.get("error"))
+            if isinstance(payload, dict):
+                is_error = bool(payload.get("error") or payload.get("code") or payload.get("isError"))
+            else:
+                is_error = False
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -1598,7 +1604,9 @@ ida_pro.qexit(0)
                 if not action:
                     return wrap_result(make_error(MCPError.INVALID_ARGS, "action is required for session tool"))
                 required_params = ACTION_REQUIRED_PARAMS.get("session", {}).get(action, [])
-                missing = [p for p in required_params if arguments.get(p) in (None, "", [])]
+                # Explicit empty strings are treated as missing to encourage concrete values from LLMs.
+                # Empty collections are allowed because some actions legitimately accept empty lists.
+                missing = [p for p in required_params if arguments.get(p) in (None, "")]
                 if missing:
                     return wrap_result(
                         make_error(
@@ -1613,7 +1621,9 @@ ida_pro.qexit(0)
                     return wrap_result(make_error(MCPError.INVALID_ARGS, "action is required"))
 
                 required_params = ACTION_REQUIRED_PARAMS.get(tool_name, {}).get(action, [])
-                missing = [p for p in required_params if arguments.get(p) in (None, "", [])]
+                # Explicit empty strings are treated as missing to encourage concrete values from LLMs.
+                # Empty collections are allowed because some actions legitimately accept empty lists.
+                missing = [p for p in required_params if arguments.get(p) in (None, "")]
                 if missing:
                     return wrap_result(
                         make_error(

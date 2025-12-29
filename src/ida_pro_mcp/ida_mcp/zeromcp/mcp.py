@@ -427,7 +427,7 @@ class McpServer:
             if data:
                 try:
                     text_parts.append(json.dumps(data, indent=2))
-                except TypeError:
+                except TypeError:  # json.dumps raises TypeError on non-serializable objects
                     text_parts.append(str(data))
 
             return {
