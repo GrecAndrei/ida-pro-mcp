@@ -1437,7 +1437,7 @@ def misc(
                     "__builtins__": __builtins__,
                     "idaapi": idaapi,
                     "idc": idc,
-                    "idautils": idautils,
+                    "idautils": lazy_import("idautils"),
                     "ida_allins": lazy_import("ida_allins"),
                     "ida_auto": lazy_import("ida_auto"),
                     "ida_bitrange": lazy_import("ida_bitrange"),
@@ -1550,9 +1550,12 @@ def misc(
             except Exception:
                 import traceback
                 
+                # Safely get stdout if available
+                stdout_text = stdout_capture.getvalue() if 'stdout_capture' in locals() else ""
+                
                 return {
                     "result": "",
-                    "stdout": stdout_capture.getvalue(),
+                    "stdout": stdout_text,
                     "stderr": traceback.format_exc(),
                 }
             finally:
