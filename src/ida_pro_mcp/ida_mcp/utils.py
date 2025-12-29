@@ -11,12 +11,21 @@ from typing import (
     Callable,
     Generic,
     Literal,
-    NotRequired,
     Optional,
     TypedDict,
     TypeVar,
     overload,
 )
+
+# Compatibility for Python < 3.11
+try:
+    from typing import NotRequired
+except ImportError:
+    try:
+        from typing_extensions import NotRequired
+    except ImportError:
+        # Fallback for old Python without typing_extensions
+        NotRequired = Optional
 
 import ida_funcs
 import ida_hexrays
@@ -389,9 +398,13 @@ class FileInfo(TypedDict):
 T = TypeVar("T")
 
 
-class Page(TypedDict, Generic[T]):
-    data: list[T]
-    next_offset: Optional[int]
+class Page(TypedDict):
+    """Generic paginated response"""
+
+    items: list[Any]
+    total: int
+    offset: int
+    count: int
 
 
 # ============================================================================

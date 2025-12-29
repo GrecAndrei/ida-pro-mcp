@@ -507,9 +507,9 @@ class IDAMCPServer:
     """MCP server with session management and multi-instance support."""
     
     def __init__(self):
-        self.ida_dir = os.environ.get("IDADIR", "")
+        self.ida_dir = r"C:\Program Files\IDA Professional 9.2"
         self.idat_exe = self._find_idat()
-        self.cache_dir = os.path.join(os.path.expanduser("~"), ".ida_mcp_cache")
+        self.cache_dir = r"C:\Users\Alexander\.ida_mcp_cache"
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.api_path = os.path.join(self.script_dir, "src", "ida_pro_mcp", "ida_mcp")
         
@@ -689,8 +689,8 @@ class IDAMCPServer:
             output_file = os.path.join(self.cache_dir, f"mcp_result_{unique_id}.json")
             args_file = os.path.join(self.cache_dir, f"mcp_args_{unique_id}.json")
             
-            # Enable IDA logging if IDA_MCP_DEBUG env var is set
-            enable_logging = os.environ.get("IDA_MCP_DEBUG", "").lower() in ("1", "true", "yes")
+            # Enable IDA logging
+            enable_logging = True
             if enable_logging:
                 log_file = os.path.join(self.cache_dir, f"mcp_ida_{unique_id}.log")
             
@@ -749,7 +749,7 @@ ida_pro.qexit(0)
                 cmd.append(f"-L{log_file}")
             cmd.extend([f"-S{script_file}", target])
             
-            proc = subprocess.run(cmd, capture_output=True, timeout=120, cwd=cwd, env=env)
+            proc = subprocess.run(cmd, capture_output=True, timeout=300, cwd=cwd, env=env, shell=True)
             
             # Check for common error patterns in stderr
             stderr_text = proc.stderr.decode('utf-8', errors='ignore')
@@ -796,23 +796,34 @@ ida_pro.qexit(0)
         
         except subprocess.TimeoutExpired:
             details = {
-                "timeout": 120,
+                "timeout": 300,
                 "idat_exe": self.idat_exe,
                 "cwd": cwd,
                 "idadir_set": bool(self.ida_dir)
             }
-            return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (120s)", recoverable=True, details=details)
+            return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (300s)", recoverable=True, details=details)
         except Exception as e:
             return make_error(MCPError.IDA_CRASHED, str(e))
         finally:
-            # Cleanup all temp files
-            for f in [script_file, output_file, args_file, log_file]:
+            # Cleanup all temp files (except log file on error)
+            for f in [script_file, output_file, args_file]:
                 if f:
                     try:
                         if os.path.exists(f):
                             os.remove(f)
                     except:
                         pass
+            
+            if log_file and os.path.exists(log_file) and not os.path.exists(output_file):
+                # Keep log file for debugging if it failed
+                pass
+            elif log_file:
+                try:
+                    if os.path.exists(log_file):
+                        os.remove(log_file)
+                except:
+                    pass
+            
             # Release lock if we acquired it
             lock.release()
     

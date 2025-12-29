@@ -7,7 +7,16 @@ import inspect
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, HTTPServer
-from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict, Literal
+from typing import Any, Callable, Union, Annotated, BinaryIO, get_origin, get_args, get_type_hints, is_typeddict, Literal, Optional
+
+# Compatibility for Python < 3.11
+try:
+    from typing import NotRequired
+except ImportError:
+    try:
+        from typing_extensions import NotRequired
+    except ImportError:
+        NotRequired = Optional
 from types import UnionType
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
