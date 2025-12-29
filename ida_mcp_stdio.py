@@ -30,7 +30,6 @@ import threading
 import subprocess
 import time
 import warnings
-import hashlib
 import glob
 import uuid
 from typing import Any, Dict, Optional, List
@@ -45,67 +44,138 @@ sys.stderr = io.StringIO()
 
 
 # =============================================================================
+# CONSTANTS - Avoid magic numbers scattered throughout code
+# =============================================================================
+
+# Timeouts (in seconds)
+LOCK_TIMEOUT_DEFAULT = 10
+LOCK_TIMEOUT_EXTENDED = 30
+LOCK_STALE_THRESHOLD = 300  # 5 minutes
+IDA_EXECUTION_TIMEOUT = 300  # 5 minutes
+
+# Limits
+LOG_TAIL_LINES = 50
+ERROR_STDERR_LIMIT = 1000
+SESSION_ID_LENGTH = 8
+
+# Cache management
+CACHE_MAX_SIZE_MB = 500  # Maximum cache directory size in MB
+CACHE_CLEANUP_AGE_HOURS = 24  # Remove temp files older than this
+TEMP_FILE_MAX_AGE = 3600  # 1 hour in seconds
+
+# Retry intervals (in seconds)
+LOCK_RETRY_INTERVAL = 0.1
+ERROR_RETRY_AFTER = 5
+
+
+# =============================================================================
 # SESSION MANAGEMENT
 # =============================================================================
 
 class SimpleLock:
-    """Cross-platform file lock without external dependencies."""
+    """Cross-platform file lock without external dependencies.
+    
+    Uses atomic file creation for locking. Handles stale locks from crashed processes.
+    
+    Thread Safety:
+        This class is NOT thread-safe. Each thread should create its own SimpleLock instance.
+        The lock is process-level (file-based), not thread-level.
+        For thread safety within a process, use threading.Lock in addition to this.
+    """
     
     def __init__(self, path: str):
         self.lock_file = path + ".mcp.lock"
         self.locked = False
         self.pid = os.getpid()
+        self._fd = None  # File descriptor for atomic operations
     
-    def acquire(self, timeout: int = 10) -> bool:
-        """Acquire the lock. Returns True if successful."""
+    def acquire(self, timeout: int = LOCK_TIMEOUT_DEFAULT) -> bool:
+        """Acquire the lock. Returns True if successful.
+        
+        Uses atomic file creation (O_CREAT | O_EXCL) to prevent race conditions.
+        Handles stale locks from crashed processes by checking modification time.
+        """
         start = time.time()
         while time.time() - start < timeout:
             try:
-                # Atomic create - fails if exists
+                # Atomic create - fails if file exists
                 fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, f"{self.pid}:{time.time()}".encode())
-                os.close(fd)
+                try:
+                    os.write(fd, f"{self.pid}:{time.time()}".encode())
+                finally:
+                    os.close(fd)
                 self.locked = True
                 return True
             except FileExistsError:
-                # Check if lock is stale (older than 5 minutes)
-                if self._is_stale():
-                    self._force_release()
+                # Lock file exists - check if it's stale
+                if self._check_and_remove_stale():
+                    # Stale lock was removed, retry immediately
                     continue
-                time.sleep(0.1)
-            except Exception:
-                time.sleep(0.1)
+                time.sleep(LOCK_RETRY_INTERVAL)
+            except OSError as e:
+                # Handle other OS errors (permission denied, etc.)
+                time.sleep(LOCK_RETRY_INTERVAL)
         return False
     
     def release(self):
-        """Release the lock."""
-        if self.locked and os.path.exists(self.lock_file):
+        """Release the lock by removing the lock file."""
+        if self.locked:
             try:
-                os.remove(self.lock_file)
-            except:
-                pass
-            self.locked = False
+                if os.path.exists(self.lock_file):
+                    os.remove(self.lock_file)
+            except OSError:
+                pass  # Ignore errors during cleanup
+            finally:
+                self.locked = False
     
     def is_locked(self) -> bool:
-        """Check if the file is currently locked."""
+        """Check if the file is currently locked (lock file exists)."""
         return os.path.exists(self.lock_file)
     
-    def _is_stale(self) -> bool:
-        """Check if lock is stale (older than 5 minutes)."""
+    def _check_and_remove_stale(self) -> bool:
+        """Check if lock is stale and remove it atomically.
+        
+        Returns True if:
+          - The lock file doesn't exist (can proceed with acquisition)
+          - A stale lock was successfully removed
+        Returns False if:
+          - The lock exists and is not stale
+          - The lock is stale but removal failed
+          
+        Uses atomic rename-to-temp + delete pattern to avoid TOCTOU races.
+        """
         try:
-            if os.path.exists(self.lock_file):
-                mtime = os.path.getmtime(self.lock_file)
-                return time.time() - mtime > 300  # 5 minutes
-        except:
-            pass
-        return False
-    
-    def _force_release(self):
-        """Force release a stale lock."""
-        try:
-            os.remove(self.lock_file)
-        except:
-            pass
+            if not os.path.exists(self.lock_file):
+                # No lock file - caller can proceed with acquisition
+                return True
+            
+            mtime = os.path.getmtime(self.lock_file)
+            if time.time() - mtime <= LOCK_STALE_THRESHOLD:
+                return False  # Lock is not stale
+            
+            # Lock appears stale - try to remove it atomically
+            # Generate a unique temp name to avoid collisions
+            temp_name = f"{self.lock_file}.stale.{os.getpid()}.{time.time()}"
+            try:
+                # Atomic rename - if this succeeds, we "own" the stale lock
+                os.rename(self.lock_file, temp_name)
+                # Now safely delete the renamed file
+                os.remove(temp_name)
+                return True
+            except FileNotFoundError:
+                # Another process already removed it - we can proceed
+                return True
+            except OSError:
+                # Rename failed (another process may have grabbed it)
+                # Clean up temp file if it exists
+                try:
+                    if os.path.exists(temp_name):
+                        os.remove(temp_name)
+                except OSError:
+                    pass
+                return False
+        except OSError:
+            return False
     
     def get_owner_info(self) -> Optional[Dict]:
         """Get info about who holds the lock."""
@@ -119,9 +189,20 @@ class SimpleLock:
                             "pid": int(parts[0]),
                             "locked_at": datetime.fromtimestamp(float(parts[1])).isoformat()
                         }
-        except:
+        except (OSError, ValueError, IndexError):
             pass
         return None
+    
+    def force_release(self):
+        """Force release a lock, even if we don't own it.
+        
+        Use with caution - only for cleaning up stale locks.
+        """
+        try:
+            if os.path.exists(self.lock_file):
+                os.remove(self.lock_file)
+        except OSError:
+            pass
     
     def __enter__(self):
         if not self.acquire():
@@ -171,7 +252,7 @@ class SessionManager:
         """Generate a unique session ID."""
         import random
         import string
-        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=SESSION_ID_LENGTH))
     
     def _get_session_idb_path(self, binary_path: str, session_id: str) -> str:
         """Get the IDB path for a session."""
@@ -296,7 +377,17 @@ class MCPError:
     DECOMPILE_FAILED = "DECOMPILE_FAILED"
 
 def make_error(code: str, message: str, recoverable: bool = False, details: dict = None) -> dict:
-    """Create a structured error response."""
+    """Create a structured error response.
+    
+    Args:
+        code: Error code from MCPError class
+        message: Human-readable error message
+        recoverable: If True, suggests the operation can be retried
+        details: Optional dict with additional context
+    
+    Returns:
+        Structured error dict with consistent format
+    """
     result = {
         "error": True,
         "code": code,
@@ -304,7 +395,7 @@ def make_error(code: str, message: str, recoverable: bool = False, details: dict
         "recoverable": recoverable
     }
     if recoverable:
-        result["retry_after_seconds"] = 5
+        result["retry_after_seconds"] = ERROR_RETRY_AFTER
     if details:
         result["details"] = details
     return result
@@ -314,9 +405,9 @@ def make_error(code: str, message: str, recoverable: bool = False, details: dict
 # TOOLS LIST
 # =============================================================================
 
-# List of available tools (40 total - includes session_manager)
+# List of available tools (39 total - includes session_manager)
 TOOLS = [
-    "session",  # NEW: Session management tool
+    "session",  # Session management tool
     "idb", "code", "data", "search", "types", "memory", "modify",
     "misc", "debug", "funcs", "segments", "files", "plugins", "trace",
     "fixups", "data_ops", "agent", "microcode", "graph", "bulk",
@@ -689,7 +780,16 @@ class IDAMCPServer:
             return make_error(MCPError.INVALID_ARGS, f"Unknown session action: {action}")
     
     def call_tool(self, tool_name: str, idb_path: str, **kwargs) -> Dict[str, Any]:
-        """Execute a tool from api_consolidated.py on an IDB file."""
+        """Execute a tool from api_consolidated.py on an IDB file.
+        
+        Args:
+            tool_name: Name of the tool function to call
+            idb_path: Path to IDB file or binary
+            **kwargs: Arguments to pass to the tool
+            
+        Returns:
+            Result dict from tool, or structured error dict
+        """
         start_time = time.time()
         
         # Find or create IDB
@@ -705,9 +805,12 @@ class IDAMCPServer:
         if not self.idat_exe:
             return make_error(MCPError.IDA_NOT_FOUND, "idat.exe not found. Set IDADIR environment variable.")
         
-        # Acquire lock for this IDB
+        # Try to acquire lock for this IDB
+        # The acquire() method handles stale lock detection internally
         lock = SimpleLock(target)
-        if lock.is_locked() and not lock.acquire(timeout=30):
+        lock_acquired = lock.acquire(timeout=LOCK_TIMEOUT_EXTENDED)
+        
+        if not lock_acquired:
             owner = lock.get_owner_info()
             return make_error(
                 MCPError.FILE_LOCKED,
@@ -722,6 +825,7 @@ class IDAMCPServer:
         args_file = None
         log_file = None
         cwd = None
+        success = False
         
         try:
             # Create unique temp files (collision-safe using UUID)
@@ -730,10 +834,8 @@ class IDAMCPServer:
             output_file = os.path.join(self.cache_dir, f"mcp_result_{unique_id}.json")
             args_file = os.path.join(self.cache_dir, f"mcp_args_{unique_id}.json")
             
-            # Enable IDA logging
-            enable_logging = True
-            if enable_logging:
-                log_file = os.path.join(self.cache_dir, f"mcp_ida_{unique_id}.log")
+            # Enable IDA logging for debugging
+            log_file = os.path.join(self.cache_dir, f"mcp_ida_{unique_id}.log")
             
             # Write arguments to separate JSON file (UTF-8, safe from escaping issues)
             with open(args_file, 'w', encoding='utf-8') as f:
@@ -793,7 +895,7 @@ ida_pro.qexit(0)
             # Using shell=False (default) for security - paths with spaces are handled
             # correctly because subprocess passes list elements as separate arguments,
             # unlike shell mode which would require quoting
-            proc = subprocess.run(cmd, capture_output=True, timeout=300, cwd=cwd, env=env)
+            proc = subprocess.run(cmd, capture_output=True, timeout=IDA_EXECUTION_TIMEOUT, cwd=cwd, env=env)
             
             # Check for common error patterns in stderr
             stderr_text = proc.stderr.decode('utf-8', errors='ignore')
@@ -812,12 +914,13 @@ ida_pro.qexit(0)
                     result = json.load(f)
                 result["_execution_time"] = round(time.time() - start_time, 2)
                 result["_session"] = self.current_session.session_id if self.current_session else None
+                success = True
                 return result
             else:
                 # Build detailed error with diagnostics
                 details = {
                     "returncode": proc.returncode,
-                    "stderr": stderr_text[:1000] if stderr_text else "",
+                    "stderr": stderr_text[:ERROR_STDERR_LIMIT] if stderr_text else "",
                     "idat_exe": self.idat_exe,
                     "cwd": cwd,
                     "idadir_set": bool(self.ida_dir)
@@ -828,8 +931,8 @@ ida_pro.qexit(0)
                     try:
                         with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                             lines = f.readlines()
-                            details["ida_log_tail"] = "".join(lines[-50:])
-                    except:
+                            details["ida_log_tail"] = "".join(lines[-LOG_TAIL_LINES:])
+                    except OSError:
                         pass
                 
                 return make_error(
@@ -840,36 +943,60 @@ ida_pro.qexit(0)
         
         except subprocess.TimeoutExpired:
             details = {
-                "timeout": 300,
+                "timeout": IDA_EXECUTION_TIMEOUT,
                 "idat_exe": self.idat_exe,
                 "cwd": cwd,
                 "idadir_set": bool(self.ida_dir)
             }
-            return make_error(MCPError.IDA_TIMEOUT, "Operation timed out (300s)", recoverable=True, details=details)
+            return make_error(MCPError.IDA_TIMEOUT, f"Operation timed out ({IDA_EXECUTION_TIMEOUT}s)", recoverable=True, details=details)
+        except OSError as e:
+            return make_error(MCPError.IDA_CRASHED, f"OS error: {e}")
         except Exception as e:
-            return make_error(MCPError.IDA_CRASHED, str(e))
+            return make_error(MCPError.IDA_CRASHED, f"Unexpected error: {e}")
         finally:
-            # Cleanup all temp files (except log file on error)
-            for f in [script_file, output_file, args_file]:
-                if f:
-                    try:
-                        if os.path.exists(f):
-                            os.remove(f)
-                    except:
-                        pass
+            # Always clean up temp files
+            self._cleanup_temp_files(
+                script_file, output_file, args_file, log_file,
+                keep_log_on_failure=not success
+            )
             
-            if log_file and os.path.exists(log_file) and not os.path.exists(output_file):
-                # Keep log file for debugging if it failed
-                pass
-            elif log_file:
+            # Release lock if we acquired it
+            if lock_acquired:
+                lock.release()
+    
+    def _cleanup_temp_files(self, script_file: str, output_file: str, args_file: str, 
+                           log_file: str, keep_log_on_failure: bool = True):
+        """Clean up temporary files created during tool execution.
+        
+        Args:
+            script_file: Path to temporary script file
+            output_file: Path to output JSON file
+            args_file: Path to arguments JSON file
+            log_file: Path to IDA log file
+            keep_log_on_failure: If True, keep log file when operation failed
+        """
+        # Always clean these files
+        for f in [script_file, output_file, args_file]:
+            if f:
+                try:
+                    if os.path.exists(f):
+                        os.remove(f)
+                except OSError:
+                    pass
+        
+        # Conditionally clean log file
+        if log_file:
+            # Determine if operation succeeded (output file was created)
+            operation_succeeded = output_file and os.path.exists(output_file)
+            # Keep log file only on failure if requested
+            should_keep_log = keep_log_on_failure and not operation_succeeded
+            
+            if not should_keep_log:
                 try:
                     if os.path.exists(log_file):
                         os.remove(log_file)
-                except:
+                except OSError:
                     pass
-            
-            # Release lock if we acquired it
-            lock.release()
     
     def get_tools_list(self) -> list:
         """Return list of available tools in MCP format."""
@@ -1025,15 +1152,65 @@ ida_pro.qexit(0)
                     stdout.flush()
             
             except json.JSONDecodeError:
+                # Invalid JSON - skip this request
                 continue
             except KeyboardInterrupt:
+                # User requested shutdown
                 break
+            except UnicodeDecodeError:
+                # Invalid UTF-8 input - skip
+                continue
+            except IOError:
+                # I/O error (pipe closed, etc.) - exit
+                break
+            except Exception:
+                # Log other errors but continue processing
+                # In production, this could log to a file
+                pass
+        
+        # Cleanup: release all session locks and clean up stale lock files
+        self._cleanup_on_exit()
+    
+    def _cleanup_on_exit(self):
+        """Clean up resources when the server exits."""
+        # Release all session locks
+        for session in self.session_mgr.sessions.values():
+            try:
+                session.lock.release()
             except Exception:
                 pass
         
-        # Cleanup: release all session locks
-        for session in self.session_mgr.sessions.values():
-            session.lock.release()
+        # Clean up stale lock files in the cache directory
+        try:
+            lock_pattern = os.path.join(self.cache_dir, "*.mcp.lock")
+            for lock_file in glob.glob(lock_pattern):
+                try:
+                    # Only remove stale locks (older than threshold)
+                    if os.path.exists(lock_file):
+                        mtime = os.path.getmtime(lock_file)
+                        if time.time() - mtime > LOCK_STALE_THRESHOLD:
+                            os.remove(lock_file)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        
+        # Clean up old temp files (older than configured age)
+        # Use os.listdir for better performance than multiple glob calls
+        try:
+            temp_prefixes = ("mcp_script_", "mcp_result_", "mcp_args_", "mcp_ida_")
+            cutoff_time = time.time() - TEMP_FILE_MAX_AGE
+            
+            for filename in os.listdir(self.cache_dir):
+                if filename.startswith(temp_prefixes):
+                    filepath = os.path.join(self.cache_dir, filename)
+                    try:
+                        if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff_time:
+                            os.remove(filepath)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

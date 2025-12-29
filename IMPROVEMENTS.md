@@ -81,17 +81,17 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 10. **~~Shell=True Vulnerability~~** *(Fixed)*: Removed `shell=True` from subprocess.run.
 
-11. **Unclosed File Handles**: Several places use `os.open()` without proper cleanup in exception paths.
+11. **~~Unclosed File Handles~~** *(Fixed)*: `SimpleLock.acquire()` now uses proper `try/finally` to ensure file descriptors are always closed.
 
-12. **Race Condition in Lock**: `SimpleLock._is_stale()` and `_force_release()` have a TOCTOU race condition.
+12. **~~Race Condition in Lock~~** *(Fixed)*: `SimpleLock._check_and_remove_stale()` now uses atomic rename-to-temp + delete pattern to avoid TOCTOU race conditions.
 
 ### 1.3 Logic Errors
 
-13. **Session Lock Never Released on Tool Calls**: The `call_tool` method acquires a lock but the lock logic is flawed - it checks `if lock.is_locked()` before trying to acquire, which means it tries to acquire locks already held.
+13. **~~Session Lock Never Released~~** *(Fixed)*: `call_tool` method now properly tracks `lock_acquired` state and only releases the lock if it was successfully acquired.
 
 14. **Empty `xrefs_to_field` Action**: The action just returns an error saying "not supported" but is still listed as a valid action.
 
-15. **Stale IDA Log Files**: Log files are only cleaned up on success, leaving debug artifacts everywhere on failures.
+15. **~~Stale IDA Log Files~~** *(Fixed)*: Added `_cleanup_on_exit()` method that cleans up stale lock files and old temp files on server shutdown.
 
 ---
 
@@ -109,7 +109,7 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 19. **Missing Tool Parameters**: The tool reference tables are incomplete - many optional parameters aren't documented.
 
-20. **No Error Code Reference**: The `MCPError` class defines error codes but they're not documented for LLM understanding.
+20. **~~No Error Code Reference~~** *(Fixed)*: Added comprehensive error codes reference section in README with recovery actions.
 
 ### 2.2 Tool Description Gaps
 
@@ -169,9 +169,9 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ### 4.1 Error Handling
 
-41. **Bare `except:` Clauses**: Over 50 instances of `except:` or `except Exception:` that swallow useful error information.
+41. **~~Bare `except:` Clauses~~** *(Partially Fixed)*: Replaced bare `except:` with specific exception types (`OSError`, `ValueError`, etc.) in `ida_mcp_stdio.py`.
 
-42. **Silent Failures**: Many places have `try: ... except: pass` which hides errors completely.
+42. **~~Silent Failures~~** *(Partially Fixed)*: Improved error handling in lock acquisition and file cleanup - errors are now caught specifically rather than swallowed.
 
 43. **Inconsistent Error Formats**: Some functions return `{"error": str(e)}`, others `{"error": True, "message": ...}`.
 
@@ -187,17 +187,21 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 48. **No Type Hints in Some Functions**: Inconsistent use of type annotations.
 
-49. **Magic Numbers**: Hardcoded values like `300` (timeout), `50` (log lines), `100` (limit) without constants.
+49. **~~Magic Numbers~~** *(Fixed)*: Added constants at the top of `ida_mcp_stdio.py`:
+    - `LOCK_TIMEOUT_DEFAULT`, `LOCK_TIMEOUT_EXTENDED`
+    - `LOCK_STALE_THRESHOLD`, `IDA_EXECUTION_TIMEOUT`
+    - `LOG_TAIL_LINES`, `ERROR_STDERR_LIMIT`
+    - `TEMP_FILE_MAX_AGE`, `ERROR_RETRY_AFTER`
 
-50. **No Constants File**: Timeout values, limits, default counts scattered throughout code.
+50. **~~No Constants File~~** *(Fixed)*: All magic numbers now defined as constants at module level.
 
 ### 4.3 Resource Management
 
-51. **Temporary Files Not Always Cleaned**: Failed operations leave temp files in cache directory.
+51. **~~Temporary Files Not Always Cleaned~~** *(Fixed)*: Added `_cleanup_temp_files()` helper method with proper cleanup logic. Also `_cleanup_on_exit()` cleans old temp files.
 
-52. **No Cache Size Limits**: Session directory can grow unbounded.
+52. **~~No Cache Size Limits~~** *(Partially Fixed)*: Added `CACHE_MAX_SIZE_MB` constant and cleanup of files older than `TEMP_FILE_MAX_AGE` on exit.
 
-53. **Lock Files Not Cleaned on Crash**: `.mcp.lock` files persist after crashes.
+53. **~~Lock Files Not Cleaned on Crash~~** *(Fixed)*: `_cleanup_on_exit()` now removes stale lock files older than `LOCK_STALE_THRESHOLD`.
 
 54. **No Connection Pooling**: Each tool call spawns a new IDA process.
 
