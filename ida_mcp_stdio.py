@@ -565,22 +565,21 @@ class IDAMCPServer:
         else:
             exe_names = ["idat64", "idat"]
         
+        # Search in configured ida_dir first
         if self.ida_dir:
             for name in exe_names:
                 path = os.path.join(self.ida_dir, name)
                 if os.path.exists(path):
                     return path
         
-        # Fallback: try common Windows paths if on Windows
-        if sys.platform == "win32":
-            win_candidates = [
-                r"C:\Program Files\IDA Professional 9.2\idat.exe",
-                r"C:\Program Files\IDA Pro 9.2\idat.exe",
-                r"C:\Program Files\IDA Professional 9.0\idat.exe",
-            ]
-            for c in win_candidates:
-                if os.path.exists(c):
-                    return c
+        # Fallback: search in auto-detected directories
+        # Reuse the detection logic to avoid duplication
+        detected_dir = self._detect_ida_dir()
+        if detected_dir and detected_dir != self.ida_dir:
+            for name in exe_names:
+                path = os.path.join(detected_dir, name)
+                if os.path.exists(path):
+                    return path
         
         return ""
     
@@ -791,7 +790,9 @@ ida_pro.qexit(0)
                 cmd.append(f"-L{log_file}")
             cmd.extend([f"-S{script_file}", target])
             
-            # Note: shell=False is used for security. If paths have spaces, they're handled as list elements.
+            # Using shell=False (default) for security - paths with spaces are handled
+            # correctly because subprocess passes list elements as separate arguments,
+            # unlike shell mode which would require quoting
             proc = subprocess.run(cmd, capture_output=True, timeout=300, cwd=cwd, env=env)
             
             # Check for common error patterns in stderr
