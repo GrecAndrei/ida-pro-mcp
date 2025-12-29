@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/IDA%20Pro-9.0%2B-blue?style=for-the-badge" alt="IDA Pro 9.0+"/>
   <img src="https://img.shields.io/badge/Python-3.11%2B-green?style=for-the-badge" alt="Python 3.11+"/>
   <img src="https://img.shields.io/badge/MCP-2.0-purple?style=for-the-badge" alt="MCP 2.0"/>
-  <img src="https://img.shields.io/badge/Tools-40-orange?style=for-the-badge" alt="40 Tools"/>
+  <img src="https://img.shields.io/badge/Tools-39-orange?style=for-the-badge" alt="39 Tools"/>
   <img src="https://img.shields.io/badge/Sessions-Yes-brightgreen?style=for-the-badge" alt="Session Support"/>
 </p>
 
@@ -15,7 +15,7 @@
 
 <p align="center">
   <strong>AI-powered reverse engineering without launching IDA Pro GUI.</strong><br>
-  40 comprehensive tools for binary analysis, decompilation, and annotation.<br>
+  39 comprehensive tools for binary analysis, decompilation, and annotation.<br>
   <strong>Multi-session support</strong> - multiple LLMs can analyze the same binary simultaneously.<br>
   Works with Claude, Gemini, Cursor, VS Code, and any MCP-compatible client.
 </p>
@@ -24,16 +24,9 @@
 
 ## ⚡ Quick Start
 
-### 1. Install for Google Antigravity / IDE Integration
+### 1. Add to MCP Config
 
-```bash
-cd ida-pro-mcp
-python install_antigravity.py
-```
-
-This adds the MCP server to your IDE's `mcp_config.json`. Restart your IDE.
-
-### 2. Or Add Manually to MCP Config
+Add the server to your MCP client's configuration (e.g., `mcp_config.json` for VS Code, `claude_desktop_config.json` for Claude):
 
 ```json
 {
@@ -50,7 +43,9 @@ This adds the MCP server to your IDE's `mcp_config.json`. Restart your IDE.
 }
 ```
 
-### 3. Use It
+> **Important**: Set the `IDADIR` environment variable to your IDA Pro installation path.
+
+### 2. Use It
 
 ```python
 # Get IDB metadata
@@ -86,7 +81,7 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
                                                   ▼
                                          ┌──────────────────┐
                                          │  api_consolidated│
-                                         │   23 tools       │
+                                         │   39 tools       │
                                          └──────────────────┘
 ```
 
@@ -94,7 +89,7 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 
 - **Fully Standalone**: No IDA GUI required - uses headless `idat.exe`
 - **MCP Stdio Protocol**: Works with any MCP-compatible client
-- **40 Comprehensive Tools**: Covers all reverse engineering needs
+- **39 Comprehensive Tools**: Covers all reverse engineering needs
 - **Session Management**: Multiple LLMs can analyze the same binary with separate IDBs
 - **File Locking**: Automatic lock detection prevents conflicts
 - **Structured Errors**: Clear error codes for LLM understanding
@@ -194,11 +189,11 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 For batch analysis or custom integrations, use the HTTP daemon:
 
 ```bash
-# Start daemon
-python ida_mcp_daemon.py --port 13338
+# Start daemon (default port is 13337)
+python ida_mcp_daemon.py --port 13337
 
 # Call tools via HTTP
-curl -X POST http://127.0.0.1:13338 -d '{
+curl -X POST http://127.0.0.1:13337 -d '{
   "action": "tool",
   "tool": "data",
   "idb": "C:/samples/malware.exe.i64",
@@ -214,13 +209,13 @@ curl -X POST http://127.0.0.1:13338 -d '{
 ida-pro-mcp/
 ├── ida_mcp_stdio.py        # MCP stdio server (main entry point)
 ├── ida_mcp_daemon.py       # HTTP daemon (alternative mode)
-├── install_antigravity.py  # IDE installer
 ├── src/ida_pro_mcp/
 │   └── ida_mcp/
-│       ├── api_consolidated.py  # All 20 tool implementations
+│       ├── api_consolidated.py  # All 39 tool implementations
 │       ├── utils.py             # Helper functions
 │       └── zeromcp/             # MCP protocol library
 ├── archive/                # Legacy files (tests, docs)
+├── IMPROVEMENTS.md         # Detailed improvement analysis
 └── README.md
 ```
 
@@ -230,17 +225,29 @@ ida-pro-mcp/
 
 - **IDA Pro 9.0+** with Hex-Rays decompiler
 - **Python 3.11+**
-- **Windows** (Linux support planned)
+- **Windows** (primary), Linux/macOS (experimental)
 
 Set `IDADIR` environment variable to your IDA installation path:
 
 ```bash
+# Windows
 set IDADIR=C:\Program Files\IDA Professional 9.2
+
+# Linux/macOS
+export IDADIR=/opt/idapro
 ```
 
 ---
 
 ## 🔧 Advanced Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `IDADIR` | Path to IDA Pro installation | Auto-detected |
+| `IDA_MCP_CACHE` | Path to cache directory | `~/.ida_mcp_cache` |
+| `IDA_MCP_DEBUG` | Enable debug logging | `0` |
 
 ### Debug Mode
 
@@ -267,6 +274,57 @@ This helps diagnose issues such as:
 - Missing resource files even when they exist
 - IDA crashes or initialization failures
 - Problems with specific tool arguments
+
+---
+
+## 🚨 Error Codes Reference
+
+The server returns structured errors with codes that LLMs can understand and act upon:
+
+| Code | Description | Recovery Action |
+|------|-------------|-----------------|
+| `FILE_NOT_FOUND` | IDB or binary file doesn't exist | Verify path, check working directory |
+| `FILE_LOCKED` | IDB is being used by another process | Wait and retry, or use session tool to check status |
+| `FILE_CORRUPT` | IDB file is corrupted | Re-analyze original binary |
+| `IDA_NOT_FOUND` | idat.exe not found | Set IDADIR environment variable |
+| `IDA_CRASHED` | IDA process terminated unexpectedly | Check IDB compatibility, enable debug mode |
+| `IDA_TIMEOUT` | Operation took too long (>300s) | Try smaller scope, or use batch mode |
+| `IDA_LICENSE` | IDA license issue | Check IDA license configuration |
+| `SESSION_NOT_FOUND` | Invalid session ID | Use `session(action="list")` to find valid sessions |
+| `SESSION_LOCKED` | Session IDB is locked | Close other IDA instances |
+| `SESSION_REQUIRED` | No IDB specified and no active session | Provide `idb` parameter or create session |
+| `TOOL_NOT_FOUND` | Unknown tool name | Check available tools list |
+| `INVALID_ARGS` | Missing or invalid parameters | Check required parameters for the action |
+| `DECOMPILE_FAILED` | Hex-Rays decompilation failed | Try `disasm` action instead |
+
+### Error Response Format
+
+```json
+{
+  "error": true,
+  "code": "FILE_NOT_FOUND",
+  "message": "File not found: C:/samples/malware.exe",
+  "recoverable": false,
+  "details": {
+    "path": "C:/samples/malware.exe"
+  }
+}
+```
+
+For recoverable errors, `retry_after_seconds` indicates when to retry:
+
+```json
+{
+  "error": true,
+  "code": "FILE_LOCKED",
+  "message": "IDB is locked by another process",
+  "recoverable": true,
+  "retry_after_seconds": 5,
+  "details": {
+    "owner": {"pid": 1234, "locked_at": "2024-01-15T10:30:00"}
+  }
+}
+```
 
 ---
 
