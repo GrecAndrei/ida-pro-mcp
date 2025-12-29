@@ -61,6 +61,42 @@ code(idb="C:/samples/malware.exe.i64", action="decompile", addrs="0x401000")
 search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48 8B")
 ```
 
+### Common Analysis Workflows
+
+**Workflow 1: Function Analysis Pipeline**
+```python
+# Step 1: Find interesting functions
+data(idb="sample.i64", action="functions", query="*crypt*")
+
+# Step 2: Decompile the function
+code(idb="sample.i64", action="decompile", addr="0x401234")
+
+# Step 3: Find who calls it
+code(idb="sample.i64", action="callers", addr="0x401234", max_depth=3)
+
+# Step 4: Rename based on analysis
+modify(idb="sample.i64", action="rename", addr="0x401234", name="decrypt_data")
+```
+
+**Workflow 2: String-Based Triage**
+```python
+# Step 1: Find suspicious strings
+data(idb="sample.i64", action="strings", query="*password*")
+
+# Step 2: For each string, find code that uses it
+code(idb="sample.i64", action="xrefs_to", addr="<string_address>")
+
+# Step 3: Decompile the referencing function
+code(idb="sample.i64", action="decompile", addr="<function_address>")
+```
+
+**Workflow 3: Comprehensive First-Pass Analysis**
+```python
+# Use the agent tool for automatic comprehensive analysis
+agent(idb="sample.i64", action="analyze_function", addr="main")
+# Returns: decompilation + xrefs + strings + comments in one call
+```
+
 ---
 
 ## 🎯 Architecture
@@ -113,13 +149,13 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 
 ### Static Analysis Tools
 
-| Tool     | Description                 | Key Actions                                                   |
-| -------- | --------------------------- | ------------------------------------------------------------- |
-| `idb`    | Database metadata           | `meta`, `segments`, `cursor`, `entrypoints`                   |
-| `code`   | Decompilation & disassembly | `decompile`, `disassemble`, `xrefs_to`, `xrefs_from`, `graph` |
-| `data`   | Data enumeration            | `functions`, `globals`, `strings`, `imports`, `exports`       |
-| `search` | Pattern search              | `bytes`, `string`, `immediate`, `name`, `pattern`             |
-| `types`  | Type management             | `list`, `get`, `define`, `apply`, `get_members`               |
+| Tool     | Description                 | Key Actions                                                          |
+| -------- | --------------------------- | -------------------------------------------------------------------- |
+| `idb`    | Database metadata           | `meta`, `segments`, `cursor`, `entrypoints`                          |
+| `code`   | Decompilation & disassembly | `decompile`, `disasm`, `xrefs_to`, `xrefs_from`, `callgraph`, `analyze` |
+| `data`   | Data enumeration            | `functions`, `globals`, `strings`, `imports`, `exports`              |
+| `search` | Pattern search              | `bytes`, `string`, `immediate`, `name`, `pattern`, `data_ref`, `code_ref` |
+| `types`  | Type management             | `list`, `get`, `define`, `apply`, `get_members`                      |
 
 ### Modification Tools
 
@@ -288,7 +324,7 @@ For recoverable errors, a `retry_after_seconds` field indicates when to retry.
 
 | Client                 | Status         | Notes                               |
 | ---------------------- | -------------- | ----------------------------------- |
-| **Google Antigravity** | ✅ Recommended | Use `install_antigravity.py`        |
+| **Google Antigravity** | ✅ Recommended | Configure in MCP settings           |
 | Claude Desktop         | ✅ Full        | Add to `claude_desktop_config.json` |
 | Cursor                 | ✅ Full        | Add to settings.json                |
 | VS Code                | ✅ Full        | MCP extension                       |
