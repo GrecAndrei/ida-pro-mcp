@@ -211,11 +211,11 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ### 5.1 Context Efficiency
 
-55. **Add `agent` Tool Examples**: The `agent` tool is designed for LLMs but examples are sparse.
+55. **~~Add `agent` Tool Examples~~** *(Fixed)*: Added detailed examples in `agent` tool description showing analyze_function, explore_address, and search_all usage.
 
-56. **Create "Quick Analysis" Workflow**: Document the fastest path to understanding a function.
+56. **~~Create "Quick Analysis" Workflow~~** *(Fixed)*: README now has "Common Analysis Workflows" section with 3 example pipelines, and `agent` tool shows the fastest path.
 
-57. **Add Token-Aware Truncation**: Large responses should indicate they're truncated and how to get more.
+57. **Add Token-Aware Truncation**: Large responses should indicate they're truncated and how to get more. *(Partial: pagination exists but no truncation indicator)*
 
 58. **Provide Summary Statistics First**: Before dumping all functions, give counts and notable items.
 
