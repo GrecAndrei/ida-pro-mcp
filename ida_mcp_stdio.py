@@ -1377,6 +1377,8 @@ ida_pro.qexit(0)
             return make_error(MCPError.IDA_TIMEOUT, f"Operation timed out ({IDA_EXECUTION_TIMEOUT}s)", recoverable=True, details=details)
         except OSError as e:
             return make_error(MCPError.IDA_CRASHED, f"OS error: {e}")
+        except json.JSONDecodeError as e:
+            return make_error(MCPError.IDA_CRASHED, f"Failed to parse IDA output: {e}", details={"output_file": output_file})
         except Exception as e:
             return make_error(MCPError.IDA_CRASHED, f"Unexpected error: {e}")
         finally:
