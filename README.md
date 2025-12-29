@@ -172,6 +172,118 @@ search(idb="C:/samples/malware.exe.i64", action="bytes", pattern="48 83 EC ?? 48
 
 ---
 
+## 📖 Detailed Parameter Reference
+
+### Universal Parameters
+
+All tools (except `session`) accept these parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `idb` | string | Yes* | Path to IDB file (`.i64`/`.idb`) or original binary. *Optional if a session is active. |
+| `action` | string | Yes | The operation to perform. See tool-specific actions above. |
+
+> **Note on `idb` parameter**: When a session is active (created via `session(action="create")`), the `idb` parameter becomes optional - the server will use the session's IDB automatically.
+
+### Address Formats
+
+Addresses can be specified in multiple formats:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Hex string | `"0x401000"` | Hexadecimal with `0x` prefix |
+| Decimal | `"4198400"` | Decimal number as string |
+| Symbol name | `"main"` | Function or symbol name |
+| Expression | `"start+0x100"` | Simple arithmetic expressions |
+
+### Pagination Parameters
+
+Tools that return large result sets support pagination:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `offset` | int | 0 | Starting index (0-based) |
+| `count` | int | 100 | Maximum number of items to return |
+
+**Example with pagination:**
+```python
+# Get first 50 functions
+data(idb="sample.i64", action="functions", offset=0, count=50)
+
+# Get next 50 functions
+data(idb="sample.i64", action="functions", offset=50, count=50)
+```
+
+### Tool-Specific Parameters
+
+#### `code` Tool Parameters
+
+| Parameter | Actions | Type | Description |
+|-----------|---------|------|-------------|
+| `addrs` | all | string/list | Single address or list of addresses |
+| `addr` | all | string | Alias for `addrs` (single address) |
+| `max_items` | graph, find_paths | int | Maximum results (default: 1000) |
+| `max_depth` | callgraph, find_paths | int | Traversal depth (default: 5) |
+| `format` | export | string | Output format: `json`, `c_header`, `prototypes` |
+| `field_name` | xrefs_to_field | string | Struct field in format `struct.field` |
+| `target` | find_paths | string | Target address for path finding |
+
+#### `data` Tool Parameters
+
+| Parameter | Actions | Type | Description |
+|-----------|---------|------|-------------|
+| `query` | all | string | Filter pattern (supports `*` wildcards) |
+| `offset` | all | int | Pagination start index |
+| `count` | all | int | Max items to return |
+
+#### `search` Tool Parameters
+
+| Parameter | Actions | Type | Description |
+|-----------|---------|------|-------------|
+| `query`/`pattern` | all | string | Search pattern |
+| `start` | all | string | Start address for search range |
+| `end` | all | string | End address for search range |
+
+**Byte pattern format:** Use `??` for wildcards: `"48 83 EC ?? 48 8B"` matches `48 83 EC 20 48 8B`, etc.
+
+---
+
+## 🔄 Response Formats
+
+### Success Responses
+
+All successful responses return a JSON object with the requested data:
+
+```json
+{
+  "functions": [...],
+  "_execution_time": 1.23,
+  "_session": "ABC12345"
+}
+```
+
+The `_execution_time` and `_session` fields are added by the server for diagnostics.
+
+### Error Responses
+
+Errors return a structured object:
+
+```json
+{
+  "error": true,
+  "code": "FILE_NOT_FOUND",
+  "message": "File not found: /path/to/file.idb",
+  "recoverable": false,
+  "details": {
+    "path": "/path/to/file.idb"
+  }
+}
+```
+
+For recoverable errors, a `retry_after_seconds` field indicates when to retry.
+
+---
+
 ## 🔌 Supported MCP Clients
 
 | Client                 | Status         | Notes                               |
