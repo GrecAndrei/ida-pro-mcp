@@ -113,11 +113,11 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ### 2.2 Tool Description Gaps
 
-21. **`code` Tool Missing Actions**: The `code` tool description mentions `graph` action but the actual action is `callgraph`.
+21. **~~`code` Tool Missing Actions~~** *(Fixed)*: README tables now correctly list `callgraph` instead of `graph`, added `disasm` and `analyze`.
 
-22. **`search` Tool Undocumented Actions**: `data_ref` and `code_ref` actions exist but aren't in the main README tables.
+22. **~~`search` Tool Undocumented Actions~~** *(Fixed)*: README tables now include `data_ref` and `code_ref` actions.
 
-23. **Inconsistent Action Names**: Some tools use underscores (`xrefs_to`), some use hyphens in descriptions, creating confusion.
+23. **~~Inconsistent Action Names~~** *(Fixed)*: All tool descriptions now use consistent underscore naming (e.g., `xrefs_to`, `xrefs_from`).
 
 24. **~~Missing Return Type Documentation~~** *(Fixed)*: Added "Response Formats" section showing success and error response structures.
 
@@ -131,7 +131,7 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 26. **~~Add "When to Use" Guidance~~** *(Fixed)*: Added "WHEN TO USE" sections to `code`, `data`, `search`, and `agent` tool descriptions explaining when to prefer MCP tools over raw IDAPython.
 
-27. **Add Common Workflow Examples**: Show tool chains like "Use `data` to find functions, then `code` to decompile".
+27. **~~Add Common Workflow Examples~~** *(Fixed)*: Added "Common Analysis Workflows" section in README with 3 example pipelines (function analysis, string-based triage, comprehensive first-pass).
 
 28. **~~Clarify Address Formats~~** *(Fixed)*: Added "Address Formats" table in README showing hex, decimal, symbol name, and expression formats.
 
