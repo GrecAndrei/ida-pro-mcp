@@ -1700,20 +1700,16 @@ def misc(
             return {"error": "Failed to load TIL"}
         
         elif action == "bookmark_list":
-            bookmarks = []
-            # IDA 9 bookmarks
-            if hasattr(idaapi, "bookmarks_t_get"):
-                 for i in range(10): # Legacy slots 0-9 usually
-                     # Complex C++ wrapper, might fail logic.
-                     # For now, return empty or safe error to avoid crashing.
-                     pass
-            return {"bookmarks": bookmarks, "note": "Bookmarks API changed in IDA 9, listing temporarily disabled"}
+            # Use nav tool implementation which has better compatibility logic or custom netnode storage
+            return nav(action="bookmarks")
         
         elif action == "bookmark_set":
-             return {"error": "Not supported in this version"}
+             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+             return nav(action="add_bookmark", addr=addr, slot=slot or 0)
         
         elif action == "bookmark_del":
-             return {"error": "Not supported in this version"}
+             if not slot and not addr: return make_error(MCPError.INVALID_ARGS, "slot or addr required")
+             return nav(action="del_bookmark", slot=slot or 0, addr=addr)
         
         elif action == "stack_get":
             if not addr:
@@ -2512,12 +2508,13 @@ def files(
             # NO MANUAL SETUP REQUIRED
             
             if not path:
-                return {"error": "path required - provide JSON array of paths or a directory"}
+                return make_error(MCPError.INVALID_ARGS, "path required - provide JSON array of paths or a directory")
             
             import json as json_mod
             import subprocess
             import tempfile
             import sys
+            import uuid
             
             # Parse paths
             file_list = []
@@ -2525,7 +2522,7 @@ def files(
                 try:
                     file_list = json_mod.loads(path)
                 except:
-                    return {"error": "Invalid JSON array for paths"}
+                    return make_error(MCPError.INVALID_ARGS, "Invalid JSON array for paths")
             elif os.path.isdir(path):
                 for f in os.listdir(path):
                     full = os.path.join(path, f)
@@ -2534,10 +2531,10 @@ def files(
                         if ext in ['.exe', '.dll', '.so', '.dylib', '.bin', '.elf', '']:
                             file_list.append(full)
             else:
-                return {"error": f"path must be JSON array or directory, got: {path}"}
+                return make_error(MCPError.INVALID_ARGS, f"path must be JSON array or directory, got: {path}")
             
             if not file_list:
-                return {"error": "No files to analyze"}
+                return make_error(MCPError.INVALID_ARGS, "No files to analyze")
             
             # Check if already in headless mode
             try:
@@ -2581,55 +2578,7 @@ def files(
                     break
             
             if not idat_exe:
-                return {"error": f"idat executable not found in {ida_dir}"}
-            
-            # Create analysis script
-            script_content = '''
-import sys
-import json
-import os
-
-try:
-    import idapro
-    import ida_auto
-    import idautils
-    import idc
-except ImportError:
-    # Fallback for older IDA
-    import ida_auto
-    import idautils
-    import idc
-
-files = FILES_PLACEHOLDER
-results = []
-
-for filepath in files:
-    if not os.path.exists(filepath):
-        results.append({"path": filepath, "error": "File not found"})
-        continue
-    try:
-        # For idat, we need to use ida_loader or just run per-file
-        # This script runs once per file via idat -A -S
-        func_count = len(list(idautils.Functions()))
-        md5 = idc.retrieve_input_file_md5().hex() if hasattr(idc, 'retrieve_input_file_md5') else ""
-        results.append({
-            "path": idc.get_input_file_path(),
-            "ok": True,
-            "functions": func_count,
-            "strings": len(list(idautils.Strings())),
-            "md5": md5
-        })
-    except Exception as e:
-        results.append({"path": filepath, "error": str(e)})
-
-# Write results
-with open(OUTPUT_PLACEHOLDER, "w") as f:
-    json.dump(results, f)
-
-# Exit IDA
-import ida_pro
-ida_pro.qexit(0)
-'''
+                return make_error(MCPError.IDA_NOT_FOUND, f"idat executable not found in {ida_dir}")
             
             # Run analysis on each file WITH CACHING
             results = []
@@ -2641,6 +2590,10 @@ ida_pro.qexit(0)
                     results.append({"path": filepath, "error": "File not found"})
                     continue
                 
+                # Generate unique ID for this file's output to avoid PID collisions
+                job_uuid = uuid.uuid4().hex
+                output_file = os.path.join(home_dir, f".ida_batch_{job_uuid}.json")
+
                 # CACHE CHECK: If .i64 or .idb exists, load it instead of re-analyzing
                 base_name = os.path.splitext(filepath)[0]
                 cached_idb = None
@@ -2652,8 +2605,6 @@ ida_pro.qexit(0)
                 
                 if cached_idb:
                     # Load cached database - much faster!
-                    output_file = os.path.join(home_dir, f".ida_batch_{os.getpid()}_{len(results)}.json")
-                    
                     cache_script = f'''
 import json
 import idautils
@@ -2673,7 +2624,7 @@ with open(r"{output_file}", "w") as f:
 
 ida_pro.qexit(0)
 '''
-                    script_file = os.path.join(home_dir, f".ida_batch_script_{os.getpid()}.py")
+                    script_file = os.path.join(home_dir, f".ida_batch_script_{job_uuid}.py")
                     with open(script_file, "w") as f:
                         f.write(cache_script)
                     
@@ -2702,8 +2653,6 @@ ida_pro.qexit(0)
                     continue
                 
                 # NO CACHE: Full analysis needed
-                output_file = os.path.join(home_dir, f".ida_batch_{os.getpid()}_{len(results)}.json")
-                
                 single_script = f'''
 import json
 import os
@@ -2725,7 +2674,7 @@ with open(r"{output_file}", "w") as f:
 ida_pro.qexit(0)
 '''
                 
-                script_file = os.path.join(home_dir, f".ida_batch_script_{os.getpid()}.py")
+                script_file = os.path.join(home_dir, f".ida_batch_script_{job_uuid}.py")
                 with open(script_file, "w") as f:
                     f.write(single_script)
                 
@@ -4844,12 +4793,14 @@ def structs(
     try:
         if action == "recover":
             if not addr:
-                return {"error": "addr required (function address)"}
+                return make_error(MCPError.INVALID_ARGS, "addr required (function address)")
+
+            ea, error = validate_addr(addr)
+            if error: return error
             
-            ea = parse_address(addr)
             func = ida_funcs.get_func(ea)
             if not func:
-                return {"error": f"No function at {addr}"}
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
             
             # Try to recover struct from decompilation
             try:
@@ -4897,13 +4848,14 @@ def structs(
                 }
                 
             except ida_hexrays.DecompilationFailure:
-                return {"error": "Decompilation failed"}
+                return make_error(MCPError.IDA_ERROR, "Decompilation failed")
         
         elif action == "analyze_usage":
             if not addr:
-                return {"error": "addr required"}
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             
-            ea = parse_address(addr)
+            ea, error = validate_addr(addr)
+            if error: return error
             
             # Analyze memory accesses from this point
             accesses = []
@@ -4942,7 +4894,7 @@ def structs(
         
         elif action == "create":
             if not decl:
-                return {"error": "decl required (C structure declaration)"}
+                return make_error(MCPError.INVALID_ARGS, "decl required (C structure declaration)")
             
             # Parse the declaration
             til = ida_typeinf.get_idati()
@@ -4950,7 +4902,7 @@ def structs(
             
             result = ida_typeinf.parse_decl(tinfo, til, decl, ida_typeinf.PT_TYP)
             if result is None:
-                return {"error": f"Failed to parse declaration: {decl}"}
+                return make_error(MCPError.INVALID_ARGS, f"Failed to parse declaration: {decl}")
             
             # Get the name
             struct_name = tinfo.get_type_name()
@@ -4971,34 +4923,36 @@ def structs(
                     "size": tinfo.get_size()
                 }
             
-            return {"error": "Failed to save structure to type library"}
+            return make_error(MCPError.IDA_ERROR, "Failed to save structure to type library")
         
         elif action == "add_member":
             if not name:
-                return {"error": "name (struct name) required"}
+                return make_error(MCPError.INVALID_ARGS, "name (struct name) required")
             if not member_name:
-                return {"error": "member_name required"}
+                return make_error(MCPError.INVALID_ARGS, "member_name required")
             
             # This is complex in IDA 9 with new type system
             # For now, suggest using create with full declaration
-            return {
-                "error": "add_member not fully supported in IDA 9",
-                "suggestion": "Use create action with full C declaration instead",
-                "example": f"structs(action='create', decl='struct {name} {{ int {member_name}; }};')"
-            }
+            return make_error(
+                MCPError.NOT_IMPLEMENTED,
+                "add_member not fully supported in IDA 9",
+                "Use create action with full C declaration instead",
+                details={"suggestion": f"structs(action='create', decl='struct {name} {{ int {member_name}; }};')"}
+            )
         
         elif action == "apply":
             if not addr:
-                return {"error": "addr required"}
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             if not name:
-                return {"error": "name (struct name) required"}
+                return make_error(MCPError.INVALID_ARGS, "name (struct name) required")
             
-            ea = parse_address(addr)
+            ea, error = validate_addr(addr)
+            if error: return error
             
             # Get the struct type
             tinfo = ida_typeinf.tinfo_t()
             if not tinfo.get_named_type(ida_typeinf.get_idati(), name):
-                return {"error": f"Structure '{name}' not found"}
+                return make_error(MCPError.TYPE_ERROR, f"Structure '{name}' not found")
             
             # Apply to address
             if ida_typeinf.apply_tinfo(ea, tinfo, ida_typeinf.TINFO_DEFINITE):
@@ -5009,14 +4963,13 @@ def structs(
                     "size": tinfo.get_size()
                 }
             
-            return {"error": f"Failed to apply struct '{name}' at {hex(ea)}"}
+            return make_error(MCPError.IDA_ERROR, f"Failed to apply struct '{name}' at {hex(ea)}")
         
         else:
-            return {"error": f"Unknown action: {action}"}
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     
     except Exception as e:
-        import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
+        return handle_error(e)
 
 
 
@@ -6020,19 +5973,44 @@ def entropy(
                 seg_name = idc.get_segm_name(seg_ea)
                 seg_size = seg.end_ea - seg.start_ea
                 
-                # Sample entropy (don't read huge segments entirely)
-                sample_size = min(seg_size, 65536)
-                data = ida_bytes.get_bytes(seg.start_ea, sample_size)
+                # Sample entropy using chunks to avoid OOM
+                # We read up to 1MB total in 64KB chunks to estimate entropy
+                max_sample = 1024 * 1024
+                sample_size = min(seg_size, max_sample)
+                chunk_size = 65536
                 
-                if data:
-                    ent = calc_entropy(data)
+                freq = {}
+                total_read = 0
+
+                curr = seg.start_ea
+                end_sample = curr + sample_size
+
+                while curr < end_sample:
+                    read_len = min(chunk_size, end_sample - curr)
+                    data = ida_bytes.get_bytes(curr, read_len)
+                    if not data: break
+
+                    for b in data:
+                        freq[b] = freq.get(b, 0) + 1
+
+                    total_read += len(data)
+                    curr += read_len
+
+                if total_read > 0:
+                    ent = 0.0
+                    for count in freq.values():
+                        p = count / total_read
+                        ent -= p * math.log2(p)
+                    ent /= 8.0
+
                     sections.append({
                         "name": seg_name,
                         "start": hex(seg.start_ea),
                         "end": hex(seg.end_ea),
                         "size": seg_size,
                         "entropy": round(ent, 4),
-                        "is_high": ent > threshold
+                        "is_high": ent > threshold,
+                        "sampled_size": total_read
                     })
             
             return {"sections": sections, "threshold": threshold}
@@ -6074,7 +6052,10 @@ def entropy(
                 
                 seg_name = idc.get_segm_name(seg_ea)
                 seg_size = seg.end_ea - seg.start_ea
-                sample_size = min(seg_size, 65536)
+
+                # Chunked reading for entropy
+                max_sample = 65536 # Check header for packing is enough usually
+                sample_size = min(seg_size, max_sample)
                 data = ida_bytes.get_bytes(seg.start_ea, sample_size)
                 
                 if data:
@@ -6120,35 +6101,45 @@ def entropy(
                 if not seg:
                     continue
                 
-                seg_size = min(seg.end_ea - seg.start_ea, 1048576)
-                data = ida_bytes.get_bytes(seg.start_ea, seg_size)
+                # Read in chunks to avoid OOM on large segments
+                chunk_size = 1024 * 1024 # 1MB chunks
+                curr = seg.start_ea
+
+                # Only scan first 5MB per segment to save time
+                end_scan = min(seg.end_ea, seg.start_ea + 5 * 1024 * 1024)
+
+                while curr < end_scan:
+                    read_len = min(chunk_size, end_scan - curr)
+                    data = ida_bytes.get_bytes(curr, read_len)
+                    if not data: break
+
+                    # Search for crypto constants
+                    for pattern, name in crypto_patterns:
+                        offset = data.find(pattern)
+                        if offset != -1:
+                            indicators.append({
+                                "addr": hex(curr + offset),
+                                "type": "crypto_constant",
+                                "description": name
+                            })
+
+                    # Look for high-entropy 256-byte blocks (potential S-boxes)
+                    # Simple sampling in chunk
+                    for i in range(0, len(data) - 256, 4096): # Step 4KB
+                        block = data[i:i+256]
+                        ent = calc_entropy(block)
+                        unique = len(set(block))
+                        if ent > 0.95 and unique > 200:
+                            indicators.append({
+                                "addr": hex(curr + i),
+                                "type": "potential_sbox",
+                                "description": f"High entropy block ({unique} unique bytes)"
+                            })
+
+                    if len(indicators) > 50: break
+                    curr += read_len
                 
-                if not data:
-                    continue
-                
-                # Search for crypto constants
-                for pattern, name in crypto_patterns:
-                    offset = data.find(pattern)
-                    if offset != -1:
-                        indicators.append({
-                            "addr": hex(seg.start_ea + offset),
-                            "type": "crypto_constant",
-                            "description": name
-                        })
-                
-                # Look for high-entropy 256-byte blocks (potential S-boxes)
-                for i in range(0, len(data) - 256, 256):
-                    block = data[i:i+256]
-                    ent = calc_entropy(block)
-                    unique = len(set(block))
-                    if ent > 0.95 and unique > 200:
-                        indicators.append({
-                            "addr": hex(seg.start_ea + i),
-                            "type": "potential_sbox",
-                            "description": f"High entropy block ({unique} unique bytes)"
-                        })
-                        if len(indicators) > 50:
-                            break
+                if len(indicators) > 50: break
             
             return {"crypto_indicators": indicators[:50]}
         
@@ -6695,56 +6686,115 @@ def nav(
         if action == "bookmarks":
             bookmarks = []
             
-            # IDA stores marked positions (bookmarks) in slots 1-1024
-            for i in range(1, 1025):
-                mark_ea = idc.get_bookmark(i)
-                if mark_ea != idaapi.BADADDR:
-                    mark_desc = idc.get_bookmark_desc(i)
-                    bookmarks.append({
-                        "slot": i,
-                        "addr": hex(mark_ea),
-                        "name": idc.get_name(mark_ea) or None,
-                        "description": mark_desc or None
-                    })
-                if len(bookmarks) >= 100:
-                    break
+            # Check if legacy bookmarks API works (IDA < 9)
+            if hasattr(idc, 'get_bookmark') and hasattr(idc, 'get_bookmark_desc'):
+                for i in range(1, 1025):
+                    mark_ea = idc.get_bookmark(i)
+                    if mark_ea != idaapi.BADADDR:
+                        mark_desc = idc.get_bookmark_desc(i)
+                        bookmarks.append({
+                            "slot": i,
+                            "addr": hex(mark_ea),
+                            "name": idc.get_name(mark_ea) or None,
+                            "description": mark_desc or None
+                        })
+                    if len(bookmarks) >= 100:
+                        break
+            else:
+                # IDA 9+ fallback: Use custom netnode
+                # The native bookmarks API is C++ wrapped and complex to access via Python in 9.0
+                try:
+                    import ida_netnode
+                    node = ida_netnode.netnode("$ mcp_bookmarks", 0, True)
+                    # Iterate sparce array
+                    idx = node.alt1st()
+                    while idx != ida_netnode.BADNODE and len(bookmarks) < 100:
+                        ea = node.altval(idx)
+                        desc = node.supstr(idx)
+                        bookmarks.append({
+                            "slot": idx,
+                            "addr": hex(ea),
+                            "description": desc.decode('utf-8') if desc else None
+                        })
+                        idx = node.altnxt(idx)
+                except Exception as e:
+                    return make_error(MCPError.IDA_ERROR, f"Failed to access bookmarks: {e}")
             
             return {"bookmarks": bookmarks}
         
         elif action == "add_bookmark":
             if not addr:
-                return {"error": "addr required"}
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             
-            ea = parse_address(addr)
+            ea, error = validate_addr(addr)
+            if error: return error
             
-            # Find an empty slot or use provided one
-            target_slot = slot if slot > 0 else 1
-            if slot == 0:
-                for i in range(1, 1025):
-                    if idc.get_bookmark(i) == idaapi.BADADDR:
-                        target_slot = i
-                        break
+            desc = name or f"Bookmark at {hex(ea)}"
+            target_slot = slot if slot > 0 else 0
             
-            # Set bookmark
-            idc.put_bookmark(ea, 0, 0, 0, target_slot, name or f"Bookmark at {hex(ea)}")
+            # Legacy API
+            if hasattr(idc, 'put_bookmark') and hasattr(idc, 'get_bookmark'):
+                if target_slot == 0:
+                    for i in range(1, 1025):
+                        if idc.get_bookmark(i) == idaapi.BADADDR:
+                            target_slot = i
+                            break
+                idc.put_bookmark(ea, 0, 0, 0, target_slot, desc)
+            else:
+                # IDA 9+ fallback: Custom netnode
+                try:
+                    import ida_netnode
+                    node = ida_netnode.netnode("$ mcp_bookmarks", 0, True)
+                    if target_slot == 0:
+                        # Find free slot
+                        target_slot = 1
+                        while node.altval(target_slot) != 0:
+                            target_slot += 1
+
+                    node.altset(target_slot, ea)
+                    node.supset(target_slot, desc.encode('utf-8'))
+                except Exception as e:
+                    return make_error(MCPError.IDA_ERROR, f"Failed to set bookmark: {e}")
             
-            return {"added": True, "addr": hex(ea), "slot": target_slot, "name": name}
+            return {"added": True, "addr": hex(ea), "slot": target_slot, "name": desc}
         
         elif action == "del_bookmark":
-            if slot > 0:
-                # Delete by slot
-                idc.put_bookmark(idaapi.BADADDR, 0, 0, 0, slot, "")
-                return {"deleted": True, "slot": slot}
-            elif addr:
-                # Find and delete by address
-                ea = parse_address(addr)
-                for i in range(1, 1025):
-                    if idc.get_bookmark(i) == ea:
-                        idc.put_bookmark(idaapi.BADADDR, 0, 0, 0, i, "")
-                        return {"deleted": True, "slot": i, "addr": hex(ea)}
-                return {"error": f"No bookmark at {addr}"}
+            target_slot = slot if slot > 0 else 0
+
+            if hasattr(idc, 'put_bookmark'):
+                if target_slot > 0:
+                    idc.put_bookmark(idaapi.BADADDR, 0, 0, 0, target_slot, "")
+                elif addr:
+                    ea, error = validate_addr(addr)
+                    if error: return error
+                    for i in range(1, 1025):
+                        if idc.get_bookmark(i) == ea:
+                            idc.put_bookmark(idaapi.BADADDR, 0, 0, 0, i, "")
+                            target_slot = i
+                            break
             else:
-                return {"error": "slot or addr required"}
+                # IDA 9+ fallback
+                import ida_netnode
+                node = ida_netnode.netnode("$ mcp_bookmarks", 0, True)
+                if target_slot > 0:
+                    node.altdel(target_slot)
+                    node.supdel(target_slot)
+                elif addr:
+                    ea, error = validate_addr(addr)
+                    if error: return error
+                    # Scan
+                    idx = node.alt1st()
+                    while idx != ida_netnode.BADNODE:
+                        if node.altval(idx) == ea:
+                            node.altdel(idx)
+                            node.supdel(idx)
+                            target_slot = idx
+                            break
+                        idx = node.altnxt(idx)
+
+            if target_slot > 0:
+                return {"deleted": True, "slot": target_slot}
+            return make_error(MCPError.FILE_NOT_FOUND, "Bookmark not found")
         
         elif action == "goto":
             if not addr:
