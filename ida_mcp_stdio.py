@@ -32,6 +32,7 @@ import time
 import warnings
 import glob
 import uuid
+import logging
 from typing import Any, Dict, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -1022,6 +1023,15 @@ class IDAMCPServer:
         # Create cache dir
         os.makedirs(self.cache_dir, exist_ok=True)
         
+        # Configure logging
+        log_file = os.path.join(self.cache_dir, "mcp_debug.log")
+        logging.basicConfig(
+            filename=log_file,
+            level=logging.DEBUG,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        logging.info("IDA MCP Server starting")
+
         # Session manager
         self.session_mgr = SessionManager(self.cache_dir)
         
@@ -1499,6 +1509,8 @@ class IDAMCPServer:
         req_id = request.get("id")
         params = request.get("params", {})
 
+        logging.debug(f"Handling request: {method} (id={req_id})")
+
         def wrap_result(payload: dict | list | str) -> dict:
             structured = payload if isinstance(payload, dict) else {"result": payload}
             if isinstance(payload, dict):
@@ -1624,7 +1636,70 @@ class IDAMCPServer:
                     "message": f"Method not found: {method}"
                 }
             }
-    
+
+    def _read_message(self, stdin) -> Optional[dict]:
+        """Read a JSON-RPC message handling both headers and newlines."""
+        try:
+            # Read a line
+            line = stdin.readline()
+            if not line:
+                return None  # EOF
+
+            # Try to decode as UTF-8
+            try:
+                line_str = line.decode('utf-8')
+            except UnicodeDecodeError:
+                logging.warning("Received invalid UTF-8 data")
+                return None
+
+            line_str_strip = line_str.strip()
+
+            # 1. Header handling (LSP-style)
+            # Check for Content-Length case-insensitively
+            if line_str_strip.lower().startswith("content-length:"):
+                try:
+                    length = int(line_str_strip.split(":", 1)[1].strip())
+                    logging.debug(f"Detected Content-Length: {length}")
+
+                    # Read until empty line (headers end)
+                    while True:
+                        next_line = stdin.readline()
+                        if not next_line:
+                            break
+                        try:
+                            next_line_str = next_line.decode('utf-8').strip()
+                        except UnicodeDecodeError:
+                            continue
+
+                        if not next_line_str:
+                            break
+
+                    # Read exactly 'length' bytes
+                    body = stdin.read(length)
+                    if not body or len(body) < length:
+                        logging.error("Unexpected EOF while reading body")
+                        return None
+
+                    return json.loads(body)
+                except ValueError:
+                    logging.error("Failed to parse Content-Length header")
+                    return None
+
+            # 2. Skip empty lines
+            if not line_str_strip:
+                return {} # Return empty dict to indicate "skip"
+
+            # 3. Newline delimited JSON
+            try:
+                return json.loads(line_str_strip)
+            except json.JSONDecodeError:
+                logging.warning(f"Invalid JSON received: {line_str_strip[:100]}...")
+                return {} # Return empty dict to indicate "skip"
+
+        except Exception as e:
+            logging.error(f"Error reading message: {e}")
+            return None
+
     def run(self):
         """Main event loop - read from stdin, write to stdout."""
         # Use binary mode to avoid encoding issues
@@ -1636,17 +1711,21 @@ class IDAMCPServer:
         stdin = sys.stdin.buffer
         stdout = sys.stdout.buffer
         
+        logging.info("Starting main event loop")
+
         while True:
             try:
-                line = stdin.readline()
-                if not line:
+                request = self._read_message(stdin)
+
+                # Check for None (EOF)
+                if request is None:
+                    logging.info("EOF received, shutting down")
                     break
                 
-                line = line.decode('utf-8').strip()
-                if not line:
+                # Check for empty dict (skip)
+                if not request:
                     continue
                 
-                request = json.loads(line)
                 response = self.handle_request(request)
                 
                 if response is not None:
@@ -1654,25 +1733,18 @@ class IDAMCPServer:
                     stdout.write((out + "\n").encode('utf-8'))
                     stdout.flush()
             
-            except json.JSONDecodeError:
-                # Invalid JSON - skip this request
-                continue
             except KeyboardInterrupt:
                 # User requested shutdown
+                logging.info("KeyboardInterrupt received")
                 break
-            except UnicodeDecodeError:
-                # Invalid UTF-8 input - skip
-                continue
-            except IOError:
-                # I/O error (pipe closed, etc.) - exit
-                break
-            except Exception:
+            except Exception as e:
                 # Log other errors but continue processing
-                # In production, this could log to a file
+                logging.error(f"Unexpected error in run loop: {e}", exc_info=True)
                 pass
         
         # Cleanup: release all session locks and clean up stale lock files
         self._cleanup_on_exit()
+        logging.info("Server stopped")
     
     def _cleanup_on_exit(self):
         """Clean up resources when the server exits."""
