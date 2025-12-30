@@ -183,7 +183,7 @@ def idb(
                 ea = _entry(ordinal)
                 name = _name(ordinal)
                 entries.append({"addr": hex(ea), "name": name, "ordinal": ordinal})
-            return {"entrypoints": entries}
+            return {"ok": True, "entrypoints": entries}
         
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
@@ -299,27 +299,27 @@ def code(
                         suggestion = f" Try {hex(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
                     elif next_func:
                         suggestion = f" Try {hex(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
-                    results.append(make_error(
-                        MCPError.FUNCTION_NOT_FOUND,
-                        f"No function at {addr}.{suggestion}",
-                        "Use 'data functions' to list all functions, or 'funcs create' to define a new function",
-                        details={"addr": addr}
-                    ))
+                    
+                    results.append({"addr": addr, "error": f"No function at {hex(ea)}.{suggestion}"})
                     continue
+                
                 try:
+                    if not ida_hexrays.init_hexrays_plugin():
+                        results.append({"addr": addr, "error": "Hex-Rays decompiler not available"})
+                        continue
+                        
                     cfunc = ida_hexrays.decompile(func.start_ea)
-                    results.append({
-                        "addr": addr, 
-                        "name": ida_funcs.get_func_name(func.start_ea),
-                        "code": str(cfunc)
-                    })
+                    if cfunc:
+                        results.append({
+                            "ok": True,
+                            "addr": hex(func.start_ea),
+                            "code": str(cfunc),
+                            "prototype": get_prototype(func)
+                        })
+                    else:
+                        results.append({"addr": addr, "error": "Decompilation failed"})
                 except Exception as e:
-                    results.append(make_error(
-                        MCPError.IDA_ERROR,
-                        str(e),
-                        "Hex-Rays decompiler may have failed. Try 'disasm' action instead.",
-                        details={"addr": addr}
-                    ))
+                    results.append({"addr": addr, "error": str(e)})
             
             elif action == "disasm":
                 func = idaapi.get_func(ea)
@@ -348,17 +348,17 @@ def code(
                     insns.append({"addr": hex(curr), "text": idc.generate_disasm_line(curr, 0)})
                     curr = idc.next_head(curr, func.end_ea)
                     count += 1
-                results.append({"addr": addr, "instructions": insns})
+                results.append({"ok": True, "addr": addr, "instructions": insns})
             
             elif action == "xrefs_to":
                 xrefs = [{"from": hex(x.frm), "type": "code" if x.iscode else "data"} 
                          for x in idautils.XrefsTo(ea, 0)][:max_items]
-                results.append({"addr": addr, "xrefs": xrefs})
+                results.append({"ok": True, "addr": addr, "xrefs": xrefs})
             
             elif action == "xrefs_from":
                 xrefs = [{"to": hex(x.to), "type": "code" if x.iscode else "data"} 
                          for x in idautils.XrefsFrom(ea, 0)][:max_items]
-                results.append({"addr": addr, "xrefs": xrefs})
+                results.append({"ok": True, "addr": addr, "xrefs": xrefs})
             
             elif action == "callees":
                 func = idaapi.get_func(ea)
@@ -373,7 +373,7 @@ def code(
                             if target_func and target_func.start_ea != func.start_ea:
                                 callees.add((hex(target_func.start_ea), 
                                             ida_funcs.get_func_name(target_func.start_ea)))
-                results.append({"addr": addr, "callees": [{"addr": a, "name": n} for a, n in callees]})
+                results.append({"ok": True, "addr": addr, "callees": [{"addr": a, "name": n} for a, n in callees]})
             
             elif action == "callers":
                 func = idaapi.get_func(ea)
@@ -385,7 +385,7 @@ def code(
                         if caller_func:
                             callers.add((hex(caller_func.start_ea),
                                         ida_funcs.get_func_name(caller_func.start_ea)))
-                results.append({"addr": addr, "callers": [{"addr": a, "name": n} for a, n in callers]})
+                results.append({"ok": True, "addr": addr, "callers": [{"addr": a, "name": n} for a, n in callers]})
             
             elif action == "blocks":
                 func = idaapi.get_func(ea)
@@ -403,7 +403,7 @@ def code(
                     })
                     if len(blocks) >= max_items:
                         break
-                results.append({"addr": addr, "blocks": blocks})
+                results.append({"ok": True, "addr": addr, "blocks": blocks})
             
             elif action == "analyze":
                 # Comprehensive function analysis
@@ -413,14 +413,17 @@ def code(
                     continue
                 
                 fname = ida_funcs.get_func_name(func.start_ea)
-                info = {"addr": addr, "name": fname, "size": hex(func.end_ea - func.start_ea)}
+                info = {"ok": True, "addr": addr, "name": fname, "size": hex(func.end_ea - func.start_ea)}
                 
                 # Decompile
                 try:
                     cfunc = ida_hexrays.decompile(func.start_ea)
-                    info["code"] = str(cfunc)
+                    info["pseudocode"] = str(cfunc)
                 except:
-                    info["code"] = None
+                    info["pseudocode"] = None
+                
+                # Prototype
+                info["prototype"] = get_prototype(func)
                 
                 # Callees
                 callees = set()
@@ -441,45 +444,49 @@ def code(
                             callers.add(ida_funcs.get_func_name(cf.start_ea))
                 info["callers"] = list(callers)
                 
-                # Strings referenced
-                strs = []
+                # Strings
+                strings = []
                 for item in idautils.FuncItems(func.start_ea):
                     for xref in idautils.XrefsFrom(item, 0):
                         if not xref.iscode:
                             s = idc.get_strlit_contents(xref.to)
                             if s:
-                                strs.append(s.decode("utf-8", errors="replace"))
-                info["strings"] = strs[:100]
+                                strings.append(s.decode("utf-8", errors="replace"))
+                info["strings"] = strings[:50]
+                
+                # Stack vars
+                info["stack_vars"] = get_stack_frame_variables_internal(func.start_ea, False)
                 
                 results.append(info)
             
             elif action == "callgraph":
-                # Build call graph from function
+                # BFS for call graph
                 func = idaapi.get_func(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
                     continue
                 
-                visited = {}
-                def traverse(start_ea, depth):
-                    if depth > max_depth or start_ea in visited:
-                        return
-                    fn = idaapi.get_func(start_ea)
-                    if not fn:
-                        return
-                    name = ida_funcs.get_func_name(fn.start_ea)
-                    visited[start_ea] = {"name": name, "callees": []}
+                visited = {func.start_ea: 0}
+                queue = [(func.start_ea, 0)]
+                edges = []
+                
+                while queue:
+                    curr_ea, dist = queue.pop(0)
+                    if dist >= max_depth:
+                        continue
                     
-                    for item in idautils.FuncItems(fn.start_ea):
-                        for xref in idautils.XrefsFrom(item, 0):
+                    for item_ea in idautils.FuncItems(curr_ea):
+                        for xref in idautils.XrefsFrom(item_ea, 0):
                             if xref.iscode:
                                 tf = idaapi.get_func(xref.to)
-                                if tf and tf.start_ea != fn.start_ea:
-                                    visited[start_ea]["callees"].append(ida_funcs.get_func_name(tf.start_ea))
-                                    traverse(tf.start_ea, depth + 1)
+                                if tf and tf.start_ea != curr_ea:
+                                    target_ea = tf.start_ea
+                                    edges.append({"caller": hex(curr_ea), "callee": hex(target_ea)})
+                                    if target_ea not in visited:
+                                        visited[target_ea] = dist + 1
+                                        queue.append((target_ea, dist + 1))
                 
-                traverse(func.start_ea, 0)
-                results.append({"addr": addr, "graph": {hex(k): v for k, v in visited.items()}})
+                results.append({"ok": True, "addr": addr, "graph": {hex(k): v for k, v in visited.items()}, "edges": edges[:max_items]})
             
             elif action == "export":
                 # Export function info
@@ -607,7 +614,7 @@ def code(
                             s = idc.get_strlit_contents(xref.to)
                             if s:
                                 strs.append({"addr": hex(xref.to), "string": s.decode("utf-8", errors="replace")})
-                results.append({"addr": addr, "strings": strs})
+                results.append({"ok": True, "addr": addr, "strings": strs})
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
@@ -657,7 +664,7 @@ def data(
                         funcs.append({"addr": hex(ea), "name": name, "size": hex(fn.end_ea - fn.start_ea)})
             total = len(funcs)
             funcs = funcs[offset:offset+count] if count else funcs[offset:]
-            result = {"functions": funcs, "total": total}
+            result = {"ok": True, "functions": funcs, "total": total}
             if total == 0:
                 result["warning"] = "No functions found. Binary may not be auto-analyzed yet. Try loading IDB in IDA GUI first, or the binary has no recognized code."
             return result
@@ -671,7 +678,7 @@ def data(
                     globs.append({"addr": hex(ea), "name": name})
             total = len(globs)
             globs = globs[offset:offset+count] if count else globs[offset:]
-            return {"globals": globs, "total": total}
+            return {"ok": True, "globals": globs, "total": total}
         
         elif action == "strings":
             strings = []
@@ -701,7 +708,7 @@ def data(
                         pass
             total = len(strings)
             strings = strings[offset:offset+count] if count else strings[offset:]
-            return {"strings": strings, "total": total}
+            return {"ok": True, "strings": strings, "total": total}
         
         elif action == "imports":
             imports = []
@@ -713,7 +720,7 @@ def data(
                 ida_nalt.enum_import_names(i, cb)
             total = len(imports)
             imports = imports[offset:offset+count] if count else imports[offset:]
-            return {"imports": imports, "total": total}
+            return {"ok": True, "imports": imports, "total": total}
         
         elif action == "exports":
             exports = []
@@ -741,14 +748,14 @@ def data(
                         _entry = ida_nalt.get_entry
                         _name = ida_nalt.get_entry_name
                     else:
-                        return {"error": "Entry API not available in this IDA version"}
+                        return make_error(MCPError.IDA_ERROR, "Entry API not available in this IDA version")
 
             for i in range(_qty()):
                 ordinal = _ordinal(i)
                 ea = _entry(ordinal)
                 name = _name(ordinal)
                 exports.append({"addr": hex(ea), "name": name, "ordinal": ordinal})
-            return {"exports": exports}
+            return {"ok": True, "exports": exports}
         
         elif action == "lookup":
             if not query:
@@ -759,14 +766,14 @@ def data(
                     ea = parse_address(query)
                     name = idc.get_name(ea)
                     func = idaapi.get_func(ea)
-                    return {"addr": hex(ea), "name": name, "is_func": func is not None}
+                    return {"ok": True, "addr": hex(ea), "name": name, "is_func": func is not None}
                 except:
                     pass
             # Try as name
             ea = idc.get_name_ea_simple(query)
             if ea != idaapi.BADADDR:
                 func = idaapi.get_func(ea)
-                return {"addr": hex(ea), "name": query, "is_func": func is not None}
+                return {"ok": True, "addr": hex(ea), "name": query, "is_func": func is not None}
             return make_error(MCPError.FILE_NOT_FOUND, f"Not found: {query}")
         
         else:
@@ -839,7 +846,7 @@ def search(
                      pass
                         
                 seg = idaapi.get_next_seg(seg.end_ea)
-            return {"matches": results, "pattern": pattern}
+            return {"ok": True, "matches": results, "pattern": pattern}
         
         elif action == "string":
             for i in range(idaapi.get_strlist_qty()):
@@ -855,7 +862,7 @@ def search(
                                 results.append({"addr": hex(sc.ea), "string": s})
                     except:
                         pass
-            return {"matches": results, "pattern": pattern}
+            return {"ok": True, "matches": results, "pattern": pattern}
         
         elif action == "immediate":
             # Immediate value search
@@ -876,7 +883,7 @@ def search(
                     else:
                          break
                 seg = idaapi.get_next_seg(seg.end_ea)
-            return {"matches": results, "value": pattern}
+            return {"ok": True, "matches": results, "value": pattern}
         
         elif action == "name":
             for ea, name in idautils.Names():
@@ -884,7 +891,7 @@ def search(
                     break
                 if fnmatch.fnmatch(name.lower(), pattern.lower()):
                     results.append({"addr": hex(ea), "name": name})
-            return {"matches": results, "pattern": pattern}
+            return {"ok": True, "matches": results, "pattern": pattern}
         
         elif action == "insns":
             # Search for instruction mnemonic sequence (comma-separated)
@@ -912,7 +919,7 @@ def search(
                         if match:
                             results.append({"addr": hex(ea)})
                     ea = idc.next_head(ea, seg.end_ea)
-            return {"matches": results, "pattern": pattern}
+            return {"ok": True, "matches": results, "pattern": pattern}
         
         elif action == "data_ref":
             # Search for data references to address
@@ -924,7 +931,7 @@ def search(
                     break
                 if not xref.iscode:
                     results.append({"from": hex(xref.frm), "to": hex(xref.to)})
-            return {"matches": results, "target": pattern}
+            return {"ok": True, "matches": results, "target": pattern}
         
         elif action == "code_ref":
             # Search for code references to address
@@ -940,7 +947,7 @@ def search(
                     if func:
                         entry["func"] = ida_funcs.get_func_name(func.start_ea)
                     results.append(entry)
-            return {"matches": results, "target": pattern}
+            return {"ok": True, "matches": results, "target": pattern}
         
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
@@ -993,68 +1000,67 @@ def types(
                 if not tif.get_numbered_type(None, ordinal):
                     break
                     
-                types_list.append({
-                    "ordinal": ordinal,
-                    "name": tif.get_type_name(),
-                    "type": str(tif),
-                    "is_struct": tif.is_struct(),
-                    "is_enum": tif.is_enum()
-                })
-            return {"types": types_list}
-        
-        elif action == "get":
-            if not name:
-                return {"error": "name required"}
-            
-            IDA9 = int(idaapi.get_kernel_version().split('.')[0]) >= 9
-            tid = ida_typeinf.get_named_type_tid(name) if IDA9 else idaapi.BADADDR
-            
-            tif = ida_typeinf.tinfo_t()
-            if tid != idaapi.BADADDR:
-                tif.get_type_by_tid(tid)
-            else:
-                # Try parse
-                if not tif.get_named_type(None, name):
-                    return {"error": f"Type not found: {name}"}
-            
-            result = {"name": name, "type": str(tif), "size": tif.get_size()}
-            
-            if tif.is_struct() or tif.is_union():
-                udt = ida_typeinf.udt_type_data_t()
-                if tif.get_udt_details(udt):
-                    members = []
-                    for i in range(udt.size()):
-                        m = udt[i]
-                        members.append({"name": m.name, "offset": m.offset // 8, "type": str(m.type)})
-                    result["members"] = members
-            
-            elif tif.is_enum():
-                ei = ida_typeinf.enum_type_data_t()
-                if tif.get_enum_details(ei):
-                    members = [{"name": ei[i].name, "value": ei[i].value} for i in range(ei.size())]
-                    result["members"] = members
-            
-            return result
-        
-        elif action == "set_prototype":
-            if not addr or not decl:
-                return {"error": "addr and decl required"}
-            ea = parse_address(addr)
-            tif = ida_typeinf.tinfo_t()
-            if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
-                return {"error": f"Failed to parse: {decl}"}
-            if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
-                return {"error": "Failed to apply type"}
-            return {"ok": True, "addr": addr, "type": str(tif)}
-        
-        elif action == "parse_decl":
-            if not decl:
-                return {"error": "decl required"}
-            tif = ida_typeinf.tinfo_t()
-            if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
-                return {"error": f"Failed to parse: {decl}"}
-            return {"parsed": str(tif), "size": tif.get_size()}
-        
+                                    types_list.append({
+                                    "ordinal": ordinal,
+                                    "name": tif.get_type_name(),
+                                    "type": str(tif),
+                                    "is_struct": tif.is_struct(),
+                                    "is_enum": tif.is_enum()
+                                })
+                            return {"ok": True, "types": types_list}
+                        
+                        elif action == "get":
+                            if not name:
+                                return {"error": "name required"}
+                            
+                            IDA9 = int(idaapi.get_kernel_version().split('.')[0]) >= 9
+                            tid = ida_typeinf.get_named_type_tid(name) if IDA9 else idaapi.BADADDR
+                            
+                            tif = ida_typeinf.tinfo_t()
+                            if tid != idaapi.BADADDR:
+                                tif.get_type_by_tid(tid)
+                            else:
+                                # Try parse
+                                if not tif.get_named_type(None, name):
+                                    return {"error": f"Type not found: {name}"}
+                            
+                            result = {"ok": True, "name": name, "type": str(tif), "size": tif.get_size()}
+                            
+                            if tif.is_struct() or tif.is_union():
+                                udt = ida_typeinf.udt_type_data_t()
+                                if tif.get_udt_details(udt):
+                                    members = []
+                                    for i in range(udt.size()):
+                                        m = udt[i]
+                                        members.append({"name": m.name, "offset": m.offset // 8, "type": str(m.type)})
+                                    result["members"] = members
+                            
+                            elif tif.is_enum():
+                                ei = ida_typeinf.enum_type_data_t()
+                                if tif.get_enum_details(ei):
+                                    members = [{"name": ei[i].name, "value": ei[i].value} for i in range(ei.size())]
+                                    result["members"] = members
+                            
+                            return result
+                        
+                        elif action == "set_prototype":
+                            if not addr or not decl:
+                                return {"error": "addr and decl required"}
+                            ea = parse_address(addr)
+                            tif = ida_typeinf.tinfo_t()
+                            if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
+                                return {"error": f"Failed to parse: {decl}"}
+                            if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
+                                return {"error": "Failed to apply type"}
+                            return {"ok": True, "addr": addr, "type": str(tif)}
+                        
+                        elif action == "parse_decl":
+                            if not decl:
+                                return {"error": "decl required"}
+                            tif = ida_typeinf.tinfo_t()
+                            if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
+                                return {"error": f"Failed to parse: {decl}"}
+                            return {"ok": True, "parsed": str(tif), "size": tif.get_size()}        
         elif action == "declare":
             # Declare a new local type
             if not decl:
@@ -1173,7 +1179,7 @@ def types(
                                     "field": m.name
                                 })
                                 break
-            return {"matches": matches, "query": query}
+            return {"ok": True, "matches": matches}
         
         elif action == "infer":
              # Infer type at address
@@ -1340,7 +1346,7 @@ def memory(
                     value = None
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown type: {type}")
-            return {"addr": addr, "value": value}
+            return {"ok": True, "addr": addr, "value": value}
         
         elif action == "write":
             if not data:
@@ -3011,6 +3017,7 @@ def agent(
             
             name = ida_funcs.get_func_name(func.start_ea)
             result = {
+                "ok": True,
                 "addr": hex(func.start_ea),
                 "name": name,
                 "size": func.end_ea - func.start_ea,
@@ -3065,7 +3072,7 @@ def agent(
                 return {"error": "addr required"}
             ea = parse_address(addr)
             
-            result = {"addr": hex(ea), "name": idc.get_name(ea) or ""}
+            result = {"ok": True, "addr": hex(ea), "name": idc.get_name(ea) or ""}
             
             # What is at this address?
             func = idaapi.get_func(ea)
@@ -3100,7 +3107,7 @@ def agent(
                 return {"error": "addr required"}
             ea = parse_address(addr)
             
-            result = {"addr": hex(ea), "code_refs": [], "data_refs": []}
+            result = {"ok": True, "addr": hex(ea), "code_refs": [], "data_refs": []}
             
             for xref in idautils.XrefsTo(ea, 0):
                 entry = {"from": hex(xref.frm)}
@@ -3123,7 +3130,7 @@ def agent(
             if not query:
                 return {"error": "query required"}
             
-            results = {"query": query, "functions": [], "strings": [], "names": []}
+            results = {"ok": True, "query": query, "functions": [], "strings": [], "names": []}
             
             # Search functions
             for ea in idautils.Functions():
