@@ -1027,6 +1027,15 @@ class IDAMCPServer:
         
         # Current active session
         self.current_session: Optional[Session] = None
+
+        # Active server process management
+        self.server_process = None
+        self.server_port = 0
+        self.server_sock = None
+
+        # Ensure cleanup of child processes
+        import atexit
+        atexit.register(self._cleanup_server)
     
     def _detect_ida_dir(self) -> str:
         """Auto-detect IDA installation directory."""
@@ -1091,6 +1100,133 @@ class IDAMCPServer:
             if os.path.exists(idb_path2):
                 return idb_path2
         return None
+
+    def _get_free_port(self):
+        """Get a free ephemeral port."""
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    def _start_server(self, target_path: str):
+        """Start the persistent IDA server."""
+        if self.server_process:
+            if self.server_process.poll() is None:
+                return  # Already running
+            self._cleanup_server()
+
+        self.server_port = self._get_free_port()
+        server_script = os.path.join(os.path.dirname(self.api_path), "server_script.py")
+
+        if not os.path.exists(server_script):
+            # Fallback to local
+            server_script = os.path.join(self.script_dir, "src", "ida_pro_mcp", "server_script.py")
+
+        env = os.environ.copy()
+        if self.ida_dir:
+            env["IDADIR"] = self.ida_dir
+            path_entries = env.get("PATH", "").split(os.pathsep)
+            if self.ida_dir not in path_entries:
+                env["PATH"] = self.ida_dir + os.pathsep + env.get("PATH", "")
+
+        env["IDA_MCP_PORT"] = str(self.server_port)
+        # Ensure server waits for analysis
+        env["IDA_WAIT_ANALYSIS"] = "1"
+
+        cmd = [self.idat_exe, "-A", f"-S{server_script}", target_path]
+
+        # Start process detached but tracked
+        if sys.platform == "win32":
+            self.server_process = subprocess.Popen(
+                cmd,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdout=subprocess.DEVNULL, # Suppress noisy IDA output
+                stderr=subprocess.DEVNULL,
+                env=env
+            )
+        else:
+            self.server_process = subprocess.Popen(
+                cmd,
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env
+            )
+
+        # Wait for port to be ready
+        import socket
+        start = time.time()
+        while time.time() - start < 30: # Wait up to 30s for IDA to load
+            if self.server_process.poll() is not None:
+                raise RuntimeError(f"IDA process died immediately (code {self.server_process.returncode})")
+
+            try:
+                s = socket.create_connection(("127.0.0.1", self.server_port), timeout=0.1)
+                s.close()
+                return # Ready
+            except (ConnectionRefusedError, OSError):
+                time.sleep(0.5)
+
+        raise RuntimeError("Timed out waiting for IDA server to start")
+
+    def _cleanup_server(self):
+        """Kill the server process."""
+        if self.server_process:
+            # Try graceful shutdown via RPC first
+            try:
+                self._send_rpc({"type": "shutdown"})
+            except:
+                pass
+
+            if self.server_process.poll() is None:
+                try:
+                    self.server_process.terminate()
+                    try:
+                        self.server_process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        self.server_process.kill()
+                except:
+                    pass
+            self.server_process = None
+
+    def _send_rpc(self, request: dict) -> dict:
+        """Send JSON request to IDA server via TCP."""
+        import socket
+        import struct
+
+        if not self.server_process or self.server_process.poll() is not None:
+            raise RuntimeError("IDA server is not running")
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.connect(("127.0.0.1", self.server_port))
+
+            # Send length-prefixed JSON
+            data = json.dumps(request).encode("utf-8")
+            s.sendall(len(data).to_bytes(4, 'big') + data)
+
+            # Read response length
+            len_bytes = b""
+            while len(len_bytes) < 4:
+                chunk = s.recv(4 - len(len_bytes))
+                if not chunk: raise EOFError("Connection closed")
+                len_bytes += chunk
+
+            resp_len = int.from_bytes(len_bytes, 'big')
+
+            # Read response body
+            resp_data = b""
+            while len(resp_data) < resp_len:
+                chunk = s.recv(min(4096, resp_len - len(resp_data)))
+                if not chunk: raise EOFError("Connection closed")
+                resp_data += chunk
+
+            return json.loads(resp_data.decode("utf-8"))
+
+        finally:
+            s.close()
     
     def handle_session_tool(self, action: str, arguments: dict) -> dict:
         """Handle session management actions."""
@@ -1186,7 +1322,7 @@ class IDAMCPServer:
             return make_error(MCPError.INVALID_ARGS, f"Unknown session action: {action}")
     
     def call_tool(self, tool_name: str, idb_path: str, **kwargs) -> Dict[str, Any]:
-        """Execute a tool from api_consolidated.py on an IDB file.
+        """Execute a tool from api_consolidated.py via RPC.
         
         Args:
             tool_name: Name of the tool function to call
@@ -1231,200 +1367,26 @@ class IDAMCPServer:
                             if validated is None:
                                 return make_error(MCPError.INTEGER_OVERFLOW, f"Invalid address: {a}")
         
-        # Try to acquire lock for this IDB
-        # The acquire() method handles stale lock detection internally
-        lock = SimpleLock(target)
-        lock_acquired = lock.acquire(timeout=LOCK_TIMEOUT_EXTENDED)
-        
-        if not lock_acquired:
-            owner = lock.get_owner_info()
-            return make_error(
-                MCPError.FILE_LOCKED,
-                f"IDB is locked by another process",
-                recoverable=True,
-                details={"owner": owner}
-            )
-        
-        # Initialize temp file paths
-        script_file = None
-        output_file = None
-        args_file = None
-        log_file = None
-        cwd = None
-        success = False
-        
+        # Ensure server is running
         try:
-            # Create unique temp files (collision-safe using UUID)
-            unique_id = f"{os.getpid()}_{threading.get_ident()}_{uuid.uuid4().hex[:12]}"
-            script_file = os.path.join(self.cache_dir, f"mcp_script_{unique_id}.py")
-            output_file = os.path.join(self.cache_dir, f"mcp_result_{unique_id}.json")
-            args_file = os.path.join(self.cache_dir, f"mcp_args_{unique_id}.json")
-            
-            # Enable IDA logging for debugging
-            log_file = os.path.join(self.cache_dir, f"mcp_ida_{unique_id}.log")
-            
-            # Write arguments to separate JSON file (UTF-8, safe from escaping issues)
-            with open(args_file, 'w', encoding='utf-8') as f:
-                json.dump(kwargs, f, ensure_ascii=False, indent=2)
-            
-            # Escape paths for Windows
-            escaped_api_path = self.api_path.replace('\\', '\\\\')
-            escaped_output = output_file.replace('\\', '\\\\')
-            escaped_args = args_file.replace('\\', '\\\\')
-            
-            # Generate script that reads args from file
-            script = f'''import json
-import sys
-
-sys.path.insert(0, "{escaped_api_path}")
-
-from api_consolidated import {tool_name}
-
-try:
-    # Read arguments from JSON file (safe from escaping issues)
-    with open("{escaped_args}", "r", encoding="utf-8") as f:
-        kwargs = json.load(f)
-    result = {tool_name}(**kwargs)
-except Exception as e:
-    result = {{"error": str(e), "traceback": __import__("traceback").format_exc()}}
-
-with open("{escaped_output}", "w", encoding="utf-8") as f:
-    json.dump(result, f, default=str)
-
-import ida_pro
-ida_pro.qexit(0)
-'''
-            
-            # Write script to file
-            with open(script_file, 'w', encoding='utf-8') as f:
-                f.write(script)
-            
-            # Determine working directory (stable environment)
-            ida_dir = self.ida_dir if self.ida_dir else os.path.dirname(self.idat_exe)
-            cwd = ida_dir if os.path.isdir(ida_dir) else None
-            
-            # Build explicit environment
-            env = os.environ.copy()
-            if self.ida_dir:
-                env["IDADIR"] = self.ida_dir
-                # Ensure ida_dir is in PATH
-                path_entries = env.get("PATH", "").split(os.pathsep)
-                if self.ida_dir not in path_entries:
-                    env["PATH"] = self.ida_dir + os.pathsep + env.get("PATH", "")
-            
-            # Build command with optional logging
-            cmd = [self.idat_exe, "-A"]
-            if log_file:
-                cmd.append(f"-L{log_file}")
-            cmd.extend([f"-S{script_file}", target])
-            
-            # Using shell=False (default) for security - paths with spaces are handled
-            # correctly because subprocess passes list elements as separate arguments,
-            # unlike shell mode which would require quoting
-            proc = subprocess.run(cmd, capture_output=True, timeout=IDA_EXECUTION_TIMEOUT, cwd=cwd, env=env)
-            
-            # Check for common error patterns in stderr
-            stderr_text = proc.stderr.decode('utf-8', errors='ignore')
-            stderr_lower = stderr_text.lower()
-            
-            if proc.returncode != 0:
-                if "license" in stderr_lower:
-                    return make_error(MCPError.IDA_LICENSE, "IDA license issue detected")
-                elif "access denied" in stderr_lower or "locked" in stderr_lower:
-                    return make_error(MCPError.FILE_LOCKED, "File access denied", recoverable=True)
-                elif "corrupt" in stderr_lower:
-                    return make_error(MCPError.FILE_CORRUPT, "IDB appears to be corrupt")
-            
-            if os.path.exists(output_file):
-                with open(output_file, 'r', encoding='utf-8') as f:
-                    result = json.load(f)
-                result["_execution_time"] = round(time.time() - start_time, 2)
-                result["_session"] = self.current_session.session_id if self.current_session else None
-                success = True
-                return result
-            else:
-                # Build detailed error with diagnostics
-                details = {
-                    "returncode": proc.returncode,
-                    "stderr": stderr_text[:ERROR_STDERR_LIMIT] if stderr_text else "",
-                    "idat_exe": self.idat_exe,
-                    "cwd": cwd,
-                    "idadir_set": bool(self.ida_dir)
-                }
-                
-                # Include last N lines of IDA log if enabled
-                if log_file and os.path.exists(log_file):
-                    try:
-                        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                            lines = f.readlines()
-                            details["ida_log_tail"] = "".join(lines[-LOG_TAIL_LINES:])
-                    except OSError:
-                        pass
-                
-                return make_error(
-                    MCPError.IDA_CRASHED,
-                    "IDA crashed or produced no output",
-                    details=details
-                )
-        
-        except subprocess.TimeoutExpired:
-            details = {
-                "timeout": IDA_EXECUTION_TIMEOUT,
-                "idat_exe": self.idat_exe,
-                "cwd": cwd,
-                "idadir_set": bool(self.ida_dir)
-            }
-            return make_error(MCPError.IDA_TIMEOUT, f"Operation timed out ({IDA_EXECUTION_TIMEOUT}s)", recoverable=True, details=details)
-        except OSError as e:
-            return make_error(MCPError.IDA_CRASHED, f"OS error: {e}")
-        except json.JSONDecodeError as e:
-            return make_error(MCPError.IDA_CRASHED, f"Failed to parse IDA output: {e}", details={"output_file": output_file})
+            if not self.server_process or self.server_process.poll() is not None:
+                self._start_server(target)
         except Exception as e:
-            return make_error(MCPError.IDA_CRASHED, f"Unexpected error: {e}")
-        finally:
-            # Always clean up temp files
-            self._cleanup_temp_files(
-                script_file, output_file, args_file, log_file,
-                keep_log_on_failure=not success
-            )
+            return make_error(MCPError.IDA_CRASHED, f"Failed to start IDA server: {e}")
             
-            # Release lock if we acquired it
-            if lock_acquired:
-                lock.release()
-    
-    def _cleanup_temp_files(self, script_file: str, output_file: str, args_file: str, 
-                           log_file: str, keep_log_on_failure: bool = True):
-        """Clean up temporary files created during tool execution.
-        
-        Args:
-            script_file: Path to temporary script file
-            output_file: Path to output JSON file
-            args_file: Path to arguments JSON file
-            log_file: Path to IDA log file
-            keep_log_on_failure: If True, keep log file when operation failed
-        """
-        # Always clean these files
-        for f in [script_file, output_file, args_file]:
-            if f:
-                try:
-                    if os.path.exists(f):
-                        os.remove(f)
-                except OSError:
-                    pass
-        
-        # Conditionally clean log file
-        if log_file:
-            # Determine if operation succeeded (output file was created)
-            operation_succeeded = output_file and os.path.exists(output_file)
-            # Keep log file only on failure if requested
-            should_keep_log = keep_log_on_failure and not operation_succeeded
+        # Send RPC
+        try:
+            result = self._send_rpc({
+                "tool": tool_name,
+                "args": kwargs
+            })
             
-            if not should_keep_log:
-                try:
-                    if os.path.exists(log_file):
-                        os.remove(log_file)
-                except OSError:
-                    pass
+            result["_execution_time"] = round(time.time() - start_time, 2)
+            result["_session"] = self.current_session.session_id if self.current_session else None
+            return result
+            
+        except Exception as e:
+            return make_error(MCPError.IDA_CRASHED, f"RPC failed: {e}")
     
     def get_tools_list(self) -> list:
         """Return list of available tools in MCP format with action enums."""
