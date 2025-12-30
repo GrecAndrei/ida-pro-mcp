@@ -30,6 +30,11 @@ try:
         get_function, get_prototype, get_image_size, looks_like_address,
         get_stack_frame_variables_internal, get_type_by_name,
     )
+    # Import unified error handling
+    from .error_handling import (
+        MCPError, make_error, handle_error,
+        validate_addr, validate_range, check_debugger, validate_path_safe
+    )
 except ImportError:
     # Standalone mode - define no-op decorators
     def tool(func):
@@ -53,6 +58,10 @@ except ImportError:
         parse_address, normalize_list_input, normalize_dict_list,
         get_function, get_prototype, get_image_size, looks_like_address,
         get_stack_frame_variables_internal, get_type_by_name,
+    )
+    from error_handling import (
+        MCPError, make_error, handle_error,
+        validate_addr, validate_range, check_debugger, validate_path_safe
     )
 
 
@@ -167,7 +176,7 @@ def idb(
                         _entry = ida_nalt.get_entry
                         _name = ida_nalt.get_entry_name
                     else:
-                        return {"error": "Entry API not available in this IDA version"}
+                        return make_error(MCPError.IDA_ERROR, "Entry API not available in this IDA version", "Ensure IDA version supports entry point API")
 
             for i in range(_qty()):
                 ordinal = _ordinal(i)
@@ -177,9 +186,9 @@ def idb(
             return {"entrypoints": entries}
         
         else:
-            return {"error": f"Unknown action: {action}"}
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
-        return {"error": str(e)}
+        return handle_error(e)
 
 
 # ============================================================================
@@ -269,12 +278,15 @@ def code(
         if not addrs and addr:
             addrs = addr
         if not addrs:
-            return {"error": "addrs or addr parameter required"}
+            return make_error(MCPError.INVALID_ARGS, "addrs or addr parameter required")
         addrs = normalize_list_input(addrs)
         results = []
         
         for addr in addrs:
-            ea = parse_address(addr)
+            ea, error = validate_addr(addr)
+            if error:
+                results.append({"addr": addr, **error})
+                continue
             
             if action == "decompile":
                 func = idaapi.get_func(ea)
@@ -287,11 +299,12 @@ def code(
                         suggestion = f" Try {hex(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
                     elif next_func:
                         suggestion = f" Try {hex(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
-                    results.append({
-                        "addr": addr, 
-                        "error": f"No function at {addr}.{suggestion}",
-                        "hint": "Use 'data functions' to list all functions, or 'funcs create' to define a new function"
-                    })
+                    results.append(make_error(
+                        MCPError.FUNCTION_NOT_FOUND,
+                        f"No function at {addr}.{suggestion}",
+                        "Use 'data functions' to list all functions, or 'funcs create' to define a new function",
+                        details={"addr": addr}
+                    ))
                     continue
                 try:
                     cfunc = ida_hexrays.decompile(func.start_ea)
@@ -301,7 +314,12 @@ def code(
                         "code": str(cfunc)
                     })
                 except Exception as e:
-                    results.append({"addr": addr, "error": str(e), "hint": "Hex-Rays decompiler may have failed. Try 'disasm' action instead."})
+                    results.append(make_error(
+                        MCPError.IDA_ERROR,
+                        str(e),
+                        "Hex-Rays decompiler may have failed. Try 'disasm' action instead.",
+                        details={"addr": addr}
+                    ))
             
             elif action == "disasm":
                 func = idaapi.get_func(ea)
@@ -345,7 +363,7 @@ def code(
             elif action == "callees":
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}", "Use 'funcs.create' to define a function here first"))
                     continue
                 callees = set()
                 for item in idautils.FuncItems(func.start_ea):
@@ -372,7 +390,7 @@ def code(
             elif action == "blocks":
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
                     continue
                 fc = idaapi.FlowChart(func)
                 blocks = []
@@ -391,7 +409,7 @@ def code(
                 # Comprehensive function analysis
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
                     continue
                 
                 fname = ida_funcs.get_func_name(func.start_ea)
@@ -439,7 +457,7 @@ def code(
                 # Build call graph from function
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
                     continue
                 
                 visited = {}
@@ -467,7 +485,7 @@ def code(
                 # Export function info
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
                     continue
                 
                 name = ida_funcs.get_func_name(func.start_ea)
@@ -484,7 +502,7 @@ def code(
             elif action == "xrefs_to_field":
                 # Find xrefs to a struct field
                 if not field_name:
-                    results.append({"addr": addr, "error": "field_name required"})
+                    results.append(make_error(MCPError.INVALID_ARGS, "field_name required"))
                     continue
                 
                 # Parse field_name in format "struct_name.field_name" or just "field_name"
@@ -528,16 +546,19 @@ def code(
                     else:
                         results.append({"addr": addr, "field": field_name, "struct_info": xrefs_found})
                 except Exception as e:
-                    results.append({"addr": addr, "error": f"Error searching for field: {str(e)}"})
+                    results.append(make_error(MCPError.IDA_ERROR, f"Error searching for field: {str(e)}", details={"addr": addr}))
                 continue
 
             elif action == "find_paths":
                 # Find path(s) from addr to target
                 if not target:
-                    results.append({"addr": addr, "error": "target required"})
+                    results.append(make_error(MCPError.INVALID_ARGS, "target required"))
                     continue
                 
-                target_ea = parse_address(target)
+                target_ea, error = validate_addr(target)
+                if error:
+                    results.append({"addr": addr, **error})
+                    continue
                 
                 # Simple BFS
                 queue = [(ea, [hex(ea)])]
@@ -575,7 +596,7 @@ def code(
             elif action == "strings_in_func":
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append({"addr": addr, "error": "No function"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
                     continue
                 
                 strs = []
@@ -589,11 +610,11 @@ def code(
                 results.append({"addr": addr, "strings": strs})
 
             else:
-                return {"error": f"Unknown action: {action}"}
+                return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
         
         return results[0] if len(results) == 1 else results
     except Exception as e:
-        return {"error": str(e)}
+        return handle_error(e)
 
 
 # ============================================================================
@@ -731,7 +752,7 @@ def data(
         
         elif action == "lookup":
             if not query:
-                return {"error": "query required for lookup"}
+                return make_error(MCPError.INVALID_ARGS, "query required for lookup")
             # Try as address
             if looks_like_address(query):
                 try:
@@ -746,12 +767,12 @@ def data(
             if ea != idaapi.BADADDR:
                 func = idaapi.get_func(ea)
                 return {"addr": hex(ea), "name": query, "is_func": func is not None}
-            return {"error": f"Not found: {query}"}
+            return make_error(MCPError.FILE_NOT_FOUND, f"Not found: {query}")
         
         else:
-            return {"error": f"Unknown action: {action}"}
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
-        return {"error": str(e)}
+        return handle_error(e)
 
 
 # ============================================================================
@@ -788,7 +809,7 @@ def search(
         if not pattern and query:
             pattern = query
         if not pattern:
-            return {"error": "pattern or query parameter required"}
+            return make_error(MCPError.INVALID_ARGS, "pattern or query parameter required")
             
         import ida_search
         import fnmatch
@@ -796,7 +817,6 @@ def search(
         results = []
         
         if action == "bytes":
-            # Byte pattern search e.g. "48 8B ?? ??"
             # Byte pattern search e.g. "48 8B ?? ??"
             
             seg = idaapi.get_first_seg()
@@ -806,7 +826,7 @@ def search(
                     pt = ida_bytes.compiled_binpat_vec_t()
                     err = ida_bytes.parse_binpat_str(pt, 0, pattern, 16)
                     if err:
-                        return {"error": f"Invalid pattern: {err}"}
+                        return make_error(MCPError.INVALID_ARGS, f"Invalid pattern: {err}")
                     
                     ea, _ = ida_bytes.bin_search(seg.start_ea, seg.end_ea, pt, ida_bytes.BIN_SEARCH_FORWARD)
                     while ea != idaapi.BADADDR and len(results) < limit:
@@ -896,7 +916,9 @@ def search(
         
         elif action == "data_ref":
             # Search for data references to address
-            target_ea = parse_address(pattern)
+            target_ea, error = validate_addr(pattern)
+            if error: return error
+
             for xref in idautils.XrefsTo(target_ea, 0):
                 if len(results) >= limit:
                     break
@@ -906,7 +928,9 @@ def search(
         
         elif action == "code_ref":
             # Search for code references to address
-            target_ea = parse_address(pattern)
+            target_ea, error = validate_addr(pattern)
+            if error: return error
+
             for xref in idautils.XrefsTo(target_ea, 0):
                 if len(results) >= limit:
                     break
@@ -919,9 +943,9 @@ def search(
             return {"matches": results, "target": pattern}
         
         else:
-            return {"error": f"Unknown action: {action}"}
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
-        return {"error": str(e)}
+        return handle_error(e)
 
 
 # ============================================================================
@@ -1283,11 +1307,20 @@ def memory(
     - data: Hex string to write (e.g. "90 90 90"). REQUIRED for write.
     """
     try:
-        ea = parse_address(addr)
+        ea, error = validate_addr(addr)
+        if error: return error
         
         if action == "read":
+            # Safety check for size
+            if size > 1024 * 1024:  # 1MB limit
+                return make_error(MCPError.SIZE_LIMIT_EXCEEDED, f"Read size too large ({size} bytes)", "Limit reads to 1MB or use paging")
+
             if type == "bytes":
-                value = " ".join(f"{x:02x}" for x in ida_bytes.get_bytes(ea, size))
+                data = ida_bytes.get_bytes(ea, size)
+                if data:
+                    value = " ".join(f"{x:02x}" for x in data)
+                else:
+                    return make_error(MCPError.ADDRESS_INVALID, f"Could not read {size} bytes from {hex(ea)}")
             elif type == "u8":
                 value = ida_bytes.get_wide_byte(ea)
             elif type == "u16":
@@ -1297,22 +1330,39 @@ def memory(
             elif type == "u64":
                 value = ida_bytes.get_qword(ea)
             elif type == "string":
-                value = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8")
+                # Check string length limit
+                s = idaapi.get_strlit_contents(ea, -1, 0)
+                if s:
+                    if len(s) > 65536:
+                        s = s[:65536]
+                    value = s.decode("utf-8", errors="replace")
+                else:
+                    value = None
             else:
-                return {"error": f"Unknown type: {type}"}
+                return make_error(MCPError.INVALID_ARGS, f"Unknown type: {type}")
             return {"addr": addr, "value": value}
         
         elif action == "write":
             if not data:
-                return {"error": "data required for write"}
-            bytes_data = bytes.fromhex(data.replace(" ", ""))
+                return make_error(MCPError.INVALID_ARGS, "data required for write")
+            try:
+                bytes_data = bytes.fromhex(data.replace(" ", ""))
+            except ValueError:
+                return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
+
+            # Check if writable
+            seg = ida_segment.getseg(ea)
+            if seg and (seg.perm & ida_segment.SEGPERM_WRITE) == 0:
+                 # Warn but allow if user insists (maybe add force param?)
+                 pass
+
             ida_bytes.patch_bytes(ea, bytes_data)
             return {"ok": True, "addr": addr, "size": len(bytes_data)}
         
         else:
-            return {"error": f"Unknown action: {action}"}
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
-        return {"error": str(e)}
+        return handle_error(e)
 
 
 # ============================================================================
@@ -1360,14 +1410,15 @@ def modify(
                 value = asm
         
         if not value:
-            return {"error": f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)"}
+            return make_error(MCPError.INVALID_ARGS, f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)")
         
-        ea = parse_address(addr)
+        ea, error = validate_addr(addr)
+        if error: return error
         
         if action == "rename":
             if idc.set_name(ea, value, ida_name.SN_FORCE):
                 return {"ok": True, "addr": addr, "name": value}
-            return {"error": "Failed to rename"}
+            return make_error(MCPError.IDA_ERROR, "Failed to rename", "Check if name is valid C identifier and not duplicate")
         
         elif action == "comment":
             if comment_type == "regular":
@@ -1388,10 +1439,10 @@ def modify(
         elif action == "set_type":
             tif = ida_typeinf.tinfo_t()
             if not ida_typeinf.parse_decl(tif, None, value, ida_typeinf.PT_SIL):
-                return {"error": f"Failed to parse type: {value}"}
+                return make_error(MCPError.TYPE_ERROR, f"Failed to parse type: {value}", "Check C declaration syntax")
             if ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
                 return {"ok": True, "addr": addr, "type": str(tif)}
-            return {"error": "Failed to apply type"}
+            return make_error(MCPError.IDA_ERROR, "Failed to apply type", "Check if type is compatible with address")
         
         elif action == "patch_asm":
             # Assemble and patch
@@ -1405,12 +1456,12 @@ def modify(
                 # assembled returns a bytes object on success
                 ida_bytes.patch_bytes(ea, assembled)
                 return {"ok": True, "addr": addr, "size": len(assembled), "asm": value}
-            return {"error": f"Failed to assemble: {value}"}
+            return make_error(MCPError.IDA_ERROR, f"Failed to assemble: {value}", "Check instruction syntax and operands")
         
         else:
-            return {"error": f"Unknown action: {action}"}
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
-        return {"error": str(e)}
+        return handle_error(e)
 
 
 # ============================================================================
@@ -1730,28 +1781,42 @@ def debug(
         if action == "start":
             if ida_dbg.start_process():
                 return {"ok": True}
-            return {"error": "Failed to start debugger"}
+            return make_error(MCPError.IDA_ERROR, "Failed to start debugger", "Check process configuration and permissions")
         
         elif action == "stop":
+            # Check state first
+            if not ida_dbg.is_debugger_on():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.exit_process()
             return {"ok": True}
         
         elif action == "continue":
+            if not ida_dbg.is_debugger_on():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.continue_process()
             return {"ok": True}
         
         elif action == "step_into":
+            if not ida_dbg.is_debugger_on():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.step_into()
             return {"ok": True}
         
         elif action == "step_over":
+            if not ida_dbg.is_debugger_on():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.step_over()
             return {"ok": True}
         
         elif action == "run_to":
             if not addr:
-                return {"error": "addr required"}
-            ea = parse_address(addr)
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            if not ida_dbg.is_debugger_on():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+
+            ea, error = validate_addr(addr)
+            if error: return error
+
             ida_dbg.run_to(ea)
             return {"ok": True, "addr": addr}
         
@@ -1767,28 +1832,31 @@ def debug(
                     })
             return {"breakpoints": bps}
         
-
-        
         elif action == "add_bp":
             if not addr:
-                return {"error": "addr required"}
-            ea = parse_address(addr)
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+
+            ea, error = validate_addr(addr, require_code=True)
+            if error: return error
+
             # 0 = BPT_DEFAULT/BPT_BRK in older APIs, BPT_BRK in new
             if ida_dbg.add_bpt(ea, 0, 0): 
                 return {"ok": True, "addr": addr}
-            return {"error": "Failed to add breakpoint"}
+            return make_error(MCPError.IDA_ERROR, "Failed to add breakpoint", "Check if address is valid code")
         
         elif action == "enable_bp":
             if not addr:
-                return {"error": "addr required"}
-            ea = parse_address(addr)
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, error = validate_addr(addr)
+            if error: return error
+
             if ida_dbg.enable_bpt(ea, enabled):
                 return {"ok": True, "addr": addr, "enabled": enabled}
-            return {"error": "Failed to enable/disable breakpoint"}
+            return make_error(MCPError.IDA_ERROR, "Failed to enable/disable breakpoint", "Check if breakpoint exists at address")
         
         elif action == "regs":
-            if not ida_dbg.is_debugger_on():
-                return {"error": "Debugger not running"}
+            error = check_debugger(require_active=True)
+            if error: return error
             
             # Determine thread ID
             target_tid = tid if tid is not None else ida_dbg.get_current_thread()
@@ -1796,12 +1864,12 @@ def debug(
             # Get debugger info for register names/types
             dbg = ida_idd.get_dbg()
             if not dbg:
-                 return {"error": "No debugger info"}
+                 return make_error(MCPError.IDA_ERROR, "No debugger info available")
             
             # Get values for specific thread
             regvals = ida_dbg.get_reg_vals(target_tid)
             if not regvals:
-                 return {"error": f"Failed to get registers for thread {target_tid}"}
+                 return make_error(MCPError.IDA_ERROR, f"Failed to get registers for thread {target_tid}")
             
             regs = {}
             for i, rv in enumerate(regvals):
@@ -1825,8 +1893,9 @@ def debug(
             return {"registers": regs, "tid": target_tid}
         
         elif action == "callstack":
-            if not ida_dbg.is_debugger_on():
-                return {"error": "Debugger not running"}
+            error = check_debugger(require_active=True)
+            if error: return error
+
             # call_stack_t / get_call_stack removed in IDA 9
             if hasattr(ida_dbg, 'collect_stack_trace'):
                 stack = []
@@ -1835,34 +1904,48 @@ def debug(
                     for frame in frames:
                         stack.append({"addr": hex(frame.ea), "func": idc.get_name(frame.ea) or ""})
                 return {"callstack": stack}
-            return {"error": "Callstack API not available in this IDA version"}
+            return make_error(MCPError.NOT_IMPLEMENTED, "Callstack API not available in this IDA version")
         
         elif action == "read_mem":
+            error = check_debugger(require_active=True)
+            if error: return error
+
             if not addr:
-                return {"error": "addr required"}
-            if not ida_dbg.is_debugger_on():
-                return {"error": "Debugger not running"}
-            ea = parse_address(addr)
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            if size > 1024 * 1024:
+                return make_error(MCPError.SIZE_LIMIT_EXCEEDED, f"Read size too large ({size} bytes)")
+
+            ea, parse_err = parse_address_safe(addr)
+            if parse_err: return parse_err
+
             data = ida_dbg.read_dbg_memory(ea, size)
             if data:
                 return {"addr": addr, "data": " ".join(f"{b:02x}" for b in data)}
-            return {"error": "Failed to read memory"}
+            return make_error(MCPError.IDA_ERROR, "Failed to read memory", "Check if address is valid/accessible")
         
         elif action == "write_mem":
+            error = check_debugger(require_active=True)
+            if error: return error
+
             if not addr or not data:
-                return {"error": "addr and data required"}
-            if not ida_dbg.is_debugger_on():
-                return {"error": "Debugger not running"}
-            ea = parse_address(addr)
-            bytes_data = bytes.fromhex(data.replace(" ", ""))
+                return make_error(MCPError.INVALID_ARGS, "addr and data required")
+
+            ea, parse_err = parse_address_safe(addr)
+            if parse_err: return parse_err
+
+            try:
+                bytes_data = bytes.fromhex(data.replace(" ", ""))
+            except ValueError:
+                return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
+
             if ida_dbg.write_dbg_memory(ea, bytes_data):
                 return {"ok": True, "addr": addr, "size": len(bytes_data)}
-            return {"error": "Failed to write memory"}
+            return make_error(MCPError.IDA_ERROR, "Failed to write memory", "Check if address is writable")
         
         else:
-            return {"error": f"Unknown action: {action}"}
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
-        return {"error": str(e)}
+        return handle_error(e)
 
 
 # ============================================================================
@@ -2163,11 +2246,14 @@ def files(
             # In idalib: use open_database()
             # In GUI mode: spawn a NEW IDA process with the target file
             if not path:
-                return {"error": "path required"}
+                return make_error(MCPError.INVALID_ARGS, "path required")
+
+            path, error = validate_path_safe(path)
+            if error: return error
             
             import os
             if not os.path.exists(path):
-                return {"error": f"File not found: {path}"}
+                return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {path}")
             
             # HEADLESS MODE: Try idapro first (IDA 9.x), then idalib
             # This allows batch analysis of multiple files
@@ -2329,8 +2415,16 @@ def files(
         elif action == "load_binary":
             # Load additional binary into current database (not replace)
             if not path:
-                return {"error": "path required"}
-            ba = parse_address(base_addr) if base_addr else 0
+                return make_error(MCPError.INVALID_ARGS, "path required")
+
+            path, error = validate_path_safe(path)
+            if error: return error
+
+            if base_addr:
+                ba, error = parse_address_safe(base_addr)
+                if error: return error
+            else:
+                ba = 0
             
             # Try multiple approaches
             try:
@@ -4493,19 +4587,21 @@ def patterns(
     try:
         if action == "generate":
             if not addr:
-                return {"error": "addr required"}
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+
+            ea, error = validate_addr(addr)
+            if error: return error
             
-            ea = parse_address(addr)
             func = ida_funcs.get_func(ea)
             if not func:
-                return {"error": f"No function at {addr}"}
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
             
             # Read function bytes
             func_size = min(length, func.end_ea - func.start_ea)
             func_bytes = ida_bytes.get_bytes(func.start_ea, func_size)
             
             if not func_bytes:
-                return {"error": "Could not read function bytes"}
+                return make_error(MCPError.ADDRESS_INVALID, "Could not read function bytes")
             
             # Generate pattern with wildcards for relocations
             pattern_parts = []
@@ -4537,21 +4633,24 @@ def patterns(
         
         elif action == "match":
             if not pattern:
-                return {"error": "pattern required"}
+                return make_error(MCPError.INVALID_ARGS, "pattern required")
             
             # Parse pattern
             pattern_bytes = []
             mask = []
-            for part in pattern.split():
-                if part == "??" or part == "?":
-                    pattern_bytes.append(0)
-                    mask.append(False)
-                else:
-                    pattern_bytes.append(int(part, 16))
-                    mask.append(True)
+            try:
+                for part in pattern.split():
+                    if part == "??" or part == "?":
+                        pattern_bytes.append(0)
+                        mask.append(False)
+                    else:
+                        pattern_bytes.append(int(part, 16))
+                        mask.append(True)
+            except ValueError:
+                return make_error(MCPError.INVALID_ARGS, "Invalid hex in pattern")
             
             if not pattern_bytes:
-                return {"error": "Invalid pattern"}
+                return make_error(MCPError.INVALID_ARGS, "Empty pattern")
             
             matches = []
             
@@ -4610,7 +4709,11 @@ def patterns(
         
         elif action == "apply_sig":
             if not name:
-                return {"error": "name required (signature name without .sig)"}
+                return make_error(MCPError.INVALID_ARGS, "name required (signature name without .sig)")
+
+            # Validate name to prevent directory traversal
+            name, error = validate_path_safe(name, allow_absolute=False)
+            if error: return error
             
             import ida_funcs
             
@@ -4626,8 +4729,8 @@ def patterns(
                 import ida_libfuncs
                 ida_libfuncs.plan_to_apply_ldes(name)
                 idaapi.auto_wait()
-            except:
-                return {"error": f"Could not apply signature: {name}"}
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"Could not apply signature: {name}", str(e))
             
             # Count after
             after_count = 0
@@ -4644,19 +4747,21 @@ def patterns(
         
         elif action == "create_sig":
             if not addr:
-                return {"error": "addr required"}
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+
+            ea, error = validate_addr(addr)
+            if error: return error
             
-            ea = parse_address(addr)
             func = ida_funcs.get_func(ea)
             if not func:
-                return {"error": f"No function at {addr}"}
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
             
             # Generate signature data
             func_size = min(64, func.end_ea - func.start_ea)
             func_bytes = ida_bytes.get_bytes(func.start_ea, func_size)
             
             if not func_bytes:
-                return {"error": "Could not read function bytes"}
+                return make_error(MCPError.ADDRESS_INVALID, "Could not read function bytes")
             
             # Calculate CRC16 of first 32 bytes (FLIRT-style)
             import zlib
