@@ -1,0 +1,35 @@
+Transport & Infrastructure Audit
+================================
+
+1. `ida_mcp_stdio.py`: `_read_message` Implementation details
+   - **Potential Logic Error**: In the `Content-Length` block, `json.loads(body)` can raise `ValueError`. The current code catches this, logs "Failed to parse Content-Length header", and returns `None` (EOF).
+     - *Issue*: This kills the server if one malformed JSON packet is sent.
+     - *Recommendation*: Should return `{}` (skip) or a specific error object, not `None`, unless the stream is desync'd. But since we read exactly `length` bytes, the stream *should* be aligned for the next header. If JSON parsing fails, we should just log and continue.
+   - **Blocking Read**: `stdin.read(length)` is blocking. If a client sends "Content-Length: 100" but only sends 50 bytes, the server hangs forever.
+     - *Risk*: DoS or hung client.
+     - *Mitigation*: Hard to fix in blocking stdio without complex selectors (which don't work well on Windows stdin). Document as limitation.
+
+2. `SimpleLock` Implementation
+   - **Race Condition**: `_check_and_remove_stale` uses `os.rename` + `os.remove`. This is good.
+   - **PID Reuse**: It checks `os.getpid()`. On Windows, PIDs are recycled. `LOCK_STALE_THRESHOLD` is 300s. If a process crashes and a new one gets the same PID within 5 minutes (unlikely but possible), it might respect a stale lock.
+     - *Low Risk*: PID collision is rare.
+
+3. `SessionManager`
+   - **Concurrency**: `sessions` dict is modified by `create_session` and `close_session`. If `handle_request` was multithreaded (it's single threaded here), this would be unsafe.
+   - *Observation*: The server is single-threaded (`server.run()` loop). However, `_start_server` spawns a subprocess.
+
+4. `IDAMCPServer._start_server`
+   - **Busy Wait**: Loops for 30 seconds trying to connect.
+   - **Zombie Processes**: If `server_process` dies but `poll()` returns None (zombie), `_cleanup_server` might fail to detect it properly.
+   - **Security**: `subprocess.Popen` with `shell=False` is good.
+   - **Environment**: Passes full environment + IDADIR. Safe.
+
+5. `server_script.py` (Wait for content)
+   - I need to see this file to check how it handles the socket connection.
+
+6. `zeromcp`
+   - The files exist but `ida_mcp_stdio.py` seems to implement its own JSON-RPC handling inline (`handle_request`, `wrap_result`) instead of using `zeromcp`.
+   - *Code Bloat*: `zeromcp` might be dead code if `ida_mcp_stdio.py` is self-contained.
+
+7. `ida_mcp_daemon.py`
+   - I need to check if this also needs the `Content-Length` fix or if it uses HTTP (which handles CL automatically).

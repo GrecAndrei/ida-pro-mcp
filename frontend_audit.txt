@@ -1,0 +1,81 @@
+Frontend & Tool Schema Audit
+==============================
+
+I compared `ida_mcp_stdio.py` definitions with `api_consolidated.py`.
+
+1.  **Missing `session` Tool Implementation in `api_consolidated.py`**:
+    - The `session` tool is handled entirely in `ida_mcp_stdio.py` (line 1205).
+    - `api_consolidated.py` defines tools 1-39, but `TOOLS` list in `ida_mcp_stdio.py` has 40 items.
+    - *Risk*: If a user calls `session` via `ida_mcp_daemon.py` (which likely uses `api_consolidated.py` directly), it might fail if logic isn't duplicated or forwarded. `ida_mcp_daemon.py` needs to be checked.
+
+2.  **`idb` Tool**:
+    - `cursor` action: Returns `{"addr", "function": {...}}`. Schema in stdio says "Get current address". Consistent.
+    - `entrypoints` action: Uses `ida_entry` (IDA 9) or `ida_nalt` fallback.
+    - *Bug*: In `entrypoints`, if `get_entry_qty` is missing, it returns an error dict. But `_qty()` is called later without checking for None again if the exception handler returns. Wait, `return make_error(...)` returns from the function, so it's safe.
+
+3.  **`code` Tool**:
+    - `decompile`:
+        - *UX Issue*: If `ida_hexrays.init_hexrays_plugin()` fails, returns `{addr, error}`. The schema says `[{addr, code, prototype}]` or error. LLM might expect a list even on error.
+        - *Logic*: `results.append({"addr": addr, "error": "Hex-Rays..."})` - good, it appends to list.
+    - `disasm`:
+        - *UX*: Returns 50 lines if not a function. This is a "smart" default.
+    - `xrefs_to_field`:
+        - *Bug*: `ida_typeinf.get_ordinal_qty(til)` - this API might be deprecated/removed in IDA 9. `get_ordinal_count` is the modern one.
+        - *Logic*: Iterates *all* ordinals (1 to qty). This is slow for large Type Libraries (like `mssdk`).
+        - *Optimization*: Should probably use `get_ordinal_from_name` if `struct_name` is provided.
+
+4.  **`search` Tool**:
+    - `bytes`:
+        - *IDA 9 Compat*: Uses `ida_bytes.compiled_binpat_vec_t` and `ida_bytes.parse_binpat_str`. This is correct for IDA 9.
+        - *Fallback*: The `else` block for older IDA is empty (`pass`). This means on IDA < 9, `search(action="bytes")` returns empty matches silently.
+        - *Fix*: Restore legacy `ida_search.find_binary` fallback.
+    - `immediate`:
+        - *IDA 9 Compat*: Checks `hasattr(ida_search, "find_imm")`. If missing (IDA 9 removed `find_immediate`?), it sets `ea = (BADADDR, 0)`.
+        - *Issue*: `ida_search.find_imm` exists in 9.0? Need to verify. If it doesn't, this action is broken.
+
+5.  **`types` Tool**:
+    - `list`:
+        - *Logic*: Iterates `itertools.count(1)` until failure. Safe.
+    - `apply`:
+        - *Parameters*: `kind` param ("local", "stack") is handled.
+        - *Issue*: `kind="local"` returns "Not fully supported yet". LLM might get stuck trying to rename locals.
+
+6.  **`memory` Tool**:
+    - `read`:
+        - *Safety*: Limits size to 1MB. Good.
+        - *Bug*: `type="string"` uses `idaapi.get_strlit_contents(ea, -1, 0)`. The type `0` is ASCII. If the string is Unicode, it might be truncated or fail. Should probably use `idc.get_str_type(ea)` first.
+
+7.  **`modify` Tool**:
+    - `patch_asm`:
+        - *Logic*: Uses `ida_idp.assemble`. This fails if the assembler isn't supported for the architecture (e.g. some ARM/MIPS versions in older IDA).
+
+8.  **`files` Tool**:
+    - `open`:
+        - *Concurrency*: Spawns subprocess with `subprocess.Popen`.
+        - *Bug*: In GUI mode, it tries to spawn `ida.exe`. If `IDADIR` env var is set, it uses `idaapi.idadir("")`. `idaapi.idadir` inside a script returns the directory of the *running* IDA. This is correct.
+    - `batch`:
+        - *Complexity*: Generates a temp script file (`.ida_batch_script_UUID.py`) and runs `idat` on it.
+        - *Security*: Writes code to a file in `~`. The content is fixed string formatting, so injection risk is low unless `filepath` contains newlines/escapes (but `filepath` comes from `json.load`, so it's escaped).
+        - *Bug*: `results.append(result)` inside the loop but `result` is loaded from `output_file`. If `output_file` creation fails in the subprocess, `os.path.exists` check handles it.
+
+9.  **`trace_analysis` Tool**:
+    - `import_trace`:
+        - *Logic*: Reads file line-by-line. If lines are not hex addresses, `parse_address` might raise/fail. `parse_address` in `utils.py` handles hex/decimal.
+
+10. **`hooks` Tool**:
+    - *Templates*: Returns static strings. Safe.
+
+11. **`coverage` Tool**:
+    - `import_drcov`:
+        - *Logic*: Binary parsing with `struct`. Looks robust enough for standard drcov files.
+
+General Observations:
+- **Error Handling**: Most tools use `try...except Exception as e: return handle_error(e)`. This is good generic protection.
+- **IDA 9 Compatibility**: There are explicit checks (`if hasattr(...)`), but some `else` blocks are empty (silent failure).
+- **Type Hints**: Used extensively. Good.
+- **Return formats**: Mostly consistent (`{"ok": True, ...}`).
+
+Critical Findings for Report:
+1. `search(action="bytes")` silent failure on older IDA versions.
+2. `xrefs_to_field` performance issue (linear scan of all types).
+3. `memory(read)` string type hardcoded to ASCII.

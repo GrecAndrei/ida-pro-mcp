@@ -1,0 +1,96 @@
+API Consolidated Deep Dive (Part 1 - Tools 1-17)
+====================================================
+
+1. `idb` Tool
+   - `meta` action: Uses `ida_nalt.get_input_file_path()`. Calculates MD5/SHA256 by reading the file from disk.
+     - *Issue*: If the file is exclusive-locked or large (multi-GB), reading the whole file into memory `f.read()` will cause OOM or failure.
+     - *Fix*: Chunked reading.
+   - `entrypoints`:
+     - *IDA 9 Compatibility*: Has logic to check `ida_entry` vs `ida_nalt` for `get_entry_qty`. This is good.
+     - *Bug*: Uses `_entry(ordinal)` but `get_entry` usually returns the address. Variable `ea` is assigned. Logic looks ok.
+
+2. `code` Tool
+   - `decompile`:
+     - *Error Handling*: Checks `ida_hexrays.init_hexrays_plugin()`. Handles failure gracefully.
+     - *Logic*: Returns `str(cfunc)`. This is the pseudocode string.
+   - `xrefs_to_field`:
+     - *Logic*: Iterates *all* types in `get_idati()`. Performance risk confirmed.
+     - *IDA 9*: Uses `ida_typeinf.get_ordinal_qty`. `ida_typeinf` module might not have this in 9.0 (moved to `ida_typeinf` from `ida_struct`?). Need to verify `get_ordinal_qty` location.
+   - `find_paths`:
+     - *Algorithm*: BFS. Uses `queue` and `visited`. Checks `max_depth` and `max_items`. Safe from infinite loops.
+
+3. `data` Tool
+   - `functions`:
+     - *Warning*: If no functions, returns warning about auto-analysis. Good UX.
+   - `strings`:
+     - *Filter*: Skips executable sections to reduce noise. Smart.
+     - *Filter*: Checks for 70% alphanumeric. Heuristic might hide obfuscated strings.
+   - `imports`:
+     - *Logic*: Uses `ida_nalt.enum_import_names`. Standard API.
+
+4. `search` Tool
+   - `bytes`:
+     - *IDA 9*: Uses `compiled_binpat_vec_t`.
+     - *IDA < 9*: **CRITICAL BUG**. The `else` block is empty (`pass`). Searching bytes on IDA 8.x will silently return empty results.
+   - `immediate`:
+     - *IDA 9*: Checks `find_imm`.
+     - *IDA < 9*: **CRITICAL BUG**. Uses `else: ea = (BADADDR, 0)`. `find_immediate` was the old API. It is completely missing here.
+
+5. `types` Tool
+   - `list`:
+     - *Logic*: Iterates `itertools.count(1)` and breaks on failure. Safe.
+   - `infer`:
+     - *Logic*: Tries `ida_hexrays.guess_tinfo` (deprecated/removed?) or `decompile`. Fallback to size. Good effort.
+
+6. `memory` Tool
+   - `read`:
+     - *Safety*: 1MB limit.
+     - *Encoding*: `type="string"` uses `get_strlit_contents`. Hardcoded assumption of UTF-8 decode. If `strtype` is not passed to `get_strlit_contents` (it defaults to -1 which means "use defined type"), but decode forces 'utf-8'. Might fail for UTF-16 raw bytes if IDA didn't identify it as string.
+
+7. `modify` Tool
+   - `comment`: Handles regular/repeatable/anterior. Good.
+   - `patch_asm`: Uses `ida_idp.assemble`.
+
+8. `misc` Tool
+   - `python`:
+     - *Security*: Executes code with `exec`. Major security risk but documented as such.
+     - *Features*: Attempts to return last expression value (Jupyter style). Nice UX.
+     - *Imports*: Lazy imports for all `ida_*` modules. Good for startup time.
+
+9. `debug` Tool
+   - *Checks*: Most actions check `check_debugger(require_active=True)`.
+   - `regs`:
+     - *Logic*: Iterates registers. Handles errors in value retrieval.
+
+10. `funcs` Tool
+    - Standard wrappers around `ida_funcs`.
+
+11. `segments` Tool
+    - Standard wrappers around `ida_segment`.
+
+12. `files` Tool
+    - `batch` action:
+      - *Architecture*: Generates a Python script file and runs it with `idat`.
+      - *Concurrency*: Uses `uuid` for temp files. Safe.
+      - *Caching*: Checks for existing `.i64` database to speed up re-runs. Smart.
+      - *Bug*: In `NO CACHE` path, it writes `single_script` but calls `idat` with `filepath`. `idat -S` runs the script. The logic seems correct: `idat -A -Sscript target`.
+      - *Timeout*: 300s (5 min). Reasonable.
+
+13. `plugins` Tool
+    - `list`: Returns "Not supported". Honest.
+
+14. `trace` Tool
+    - `get`: Checks `ida_dbg.is_debugger_on()`.
+
+15. `fixups` Tool
+    - Standard.
+
+16. `data_ops` Tool
+    - Standard.
+
+17. `agent` Tool
+    - *Complexity*: This tool aggregates many others.
+    - *Missing Implementation*: The file `api_consolidated.py` seems to cut off inside `agent` tool docstring/def in my `read_file` output?
+    - *Check*: The previous `read_file` output had "...1910 lines omitted...". I need to read the rest of the file to see `agent` and tools 18-39.
+
+Action: Read the second half of `api_consolidated.py`.

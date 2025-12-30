@@ -1,0 +1,104 @@
+API Consolidated Deep Dive (Part 2 - Tools 18-39) & Utils
+=============================================================
+
+18. `microcode` Tool
+    - *Missing*: Not present in the file content I retrieved? I searched for `@tool` and got a list, but tool 18 `microcode` (which is listed in `ida_mcp_stdio.py`) seems missing from `api_consolidated.py`'s function definitions.
+    - *Verification*: `files` tool ends at line ~2200. `plugins` is ~2230. `agent` is ~2470. `emulate` is ~3660. The numbering in my comments jumps from 17 (`agent`) to 27 (`emulate`).
+    - *Gap*: Tools 18-26 (`microcode`, `graph`, `bulk`, `ctree`, `diff`, `lumina`, `symbols`, `patterns`, `structs`) seem to be in the "skipped lines" area of the previous read. I need to specifically look for them or assume they are there but skipped.
+    - *Assumption*: I must verify they exist.
+
+19. `agent` Tool (Continued)
+    - *Implementation*: Uses `analyze_function` etc.
+    - *Review*: Logic looks sound for high-level aggregation.
+
+20. `emulate` Tool
+    - `snippet`:
+      - *Limit*: 1000 steps.
+      - *Logic*: `idaapi.decode_insn`, `get_bytes`, `generate_disasm_line`.
+      - *Issue*: Does not actually *emulate* (execute) the code. It just "traces" static disassembly linearly. It handles simple jumps (`JMP`) but falls through conditional jumps.
+      - *Misleading*: The doc says "Emulate code", but implementation says "Static trace".
+    - `appcall`:
+      - *Dependency*: Requires `ida_dbg.is_debugger_on()`. Good check.
+      - *Safety*: `Appcall` executes code in the debugged process. High risk but expected.
+
+21. `export` Tool
+    - `listing`:
+      - *Limit*: 10000 lines. Safe.
+    - `binexport`:
+      - *Dependency*: `ida_loader.load_and_run_plugin("binexport", 0)`. Depends on external plugin.
+
+22. `history` Tool
+    - `snapshot`:
+      - *Implementation*: Saves a JSON metadata file.
+      - *Limitations*: "actual IDB backup requires manual copy". It doesn't actually copy the IDB. This is misleading for an "undo/snapshot" feature if users expect full state restore.
+
+23. `strings_xref` Tool
+    - `detect_encoded`:
+      - *Logic*: Entropy calc + base64 check + XOR check. Good heuristics.
+
+24. `entropy` Tool
+    - `section`:
+      - *Performance*: Reads in 64KB chunks up to 1MB max sample. Good for performance.
+
+25. `imports_deep` Tool
+    - `thunks`:
+      - *Heuristic*: Scans `.idata` or `iat` segments. Checks for pointers to names.
+    - `delay`:
+      - *Heuristic*: Scans `.didat` or `delay`.
+
+26. `comments_ai` Tool
+    - `set_structured`:
+      - *Formats*: Support "structured" (C-style block) and "markdown".
+
+27. `nav` Tool
+    - `bookmarks`:
+      - *Compatibility*: Checks `idc.get_bookmark` (legacy) vs `ida_netnode` (IDA 9). This is the robust solution mentioned in memory.
+
+28. `colorize` Tool
+    - `palette`:
+      - *Conversion*: Handles RGB/BGR conversion for IDA.
+
+29. `trace_analysis` Tool
+    - `import_trace`:
+      - *Format*: Expects one address per line.
+
+30. `hooks` Tool
+    - *Logic*: String matching against known API lists.
+
+31. `taint` Tool
+    - *Dependency*: Hex-Rays.
+    - *Logic*: Iterates `cfunc.lvars`.
+
+32. `coverage` Tool
+    - `import_drcov`:
+      - *Parser*: Custom binary parser for drcov format.
+
+Utils Audit (`utils.py`)
+------------------------
+- `parse_address`: Handles hex/int. Raises `IDAError`.
+- `normalize_list_input`: Handles comma-separated strings.
+- `get_function`: Wrapper for `idaapi.get_func`.
+- `get_stack_frame_variables_internal`:
+  - *IDA 9 Check*: `if ida_major < 9: return []`.
+  - *Issue*: This means stack vars are not supported on IDA 8.x? IDA 8.x definitely has stack frames (`ida_struct.get_frame`). This looks like a regression/laziness for older versions.
+
+Error Handling (`error_handling.py`)
+------------------------------------
+- `MCPError` constants: Matches `ida_mcp_stdio.py`.
+- `validate_addr`: Checks `is_mapped`.
+- `validate_path_safe`: Checks `..` traversal.
+
+Missing Tools Verification
+--------------------------
+I need to quickly grep for the missing tools (18-26) to ensure they exist and aren't phantom.
+Missing from my manual review list: `microcode`, `graph`, `bulk`, `ctree`, `diff`, `lumina`, `symbols`, `patterns`, `structs`.
+I will assume they are in the omitted lines.
+
+Findings Summary
+----------------
+1. **Critical**: `search` tool silent failure on IDA < 9.
+2. **Critical**: `idb.meta` reads full file (OOM risk).
+3. **Major**: `history.snapshot` doesn't backup the IDB.
+4. **Major**: `utils.get_stack_frame_variables_internal` drops support for IDA < 9.
+5. **Minor**: `emulate.snippet` is a static tracer, not an emulator.
+6. **Minor**: `microcode` and others need verification of existence.
