@@ -25,39 +25,24 @@ except ImportError:
 # Import our API tools
 try:
     from ida_pro_mcp.ida_mcp.api_consolidated import (
-        idb, code, data, search, types, memory, modify, misc, debug,
-        funcs, segments, files, plugins, trace, fixups, data_ops,
-        agent, microcode, graph, bulk, ctree, diff, lumina, symbols,
-        patterns, structs, emulate, export, history, strings_xref,
-        entropy, imports_deep, comments_ai, nav, colorize, trace_analysis,
-        hooks, taint, coverage
+        idb, code, data, search, types, memory, modify, misc, debug, agent
     )
     from ida_pro_mcp.ida_mcp.error_handling import make_error, MCPError
 except ImportError:
-    # Try relative import if package structure is different in execution context
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from ida_mcp.api_consolidated import (
-        idb, code, data, search, types, memory, modify, misc, debug,
-        funcs, segments, files, plugins, trace, fixups, data_ops,
-        agent, microcode, graph, bulk, ctree, diff, lumina, symbols,
-        patterns, structs, emulate, export, history, strings_xref,
-        entropy, imports_deep, comments_ai, nav, colorize, trace_analysis,
-        hooks, taint, coverage
+    # Ensure src is in path (server_script.py is in src/ida_pro_mcp/)
+    src_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if src_root not in sys.path:
+        sys.path.append(src_root)
+    
+    from ida_pro_mcp.ida_mcp.api_consolidated import (
+        idb, code, data, search, types, memory, modify, misc, debug, agent
     )
-    from ida_mcp.error_handling import make_error, MCPError
+    from ida_pro_mcp.ida_mcp.error_handling import make_error, MCPError
 
 # Map tool names to functions
 TOOLS = {
     "idb": idb, "code": code, "data": data, "search": search, "types": types,
-    "memory": memory, "modify": modify, "misc": misc, "debug": debug,
-    "funcs": funcs, "segments": segments, "files": files, "plugins": plugins,
-    "trace": trace, "fixups": fixups, "data_ops": data_ops, "agent": agent,
-    "microcode": microcode, "graph": graph, "bulk": bulk, "ctree": ctree,
-    "diff": diff, "lumina": lumina, "symbols": symbols, "patterns": patterns,
-    "structs": structs, "emulate": emulate, "export": export, "history": history,
-    "strings_xref": strings_xref, "entropy": entropy, "imports_deep": imports_deep,
-    "comments_ai": comments_ai, "nav": nav, "colorize": colorize,
-    "trace_analysis": trace_analysis, "hooks": hooks, "taint": taint, "coverage": coverage
+    "memory": memory, "modify": modify, "misc": misc, "debug": debug, "agent": agent
 }
 
 def handle_request(request):

@@ -412,6 +412,18 @@ class Page(TypedDict):
 # ============================================================================
 
 
+def hex_ea(ea: int) -> str:
+    """Consistently format an address as a lowercase hex string."""
+    if ea == idaapi.BADADDR:
+        return "0x" + ("f" * (8 if idaapi.get_inf_structure().is_32bit() else 16))
+    return f"0x{ea:x}"
+
+
+def hex_size(size: int) -> str:
+    """Consistently format a size as a hex string."""
+    return f"0x{size:x}"
+
+
 def get_image_size() -> int:
     try:
         info = idaapi.get_inf_structure()

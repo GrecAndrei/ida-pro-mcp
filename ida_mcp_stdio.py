@@ -257,8 +257,10 @@ class SessionManager:
     def _get_session_idb_path(self, binary_path: str, session_id: str) -> str:
         """Get the IDB path for a session."""
         base = os.path.basename(binary_path)
+        # Sanitize filename: replace dots with underscores to avoid IDA 9.2 -o issues
+        safe_base = base.replace('.', '_')
         # Store session IDBs in the session directory
-        return os.path.join(self.session_dir, f"{base}.{session_id}.i64")
+        return os.path.join(self.session_dir, f"{safe_base}_{session_id}.i64")
     
     def discover_idbs(self, binary_path: str) -> List[Dict]:
         """Find all existing IDBs for a binary file."""
@@ -1011,12 +1013,9 @@ class IDAMCPServer:
         
         self.idat_exe = self._find_idat()
         
-        # Use user-specific cache directory (cross-platform)
-        self.cache_dir = os.environ.get(
-            "IDA_MCP_CACHE", 
-            os.path.join(os.path.expanduser("~"), ".ida_mcp_cache")
-        )
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Use workspace-local cache directory (no leading dot for IDA compatibility)
+        self.cache_dir = os.path.join(self.script_dir, "ida_mcp_cache")
         self.api_path = os.path.join(self.script_dir, "src", "ida_pro_mcp", "ida_mcp")
         
         # Create cache dir
@@ -1110,7 +1109,7 @@ class IDAMCPServer:
         s.close()
         return port
 
-    def _start_server(self, target_path: str):
+    def _start_server(self, input_path: str, output_path: Optional[str] = None):
         """Start the persistent IDA server."""
         if self.server_process:
             if self.server_process.poll() is None:
@@ -1124,7 +1123,18 @@ class IDAMCPServer:
             # Fallback to local
             server_script = os.path.join(self.script_dir, "src", "ida_pro_mcp", "server_script.py")
 
+        # Use absolute paths for everything to avoid ambiguity
+        abs_input = os.path.abspath(input_path)
+        abs_script = os.path.abspath(server_script)
+
         env = os.environ.copy()
+
+        # Use list-based Popen for both platforms to avoid shell mangling.
+        # Purge Python env vars to let IDA use its internal runtime.
+        for var in ["PYTHONPATH", "PYTHONHOME"]:
+            if var in env: del env[var]
+            if var in os.environ: del os.environ[var]
+
         if self.ida_dir:
             env["IDADIR"] = self.ida_dir
             path_entries = env.get("PATH", "").split(os.pathsep)
@@ -1135,32 +1145,56 @@ class IDAMCPServer:
         # Ensure server waits for analysis
         env["IDA_WAIT_ANALYSIS"] = "1"
 
-        cmd = [self.idat_exe, "-A", f"-S{server_script}", target_path]
+        cmd = [self.idat_exe, "-A"]
+        if output_path:
+            # -o switch specifies output database name
+            base_out = os.path.splitext(os.path.abspath(output_path))[0]
+            cmd.append(f"-o{base_out}")
+        
+        cmd.append(f"-S{abs_script}")
+        cmd.append(abs_input)
+        
+        with open(os.path.join(self.cache_dir, "last_cmd.txt"), "w") as f:
+            f.write(" ".join(cmd))
 
         # Start process detached but tracked
-        if sys.platform == "win32":
-            self.server_process = subprocess.Popen(
-                cmd,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                stdout=subprocess.DEVNULL, # Suppress noisy IDA output
-                stderr=subprocess.DEVNULL,
-                env=env
-            )
-        else:
-            self.server_process = subprocess.Popen(
-                cmd,
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env
-            )
+        out_log = os.path.join(self.cache_dir, "ida_stdout.log")
+        err_log = os.path.join(self.cache_dir, "ida_stderr.log")
+        
+        with open(out_log, "wb") as out_f, open(err_log, "wb") as err_f:
+            if sys.platform == "win32":
+                self.server_process = subprocess.Popen(
+                    cmd,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    stdout=out_f,
+                    stderr=err_f,
+                    env=env,
+                    cwd=self.ida_dir
+                )
+            else:
+                self.server_process = subprocess.Popen(
+                    cmd,
+                    start_new_session=True,
+                    stdout=out_f,
+                    stderr=err_f,
+                    env=env,
+                    cwd=self.ida_dir
+                )
 
         # Wait for port to be ready
         import socket
         start = time.time()
         while time.time() - start < 30: # Wait up to 30s for IDA to load
             if self.server_process.poll() is not None:
-                raise RuntimeError(f"IDA process died immediately (code {self.server_process.returncode})")
+                # Capture logs for error report
+                out_txt = ""
+                err_txt = ""
+                try:
+                    with open(out_log, "r") as f: out_txt = f.read()
+                    with open(err_log, "r") as f: err_txt = f.read()
+                except: pass
+                
+                raise RuntimeError(f"IDA process died immediately (code {self.server_process.returncode})\nStdout: {out_txt}\nStderr: {err_txt}")
 
             try:
                 s = socket.create_connection(("127.0.0.1", self.server_port), timeout=0.1)
@@ -1339,15 +1373,43 @@ class IDAMCPServer:
         if validated_path is None:
             return make_error(MCPError.PATH_TRAVERSAL, f"Invalid path: {idb_path}")
         
-        # Find or create IDB
         target = validated_path
-        if not validated_path.endswith(('.i64', '.idb')):
-            existing = self._check_idb_exists(validated_path)
-            if existing:
-                target = existing
+        input_binary = None
+        output_idb = None
         
-        if not os.path.exists(target):
-            return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {target}")
+        # Scenario 1: Path is already an IDB
+        if target.endswith(('.i64', '.idb')):
+            if not os.path.exists(target):
+                # Check if it's our active session's intended IDB (bootstrap case)
+                if self.current_session and target == self.current_session.idb_path:
+                    if os.path.exists(self.current_session.binary_path):
+                        input_binary = self.current_session.binary_path
+                        output_idb = target
+                    else:
+                        return make_error(
+                            MCPError.FILE_NOT_FOUND, 
+                            f"Binary file not found for session: {self.current_session.binary_path}. Please check the path."
+                        )
+                else:
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND, 
+                        f"Database file not found: {target}. Did you run analysis yet?"
+                    )
+            else:
+                # Existing IDB found
+                input_binary = target
+        else:
+            # Scenario 2: Path is a binary
+            if not os.path.exists(target):
+                return make_error(MCPError.FILE_NOT_FOUND, f"Binary file not found: {target}")
+            
+            # Check if there's an existing IDB for it
+            existing = self._check_idb_exists(target)
+            if existing:
+                input_binary = existing
+            else:
+                # New analysis on binary
+                input_binary = target
         
         if not self.idat_exe:
             return make_error(MCPError.IDA_NOT_FOUND, "idat.exe not found. Set IDADIR environment variable.")
@@ -1370,7 +1432,7 @@ class IDAMCPServer:
         # Ensure server is running
         try:
             if not self.server_process or self.server_process.poll() is not None:
-                self._start_server(target)
+                self._start_server(input_binary, output_idb)
         except Exception as e:
             return make_error(MCPError.IDA_CRASHED, f"Failed to start IDA server: {e}")
             
@@ -1464,7 +1526,7 @@ class IDAMCPServer:
             schema = {
                 "type": "object",
                 "properties": {
-                    key: value
+                    key: value.copy()
                     for key, value in COMMON_PROPERTIES.items()
                     if key in SCHEMA_PROPERTY_KEYS
                 },
