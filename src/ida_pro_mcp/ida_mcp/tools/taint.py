@@ -63,11 +63,12 @@ def taint(
     addr: Annotated[Optional[str], "Function or instruction address"] = None,
     arg_num: Annotated[int, "Argument number to trace (0-indexed)"] = 0,
     depth: Annotated[int, "Analysis depth"] = 5,
+    max_hits: Annotated[int, "Max results for lists"] = 50,
     **kwargs
 ) -> dict:
     """
     Static data flow and vulnerability triage utilities.
-    
+
     Actions:
     - find_arg_usage: Identify how a function argument is used in pseudocode.
     - trace_return: Find where a function's return value is used by callers.
@@ -81,68 +82,121 @@ def taint(
             "network": ["send", "recv", "connect", "WSA", "accept", "http", "curl"],
             "exec": ["system", "exec", "popen", "ShellExecute", "CreateProcess", "eval"],
             "mem": ["VirtualAlloc", "VirtualProtect", "mmap", "mprotect", "memcpy", "strcpy", "gets"],
-            "file": ["CreateFile", "ReadFile", "WriteFile", "fopen", "open"]
+            "file": ["CreateFile", "ReadFile", "WriteFile", "fopen", "open"],
         }
-        
+
+        def collect_arg_uses(cfunc, arg_name):
+            uses = []
+            class UseVisitor(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                def visit_expr(self, e):
+                    if e.op == ida_hexrays.cot_var:
+                        try:
+                            v = cfunc.lvars[e.v.idx]
+                            if v.name == arg_name:
+                                text = ida_lines.tag_remove(e.print1(None))
+                                uses.append({"addr": hex(e.ea), "text": text})
+                        except Exception:
+                            pass
+                    return 0
+            visitor = UseVisitor()
+            visitor.apply_to(cfunc.body, None)
+            return uses
+
+        def find_sinks_in_function(func_ea, max_results):
+            sinks = []
+            func = ida_funcs.get_func(func_ea)
+            if not func:
+                return sinks
+            for item in idautils.FuncItems(func.start_ea):
+                for xref in idautils.XrefsFrom(item, 0):
+                    if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                        name = idc.get_name(xref.to)
+                        if name:
+                            for cat, patterns in DANGEROUS_SINKS.items():
+                                if any(p.lower() in name.lower() for p in patterns):
+                                    sinks.append({"name": name, "addr": hex(xref.to), "site": hex(item), "category": cat})
+                                    if len(sinks) >= max_results:
+                                        return sinks
+            return sinks
+
         if action == "find_arg_usage":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
-            
+
             try:
+                if not ida_hexrays.init_hexrays_plugin():
+                    return make_error(MCPError.IDA_ERROR, "Decompiler required for arg usage")
                 cfunc = ida_hexrays.decompile(ea)
                 if not cfunc: return make_error(MCPError.IDA_ERROR, "Decompilation failed")
-                
+
                 args = [v for v in cfunc.lvars if v.is_arg_var]
                 if arg_num >= len(args): return make_error(MCPError.INVALID_ARGS, f"Function only has {len(args)} args")
-                
+
                 target = args[arg_num]
+                uses = collect_arg_uses(cfunc, target.name)[:max_hits]
+                lines = []
+                try:
+                    for idx, ln in enumerate(str(cfunc).splitlines(), 1):
+                        if target.name in ln:
+                            lines.append({"line": idx, "text": ln.strip()})
+                            if len(lines) >= max_hits:
+                                break
+                except Exception:
+                    pass
                 return {
                     "ok": True,
                     "function": idc.get_func_name(ea),
                     "arg": {"name": target.name, "type": str(target.type())},
-                    "note": "Use 'ctree' tool to trace specific operations using this variable."
+                    "uses": uses,
+                    "lines": lines,
                 }
-            except: return make_error(MCPError.IDA_ERROR, "Decompiler required for arg usage")
-        
+            except Exception:
+                return make_error(MCPError.IDA_ERROR, "Decompiler required for arg usage")
+
         elif action == "find_sinks":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
             if err: return err
-            
+
             sinks = []
             visited = {ea}
             queue = [(ea, 0)]
-            
-            while queue and len(sinks) < 50:
+
+            while queue and len(sinks) < max_hits:
                 curr_ea, curr_depth = queue.pop(0)
                 if curr_depth >= depth: continue
-                
+
                 func = ida_funcs.get_func(curr_ea)
                 if not func: continue
-                
+
                 for item in idautils.FuncItems(func.start_ea):
                     for xref in idautils.XrefsFrom(item, 0):
                         if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                             name = idc.get_name(xref.to)
                             if name:
-                                # Check sinks
                                 for cat, patterns in DANGEROUS_SINKS.items():
                                     if any(p.lower() in name.lower() for p in patterns):
                                         sinks.append({"name": name, "addr": hex(xref.to), "site": hex(item), "category": cat, "depth": curr_depth})
-                                        break
-                                
-                                if xref.to not in visited:
-                                    visited.add(xref.to)
-                                    queue.append((xref.to, curr_depth + 1))
-            
-            return {"ok": True, "start": hex(ea), "sinks": sinks}
+                                        if len(sinks) >= max_hits:
+                                            break
+                            if xref.to not in visited:
+                                visited.add(xref.to)
+                                queue.append((xref.to, curr_depth + 1))
+                            if len(sinks) >= max_hits:
+                                break
+                    if len(sinks) >= max_hits:
+                        break
+
+            return {"ok": True, "start": hex(ea), "sinks": sinks, "count": len(sinks)}
 
         elif action == "trace_return":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
-            
+
             results = []
             for xref in idautils.XrefsTo(ea):
                 if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
@@ -152,13 +206,60 @@ def taint(
                         "caller": idc.get_func_name(xref.frm),
                         "next_insn": ida_lines.tag_remove(idc.generate_disasm_line(next_ea, 0)) if next_ea != idaapi.BADADDR else None
                     })
-            return {"ok": True, "function": idc.get_func_name(ea), "usages": results[:50]}
+                    if len(results) >= max_hits:
+                        break
+            return {"ok": True, "function": idc.get_func_name(ea), "usages": results}
+
+        elif action == "data_flow":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err: return err
+
+            proto = None
+            try:
+                proto = get_prototype(ea)
+            except Exception:
+                proto = None
+
+            func = ida_funcs.get_func(ea)
+            callees = []
+            if func:
+                for item in idautils.FuncItems(func.start_ea):
+                    for xref in idautils.XrefsFrom(item, 0):
+                        if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                            name = idc.get_name(xref.to)
+                            if name:
+                                callees.append({"name": name, "addr": hex(xref.to), "site": hex(item)})
+                                if len(callees) >= max_hits:
+                                    break
+                    if len(callees) >= max_hits:
+                        break
+
+            args = []
+            if ida_hexrays.init_hexrays_plugin():
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    if cfunc:
+                        args = [{"name": v.name, "type": str(v.type())} for v in cfunc.lvars if v.is_arg_var]
+                except Exception:
+                    args = []
+
+            sinks = find_sinks_in_function(ea, max_hits)
+
+            return {
+                "ok": True,
+                "function": idc.get_func_name(ea),
+                "prototype": proto,
+                "args": args,
+                "callees": callees,
+                "sinks": sinks,
+            }
 
         elif action == "backward_trace":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
             if err: return err
-            
+
             func = ida_funcs.get_func(ea)
             trace = []
             curr = ea
@@ -166,7 +267,9 @@ def taint(
                 curr = idc.prev_head(curr)
                 if curr == idaapi.BADADDR or (func and curr < func.start_ea): break
                 trace.append({"addr": hex(curr), "disasm": ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))})
-            
+                if len(trace) >= max_hits:
+                    break
+
             return {"ok": True, "target": hex(ea), "trace": list(reversed(trace))}
 
         elif action == "slice":
@@ -195,9 +298,9 @@ def taint(
                     for ln in lines:
                         if arg_name in ln and any(p.lower() in ln.lower() for p in patterns):
                             sinks.append({"category": cat, "line": ln})
-                            if len(sinks) >= 50:
+                            if len(sinks) >= max_hits:
                                 break
-                    if len(sinks) >= 50:
+                    if len(sinks) >= max_hits:
                         break
 
                 return {
@@ -212,11 +315,11 @@ def taint(
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
-            
+
     except Exception as e:
         return handle_error(e)
 
 
-# ============================================================================
-# 39. COVERAGE - Code Coverage Import and Analysis
+# ============================================================================  
+# 39. COVERAGE# 39. COVERAGE - Code Coverage Import and Analysis
 # ============================================================================

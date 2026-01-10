@@ -17,20 +17,22 @@ Trace how a function return value is used.
 
 ### `data_flow`
 Summarize input/output data flow for a function.
+Returns prototype, args (if decompiler is available), callees, and local sink hits.
 
 ### `find_sinks`
 Find dangerous sink calls reachable from an address.
 Recursively searches callers to find paths to dangerous APIs.
-*   **Args**: `addr`, `depth` (default 5).
+*   **Args**: `addr`, `depth` (default 5), `max_hits`.
 *   **Best for**: "How does user input reach `system()`?"
 
 ### `find_arg_usage`
 Analyze how a function argument is used.
 Identifies how a function argument is used in the decompiled code.
+*   **Output**: Usage sites + pseudocode line hits.
 
 ### `backward_trace`
 Trace instructions backward from an address.
-A linear backward instruction trace. 
+A linear backward instruction trace.
 *   **Best for**: Quick checks of which instructions set a specific register.
 
 ### `slice`

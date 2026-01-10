@@ -16,6 +16,7 @@ Attempt to decode or decrypt strings.
 ### `static_trace`
 Emulate a static trace from an address.
 Perform a static walk through a function to see reachable paths without a debugger.
+*   **Args**: `follow_calls`, `max_depth`, `include_blocks` to expand depth and include CFG metadata.
 
 ### `appcall`
 Execute an appcall in IDA with arguments.
@@ -24,7 +25,8 @@ Calls a function inside the target process with specific arguments. **Requires a
 
 ### `eval_expr`
 Evaluate an expression in the emulator context.
-Evaluates a C-style expression in the current context.
+Evaluates a C-style expression in the current context or a direct address.
+*   **Args**: `expr` or `addr`.
 
 ## Best Practices
 Use `appcall` to verify your understanding of an algorithm. "I think this decrypts data? Let me call it with a known encrypted buffer and check the return."

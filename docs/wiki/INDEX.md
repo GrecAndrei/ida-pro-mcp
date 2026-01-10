@@ -25,6 +25,7 @@
 - tools/data_ops.md - # DATA_OPS Tool Manual
 - tools/debug.md - # DEBUG Tool Manual
 - tools/diff.md - # DIFF Tool Manual
+- tools/edit.md - # EDIT Tool Manual
 - tools/emulate.md - # EMULATE Tool Manual
 - tools/entropy.md - # ENTROPY Tool Manual
 - tools/export.md - # EXPORT Tool Manual
@@ -44,6 +45,7 @@
 - tools/patterns.md - # PATTERNS Tool Manual
 - tools/plugins.md - # PLUGINS Tool Manual
 - tools/project.md - # PROJECT Tool Manual
+- tools/query.md - # QUERY Tool Manual
 - tools/search.md - # SEARCH Tool Manual
 - tools/segments.md - # SEGMENTS Tool Manual
 - tools/session.md - # SESSION Tool Manual

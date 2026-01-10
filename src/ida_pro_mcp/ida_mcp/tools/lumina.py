@@ -67,7 +67,7 @@ def lumina(
 ) -> dict:
     """
     Interact with Hex-Rays Lumina server for function recognition.
-    
+
     Actions:
     - pull: Get metadata from Lumina.
     - push: Contribute metadata to Lumina.
@@ -76,35 +76,60 @@ def lumina(
     - search: Search the cloud by name.
     """
     try:
-        import ida_kernwin
-        
+        def action_available(action_name):
+            try:
+                return ida_kernwin.find_action(action_name) is not None
+            except Exception:
+                return False
+
+        def run_action(action_name, note=None):
+            if not action_available(action_name):
+                return make_error(MCPError.NOT_IMPLEMENTED, f"Action not available: {action_name}", details={"action": action_name})
+            res = ida_kernwin.process_ui_action(action_name)
+            payload = {"ok": True, "action": action_name, "action_triggered": res}
+            if note:
+                payload["note"] = note
+            return payload
+
         if action == "status":
-            # Check if Lumina is configured by looking for the server address in configuration
-            # In IDA 9, we can just return that the tool is ready to receive commands
-            return {"ok": True, "status": "Lumina actions available", "available": True}
-        
+            actions = [
+                "LuminaPull",
+                "LuminaPullAll",
+                "LuminaPush",
+                "LuminaPushAll",
+                "LuminaViewHistory",
+            ]
+            availability = {a: action_available(a) for a in actions}
+            details = {"actions": availability}
+            try:
+                import ida_lumina
+                details["module_loaded"] = True
+                for attr in ["is_inited", "is_connected", "get_lumina_server"]:
+                    if hasattr(ida_lumina, attr):
+                        try:
+                            details[attr] = getattr(ida_lumina, attr)()
+                        except Exception:
+                            details[attr] = None
+            except Exception:
+                details["module_loaded"] = False
+            return {"ok": True, "status": "Lumina actions inspected", "details": details}
+
         elif action == "pull":
             if addr:
                 ea, err = validate_addr(addr, require_func=True)
                 if err: return err
-                # Jump to address so action knows where to pull
                 idc.jumpto(ea)
-                res = ida_kernwin.process_ui_action("LuminaPull")
-                return {"ok": True, "addr": hex(ea), "action_triggered": res}
-            else:
-                res = ida_kernwin.process_ui_action("LuminaPullAll")
-                return {"ok": True, "action_triggered": res}
+                return run_action("LuminaPull", note="Pulled metadata for current function")
+            return run_action("LuminaPullAll", note="Pulled metadata for all functions")
 
         elif action == "push":
             if push_all:
-                res = ida_kernwin.process_ui_action("LuminaPushAll")
-                return {"ok": True, "action_triggered": res}
-            elif addr:
+                return run_action("LuminaPushAll", note="Pushed metadata for all functions")
+            if addr:
                 ea, err = validate_addr(addr, require_func=True)
                 if err: return err
                 idc.jumpto(ea)
-                res = ida_kernwin.process_ui_action("LuminaPush")
-                return {"ok": True, "addr": hex(ea), "action_triggered": res}
+                return run_action("LuminaPush", note="Pushed metadata for current function")
             return make_error(MCPError.INVALID_ARGS, "addr or push_all=True required")
 
         elif action == "history":
@@ -112,23 +137,20 @@ def lumina(
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
             idc.jumpto(ea)
-            res = ida_kernwin.process_ui_action("LuminaViewHistory")
-            return {"ok": True, "addr": hex(ea), "action_triggered": res}
+            return run_action("LuminaViewHistory", note="Opened Lumina history for current function")
 
         elif action == "search":
-            return make_error(MCPError.NOT_IMPLEMENTED, "Search requires GUI interaction or specialized metadata hashing")
-            
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required")
+            return make_error(MCPError.NOT_IMPLEMENTED, "Search requires interactive UI or Lumina client integration")
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
-            
+
     except Exception as e:
         return handle_error(e)
-    
-    except Exception as e:
-        import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
-# ============================================================================
-# 24. SYMBOLS - Debug Symbol Loading (PDB, DWARF, COFF)
+# ============================================================================  
+# 24. SYMBOLS# 24. SYMBOLS - Debug Symbol Loading (PDB, DWARF, COFF)
 # ============================================================================

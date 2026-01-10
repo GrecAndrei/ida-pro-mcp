@@ -43,6 +43,8 @@ from .coverage import coverage
 from .wiki import wiki
 from .yara_hunt import yara_hunt
 from .analysis import analysis
+from .query import query
+from .edit import edit
 
 __all__ = [
     "idb",
@@ -88,4 +90,6 @@ __all__ = [
     "wiki",
     "yara_hunt",
     "analysis",
+    "query",
+    "edit",
 ]

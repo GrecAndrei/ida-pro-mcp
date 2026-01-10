@@ -44,6 +44,8 @@ The server exposes a wide range of analytical tools, including:
 | `analysis` | Loader/processor settings and reanalysis controls. |
 | `batch` | Execute multiple tool calls in a single request. |
 | `idb` | Database metadata, segment mapping, and entrypoints. |
+| `query` | Consolidated read-only entry point (data/search/symbols/patterns). |
+| `edit` | Consolidated write/edit entry point (modify/funcs/segments/bulk). |
 | `code` | Decompilation (Hex-Rays), disassembly, and cross-reference analysis. |
 | `data` | Function listing, global variable tracking, and string extraction. |
 | `types` | Type Library (TIL) management and structure reconstruction. |

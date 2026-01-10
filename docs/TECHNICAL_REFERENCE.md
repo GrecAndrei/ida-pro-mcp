@@ -66,6 +66,12 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
     *   Args: `calls`, `continue_on_error`
 *   **`idb`**: Database-level information.
     *   Actions: `meta`, `segments`, `cursor`, `entrypoints`
+*   **`query`**: Consolidated read-only dispatcher.
+    *   Actions: `data`, `search`, `strings_xref`, `imports_deep`, `symbols`, `patterns`, `idb`
+    *   Args: `subaction`, `args`
+*   **`edit`**: Consolidated write dispatcher.
+    *   Actions: `modify`, `funcs`, `segments`, `data_ops`, `fixups`, `colorize`, `comments_ai`, `bulk`
+    *   Args: `subaction`, `args`
 *   **`calc`**: r2-style address and number utilities.
 *   Actions: `eval`, `offset`, `convert`, `resolve`, `deref`, `chain`, `align`
 *   Args: `expr`, `addr`, `target`, `value`, `type`, `size`, `offsets`
@@ -73,7 +79,7 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
     *   Actions: `scan`, `compile`, `list_rules`
     *   Args: `rules` (str/path), `addr` (optional), `size` (int)
 *   **`wiki`**: On-demand documentation server.
-    *   Actions: `list_topics`, `read`, `search`
+    *   Actions: `list_topics`, `read`, `search`, `sections`, `index`
     *   Args: `topic` (str), `section` (optional)
 
 ### 3. Middleware & Context Optimization
@@ -89,7 +95,7 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
     *   Actions: `get`, `blocks`, `instructions`
     *   Args: `addr` (str), `maturity` (0-7)
 *   **`ctree`**: Decompiler AST traversal.
-    *   Actions: `get`, `traverse`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`
+    *   Actions: `get`, `traverse`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`, `get_logic_flow`
     *   Args: `addr` (str), `depth` (int), `query` (str)
 *   **`graph`**: Exporting CFGs and callgraphs.
     *   Actions: `callgraph`, `cfg`
@@ -120,13 +126,13 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
 ### 5. Advanced Reverse Engineering
 *   **`taint`**: Static data flow analysis.
 *   Actions: `find_arg_usage`, `trace_return`, `find_sinks`, `data_flow`, `backward_trace`, `slice`
-    *   Args: `addr` (str), `arg_num` (int), `depth` (int)
+    *   Args: `addr` (str), `arg_num` (int), `depth` (int), `max_hits` (int)
 *   **`emulate`**: Code emulation and trace.
 *   Actions: `static_trace`, `appcall`, `decrypt_strings`, `eval_expr`
-    *   Args: `addr` (str), `max_steps` (int), `args` (list)
+    *   Args: `addr` (str), `max_steps` (int), `args` (list), `follow_calls` (bool), `max_depth` (int), `include_blocks` (bool), `expr` (str)
 *   **`entropy`**: Packed/Encrypted region detection.
-    *   Actions: `section`, `region`, `packed_detect`, `crypto_detect`, `compare`
-    *   Args: `addr` (str), `size` (int), `threshold` (float)
+    *   Actions: `section`, `region`, `packed_detect`, `crypto_detect`, `compare`, `window`, `summary`
+    *   Args: `addr` (str), `size` (int), `threshold` (float), `end_addr` (str), `window` (int), `step` (int), `limit` (int)
 *   **`strings_xref`**: Context-aware string analysis.
     *   Actions: `analyze`, `xref_chain`, `detect_encoded`, `find_format`, `clusters`
     *   Args: `addr` (str), `depth` (int)

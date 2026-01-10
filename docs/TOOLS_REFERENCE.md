@@ -2,45 +2,21 @@
 
 Auto-generated from the MCP stdio server registry. Lists every tool with actions and arguments.
 
-## agent
+## session
 
 ### Actions
-- `analyze_function`
-- `explore_address`
-- `find_references`
-- `search_all`
-- `search_structs`
-- `context_pack`
+- `discover`
+- `create`
+- `list`
+- `switch`
+- `close`
+- `status`
 
 ### Args
-- `action`: enum(analyze_function, explore_address, find_references, search_all, search_structs, context_pack)
-- `addr`: string
-- `query`: string
-- `depth`: integer
-- `include_pseudocode`: boolean
-- `max_items`: integer
-- `use_cache`: boolean
-- `idb`: string
-
-## analysis
-
-### Actions
-- `get_options`
-- `set_options`
-- `set_processor`
-- `set_loader_options`
-- `reanalyze`
-
-### Args
-- `action`: enum(get_options, set_options, set_processor, set_loader_options, reanalyze)
-- `options`: object
-- `processor`: string
-- `flags`: integer
-- `loader`: string
-- `value`: string
-- `start`: string
-- `end`: string
-- `idb`: string
+- `action`: enum(discover, create, list, switch, close, status)
+- `binary_path`: string
+- `use_existing`: string
+- `session_id`: string
 
 ## bookmarks
 
@@ -64,40 +40,71 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `tags`: ['array', 'string']
 - `query`: string
 
-## bulk
+## analysis
 
 ### Actions
-- `rename`
-- `comment`
-- `apply_type`
-- `rename_stack`
-- `import_annotations`
-- `export_annotations`
+- `get_options`
+- `set_options`
+- `set_processor`
+- `set_loader_options`
+- `reanalyze`
+
+### Args
+- `action`: enum(get_options, set_options, set_processor, set_loader_options, reanalyze)
+- `options`: object
+- `processor`: string
+- `flags`: integer
+- `loader`: string
+- `value`: string
+- `start`: string
+- `end`: string
+- `idb`: string
+
+## query
+
+### Actions
+- `data`
+- `search`
+- `strings_xref`
+- `imports_deep`
+- `symbols`
+- `patterns`
+- `idb`
+
+### Args
+- `action`: enum(data, search, strings_xref, imports_deep, symbols, patterns, idb)
+- `subaction`: string
+- `args`: object
+- `idb`: string
+
+## edit
+
+### Actions
+- `modify`
+- `funcs`
+- `segments`
+- `data_ops`
+- `fixups`
+- `colorize`
+- `comments_ai`
+- `bulk`
+
+### Args
+- `action`: enum(modify, funcs, segments, data_ops, fixups, colorize, comments_ai, bulk)
+- `subaction`: string
+- `args`: object
+- `idb`: string
+
+## idb
+
+### Actions
+- `meta`
+- `segments`
+- `cursor`
+- `entrypoints`
 
 ### Args
 - `action`: enum (see Actions)
-- `idb`: string
-
-## calc
-
-### Actions
-- `eval`
-- `offset`
-- `convert`
-- `resolve`
-- `deref`
-- `chain`
-- `align`
-
-### Args
-- `action`: enum(eval, offset, convert, resolve, deref, chain, align)
-- `expr`: string
-- `addr`: string
-- `target`: string
-- `value`: ['string', 'integer']
-- `type`: string
-- `size`: integer
-- `offsets`: ['array', 'string']
 - `idb`: string
 
 ## code
@@ -116,64 +123,6 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `export`
 - `find_paths`
 - `strings_in_func`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## colorize
-
-### Actions
-- `set_func`
-- `set_range`
-- `set_insn`
-- `get`
-- `clear`
-- `palette`
-- `highlight_pattern`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## comments_ai
-
-### Actions
-- `get_context`
-- `set_structured`
-- `bulk_set`
-- `export_md`
-- `import_md`
-- `summary`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## coverage
-
-### Actions
-- `import_drcov`
-- `import_lighthouse`
-- `highlight`
-- `report`
-- `uncovered`
-- `filter`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## ctree
-
-### Actions
-- `get`
-- `traverse`
-- `find_calls`
-- `find_vars`
-- `find_strings`
-- `find_conditions`
-- `get_logic_flow`
 
 ### Args
 - `action`: enum (see Actions)
@@ -198,17 +147,86 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `items`: array
 - `idb`: string
 
-## data_ops
+## search
 
 ### Actions
-- `make_data`
-- `make_array`
-- `make_string`
-- `undefine`
-- `make_code`
+- `bytes`
+- `string`
+- `immediate`
+- `name`
+- `insns`
+- `text`
+- `operand`
+- `comment`
+- `data_ref`
+- `code_ref`
+
+### Args
+- `action`: enum(bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref)
+- `pattern`: string
+- `query`: string
+- `limit`: integer
+- `offset`: integer
+- `start`: string
+- `end`: string
+- `idb`: string
+
+## types
+
+### Actions
+- `list`
+- `get`
+- `set_prototype`
+- `parse_decl`
+- `declare`
+- `apply`
+- `search_structs`
+- `infer`
+- `read_struct`
+- `import_header`
 
 ### Args
 - `action`: enum (see Actions)
+- `idb`: string
+
+## memory
+
+### Actions
+- `read`
+- `write`
+
+### Args
+- `action`: enum(read, write)
+- `addr`: string
+- `type`: enum(bytes, u8, u16, u32, u64, s8, s16, s32, s64, f32, f64, ptr, string)
+- `size`: integer
+- `data`: string
+- `idb`: string
+
+## modify
+
+### Actions
+- `rename`
+- `comment`
+- `set_type`
+- `patch_asm`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## misc
+
+### Actions
+- `python`
+- `idc`
+- `load_sig`
+
+### Args
+- `action`: enum(python, idc, load_sig)
+- `expr`: string
+- `code`: string
+- `name`: string
 - `idb`: string
 
 ## debug
@@ -232,70 +250,6 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `callstack`
 - `read_mem`
 - `write_mem`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## diff
-
-### Actions
-- `functions`
-- `bytes`
-- `signatures`
-- `summary`
-- `export_binexport`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## emulate
-
-### Actions
-- `static_trace`
-- `appcall`
-- `decrypt_strings`
-- `eval_expr`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## entropy
-
-### Actions
-- `section`
-- `region`
-- `packed_detect`
-- `crypto_detect`
-- `compare`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## export
-
-### Actions
-- `listing`
-- `html`
-- `idc`
-- `json`
-- `binexport`
-- `headers`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## fixups
-
-### Actions
-- `list`
-- `get`
-- `add`
-- `delete`
 
 ### Args
 - `action`: enum (see Actions)
@@ -328,166 +282,26 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `include_stack`: boolean
 - `idb`: string
 
-## graph
+## segments
 
 ### Actions
-- `callgraph`
-- `cfg`
-- `xref_graph`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## history
-
-### Actions
-- `undo`
-- `redo`
 - `list`
-- `snapshot`
-- `restore`
-- `diff`
+- `add`
+- `delete`
+- `set_attr`
+- `set_perms`
+- `move`
 
 ### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## hooks
-
-### Actions
-- `suggest`
-- `generate_frida`
-- `generate_detours`
-- `find_targets`
-- `inline_hooks`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## idb
-
-### Actions
-- `meta`
-- `segments`
-- `cursor`
-- `entrypoints`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## imports_deep
-
-### Actions
-- `thunks`
-- `delay`
-- `forwarded`
-- `ordinal`
-- `api_sets`
-- `resolve`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## lumina
-
-### Actions
-- `pull`
-- `push`
-- `status`
-- `history`
-- `search`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## memory
-
-### Actions
-- `read`
-- `write`
-
-### Args
-- `action`: enum(read, write)
-- `addr`: string
-- `type`: enum(bytes, u8, u16, u32, u64, s8, s16, s32, s64, f32, f64, ptr, string)
-- `size`: integer
-- `data`: string
-- `idb`: string
-
-## microcode
-
-### Actions
-- `get`
-- `blocks`
-- `instructions`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## misc
-
-### Actions
-- `python`
-- `idc`
-- `load_sig`
-
-### Args
-- `action`: enum(python, idc, load_sig)
-- `expr`: string
-- `code`: string
+- `action`: enum(list, add, delete, set_attr, set_perms, move)
+- `start`: string
+- `end`: string
 - `name`: string
-- `idb`: string
-
-## modify
-
-### Actions
-- `rename`
-- `comment`
-- `set_type`
-- `patch_asm`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## nav
-
-### Actions
-- `goto`
-- `cursor`
-- `interesting`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## patterns
-
-### Actions
-- `generate`
-- `match`
-- `list_sigs`
-- `apply_sig`
-- `create_sig`
-
-### Args
-- `action`: enum (see Actions)
-- `idb`: string
-
-## plugins
-
-### Actions
-- `list`
-- `run`
-
-### Args
-- `action`: enum (see Actions)
+- `sclass`: string
+- `attr`: string
+- `value`: ['string', 'integer']
+- `offset`: integer
+- `count`: integer
 - `idb`: string
 
 ## project
@@ -511,76 +325,173 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `action`: enum (see Actions)
 - `idb`: string
 
-## search
-
-### Actions
-- `bytes`
-- `string`
-- `immediate`
-- `name`
-- `insns`
-- `text`
-- `operand`
-- `comment`
-- `data_ref`
-- `code_ref`
-
-### Args
-- `action`: enum(bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref)
-- `pattern`: string
-- `query`: string
-- `limit`: integer
-- `offset`: integer
-- `start`: string
-- `end`: string
-- `idb`: string
-
-## segments
+## plugins
 
 ### Actions
 - `list`
+- `run`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## trace
+
+### Actions
+- `get`
+- `clear`
+- `set_options`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## fixups
+
+### Actions
+- `list`
+- `get`
 - `add`
 - `delete`
-- `set_attr`
-- `set_perms`
-- `move`
 
 ### Args
-- `action`: enum(list, add, delete, set_attr, set_perms, move)
-- `start`: string
-- `end`: string
-- `name`: string
-- `sclass`: string
-- `attr`: string
-- `value`: ['string', 'integer']
-- `offset`: integer
-- `count`: integer
+- `action`: enum (see Actions)
 - `idb`: string
 
-## session
+## data_ops
 
 ### Actions
-- `discover`
-- `create`
-- `list`
-- `switch`
-- `close`
-- `status`
+- `make_data`
+- `make_array`
+- `make_string`
+- `undefine`
+- `make_code`
 
 ### Args
-- `action`: enum(discover, create, list, switch, close, status)
-- `binary_path`: string
-- `use_existing`: string
-- `session_id`: string
+- `action`: enum (see Actions)
+- `idb`: string
 
-## strings_xref
+## agent
 
 ### Actions
-- `analyze`
-- `xref_chain`
-- `detect_encoded`
-- `find_format`
-- `clusters`
+- `analyze_function`
+- `explore_address`
+- `find_references`
+- `search_all`
+- `search_structs`
+- `context_pack`
+
+### Args
+- `action`: enum(analyze_function, explore_address, find_references, search_all, search_structs, context_pack)
+- `addr`: string
+- `query`: string
+- `depth`: integer
+- `include_pseudocode`: boolean
+- `max_items`: integer
+- `use_cache`: boolean
+- `idb`: string
+
+## microcode
+
+### Actions
+- `get`
+- `blocks`
+- `instructions`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## graph
+
+### Actions
+- `callgraph`
+- `cfg`
+- `xref_graph`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## bulk
+
+### Actions
+- `rename`
+- `comment`
+- `apply_type`
+- `rename_stack`
+- `import_annotations`
+- `export_annotations`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## ctree
+
+### Actions
+- `get`
+- `traverse`
+- `find_calls`
+- `find_vars`
+- `find_strings`
+- `find_conditions`
+- `get_logic_flow`
+
+### Args
+- `action`: enum(get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow)
+- `addr`: string
+- `query`: string
+- `depth`: integer
+- `idb`: string
+
+## diff
+
+### Actions
+- `functions`
+- `bytes`
+- `signatures`
+- `summary`
+- `export_binexport`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## lumina
+
+### Actions
+- `pull`
+- `push`
+- `status`
+- `history`
+- `search`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## symbols
+
+### Actions
+- `load_pdb`
+- `load_dwarf`
+- `status`
+- `apply`
+- `export`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## patterns
+
+### Actions
+- `generate`
+- `match`
+- `list_sigs`
+- `apply_sig`
+- `create_sig`
 
 ### Args
 - `action`: enum (see Actions)
@@ -601,39 +512,138 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `action`: enum (see Actions)
 - `idb`: string
 
-## symbols
+## strings_xref
 
 ### Actions
-- `load_pdb`
-- `load_dwarf`
-- `status`
-- `apply`
-- `export`
+- `analyze`
+- `xref_chain`
+- `detect_encoded`
+- `find_format`
+- `clusters`
 
 ### Args
 - `action`: enum (see Actions)
 - `idb`: string
 
-## taint
+## entropy
 
 ### Actions
-- `find_arg_usage`
-- `trace_return`
-- `find_sinks`
-- `data_flow`
-- `backward_trace`
-- `slice`
+- `section`
+- `region`
+- `packed_detect`
+- `crypto_detect`
+- `compare`
+- `window`
+- `summary`
+
+### Args
+- `action`: enum(section, region, packed_detect, crypto_detect, compare, window, summary)
+- `addr`: string
+- `size`: integer
+- `threshold`: number
+- `end_addr`: string
+- `window`: integer
+- `step`: integer
+- `limit`: integer
+- `idb`: string
+
+## imports_deep
+
+### Actions
+- `thunks`
+- `delay`
+- `forwarded`
+- `ordinal`
+- `api_sets`
+- `resolve`
 
 ### Args
 - `action`: enum (see Actions)
 - `idb`: string
 
-## trace
+## comments_ai
 
 ### Actions
+- `get_context`
+- `set_structured`
+- `bulk_set`
+- `export_md`
+- `import_md`
+- `summary`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## nav
+
+### Actions
+- `goto`
+- `cursor`
+- `interesting`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## colorize
+
+### Actions
+- `set_func`
+- `set_range`
+- `set_insn`
 - `get`
 - `clear`
-- `set_options`
+- `palette`
+- `highlight_pattern`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## emulate
+
+### Actions
+- `static_trace`
+- `appcall`
+- `decrypt_strings`
+- `eval_expr`
+
+### Args
+- `action`: enum(static_trace, appcall, decrypt_strings, eval_expr)
+- `addr`: string
+- `func_name`: string
+- `args`: array
+- `max_steps`: integer
+- `follow_calls`: boolean
+- `max_depth`: integer
+- `include_blocks`: boolean
+- `expr`: string
+- `idb`: string
+
+## export
+
+### Actions
+- `listing`
+- `html`
+- `idc`
+- `json`
+- `binexport`
+- `headers`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## history
+
+### Actions
+- `undo`
+- `redo`
+- `list`
+- `snapshot`
+- `restore`
+- `diff`
 
 ### Args
 - `action`: enum (see Actions)
@@ -652,19 +662,68 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `action`: enum (see Actions)
 - `idb`: string
 
-## types
+## hooks
 
 ### Actions
-- `list`
-- `get`
-- `set_prototype`
-- `parse_decl`
-- `declare`
-- `apply`
-- `search_structs`
-- `infer`
-- `read_struct`
-- `import_header`
+- `suggest`
+- `generate_frida`
+- `generate_detours`
+- `find_targets`
+- `inline_hooks`
+
+### Args
+- `action`: enum (see Actions)
+- `idb`: string
+
+## taint
+
+### Actions
+- `find_arg_usage`
+- `trace_return`
+- `find_sinks`
+- `data_flow`
+- `backward_trace`
+- `slice`
+
+### Args
+- `action`: enum(find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice)
+- `addr`: string
+- `arg_num`: integer
+- `depth`: integer
+- `max_hits`: integer
+- `idb`: string
+
+## calc
+
+### Actions
+- `eval`
+- `offset`
+- `convert`
+- `resolve`
+- `deref`
+- `chain`
+- `align`
+
+### Args
+- `action`: enum(eval, offset, convert, resolve, deref, chain, align)
+- `expr`: string
+- `addr`: string
+- `target`: string
+- `value`: ['string', 'integer']
+- `type`: string
+- `size`: integer
+- `offsets`: ['array', 'string']
+- `idb`: string
+
+## coverage
+
+### Actions
+- `import_drcov`
+- `import_lighthouse`
+- `highlight`
+- `report`
+- `uncovered`
+- `filter`
 
 ### Args
 - `action`: enum (see Actions)
