@@ -63,5 +63,5 @@
 - workflows/Strategy.md - # The Master RE Strategy Guide
 - workflows/VulnerabilityTriage.md - # Vulnerability Triage Workflow
 ---
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+Doc status: Updated tool descriptions to match actual implementations.
+Last reviewed: 2026-01-11

@@ -53,19 +53,22 @@ IDA 9.2 introduced strict threading restrictions. Many API calls (especially `id
 
 ## 🛠️ Exhaustive Tool Reference
 
-Below is the complete list of tools available in the Modular SDK. All tools (except `session`) require either an active session or an explicit `idb` path.
+Below is the complete list of tools available in the Modular SDK. All tools (except `session` and `bookmarks`) require either an active session or an explicit `idb` path.
 
 ### 1. Core & Metadata
 *   **`session`**: Management of LLM workflows.
     *   Actions: `discover`, `create`, `list`, `switch`, `close`, `status`
     *   Args: `binary_path`, `use_existing`, `session_id`
+*   **`bookmarks`**: Enhanced session-correlated bookmarking.
+    *   Actions: `add`, `list`, `delete`, `update`, `clear`, `find`, `export`
+    *   Args: `addr`, `id`, `name`, `notes`, `category`, `priority`, `tags`, `query`
 *   **`analysis`**: Loader/processor settings and reanalysis controls.
     *   Actions: `get_options`, `set_options`, `set_processor`, `set_loader_options`, `reanalyze`
     *   Args: `options`, `processor`, `flags`, `loader`, `value`, `start`, `end`
 *   **`batch`**: Multi-tool call batching on the host side.
     *   Args: `calls`, `continue_on_error`
 *   **`idb`**: Database-level information.
-    *   Actions: `meta`, `segments`, `cursor`, `entrypoints`
+    *   Actions: `meta`, `summary`, `segments`, `entrypoints`, `bookmarks`
 *   **`query`**: Consolidated read-only dispatcher.
     *   Actions: `data`, `search`, `strings_xref`, `imports_deep`, `symbols`, `patterns`, `idb`
     *   Args: `subaction`, `args`
@@ -73,8 +76,8 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
     *   Actions: `modify`, `funcs`, `segments`, `data_ops`, `fixups`, `colorize`, `comments_ai`, `bulk`
     *   Args: `subaction`, `args`
 *   **`calc`**: r2-style address and number utilities.
-*   Actions: `eval`, `offset`, `convert`, `resolve`, `deref`, `chain`, `align`
-*   Args: `expr`, `addr`, `target`, `value`, `type`, `size`, `offsets`
+    *   Actions: `eval`, `offset`, `convert`, `resolve`, `deref`, `chain`, `align`
+    *   Args: `expr`, `addr`, `target`, `value`, `type`, `size`, `offsets`
 *   **`yara_hunt`**: Surgical signature matching.
     *   Actions: `scan`, `compile`, `list_rules`
     *   Args: `rules` (str/path), `addr` (optional), `size` (int)
@@ -82,14 +85,14 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
     *   Actions: `list_topics`, `read`, `search`, `sections`, `index`
     *   Args: `topic` (str), `section` (optional)
 
-### 3. Middleware & Context Optimization
+### 2. Middleware & Context Optimization
 
 *   **Token-Aware Truncation**: Automatically prunes responses exceeding 4000 tokens (approx). High-frequency lists (functions, strings) are limited to safe counts with "Read More" markers.
 *   **Sparse Descriptions**: Tool definitions in the MCP manifest are stripped to essentials. Deep documentation is offloaded to the `wiki` tool to reclaim context window space.
 
-### 2. Code Analysis
+### 3. Code Analysis
 *   **`code`**: The primary analysis engine.
-    *   Actions: `decompile`, `disasm`, `xrefs_to`, `xrefs_from`, `xrefs_to_field`, `callees`, `callers`, `blocks`, `analyze`, `callgraph`, `find_paths`, `strings_in_func`
+    *   Actions: `decompile`, `disasm`, `xrefs_to`, `xrefs_from`, `xrefs_to_field`, `callees`, `callers`, `blocks`, `analyze`, `callgraph`, `export`, `find_paths`, `strings_in_func`
     *   Args: `addrs` (list/str), `max_depth` (int), `max_items` (int), `field_name` (str), `target` (str)
 *   **`microcode`**: Access to Hex-Rays IR.
     *   Actions: `get`, `blocks`, `instructions`
@@ -166,5 +169,5 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
   <sub>Document Version: 2.0.0 (Modular Era)</sub>
 </p>
 ---
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+Doc status: Updated tool descriptions to match actual implementations.
+Last reviewed: 2026-01-11

@@ -99,9 +99,10 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 
 ### Actions
 - `meta`
+- `summary`
 - `segments`
-- `cursor`
 - `entrypoints`
+- `bookmarks`
 
 ### Args
 - `action`: enum (see Actions)
@@ -760,5 +761,5 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `idb`: string
 
 ---
-Doc status: Generated tool/action/arg reference from ida_mcp_stdio.py.
-Last reviewed: 2026-01-09
+Doc status: Updated to match actual tool implementations.
+Last reviewed: 2026-01-11

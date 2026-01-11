@@ -2,63 +2,81 @@
 
 This document serves as the agent's internal "source of truth" for tool usage, quirks, and strategies. It will be updated as the agent gains practical experience.
 
-### Best Practices & Behavioral Heuristics
+## Best Practices & Behavioral Heuristics
 - **Auto-Analysis Patience**: Always wait for the session creation to return "ok" before any other call. The backend waits for `ida_auto.auto_wait()`, so the IDB is "warm" by the time I get control.
 - **Decompiler Caution**: `code.decompile` is stable but blocking. For massive functions, prefer `code.disasm` or `ctree.get` if just looking for specific patterns to avoid kernel hangs.
 - **String Context**: `data.strings` is the fastest way to ID a binary's purpose. Use it immediately after `idb.meta`.
 - **Structural Integrity**: When recovering structs with `structs.recover`, verify the offsets with `memory.read` if the decompiler output looks suspicious.
 - **Fragility Awareness**: If a tool call times out, assume the IDA process might be hung. Don't immediately retry; check if the process is still alive or if a `_nuclear_reset` is needed.
 
-### Operational Quirks & Session Management
+## Operational Quirks & Session Management
 - **Parallel Session Isolation**: Each session runs in its own IDA process. Calls to different sessions do not trigger process swaps.
 - **Session Persistence**: Each session maintains its own unique `.i64` database in `ida_mcp_cache/sessions/`. Creating a new session no longer wipes out existing ones.
-- **Enhanced Session Tool**: The `session` tool now fully supports `list` (view all tracked sessions) and `status` (current session).
+- **Enhanced Session Tool**: The `session` tool now fully supports `discover` (find existing sessions), `list` (view all tracked sessions), and `status` (current session).
+- **Bookmarks Tool**: Use `bookmarks` for persistent, session-correlated forensic markers with rich metadata (tags, priority, notes, category).
 - **Warm-up Time**: First access to a session spins up its IDA process (~3-10s), but analysis state is preserved in the SID-specific IDB.
 
-### Best Practices & Behavioral Heuristics
+## Tool Categories
 
-### Initial Tool Mapping (Jan 5, 2026)
+### Core Session & Batch Tools
+- **session**: Session lifecycle management. Actions: discover, create, list, switch, close, status.
+- **bookmarks**: Forensic bookmarks with metadata. Actions: add, list, delete, update, clear, find, export.
+- **batch**: Execute multiple tool calls in a single request for efficiency.
 
 ### Deep Analysis & Reasoning
-- **code**: High-level logic recovery. `decompile` for C-like output, `find_paths` for reachability analysis. Primary tool for understanding "what" a function does.
-- **ctree**: Decompiler AST (C-Tree) traversal. Used for precise queries (e.g., "find all calls where arg1 is a specific struct"). Bypasses text-based parsing issues.
-- **microcode**: Hex-Rays Intermediate Representation. Essential for defeating obfuscation or understanding optimizations before they are "cleaned up" for the decompiler.
-- **taint**: Static data flow analysis. Use `slice` for quick argument-to-sink scans.
-- **emulate**: Scriptable execution sandbox. Good for analyzing small blocks (decryption, hashing) without a full debugger.
+- **code**: High-level logic recovery. `decompile` for C-like output, `analyze` for comprehensive context, `find_paths` for reachability analysis.
+- **ctree**: Decompiler AST (C-Tree) traversal. Used for precise queries (e.g., "find all calls where arg1 is a specific struct"). Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow.
+- **microcode**: Hex-Rays Intermediate Representation. Actions: get, blocks, instructions. Essential for defeating obfuscation.
+- **taint**: Static data flow analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice.
+- **emulate**: Static tracing and execution sandbox. Actions: static_trace, appcall, decrypt_strings, eval_expr.
+- **agent**: High-level orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.
 
 ### Database & Context Discovery
-- **idb**: Database metadata, segments, and entry points. The "map" of the binary.
-- **data**: Search for strings, globals, and imports. The "Google" of the binary.
-- **search**: Low-level byte/pattern/immediate value discovery.
-- **symbols**: Management of PDB/DWARF information for name recovery.
-- **types**: Type Library (TIL) management. Managing structs, enums, and function prototypes.
+- **idb**: Database metadata, segments, and entry points. Actions: meta, summary, segments, entrypoints, bookmarks.
+- **data**: Functions, globals, strings, imports, exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query.
+- **search**: Low-level byte/pattern/immediate value discovery. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref.
+- **symbols**: PDB/DWARF symbol management. Actions: load_pdb, load_dwarf, status, apply, export.
+- **types**: Type Library (TIL) management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.
 
 ### Database Modification (The "Writing" Phase)
-- **modify**: The primary tool for renaming, commenting, and patching.
-- **bulk**: Batch operations for renaming or type application across multiple symbols.
-- **structs**: Structure recovery and reconstruction from raw memory offsets.
-- **data_ops**: Converting raw bytes into meaningful data types (arrays, strings, etc.).
-- **funcs**: Fixing function boundaries and managing function-level metadata.
+- **modify**: Renaming, commenting, type setting, patching. Actions: rename, comment, set_type, patch_asm.
+- **bulk**: Batch operations for efficiency. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations.
+- **structs**: Structure recovery. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.
+- **data_ops**: Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.
+- **funcs**: Function boundary management. Actions: create, delete, set_flags, set_name, add_comment, list, info.
+- **segments**: Segment management. Actions: list, add, delete, set_attr, set_perms, move.
 
-### Navigation & Orchestration
-- **agent**: Autonomous sub-agent for exploring specific addresses or functions. Use `context_pack` for fast grounding.
-- **nav**: Bookmarks and "interesting" location management. The agent's memory of the binary.
-- **graph**: CFG and callgraph visualization.
-- **session**: Connection and state management for the MCP.
+### Navigation & Utilities
+- **nav**: Navigation and triage. Actions: goto, cursor, interesting.
+- **calc**: Address and mathematical resolution. Actions: eval, offset, convert, resolve, deref, chain, align.
+- **graph**: CFG and callgraph visualization. Actions: callgraph, cfg, xref_graph.
+- **misc**: Utilities. Actions: python, idc, load_sig.
 
-### Dynamic & Forensic
-- **debug**: Live debugger control (step, break, registers).
-- **trace / trace_analysis**: Recording and analyzing execution logs.
-- **coverage**: Identifying executed vs. unexecuted code paths.
-- **yara_hunt**: Pattern matching using YARA rules for malware/code similarity.
-- **entropy**: Detecting packing, encryption, or compressed data.
+### Dynamic Analysis & Forensics
+- **debug**: Live debugger control. Actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem.
+- **trace**: Execution tracing. Actions: get, clear, set_options.
+- **trace_analysis**: Post-mortem trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.
+- **coverage**: Code coverage analysis. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter.
+- **yara_hunt**: YARA pattern matching. Actions: scan, compile, list_rules.
+- **entropy**: Packing and encryption detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.
 
-### Specialized Forensic Tools
-- **imports_deep**: Resolving complex imports (thunks, forwarded exports).
-- **strings_xref**: Deep analysis of string usage and encoded string detection.
-- **diff**: Binary diffing for patch analysis or version comparison.
-- **hooks**: Instrumentation suggestions (Frida, etc.).
-- **comments_ai**: High-level, structured AI annotations.
+### Specialized Analysis Tools
+- **imports_deep**: Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.
+- **strings_xref**: Deep string analysis. Actions: analyze, xref_chain, detect_encoded, find_format, clusters.
+- **patterns**: Signature matching. Actions: generate, match, list_sigs, apply_sig, create_sig.
+- **diff**: Binary differential analysis. Actions: functions, bytes, signatures, summary, export_binexport.
+- **lumina**: Lumina server interaction. Actions: pull, push, status, history, search.
+- **hooks**: Instrumentation suggestions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.
+
+### Export & Annotation
+- **export**: Database export. Actions: listing, html, idc, json, binexport, headers.
+- **history**: Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff.
+- **comments_ai**: Structured AI annotations. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.
+- **colorize**: Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.
+
+### Documentation
+- **wiki**: Built-in documentation. Actions: list_topics, read, search, sections, index.
+
 ---
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+Doc status: Updated tool descriptions and actions to match actual implementations.
+Last reviewed: 2026-01-11

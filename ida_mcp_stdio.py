@@ -255,99 +255,185 @@ class BookmarkManager:
 # =============================================================================
 
 TOOLS = [
-    "session", "bookmarks", "batch", "analysis",
+    # Core session and batch tools (host-side)
+    "session", "bookmarks", "batch",
+    # Analysis configuration
+    "analysis",
+    # Unified query/edit hubs (delegating to sub-tools)
     "query", "edit",
-    "code", "types", "memory", "misc", "debug", "project", "trace",
-    "agent", "microcode", "graph", "ctree", "diff", "lumina", "structs",
-    "emulate", "export", "history", "entropy", "nav",
-    "trace_analysis", "hooks", "taint", "calc", "coverage", "wiki", "yara_hunt"
+    # Primary data access tools
+    "idb", "code", "data", "search", "types", "memory",
+    # Modification tools
+    "modify", "funcs", "segments", "bulk",
+    # Utilities
+    "misc", "calc", "nav",
+    # Debugging and tracing
+    "debug", "trace", "coverage", "trace_analysis",
+    # Project and file management
+    "project",
+    # Advanced analysis
+    "agent", "microcode", "graph", "ctree", "taint", "emulate", "entropy",
+    # Structure and type recovery
+    "structs", "strings_xref", "imports_deep", "patterns", "symbols",
+    # Differential and comparison
+    "diff", "lumina",
+    # Export and annotation
+    "export", "history", "comments_ai", "colorize", "data_ops", "fixups",
+    # Instrumentation
+    "hooks",
+    # Documentation and YARA
+    "wiki", "yara_hunt"
 ]
 
 TOOL_DESCRIPTIONS = {
+    # Core session tools (host-side, no IDA process required)
     "session": "Session management. Actions: discover, create, list, switch, close, status.",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find, export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
-    "analysis": "Analysis configuration. Actions: get_options, set_options, set_processor, set_loader_options, reanalyze.",
+    
+    # Analysis configuration
+    "analysis": "Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, reanalyze.",
+    
+    # Unified query/edit hubs
     "query": "Unified read-only query hub. Actions: data, search, strings_xref, imports_deep, symbols, patterns, idb.",
     "edit": "Unified write/edit hub. Actions: modify, funcs, segments, data_ops, fixups, colorize, comments_ai, bulk.",
-    "idb": "Database metadata and segment information. Actions: meta, segments, cursor, entrypoints.",
-    "code": "Code logic and flow analysis. Actions: decompile, disasm, xrefs_to/from, blocks, analyze, callgraph, find_paths.",
+    
+    # Primary data access
+    "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks.",
+    "code": "Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
+    "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query.",
+    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref.",
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
     "memory": "Direct database memory access. Actions: read, write.",
+    
+    # Modification tools
+    "modify": "Rename, comment, set types, and patch assembly. Actions: rename, comment, set_type, patch_asm.",
+    "funcs": "Function boundary management. Actions: create, delete, set_flags, set_name, add_comment, list, info.",
+    "segments": "Segment management. Actions: list, add, delete, set_attr, set_perms, move.",
+    "bulk": "Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations.",
+    
+    # Utilities
     "misc": "Utilities. Actions: python, idc, load_sig. Use python for full IDAPython access.",
-    "debug": "Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, regs, set_reg, threads, modules, callstack, read_mem, write_mem.",
-    "project": "Project I/O. Actions: save, close, open, batch, export.",
-    "plugins": "IDA plugin integration. Actions: list, run.",
-    "trace": "Execution tracing. Actions: get, clear, set_options.",
-    "agent": "Analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
-    "microcode": "Hex-Rays Microcode access. Actions: get, blocks, instructions.",
-    "graph": "Topological visualization. Actions: callgraph, cfg.",
-    "ctree": "Hex-Rays AST analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow.",
-    "diff": "Differential analysis. Actions: functions, bytes, signatures.",
-    "lumina": "Lumina server interaction. Actions: pull, push, status, history, search.",
-    "structs": "Structure recovery. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.",
-    "entropy": "Entropy analysis. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
-    "comments_ai": "Structured annotation management. Actions: get_context, set_structured, export_md.",
+    "calc": "Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.",
     "nav": "Navigation and triage. Actions: goto, cursor, interesting.",
-    "colorize": "Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette.",
-    "emulate": "Static/dynamic emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr.",
+    
+    # Debugging and tracing
+    "debug": "Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem.",
+    "trace": "Execution tracing. Actions: get, clear, set_options.",
+    "coverage": "Code coverage import and analysis. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter.",
+    "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.",
+    
+    # Project and file management
+    "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, read, write, sessions, batch.",
+    
+    # Advanced analysis
+    "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
+    "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions.",
+    "graph": "Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph.",
+    "ctree": "Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow.",
+    "taint": "Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice.",
+    "emulate": "Static tracing and emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr.",
+    "entropy": "Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
+    
+    # Structure and type recovery
+    "structs": "Structure recovery and reconstruction. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.",
+    "strings_xref": "Deep string analysis. Actions: analyze, xref_chain, detect_encoded, find_format, clusters.",
+    "imports_deep": "Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
+    "patterns": "Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, create_sig.",
+    "symbols": "PDB/DWARF symbol management. Actions: load_pdb, load_dwarf, status, apply, export.",
+    
+    # Differential and comparison
+    "diff": "Binary differential analysis. Actions: functions, bytes, signatures, summary, export_binexport.",
+    "lumina": "Lumina server interaction. Actions: pull, push, status, history, search.",
+    
+    # Export and annotation
     "export": "Database export. Actions: listing, html, idc, json, binexport, headers.",
-    "history": "Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore.",
-    "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops.",
-    "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, find_targets.",
-    "taint": "Static data flow analysis. Actions: find_arg_usage, find_sinks, trace_return, data_flow, backward_trace, slice.",
-    "calc": "Mathematical resolution. Actions: eval, offset, convert, resolve, deref, chain, align.",
-    "coverage": "Code coverage. Actions: import_drcov, highlight, report, filter.",
-    "wiki": "Documentation system. Actions: list_topics, read, search, sections, index.",
+    "history": "Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff.",
+    "comments_ai": "Structured AI annotation. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.",
+    "colorize": "Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
+    "data_ops": "Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.",
+    "fixups": "Relocation/fixup management. Actions: list, get, add, delete.",
+    
+    # Instrumentation
+    "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
+    
+    # Documentation and YARA
+    "wiki": "Built-in documentation system. Actions: list_topics, read, search, sections, index.",
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules."
 }
 
 TOOL_ACTIONS = {
+    # Core session tools
     "session": ["discover", "create", "list", "switch", "close", "status"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
+    
+    # Analysis configuration
     "analysis": ["get_options", "set_options", "set_processor", "set_loader_options", "reanalyze"],
+    
+    # Unified query/edit hubs
     "query": ["data", "search", "strings_xref", "imports_deep", "symbols", "patterns", "idb"],
     "edit": ["modify", "funcs", "segments", "data_ops", "fixups", "colorize", "comments_ai", "bulk"],
-    "idb": ["meta", "segments", "cursor", "entrypoints"],
+    
+    # Primary data access (corrected idb actions to match actual implementation)
+    "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks"],
     "code": ["decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "analyze", "callgraph", "export", "find_paths", "strings_in_func"],
     "data": ["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query"],
     "search": ["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref"],
     "types": ["list", "get", "set_prototype", "parse_decl", "declare", "apply", "search_structs", "infer", "read_struct", "import_header"],
     "memory": ["read", "write"],
+    
+    # Modification tools
     "modify": ["rename", "comment", "set_type", "patch_asm"],
-    "misc": ["python", "idc", "load_sig"],
-    "debug": ["start", "stop", "continue", "step_into", "step_over", "run_to", "run_until", "breakpoints", "add_bp", "del_bp", "enable_bp", "regs", "set_reg", "threads", "modules", "callstack", "read_mem", "write_mem"],
     "funcs": ["create", "delete", "set_flags", "set_name", "add_comment", "list", "info"],
     "segments": ["list", "add", "delete", "set_attr", "set_perms", "move"],
-    "project": ["save", "close", "open", "load_binary", "list_recent", "get_cwd", "set_cwd", "list_dir", "exists", "read", "write", "sessions", "batch"],
-    "plugins": ["list", "run"],
+    "bulk": ["rename", "comment", "apply_type", "rename_stack", "import_annotations", "export_annotations"],
+    
+    # Utilities
+    "misc": ["python", "idc", "load_sig"],
+    "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
+    "nav": ["goto", "cursor", "interesting"],
+    
+    # Debugging and tracing
+    "debug": ["start", "stop", "continue", "step_into", "step_over", "run_to", "run_until", "breakpoints", "add_bp", "del_bp", "enable_bp", "regs", "set_reg", "threads", "modules", "callstack", "read_mem", "write_mem"],
     "trace": ["get", "clear", "set_options"],
-    "fixups": ["list", "get", "add", "delete"],
-    "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code"],
+    "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter"],
+    "trace_analysis": ["import_trace", "analyze_coverage", "find_loops", "extract_api_calls", "basic_blocks_hit"],
+    
+    # Project and file management
+    "project": ["save", "close", "open", "load_binary", "list_recent", "get_cwd", "set_cwd", "list_dir", "exists", "read", "write", "sessions", "batch"],
+    
+    # Advanced analysis
     "agent": ["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack"],
     "microcode": ["get", "blocks", "instructions"],
     "graph": ["callgraph", "cfg", "xref_graph"],
-    "bulk": ["rename", "comment", "apply_type", "rename_stack", "import_annotations", "export_annotations"],
     "ctree": ["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow"],
-    "diff": ["functions", "bytes", "signatures", "summary", "export_binexport"],
-    "lumina": ["pull", "push", "status", "history", "search"],
-    "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
-    "patterns": ["generate", "match", "list_sigs", "apply_sig", "create_sig"],
+    "taint": ["find_arg_usage", "trace_return", "find_sinks", "data_flow", "backward_trace", "slice"],
+    "emulate": ["static_trace", "appcall", "decrypt_strings", "eval_expr"],
+    "entropy": ["section", "region", "packed_detect", "crypto_detect", "compare", "window", "summary"],
+    
+    # Structure and type recovery
     "structs": ["recover", "analyze_usage", "list", "create", "add_member", "apply", "reconstruct_vtable"],
     "strings_xref": ["analyze", "xref_chain", "detect_encoded", "find_format", "clusters"],
-    "entropy": ["section", "region", "packed_detect", "crypto_detect", "compare", "window", "summary"],
     "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
-    "comments_ai": ["get_context", "set_structured", "bulk_set", "export_md", "import_md", "summary"],
-    "nav": ["goto", "cursor", "interesting"],
-    "colorize": ["set_func", "set_range", "set_insn", "get", "clear", "palette", "highlight_pattern"],
-    "emulate": ["static_trace", "appcall", "decrypt_strings", "eval_expr"],
+    "patterns": ["generate", "match", "list_sigs", "apply_sig", "create_sig"],
+    "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
+    
+    # Differential and comparison
+    "diff": ["functions", "bytes", "signatures", "summary", "export_binexport"],
+    "lumina": ["pull", "push", "status", "history", "search"],
+    
+    # Export and annotation
     "export": ["listing", "html", "idc", "json", "binexport", "headers"],
     "history": ["undo", "redo", "list", "snapshot", "restore", "diff"],
-    "trace_analysis": ["import_trace", "analyze_coverage", "find_loops", "extract_api_calls", "basic_blocks_hit"],
+    "comments_ai": ["get_context", "set_structured", "bulk_set", "export_md", "import_md", "summary"],
+    "colorize": ["set_func", "set_range", "set_insn", "get", "clear", "palette", "highlight_pattern"],
+    "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code"],
+    "fixups": ["list", "get", "add", "delete"],
+    
+    # Instrumentation
     "hooks": ["suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks"],
-    "taint": ["find_arg_usage", "trace_return", "find_sinks", "data_flow", "backward_trace", "slice"],
-    "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
-    "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter"],
+    
+    # Documentation and YARA
     "wiki": ["list_topics", "read", "search", "sections", "index"],
     "yara_hunt": ["scan", "compile", "list_rules"]
 }
