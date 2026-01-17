@@ -1,0 +1,510 @@
+
+from typing import Annotated, Optional, Literal, Union, Any
+import io
+import sys
+import os
+import idaapi
+import idautils
+import idc
+import ida_name
+import ida_bytes
+import ida_hexrays
+import ida_typeinf
+import ida_nalt
+import ida_segment
+import ida_funcs
+import ida_kernwin
+import ida_frame
+import ida_lines
+
+# Infrastructure discovery
+try:
+    # Package mode
+    from ida_mcp.rpc import tool, unsafe
+    from ida_mcp.sync import idaread, idawrite, IDAError
+    from ida_mcp.utils import (
+        parse_address, normalize_list_input, normalize_dict_list,
+        get_function, get_prototype, get_image_size, looks_like_address,
+        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
+    )
+    from ida_mcp.error_handling import (
+        MCPError, make_error, handle_error,
+        validate_addr, validate_range, check_debugger, validate_path_safe
+    )
+except (ImportError, ValueError):
+    # Standalone IDA mode
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    _mcp_root = os.path.dirname(_this_dir)
+    if _mcp_root not in sys.path:
+        sys.path.insert(0, _mcp_root)
+        
+    from rpc import tool, unsafe
+    from sync import idaread, idawrite, IDAError
+    from utils import (
+        parse_address, normalize_list_input, normalize_dict_list,
+        get_function, get_prototype, get_image_size, looks_like_address,
+        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
+    )
+    from error_handling import (
+        MCPError, make_error, handle_error,
+        validate_addr, validate_range, check_debugger, validate_path_safe
+    )
+
+
+# ============================================================================
+# 2. CODE - Decompilation & Disassembly
+# ============================================================================
+
+@tool
+@idaread
+def code(
+    action: Annotated[Literal[
+        "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
+        "callees", "callers", "blocks", "analyze", "callgraph", "export",
+        "find_paths", "strings_in_func"
+    ], "Action"],
+    addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
+    addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,  # Alias for compatibility
+    max_items: Annotated[int, "Max items to return"] = 1000,
+    max_depth: Annotated[int, "Max depth for callgraph/find_paths"] = 5,
+    format: Annotated[Literal["json", "c_header", "prototypes"], "Export format"] = "json",
+    field_name: Annotated[Optional[str], "Struct field name (for xrefs_to_field)"] = None,
+    target: Annotated[Optional[str], "Target address (for find_paths)"] = None,
+    **kwargs
+) -> list[dict] | dict:
+    """
+    Perform code analysis, decompilation, and graph traversal.
+    
+    ACTIONS:
+    
+    decompile - Decompile function to Pseudo-C (requires Hex-Rays)
+        Params: addrs (REQUIRED)
+        Returns: [{addr, code, prototype}] or {addr, error}
+        Example: code(action="decompile", addrs="0x401000")
+        Example: code(action="decompile", addrs=["main", "0x402000"])
+        
+    disasm - Get assembly listing
+        Params: addrs (REQUIRED)
+        Returns: [{addr, disasm: [{ea, mnemonic, operands}, ...]}]
+        Example: code(action="disasm", addrs="0x401000")
+        
+    xrefs_to - Get cross-references TO an address
+        Params: addrs (REQUIRED)
+        Returns: [{addr, xrefs: [{from, type}, ...]}]
+        Example: code(action="xrefs_to", addrs="0x401000")
+        
+    xrefs_from - Get cross-references FROM an address
+        Params: addrs (REQUIRED)  
+        Returns: [{addr, xrefs: [{to, type}, ...]}]
+        Example: code(action="xrefs_from", addrs="0x401000")
+        
+    callees - List functions called BY this function
+        Params: addrs (REQUIRED)
+        Returns: [{addr, callees: [{addr, name}, ...]}]
+        Example: code(action="callees", addrs="main")
+        
+    callers - List functions that CALL this function
+        Params: addrs (REQUIRED)
+        Returns: [{addr, callers: [{addr, name}, ...]}]
+        Example: code(action="callers", addrs="printf")
+        
+    blocks - Get basic blocks (control flow graph nodes)
+        Params: addrs (REQUIRED)
+        Returns: [{addr, blocks: [{start, end, type}, ...]}]
+        Example: code(action="blocks", addrs="0x401000")
+        
+    analyze - Comprehensive analysis (decompile + callees + callers + strings)
+        Params: addrs (REQUIRED)
+        Returns: [{addr, code, prototype, callees, callers, strings}]
+        Example: code(action="analyze", addrs="main")
+        Best for: Getting full context about a function in one call
+        
+    callgraph - Generate call graph from starting function
+        Params: addrs (REQUIRED), max_depth (default 5)
+        Returns: [{addr, callgraph: [{caller, callee}, ...]}]
+        Example: code(action="callgraph", addrs="main", max_depth=3)
+        
+    find_paths - Find control flow paths between two addresses
+        Params: addrs (REQUIRED), target (REQUIRED)
+        Returns: [{addr, paths: [[addr1, addr2, ...], ...]}]
+        Example: code(action="find_paths", addrs="0x401000", target="0x402000")
+        
+    strings_in_func - List strings referenced in function
+        Params: addrs (REQUIRED)
+        Returns: [{addr, strings: [{addr, value}, ...]}]
+        Example: code(action="strings_in_func", addrs="main")
+    """
+    try:
+        # Support both addr (singular) and addrs (plural) for compatibility
+        if not addrs and addr:
+            addrs = addr
+        if not addrs:
+            return make_error(MCPError.INVALID_ARGS, "addrs or addr parameter required")
+        addrs = normalize_list_input(addrs)
+        results = []
+        
+        for addr in addrs:
+            ea, error = validate_addr(addr)
+            if error:
+                results.append({"addr": addr, **error})
+                continue
+            
+            if action == "decompile":
+                func = idaapi.get_func(ea)
+                if not func:
+                    # Find nearest function for better error
+                    prev_func = idaapi.get_prev_func(ea)
+                    next_func = idaapi.get_next_func(ea)
+                    suggestion = ""
+                    if prev_func:
+                        suggestion = f" Try {hex_ea(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
+                    elif next_func:
+                        suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
+                    
+                    results.append({"addr": addr, "error": f"No function at {hex_ea(ea)}.{suggestion}"})
+                    continue
+                
+                try:
+                    if not ida_hexrays.init_hexrays_plugin():
+                        results.append({"addr": addr, "error": "Hex-Rays decompiler not available"})
+                        continue
+                        
+                    cfunc = ida_hexrays.decompile(func.start_ea)
+                    if cfunc:
+                        results.append({
+                            "ok": True,
+                            "addr": hex_ea(func.start_ea),
+                            "code": str(cfunc),
+                            "prototype": get_prototype(func)
+                        })
+                    else:
+                        results.append({"addr": addr, "error": "Decompilation failed"})
+                except Exception as e:
+                    results.append({"addr": addr, "error": str(e)})
+            
+            elif action == "disasm":
+                func = idaapi.get_func(ea)
+                if not func:
+                    # Disassemble raw bytes even without function
+                    insns = []
+                    curr = ea
+                    for _ in range(50):  # Show 50 lines anyway
+                        line = idc.generate_disasm_line(curr, 0)
+                        if line:
+                            insns.append({"addr": hex_ea(curr), "text": line})
+                        next_ea = idc.next_head(curr, ea + 0x1000)
+                        if next_ea == idaapi.BADADDR or next_ea <= curr:
+                            break
+                        curr = next_ea
+                    results.append({
+                        "addr": addr, 
+                        "warning": "Address is not within a defined function. Showing raw disassembly.",
+                        "instructions": insns
+                    })
+                    continue
+                insns = []
+                curr = func.start_ea
+                count = 0
+                while curr < func.end_ea and count < max_items:
+                    insns.append({"addr": hex_ea(curr), "text": idc.generate_disasm_line(curr, 0)})
+                    curr = idc.next_head(curr, func.end_ea)
+                    count += 1
+                results.append({"ok": True, "addr": addr, "instructions": insns})
+            
+            elif action == "xrefs_to":
+                xrefs = [{"from": hex_ea(x.frm), "type": "code" if x.iscode else "data"} 
+                         for x in idautils.XrefsTo(ea, 0)][:max_items]
+                results.append({"ok": True, "addr": addr, "xrefs": xrefs})
+            
+            elif action == "xrefs_from":
+                xrefs = [{"to": hex_ea(x.to), "type": "code" if x.iscode else "data"} 
+                         for x in idautils.XrefsFrom(ea, 0)][:max_items]
+                results.append({"ok": True, "addr": addr, "xrefs": xrefs})
+            
+            elif action == "callees":
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}", "Use 'funcs.create' to define a function here first"))
+                    continue
+                callees = set()
+                for item in idautils.FuncItems(func.start_ea):
+                    for xref in idautils.XrefsFrom(item, 0):
+                        if xref.iscode:
+                            target_func = idaapi.get_func(xref.to)
+                            if target_func and target_func.start_ea != func.start_ea:
+                                callees.add((hex_ea(target_func.start_ea), 
+                                            ida_funcs.get_func_name(target_func.start_ea)))
+                results.append({"ok": True, "addr": addr, "callees": [{"addr": a, "name": n} for a, n in callees]})
+            
+            elif action == "callers":
+                func = idaapi.get_func(ea)
+                start = func.start_ea if func else ea
+                callers = set()
+                for xref in idautils.XrefsTo(start, 0):
+                    if xref.iscode:
+                        caller_func = idaapi.get_func(xref.frm)
+                        if caller_func:
+                            callers.add((hex_ea(caller_func.start_ea),
+                                        ida_funcs.get_func_name(caller_func.start_ea)))
+                results.append({"ok": True, "addr": addr, "callers": [{"addr": a, "name": n} for a, n in callers]})
+            
+            elif action == "blocks":
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                fc = idaapi.FlowChart(func)
+                blocks = []
+                for block in fc:
+                    blocks.append({
+                        "start": hex_ea(block.start_ea),
+                        "end": hex_ea(block.end_ea),
+                        "succs": [hex_ea(s.start_ea) for s in block.succs()],
+                        "preds": [hex_ea(p.start_ea) for p in block.preds()]
+                    })
+                    if len(blocks) >= max_items:
+                        break
+                results.append({"ok": True, "addr": addr, "blocks": blocks})
+            
+            elif action == "analyze":
+                # Comprehensive function analysis
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                
+                fname = ida_funcs.get_func_name(func.start_ea)
+                info = {"ok": True, "addr": hex_ea(func.start_ea), "name": fname, "size": hex_size(func.end_ea - func.start_ea)}
+                
+                # Decompile
+                try:
+                    if ida_hexrays.init_hexrays_plugin():
+                        cfunc = ida_hexrays.decompile(func.start_ea)
+                        info["pseudocode"] = str(cfunc) if cfunc else None
+                    else:
+                        info["pseudocode"] = "Decompiler not available"
+                except:
+                    info["pseudocode"] = None
+                
+                # Prototype
+                try:
+                    info["prototype"] = get_prototype(func)
+                except:
+                    info["prototype"] = None
+                
+                # Callees
+                try:
+                    callees = set()
+                    for item in idautils.FuncItems(func.start_ea):
+                        for xref in idautils.XrefsFrom(item, 0):
+                            if xref.iscode:
+                                tf = idaapi.get_func(xref.to)
+                                if tf and tf.start_ea != func.start_ea:
+                                    callees.add((hex_ea(tf.start_ea), ida_funcs.get_func_name(tf.start_ea)))
+                    info["callees"] = [{"addr": a, "name": n} for a, n in sorted(list(callees))[:50]]
+                except:
+                    info["callees"] = []
+                
+                # Callers
+                try:
+                    callers = set()
+                    for xref in idautils.XrefsTo(func.start_ea, 0):
+                        if xref.iscode:
+                            cf = idaapi.get_func(xref.frm)
+                            if cf:
+                                callers.add((hex_ea(cf.start_ea), ida_funcs.get_func_name(cf.start_ea)))
+                    info["callers"] = [{"addr": a, "name": n} for a, n in sorted(list(callers))[:50]]
+                except:
+                    info["callers"] = []
+                
+                # Strings
+                try:
+                    strings = []
+                    for item in idautils.FuncItems(func.start_ea):
+                        for xref in idautils.XrefsFrom(item, 0):
+                            if not xref.iscode:
+                                s = idc.get_strlit_contents(xref.to)
+                                if s:
+                                    strings.append({"addr": hex_ea(xref.to), "value": s.decode("utf-8", errors="replace")})
+                    info["strings"] = strings[:25]
+                except:
+                    info["strings"] = []
+                
+                # Stack vars
+                try:
+                    info["stack_vars"] = get_stack_frame_variables_internal(func.start_ea, False)
+                except:
+                    info["stack_vars"] = []
+                
+                results.append(info)
+            
+            elif action == "callgraph":
+                # BFS for call graph
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                
+                visited = {func.start_ea: 0}
+                queue = [(func.start_ea, 0)]
+                edges = []
+                
+                while queue and len(edges) < max_items:
+                    curr_ea, dist = queue.pop(0)
+                    if dist >= max_depth:
+                        continue
+                    
+                    for item_ea in idautils.FuncItems(curr_ea):
+                        for xref in idautils.XrefsFrom(item_ea, 0):
+                            if xref.iscode:
+                                tf = idaapi.get_func(xref.to)
+                                if tf and tf.start_ea != curr_ea:
+                                    target_ea = tf.start_ea
+                                    edge = {"caller": hex_ea(curr_ea), "callee": hex_ea(target_ea)}
+                                    if edge not in edges:
+                                        edges.append(edge)
+                                    if target_ea not in visited:
+                                        visited[target_ea] = dist + 1
+                                        queue.append((target_ea, dist + 1))
+                
+                results.append({"ok": True, "addr": hex_ea(func.start_ea), "graph": {hex_ea(k): v for k, v in visited.items()}, "edges": edges})
+            
+            elif action == "export":
+                # Export function info
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                
+                name = ida_funcs.get_func_name(func.start_ea)
+                proto = get_prototype(func)
+                
+                if format == "c_header":
+                    results.append({"addr": addr, "header": f"{proto};"})
+                elif format == "prototypes":
+                    results.append({"addr": addr, "prototype": proto})
+                else:
+                    results.append({"addr": addr, "name": name, "prototype": proto, 
+                                   "start": hex_ea(func.start_ea), "end": hex_ea(func.end_ea)})
+            
+            elif action == "xrefs_to_field":
+                # Find xrefs to a struct field
+                if not field_name:
+                    results.append(make_error(MCPError.INVALID_ARGS, "field_name required"))
+                    continue
+                
+                # Parse field_name in format "struct_name.field_name" or just "field_name"
+                struct_name = None
+                actual_field = field_name
+                if "." in field_name:
+                    struct_name, actual_field = field_name.rsplit(".", 1)
+                
+                xrefs_found = []
+                try:
+                    # Get type info library
+                    til = ida_typeinf.get_idati()
+                    
+                    # Search through all local types for matching fields
+                    for ordinal in range(1, ida_typeinf.get_ordinal_qty(til) + 1):
+                        tinfo = ida_typeinf.tinfo_t()
+                        if tinfo.get_numbered_type(til, ordinal):
+                            type_name = tinfo.get_type_name()
+                            
+                            # Filter by struct name if specified
+                            if struct_name and type_name != struct_name:
+                                continue
+                            
+                            # Check if it's a struct/union
+                            if tinfo.is_struct() or tinfo.is_union():
+                                udt = ida_typeinf.udt_type_data_t()
+                                if tinfo.get_udt_details(udt):
+                                    for member in udt:
+                                        if member.name == actual_field:
+                                            # Found the field, now find xrefs to addresses using this struct
+                                            # member.offset is already in bytes in IDA 9
+                                            xrefs_found.append({
+                                                "struct": type_name,
+                                                "field": actual_field,
+                                                "offset": member.offset,
+                                                "field_type": str(member.type)
+                                            })
+                    
+                    if not xrefs_found:
+                        results.append({"addr": addr, "field": field_name, "xrefs": [], "note": "Field not found in any struct"})
+                    else:
+                        results.append({"addr": addr, "field": field_name, "struct_info": xrefs_found})
+                except Exception as e:
+                    results.append(make_error(MCPError.IDA_ERROR, f"Error searching for field: {str(e)}", details={"addr": addr}))
+                continue
+
+            elif action == "find_paths":
+                # Find path(s) from addr to target
+                if not target:
+                    results.append(make_error(MCPError.INVALID_ARGS, "target required"))
+                    continue
+                
+                target_ea, error = validate_addr(target)
+                if error:
+                    results.append({"addr": addr, **error})
+                    continue
+                
+                # Simple BFS
+                queue = [(ea, [hex(ea)])]
+                visited = {ea}
+                paths = []
+                
+                while queue and len(paths) < max_items:
+                    curr, path = queue.pop(0)
+                    if curr == target_ea:
+                        paths.append(path)
+                        continue
+                    
+                    if len(path) >= max_depth:
+                        continue
+                        
+                    # Get succs
+                    succs = []
+                    func = idaapi.get_func(curr) # if callgraph
+                    if func:
+                        # Intra-procedural flow? Or callgraph? Let's do callgraph for now as it's more useful typically
+                        for item in idautils.FuncItems(func.start_ea):
+                            for xref in idautils.XrefsFrom(item, 0):
+                                if xref.iscode:
+                                    tf = idaapi.get_func(xref.to)
+                                    if tf and tf.start_ea != func.start_ea:
+                                        succs.append(tf.start_ea)
+                    
+                    for s in succs:
+                        if s not in visited:
+                            visited.add(s)
+                            queue.append((s, path + [hex(s)]))
+                            
+                results.append({"from": addr, "to": target, "paths": paths})
+            
+            elif action == "strings_in_func":
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
+                    continue
+                
+                strs = []
+                for item in idautils.FuncItems(func.start_ea):
+                    for xref in idautils.XrefsFrom(item, 0):
+                        if not xref.iscode:
+                            # Check if string
+                            s = idc.get_strlit_contents(xref.to)
+                            if s:
+                                strs.append({"addr": hex(xref.to), "string": s.decode("utf-8", errors="replace")})
+                results.append({"ok": True, "addr": addr, "strings": strs})
+
+            else:
+                return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+        
+        return results[0] if len(results) == 1 else results
+    except Exception as e:
+        return handle_error(e)
+
+
+# ============================================================================
+# 3. DATA - Functions, Globals, Strings, Imports
+# ============================================================================
