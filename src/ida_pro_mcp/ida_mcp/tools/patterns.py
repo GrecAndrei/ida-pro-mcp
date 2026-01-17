@@ -1,0 +1,265 @@
+
+from typing import Annotated, Optional, Literal, Union, Any
+import io
+import sys
+import os
+import idaapi
+import idautils
+import idc
+import ida_name
+import ida_bytes
+import ida_hexrays
+import ida_typeinf
+import ida_nalt
+import ida_segment
+import ida_funcs
+import ida_kernwin
+import ida_frame
+import ida_lines
+
+# Infrastructure discovery
+try:
+    # Package mode
+    from ida_mcp.rpc import tool, unsafe
+    from ida_mcp.sync import idaread, idawrite, IDAError
+    from ida_mcp.utils import (
+        parse_address, normalize_list_input, normalize_dict_list,
+        get_function, get_prototype, get_image_size, looks_like_address,
+        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
+    )
+    from ida_mcp.error_handling import (
+        MCPError, make_error, handle_error,
+        validate_addr, validate_range, check_debugger, validate_path_safe
+    )
+except (ImportError, ValueError):
+    # Standalone IDA mode
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    _mcp_root = os.path.dirname(_this_dir)
+    if _mcp_root not in sys.path:
+        sys.path.insert(0, _mcp_root)
+        
+    from rpc import tool, unsafe
+    from sync import idaread, idawrite, IDAError
+    from utils import (
+        parse_address, normalize_list_input, normalize_dict_list,
+        get_function, get_prototype, get_image_size, looks_like_address,
+        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
+    )
+    from error_handling import (
+        MCPError, make_error, handle_error,
+        validate_addr, validate_range, check_debugger, validate_path_safe
+    )
+
+
+# ============================================================================
+# 25. PATTERNS - FLIRT-Like Pattern Generation and Matching
+# ============================================================================
+
+@tool
+@idaread
+def patterns(
+    action: Annotated[Literal["generate", "match", "list_sigs", "apply_sig", "create_sig", "matched"],
+                      "Action: generate|match|list_sigs|apply_sig|create_sig|matched"],
+    addr: Annotated[Optional[str], "Function address for pattern operations"] = None,
+    pattern: Annotated[Optional[str], "Pattern to match (hex with ?? wildcards)"] = None,
+    name: Annotated[Optional[str], "Signature name"] = None,
+    length: Annotated[int, "Pattern length in bytes"] = 32,
+    offset: Annotated[int, "Pagination offset (list_sigs)"] = 0,
+    count: Annotated[int, "Max results (list_sigs/match)"] = 100,
+    **kwargs
+) -> dict:
+    """
+    Generate and match function signatures (FLIRT-like patterns).
+    
+    Actions:
+    - generate: Create a hex pattern with wildcards for relocations.
+    - match: Find functions matching a hex pattern.
+    - list_sigs: List available FLIRT .sig files.
+    - apply_sig: Apply a named signature file.
+    - create_sig: Generate metadata for a single function signature.
+    """
+    try:
+        import ida_fixup
+        
+        if action == "generate":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err: return err
+            
+            func = ida_funcs.get_func(ea)
+            # Read function bytes
+            func_size = min(length, func.end_ea - func.start_ea)
+            func_bytes = ida_bytes.get_bytes(func.start_ea, func_size)
+            if not func_bytes: return make_error(MCPError.ADDRESS_INVALID, "Could not read bytes")
+            
+            p_parts, m_parts = [], []
+            for i, b in enumerate(func_bytes):
+                curr_ea = func.start_ea + i
+                fix = ida_fixup.fixup_data_t()
+                if ida_fixup.get_fixup(fix, curr_ea):
+                    p_parts.append("??")
+                    m_parts.append("0")
+                else:
+                    p_parts.append(f"{b:02X}")
+                    m_parts.append("1")
+            
+            return {"ok": True, "addr": hex(func.start_ea), "name": idc.get_func_name(ea),
+                    "pattern": " ".join(p_parts), "mask": "".join(m_parts), "length": func_size}
+        
+        elif action == "match":
+            if not pattern: return make_error(MCPError.INVALID_ARGS, "pattern required")
+            p_bytes, mask = [], []
+            try:
+                for part in pattern.split():
+                    if "?" in part:
+                        p_bytes.append(0)
+                        mask.append(False)
+                    else:
+                        p_bytes.append(int(part, 16))
+                        mask.append(True)
+            except: return make_error(MCPError.INVALID_ARGS, "Invalid hex in pattern")
+            
+            matches = []
+            total = 0
+            for ea in idautils.Functions():
+                fb = ida_bytes.get_bytes(ea, len(p_bytes))
+                if not fb or len(fb) < len(p_bytes): continue
+                if all(fb[i] == p_bytes[i] for i in range(len(p_bytes)) if mask[i]):
+                    total += 1
+                    if total > offset and (count == 0 or len(matches) < count):
+                        matches.append({"addr": hex(ea), "name": idc.get_func_name(ea)})
+            return {"ok": True, "pattern": pattern, "matches": matches, "total": total, "offset": offset, "count": len(matches)}
+        
+        elif action == "list_sigs":
+            # IDA 9.2 changed idadir() - try multiple approaches
+            sig_dirs = []
+            
+            # Try idaapi.get_ida_subdirs (IDA 9.x)
+            if hasattr(idaapi, 'get_ida_subdirs'):
+                try:
+                    sig_dirs = list(idaapi.get_ida_subdirs('sig'))
+                except:
+                    pass
+            
+            # Fallback to IDADIR environment variable
+            if not sig_dirs:
+                idadir = os.environ.get('IDADIR', '')
+                if idadir:
+                    sig_dirs = [os.path.join(idadir, 'sig')]
+            
+            # Fallback to idc.get_ida_subdirs or idaapi path
+            if not sig_dirs and hasattr(idc, 'get_ida_subdirs'):
+                try:
+                    sig_dirs = list(idc.get_ida_subdirs('sig'))
+                except:
+                    pass
+            
+            sigs = []
+            for sig_dir in sig_dirs:
+                if os.path.exists(sig_dir):
+                    for root, _, files in os.walk(sig_dir):
+                        for f in files:
+                            if f.lower().endswith(".sig"):
+                                sigs.append(os.path.splitext(os.path.relpath(os.path.join(root, f), sig_dir))[0])
+
+            signatures = sorted(list(set(sigs)))
+            total = len(signatures)
+            if count == 0:
+                page = signatures[offset:]
+            else:
+                page = signatures[offset:offset + count]
+            return {"ok": True, "signatures": page, "total": total, "offset": offset, "count": len(page), "sig_dirs": sig_dirs}
+        
+        elif action == "apply_sig":
+            if not name: return make_error(MCPError.INVALID_ARGS, "name required")
+            import ida_libfuncs
+            ida_libfuncs.plan_to_apply_ldes(name)
+            return {"ok": True, "name": name, "note": "Signature application planned and awaiting auto-analysis"}
+        
+        elif action == "create_sig":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err: return err
+            import zlib
+            fb = ida_bytes.get_bytes(ea, 32)
+            if not fb: return make_error(MCPError.ADDRESS_INVALID, "Could not read bytes")
+            return {"ok": True, "signature": {"name": name or idc.get_func_name(ea), "addr": hex(ea), "crc16": hex(zlib.crc32(fb) & 0xFFFF)}}
+        
+        elif action == "matched":
+            # Show functions that were identified by FLIRT signatures
+            # These are library functions that IDA recognized
+            matched_funcs = []
+            unmatched_count = 0
+            
+            for ea in idautils.Functions():
+                func_name = idc.get_func_name(ea)
+                func = ida_funcs.get_func(ea)
+                if not func:
+                    continue
+                
+                # Check if function has library flag (FUNC_LIB)
+                is_lib = bool(func.flags & ida_funcs.FUNC_LIB)
+                
+                # Check if function has a "real" name (not sub_XXXX)
+                has_name = func_name and not func_name.startswith("sub_") and not func_name.startswith("nullsub_")
+                
+                # Check if it's a thunk (wrapper to another function)
+                is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
+                
+                if is_lib or (has_name and not func_name.startswith("_")):
+                    # Likely identified by FLIRT or symbols
+                    entry = {
+                        "addr": hex(ea),
+                        "name": func_name,
+                        "size": func.end_ea - func.start_ea,
+                        "is_lib": is_lib,
+                        "is_thunk": is_thunk
+                    }
+                    
+                    # Try to determine the source library
+                    # Check for common library prefixes
+                    lib_hint = None
+                    if func_name.startswith("_"): lib_hint = "crt"
+                    elif "printf" in func_name.lower() or "scanf" in func_name.lower(): lib_hint = "stdio"
+                    elif "malloc" in func_name.lower() or "free" in func_name.lower(): lib_hint = "stdlib"
+                    elif "str" in func_name.lower()[:4]: lib_hint = "string"
+                    elif "mem" in func_name.lower()[:4]: lib_hint = "memory"
+                    elif func_name.startswith("__"): lib_hint = "compiler_rt"
+                    
+                    if lib_hint:
+                        entry["lib_hint"] = lib_hint
+                    
+                    matched_funcs.append(entry)
+                else:
+                    unmatched_count += 1
+                
+                if len(matched_funcs) >= count:
+                    break
+            
+            # Group by library hint
+            by_lib = {}
+            for f in matched_funcs:
+                lib = f.get("lib_hint", "other")
+                if lib not in by_lib:
+                    by_lib[lib] = 0
+                by_lib[lib] += 1
+            
+            return {
+                "ok": True,
+                "matched_functions": matched_funcs[offset:offset+count],
+                "total_matched": len(matched_funcs),
+                "total_unmatched": unmatched_count,
+                "by_library": by_lib,
+                "offset": offset,
+                "count": min(count, len(matched_funcs) - offset)
+            }
+        
+        else:
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+    except Exception as e:
+        return handle_error(e)
+
+
+# ============================================================================
+# 26. STRUCTS - Automatic Structure Recovery and Analysis
+# ============================================================================

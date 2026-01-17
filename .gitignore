@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+
+ida_mcp_cache/
+*.i64
+*.id0
+*.id1
+*.id2
+*.id3
+*.id4
+*.nam
+*.til
+*.mcp.lock
+*.drcov
+*.binexport
