@@ -100,7 +100,7 @@ def history(
                 try:
                     if idautils.take_database_snapshot(name):
                         return {"ok": True, "type": "native_snapshot", "name": name}
-                except:
+                except Exception:
                     pass # Fallback to save copy
             
             # Fallback: Save a copy of the database

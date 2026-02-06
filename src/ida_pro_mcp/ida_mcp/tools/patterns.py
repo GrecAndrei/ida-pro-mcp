@@ -71,7 +71,7 @@ def patterns(
                     else:
                         p_bytes.append(int(part, 16))
                         mask.append(True)
-            except: return make_error(MCPError.INVALID_ARGS, "Invalid hex in pattern")
+            except Exception: return make_error(MCPError.INVALID_ARGS, "Invalid hex in pattern")
             
             matches = []
             total = 0
@@ -92,7 +92,7 @@ def patterns(
             if hasattr(idaapi, 'get_ida_subdirs'):
                 try:
                     sig_dirs = list(idaapi.get_ida_subdirs('sig'))
-                except:
+                except Exception:
                     pass
             
             # Fallback to IDADIR environment variable
@@ -105,7 +105,7 @@ def patterns(
             if not sig_dirs and hasattr(idc, 'get_ida_subdirs'):
                 try:
                     sig_dirs = list(idc.get_ida_subdirs('sig'))
-                except:
+                except Exception:
                     pass
             
             sigs = []

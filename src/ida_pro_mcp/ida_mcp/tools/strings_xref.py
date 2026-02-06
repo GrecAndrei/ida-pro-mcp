@@ -169,7 +169,7 @@ def strings_xref(
                     if all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in str_val):
                         if len(str_val) > 20:
                             reasons.append("base64_like")
-                except:
+                except Exception:
                     pass
                 
                 if reasons:
@@ -196,7 +196,7 @@ def strings_xref(
                             if specs:
                                 args_count = len([sp for sp in specs if sp != '%%'])
                                 fmt_lines.append(f"{hex(s.ea)}  args={args_count}  {str_val[:100]}")
-                except:
+                except Exception:
                     continue
                 
                 if len(fmt_lines) >= 100:

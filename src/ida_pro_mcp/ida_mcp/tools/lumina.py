@@ -147,7 +147,7 @@ def lumina(
                     if hasattr(ida_lumina, 'is_func_from_lumina'):
                         try:
                             result["is_from_lumina"] = ida_lumina.is_func_from_lumina(ea)
-                        except:
+                        except Exception:
                             pass
                 else:
                     result["lumina_initialized"] = False

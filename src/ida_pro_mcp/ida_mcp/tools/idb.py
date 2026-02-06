@@ -18,7 +18,7 @@ def _safe_inf_get(attr_name, fallback=None):
     if getter:
         try:
             return getter()
-        except:
+        except Exception:
             pass
     # Fallback to idc
     attr = getattr(idc, f"INF_{attr_name.upper()}", None)
@@ -28,8 +28,8 @@ def _safe_inf_get(attr_name, fallback=None):
 
 @tool
 def idb(
-    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks"],
-                      "Action: meta|summary|segments|entrypoints|bookmarks"] = "summary",
+    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
+                      "Action: meta|summary|segments|entrypoints|bookmarks|overview"] = "summary",
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
     **kwargs
@@ -47,6 +47,9 @@ def idb(
         Returns: {functions, named_functions, segments, strings, imports, exports,
                   comments, analysis_ok, coverage_estimate}
     
+    overview - One-shot context for LLMs: meta + summary + segments + entrypoints combined
+        Returns: {meta, summary, segments, entrypoints} - everything needed to start analysis
+    
     segments - Detailed segment information with permissions and attributes
         Params: offset, count (for pagination)
         Returns: {segments: [{name, start, end, size, perms, class, align, type, flags}]}
@@ -62,6 +65,18 @@ def idb(
             return {"ok": True, **idb_meta()}
         if action == "summary":
             return {"ok": True, **idb_summary()}
+        if action == "overview":
+            meta = idb_meta()
+            summary = idb_summary()
+            segs = idb_segments_detailed()
+            entries = idb_entrypoints_detailed()
+            return {
+                "ok": True,
+                "meta": meta,
+                "summary": summary,
+                "segments": segs[:20],  # Cap at 20 segments to keep response manageable
+                "entrypoints": entries.get("entrypoints", [])[:30],
+            }
         if action == "segments":
             segs = idb_segments_detailed()
             total = len(segs)
