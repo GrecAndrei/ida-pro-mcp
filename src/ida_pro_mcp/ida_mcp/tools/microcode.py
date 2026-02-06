@@ -96,14 +96,14 @@ def microcode(
             return {"ok": True, "function": func_name, "blocks_count": mba.qty, "maturity": maturity}
             
         elif action == "blocks":
-            blocks = []
+            block_lines = []
             for i in range(mba.qty):
                 block = mba.get_mblock(i)
-                blocks.append({"id": i, "start": hex(block.start), "end": hex(block.end), "type": block.type})
-            return {"ok": True, "function": func_name, "blocks": blocks}
+                block_lines.append(f"{i}  {hex(block.start)}-{hex(block.end)}  type={block.type}")
+            return {"ok": True, "function": func_name, "blocks": "\n".join(block_lines), "count": len(block_lines)}
             
         elif action == "instructions":
-            instrs = []
+            instr_lines = []
             # Iterate through blocks and instructions
             for i in range(mba.qty):
                 block = mba.get_mblock(i)
@@ -111,11 +111,11 @@ def microcode(
                 while curr:
                     # Use print1 instead of str() for better performance
                     text = ida_lines.tag_remove(curr.d.print1())
-                    instrs.append({"addr": hex(curr.ea), "text": text})
+                    instr_lines.append(f"{hex(curr.ea)}  {text}")
                     curr = curr.next
-                    if len(instrs) >= 500: break
-                if len(instrs) >= 500: break
-            return {"ok": True, "function": func_name, "instructions": instrs}
+                    if len(instr_lines) >= 500: break
+                if len(instr_lines) >= 500: break
+            return {"ok": True, "function": func_name, "instructions": "\n".join(instr_lines), "count": len(instr_lines)}
             
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

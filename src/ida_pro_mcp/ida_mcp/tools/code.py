@@ -83,45 +83,45 @@ def code(
         Example: code(action="decompile", addrs="0x401000")
         Example: code(action="decompile", addrs=["main", "0x402000"])
         
-    disasm - Get assembly listing
+    disasm - Get assembly listing (compact text, one line per instruction)
         Params: addrs (REQUIRED)
-        Returns: [{addr, disasm: [{ea, mnemonic, operands}, ...]}]
+        Returns: [{addr, name, disasm: "addr  instr\\naddr  instr\\n...", count}]
         Example: code(action="disasm", addrs="0x401000")
         
-    xrefs_to - Get cross-references TO an address
+    xrefs_to - Get cross-references TO an address (compact text, includes function names)
         Params: addrs (REQUIRED)
-        Returns: [{addr, xrefs: [{from, type}, ...]}]
+        Returns: [{addr, xrefs: "addr  type  func_name\\n...", count}]
         Example: code(action="xrefs_to", addrs="0x401000")
         
-    xrefs_from - Get cross-references FROM an address
+    xrefs_from - Get cross-references FROM an address (compact text, includes names)
         Params: addrs (REQUIRED)  
-        Returns: [{addr, xrefs: [{to, type}, ...]}]
+        Returns: [{addr, xrefs: "addr  type  name\\n...", count}]
         Example: code(action="xrefs_from", addrs="0x401000")
         
-    callees - List functions called BY this function
+    callees - List functions called BY this function (compact text)
         Params: addrs (REQUIRED)
-        Returns: [{addr, callees: [{addr, name}, ...]}]
+        Returns: [{addr, callees: "addr  name\\n...", count}]
         Example: code(action="callees", addrs="main")
         
-    callers - List functions that CALL this function
+    callers - List functions that CALL this function (compact text)
         Params: addrs (REQUIRED)
-        Returns: [{addr, callers: [{addr, name}, ...]}]
+        Returns: [{addr, callers: "addr  name\\n...", count}]
         Example: code(action="callers", addrs="printf")
         
-    blocks - Get basic blocks (control flow graph nodes)
+    blocks - Get basic blocks (compact text with successors/predecessors)
         Params: addrs (REQUIRED)
-        Returns: [{addr, blocks: [{start, end, type}, ...]}]
+        Returns: [{addr, blocks: "start-end  succs=[...]  preds=[...]\\n...", count}]
         Example: code(action="blocks", addrs="0x401000")
         
     analyze - Comprehensive analysis (decompile + callees + callers + strings)
         Params: addrs (REQUIRED)
-        Returns: [{addr, code, prototype, callees, callers, strings}]
+        Returns: [{addr, pseudocode, prototype, callees, callers, strings}]
         Example: code(action="analyze", addrs="main")
         Best for: Getting full context about a function in one call
         
-    callgraph - Generate call graph from starting function
+    callgraph - Generate call graph from starting function (compact text)
         Params: addrs (REQUIRED), max_depth (default 5)
-        Returns: [{addr, callgraph: [{caller, callee}, ...]}]
+        Returns: [{addr, nodes: "addr  depth=N  name\\n...", edges: "addr -> addr\\n..."}]
         Example: code(action="callgraph", addrs="main", max_depth=3)
         
     find_paths - Find control flow paths between two addresses
@@ -129,9 +129,9 @@ def code(
         Returns: [{addr, paths: [[addr1, addr2, ...], ...]}]
         Example: code(action="find_paths", addrs="0x401000", target="0x402000")
         
-    strings_in_func - List strings referenced in function
+    strings_in_func - List strings referenced in function (compact text)
         Params: addrs (REQUIRED)
-        Returns: [{addr, strings: [{addr, value}, ...]}]
+        Returns: [{addr, strings: "addr  string_value\\n...", count}]
         Example: code(action="strings_in_func", addrs="main")
     """
     try:
@@ -186,12 +186,12 @@ def code(
                 func = idaapi.get_func(ea)
                 if not func:
                     # Disassemble raw bytes even without function
-                    insns = []
+                    lines = []
                     curr = ea
                     for _ in range(50):  # Show 50 lines anyway
                         line = idc.generate_disasm_line(curr, 0)
                         if line:
-                            insns.append({"addr": hex_ea(curr), "text": line})
+                            lines.append(f"{hex_ea(curr)}  {line}")
                         next_ea = idc.next_head(curr, ea + 0x1000)
                         if next_ea == idaapi.BADADDR or next_ea <= curr:
                             break
@@ -199,27 +199,40 @@ def code(
                     results.append({
                         "addr": addr, 
                         "warning": "Address is not within a defined function. Showing raw disassembly.",
-                        "instructions": insns
+                        "disasm": "\n".join(lines),
+                        "count": len(lines)
                     })
                     continue
-                insns = []
+                lines = []
                 curr = func.start_ea
                 count = 0
                 while curr < func.end_ea and count < max_items:
-                    insns.append({"addr": hex_ea(curr), "text": idc.generate_disasm_line(curr, 0)})
+                    lines.append(f"{hex_ea(curr)}  {idc.generate_disasm_line(curr, 0)}")
                     curr = idc.next_head(curr, func.end_ea)
                     count += 1
-                results.append({"ok": True, "addr": addr, "instructions": insns})
+                fname = ida_funcs.get_func_name(func.start_ea)
+                results.append({"ok": True, "addr": hex_ea(func.start_ea), "name": fname, "disasm": "\n".join(lines), "count": count})
             
             elif action == "xrefs_to":
-                xrefs = [{"from": hex_ea(x.frm), "type": "code" if x.iscode else "data"} 
-                         for x in idautils.XrefsTo(ea, 0)][:max_items]
-                results.append({"ok": True, "addr": addr, "xrefs": xrefs})
+                xref_lines = []
+                for x in idautils.XrefsTo(ea, 0):
+                    if len(xref_lines) >= max_items:
+                        break
+                    kind = "code" if x.iscode else "data"
+                    fn = idaapi.get_func(x.frm)
+                    fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
+                    xref_lines.append(f"{hex_ea(x.frm)}  {kind}  {fn_name}")
+                results.append({"ok": True, "addr": addr, "xrefs": "\n".join(xref_lines), "count": len(xref_lines)})
             
             elif action == "xrefs_from":
-                xrefs = [{"to": hex_ea(x.to), "type": "code" if x.iscode else "data"} 
-                         for x in idautils.XrefsFrom(ea, 0)][:max_items]
-                results.append({"ok": True, "addr": addr, "xrefs": xrefs})
+                xref_lines = []
+                for x in idautils.XrefsFrom(ea, 0):
+                    if len(xref_lines) >= max_items:
+                        break
+                    kind = "code" if x.iscode else "data"
+                    name = ida_name.get_name(x.to) or ""
+                    xref_lines.append(f"{hex_ea(x.to)}  {kind}  {name}")
+                results.append({"ok": True, "addr": addr, "xrefs": "\n".join(xref_lines), "count": len(xref_lines)})
             
             elif action == "callees":
                 func = idaapi.get_func(ea)
@@ -234,7 +247,8 @@ def code(
                             if target_func and target_func.start_ea != func.start_ea:
                                 callees.add((hex_ea(target_func.start_ea), 
                                             ida_funcs.get_func_name(target_func.start_ea)))
-                results.append({"ok": True, "addr": addr, "callees": [{"addr": a, "name": n} for a, n in callees]})
+                callee_lines = [f"{a}  {n}" for a, n in sorted(callees)]
+                results.append({"ok": True, "addr": addr, "callees": "\n".join(callee_lines), "count": len(callee_lines)})
             
             elif action == "callers":
                 func = idaapi.get_func(ea)
@@ -246,7 +260,8 @@ def code(
                         if caller_func:
                             callers.add((hex_ea(caller_func.start_ea),
                                         ida_funcs.get_func_name(caller_func.start_ea)))
-                results.append({"ok": True, "addr": addr, "callers": [{"addr": a, "name": n} for a, n in callers]})
+                caller_lines = [f"{a}  {n}" for a, n in sorted(callers)]
+                results.append({"ok": True, "addr": addr, "callers": "\n".join(caller_lines), "count": len(caller_lines)})
             
             elif action == "blocks":
                 func = idaapi.get_func(ea)
@@ -254,17 +269,16 @@ def code(
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
                 fc = idaapi.FlowChart(func)
-                blocks = []
+                block_lines = []
+                block_count = 0
                 for block in fc:
-                    blocks.append({
-                        "start": hex_ea(block.start_ea),
-                        "end": hex_ea(block.end_ea),
-                        "succs": [hex_ea(s.start_ea) for s in block.succs()],
-                        "preds": [hex_ea(p.start_ea) for p in block.preds()]
-                    })
-                    if len(blocks) >= max_items:
+                    succs = ",".join(hex_ea(s.start_ea) for s in block.succs())
+                    preds = ",".join(hex_ea(p.start_ea) for p in block.preds())
+                    block_lines.append(f"{hex_ea(block.start_ea)}-{hex_ea(block.end_ea)}  succs=[{succs}]  preds=[{preds}]")
+                    block_count += 1
+                    if block_count >= max_items:
                         break
-                results.append({"ok": True, "addr": addr, "blocks": blocks})
+                results.append({"ok": True, "addr": addr, "blocks": "\n".join(block_lines), "count": block_count})
             
             elif action == "analyze":
                 # Comprehensive function analysis
@@ -301,9 +315,9 @@ def code(
                                 tf = idaapi.get_func(xref.to)
                                 if tf and tf.start_ea != func.start_ea:
                                     callees.add((hex_ea(tf.start_ea), ida_funcs.get_func_name(tf.start_ea)))
-                    info["callees"] = [{"addr": a, "name": n} for a, n in sorted(list(callees))[:50]]
+                    info["callees"] = "\n".join(f"{a}  {n}" for a, n in sorted(list(callees))[:50])
                 except:
-                    info["callees"] = []
+                    info["callees"] = ""
                 
                 # Callers
                 try:
@@ -313,9 +327,9 @@ def code(
                             cf = idaapi.get_func(xref.frm)
                             if cf:
                                 callers.add((hex_ea(cf.start_ea), ida_funcs.get_func_name(cf.start_ea)))
-                    info["callers"] = [{"addr": a, "name": n} for a, n in sorted(list(callers))[:50]]
+                    info["callers"] = "\n".join(f"{a}  {n}" for a, n in sorted(list(callers))[:50])
                 except:
-                    info["callers"] = []
+                    info["callers"] = ""
                 
                 # Strings
                 try:
@@ -325,10 +339,10 @@ def code(
                             if not xref.iscode:
                                 s = idc.get_strlit_contents(xref.to)
                                 if s:
-                                    strings.append({"addr": hex_ea(xref.to), "value": s.decode("utf-8", errors="replace")})
-                    info["strings"] = strings[:25]
+                                    strings.append(f"{hex_ea(xref.to)}  {s.decode('utf-8', errors='replace')}")
+                    info["strings"] = "\n".join(strings[:25])
                 except:
-                    info["strings"] = []
+                    info["strings"] = ""
                 
                 # Stack vars
                 try:
@@ -347,9 +361,9 @@ def code(
                 
                 visited = {func.start_ea: 0}
                 queue = [(func.start_ea, 0)]
-                edges = []
+                edge_set = set()
                 
-                while queue and len(edges) < max_items:
+                while queue and len(edge_set) < max_items:
                     curr_ea, dist = queue.pop(0)
                     if dist >= max_depth:
                         continue
@@ -360,14 +374,15 @@ def code(
                                 tf = idaapi.get_func(xref.to)
                                 if tf and tf.start_ea != curr_ea:
                                     target_ea = tf.start_ea
-                                    edge = {"caller": hex_ea(curr_ea), "callee": hex_ea(target_ea)}
-                                    if edge not in edges:
-                                        edges.append(edge)
+                                    edge_set.add((curr_ea, target_ea))
                                     if target_ea not in visited:
                                         visited[target_ea] = dist + 1
                                         queue.append((target_ea, dist + 1))
                 
-                results.append({"ok": True, "addr": hex_ea(func.start_ea), "graph": {hex_ea(k): v for k, v in visited.items()}, "edges": edges})
+                # Compact: nodes with depth, then edges
+                node_lines = [f"{hex_ea(k)}  depth={v}  {ida_funcs.get_func_name(k)}" for k, v in sorted(visited.items(), key=lambda x: x[1])]
+                edge_lines = [f"{hex_ea(c)} -> {hex_ea(t)}" for c, t in sorted(edge_set)]
+                results.append({"ok": True, "addr": hex_ea(func.start_ea), "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)})
             
             elif action == "export":
                 # Export function info
@@ -487,15 +502,15 @@ def code(
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
                     continue
                 
-                strs = []
+                str_lines = []
                 for item in idautils.FuncItems(func.start_ea):
                     for xref in idautils.XrefsFrom(item, 0):
                         if not xref.iscode:
                             # Check if string
                             s = idc.get_strlit_contents(xref.to)
                             if s:
-                                strs.append({"addr": hex(xref.to), "string": s.decode("utf-8", errors="replace")})
-                results.append({"ok": True, "addr": addr, "strings": strs})
+                                str_lines.append(f"{hex(xref.to)}  {s.decode('utf-8', errors='replace')}")
+                results.append({"ok": True, "addr": addr, "strings": "\n".join(str_lines), "count": len(str_lines)})
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
