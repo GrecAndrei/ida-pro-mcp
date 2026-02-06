@@ -41,7 +41,8 @@ try:
     )
     from ida_mcp.error_handling import (
         MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
+        validate_addr, validate_range, check_debugger, validate_path_safe,
+        require_arg, require_one_of
     )
 except (ImportError, ValueError):
     # Standalone IDA mode
@@ -59,7 +60,8 @@ except (ImportError, ValueError):
     )
     from error_handling import (  # type: ignore[import-not-found]
         MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
+        validate_addr, validate_range, check_debugger, validate_path_safe,
+        require_arg, require_one_of
     )
 
 __all__ = [
@@ -81,4 +83,5 @@ __all__ = [
     # Error handling
     "MCPError", "make_error", "handle_error",
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
+    "require_arg", "require_one_of",
 ]

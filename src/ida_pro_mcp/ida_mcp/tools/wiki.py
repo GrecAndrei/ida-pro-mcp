@@ -2,6 +2,8 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+
+
 def protocol_resource() -> str:
     """The Master Forensic RE Protocol - Rules of Engagement for AI Agents."""
     _script_dir = os.path.dirname(os.path.abspath(__file__))
