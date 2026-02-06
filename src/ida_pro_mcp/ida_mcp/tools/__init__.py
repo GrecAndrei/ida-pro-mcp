@@ -45,6 +45,7 @@ from .yara_hunt import yara_hunt
 from .analysis import analysis
 from .query import query
 from .edit import edit
+from .batch import batch
 
 __all__ = [
     "idb",
@@ -92,4 +93,5 @@ __all__ = [
     "analysis",
     "query",
     "edit",
+    "batch",
 ]

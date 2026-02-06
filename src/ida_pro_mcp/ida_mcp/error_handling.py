@@ -96,13 +96,13 @@ def parse_address_safe(addr_str: Union[str, int]) -> Tuple[Optional[int], Option
                 ea = idc.get_name_ea_simple(addr_str)
                 if ea != idc.BADADDR:
                     return ea, None
-            except:
+            except Exception:
                 pass
 
             # Try hex without prefix if it looks like hex
             try:
                 return int(addr_str, 16), None
-            except:
+            except Exception:
                 pass
 
         return None, make_error(MCPError.ADDRESS_INVALID, f"Invalid address format: {addr_str}", "Use hex format (0x401000) or a valid symbol name")
@@ -201,3 +201,40 @@ def validate_path_safe(path: str, allow_absolute: bool = True) -> Tuple[Optional
         return normalized, None
     except Exception as e:
         return None, handle_error(e)
+
+
+def require_arg(value, name: str, hint: str = None) -> Optional[Dict]:
+    """
+    Check that a required argument is present and not None/empty.
+    Returns None if valid, error dict if missing.
+
+    Usage:
+        err = require_arg(addr, "addr")
+        if err: return err
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return make_error(
+            MCPError.INVALID_ARGS,
+            f"'{name}' parameter is required",
+            hint=hint or f"Provide the '{name}' parameter"
+        )
+    return None
+
+
+def require_one_of(**kwargs) -> Optional[Dict]:
+    """
+    Check that at least one of the specified arguments is present.
+    Returns None if valid, error dict if none provided.
+
+    Usage:
+        err = require_one_of(addr=addr, name=name, expr=expr)
+        if err: return err
+    """
+    for key, value in kwargs.items():
+        if value is not None and (not isinstance(value, str) or value.strip()):
+            return None
+    names = ", ".join(f"'{k}'" for k in kwargs.keys())
+    return make_error(
+        MCPError.INVALID_ARGS,
+        f"At least one of {names} is required",
+    )

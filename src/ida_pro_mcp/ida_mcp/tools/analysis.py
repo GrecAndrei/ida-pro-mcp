@@ -1,35 +1,7 @@
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
-import idaapi
-import idc
-import ida_loader
-import ida_ida
-import ida_nalt
-
-# Infrastructure discovery
 try:
-    # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 
 # ============================================================================

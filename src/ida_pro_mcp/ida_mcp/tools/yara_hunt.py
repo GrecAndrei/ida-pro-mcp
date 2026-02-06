@@ -1,23 +1,8 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import os
-import sys
-import idc
-import idautils
-import ida_bytes
-import idaapi
-
-# Infrastructure discovery
 try:
-    from ida_mcp.rpc import tool
-    from ida_mcp.sync import idaread, IDAError
-    from ida_mcp.utils import hex_ea, parse_address
-    from ida_mcp.error_handling import MCPError, make_error, handle_error, validate_path_safe
-except (ImportError, ValueError):
-    from rpc import tool
-    from sync import idaread, IDAError
-    from utils import hex_ea, parse_address
-    from error_handling import MCPError, make_error, handle_error, validate_path_safe
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 @tool
 @idaread
