@@ -73,29 +73,30 @@ def data(
 ) -> dict:
     """
     Query, filter, and list data items: functions, globals, strings, imports.
+    All list actions return compact text (one item per line) to minimize LLM context usage.
     
     ACTIONS:
     
     functions - List all defined functions with optional filtering
         Params: query (name filter), offset, count, include_prototype, include_xrefs, 
                 min_size, named_only
-        Returns: {functions: [{addr, name, size, end, flags, prototype?, xrefs_to?, xrefs_from?}]}
+        Returns: {functions: "addr  size  name [prototype] [xrefs]\\n...", total, offset, count}
         
     globals - List global names/variables (non-functions)
         Params: query (name filter), offset, count, include_xrefs
-        Returns: {globals: [{addr, name, size, type, xrefs?}]}
+        Returns: {globals: "addr  name  size=N [type] [xrefs=N]\\n...", total, offset, count}
         
     strings - List string literals with filtering
         Params: query (content filter), offset, count
-        Returns: {strings: [{addr, string, length, encoding, xrefs}]}
+        Returns: {strings: "addr  xrefs=N  string_value\\n...", total, offset, count}
         
     imports - List imported modules and functions
         Params: query (filter by module or function name), offset, count
-        Returns: {imports: [{addr, name, module, ordinal}]}
+        Returns: {imports: "addr  module  name\\n...", total, offset, count}
         
     exports - List exported entry points
         Params: offset, count
-        Returns: {exports: [{addr, name, ordinal}]}
+        Returns: {exports: "addr  name  size\\n...", total, offset, count}
         
     lookup - Resolve a name to address or address to name
         Params: query (name or address)
@@ -107,10 +108,8 @@ def data(
     """
     try:
         if action == "functions":
-            funcs = []
-            found_count = 0
+            func_lines = []
             
-            # First pass: Count total matches
             total = 0
             for ea in idautils.Functions():
                 name = ida_funcs.get_func_name(ea)
@@ -132,31 +131,27 @@ def data(
                     total += 1
                     
                     # Collect paginated results
-                    if total > offset and (count == 0 or len(funcs) < count):
-                        entry = {
-                            "addr": hex_ea(ea), 
-                            "name": name, 
-                            "size": hex_size(func_size),
-                            "end": hex_ea(fn.end_ea),
-                            "flags": hex(fn.flags),
-                        }
+                    if total > offset and (count == 0 or len(func_lines) < count):
+                        parts = [hex_ea(ea), hex_size(func_size), name]
                         
                         if include_prototype:
-                            entry["prototype"] = get_prototype(fn)
+                            parts.append(get_prototype(fn))
                             
                         if include_xrefs:
-                            entry["xrefs_to"] = len(list(idautils.XrefsTo(ea)))
-                            entry["xrefs_from"] = len(list(idautils.XrefsFrom(ea)))
+                            xrefs_to = len(list(idautils.XrefsTo(ea)))
+                            xrefs_from = len(list(idautils.XrefsFrom(ea)))
+                            parts.append(f"xrefs_to={xrefs_to}")
+                            parts.append(f"xrefs_from={xrefs_from}")
                             
-                        funcs.append(entry)
+                        func_lines.append("  ".join(parts))
             
-            result = {"ok": True, "functions": funcs, "total": total, "offset": offset, "count": len(funcs)}
+            result = {"ok": True, "functions": "\n".join(func_lines), "total": total, "offset": offset, "count": len(func_lines)}
             if total == 0:
                 result["warning"] = "No functions found matching query."
             return result
         
         elif action == "globals":
-            globs = []
+            glob_lines = []
             total = 0
             for ea, name in idautils.Names():
                 if idaapi.get_func(ea):
@@ -170,26 +165,27 @@ def data(
                     
                 if not query or query.lower() in name.lower():
                     total += 1
-                    if total > offset and (count == 0 or len(globs) < count):
-                        entry = {"addr": hex_ea(ea), "name": name}
+                    if total > offset and (count == 0 or len(glob_lines) < count):
+                        parts = [hex_ea(ea), name]
                         
-                        # Get size and type info
-                        entry["size"] = idc.get_item_size(ea)
+                        # Get size
+                        size = idc.get_item_size(ea)
+                        parts.append(f"size={size}")
                         
                         # Try to get type
                         tif = ida_typeinf.tinfo_t()
                         if ida_nalt.get_tinfo(tif, ea):
-                            entry["type"] = str(tif)
+                            parts.append(str(tif))
                             
                         if include_xrefs:
-                            entry["xrefs"] = len(list(idautils.XrefsTo(ea)))
+                            parts.append(f"xrefs={len(list(idautils.XrefsTo(ea)))}")
                             
-                        globs.append(entry)
+                        glob_lines.append("  ".join(parts))
             
-            return {"ok": True, "globals": globs, "total": total, "offset": offset, "count": len(globs)}
+            return {"ok": True, "globals": "\n".join(glob_lines), "total": total, "offset": offset, "count": len(glob_lines)}
         
         elif action == "strings":
-            strings = []
+            str_lines = []
             total = 0
             for i in range(idaapi.get_strlist_qty()):
                 sc = idaapi.string_info_t()
@@ -213,33 +209,16 @@ def data(
                         
                         if not query or query.lower() in s.lower():
                             total += 1
-                            if total > offset and (count == 0 or len(strings) < count):
-                                # Determine encoding
-                                str_type = idc.get_str_type(sc.ea)
-                                encoding = "ascii"
-                                if str_type == idc.STRTYPE_C_16:
-                                    encoding = "utf-16"
-                                elif str_type == idc.STRTYPE_C_32:
-                                    encoding = "utf-32"
-                                
-                                entry = {
-                                    "addr": hex_ea(sc.ea), 
-                                    "string": s[:500], 
-                                    "length": sc.length,
-                                    "encoding": encoding,
-                                }
-                                
-                                # Count xrefs
-                                entry["xrefs"] = len(list(idautils.XrefsTo(sc.ea)))
-                                
-                                strings.append(entry)
+                            if total > offset and (count == 0 or len(str_lines) < count):
+                                xref_count = len(list(idautils.XrefsTo(sc.ea)))
+                                str_lines.append(f"{hex_ea(sc.ea)}  xrefs={xref_count}  {s[:500]}")
                     except:
                         pass
             
-            return {"ok": True, "strings": strings, "total": total, "offset": offset, "count": len(strings)}
+            return {"ok": True, "strings": "\n".join(str_lines), "total": total, "offset": offset, "count": len(str_lines)}
         
         elif action == "imports":
-            imports = []
+            import_lines = []
             total = 0
             query_lower = query.lower() if query else None
             
@@ -256,24 +235,19 @@ def data(
                 def cb(ea, name, ordinal):
                     imp_name = name or f"ord_{ordinal}"
                     if not query_lower or query_lower in module.lower() or query_lower in imp_name.lower():
-                        mod_imports.append({
-                            "addr": hex_ea(ea), 
-                            "name": imp_name, 
-                            "module": module,
-                            "ordinal": ordinal if ordinal else None
-                        })
+                        mod_imports.append((ea, imp_name, module, ordinal))
                     return True
                 ida_nalt.enum_import_names(i, cb)
                 
-                for imp in mod_imports:
+                for ea, imp_name, mod, ordinal in mod_imports:
                     total += 1
-                    if total > offset and (count == 0 or len(imports) < count):
-                        imports.append(imp)
+                    if total > offset and (count == 0 or len(import_lines) < count):
+                        import_lines.append(f"{hex_ea(ea)}  {mod}  {imp_name}")
                         
-            return {"ok": True, "imports": imports, "total": total, "offset": offset, "count": len(imports)}
+            return {"ok": True, "imports": "\n".join(import_lines), "total": total, "offset": offset, "count": len(import_lines)}
         
         elif action == "exports":
-            exports = []
+            export_lines = []
             total = 0
             
             # Resolve API
@@ -310,17 +284,12 @@ def data(
                     continue
                     
                 total += 1
-                if total > offset and (count == 0 or len(exports) < count):
-                    entry = {"addr": hex(ea), "name": name, "ordinal": ordinal}
-                    
-                    # Add function size if it's a function
+                if total > offset and (count == 0 or len(export_lines) < count):
                     func = idaapi.get_func(ea)
-                    if func:
-                        entry["size"] = hex(func.end_ea - func.start_ea)
-                        
-                    exports.append(entry)
+                    size_str = hex(func.end_ea - func.start_ea) if func else ""
+                    export_lines.append(f"{hex(ea)}  {name}  {size_str}")
                     
-            return {"ok": True, "exports": exports, "total": total, "offset": offset, "count": len(exports)}
+            return {"ok": True, "exports": "\n".join(export_lines), "total": total, "offset": offset, "count": len(export_lines)}
         
         elif action == "lookup":
             if not query:
