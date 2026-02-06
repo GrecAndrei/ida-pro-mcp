@@ -142,11 +142,12 @@ def diff(
                 
                 sim = difflib.SequenceMatcher(None, target_b, other_b).ratio()
                 if sim >= threshold:
-                    matches.append(f"{hex(other_ea)}  sim={round(sim, 3)}  {idc.get_func_name(other_ea)}")
+                    matches.append((sim, other_ea, idc.get_func_name(other_ea)))
                 if len(matches) >= 20: break
             
-            matches.sort(reverse=True, key=lambda x: float(x.split("sim=")[1].split()[0]))
-            return {"ok": True, "matches": "\n".join(matches)}
+            matches.sort(reverse=True, key=lambda x: x[0])
+            match_lines = [f"{hex(ea)}  sim={round(sim, 3)}  {name}" for sim, ea, name in matches]
+            return {"ok": True, "matches": "\n".join(match_lines)}
 
         elif action == "export_binexport":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")

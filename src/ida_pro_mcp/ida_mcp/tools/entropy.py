@@ -103,6 +103,7 @@ def entropy(
             return ", ".join(f"0x{b:02x}={c}" for b, c in common)
 
         def window_scan(start_ea, length):
+            """Returns list of (addr, window_size, entropy) tuples for internal use."""
             results = []
             if length <= 0:
                 return results
@@ -110,9 +111,13 @@ def entropy(
             cur = start_ea
             while cur + window <= end_ea and len(results) < limit:
                 ent = calc_entropy(cur, window)
-                results.append(f"{hex(cur)}  size={window}  ent={ent}")
+                results.append((cur, window, ent))
                 cur += max(1, step)
             return results
+
+        def format_windows(windows):
+            """Format window tuples as compact text lines."""
+            return "\n".join(f"{hex(addr)}  size={sz}  ent={ent}" for addr, sz, ent in windows)
 
         def search_pattern(pattern_bytes):
             hits = []
@@ -153,19 +158,9 @@ def entropy(
                 ent = calc_entropy(seg.start_ea, scan_size) # Cap at 1MB for speed
                 windows = window_scan(seg.start_ea, scan_size)
                 if windows:
-                    # Parse entropy values from compact lines
-                    ents = []
-                    for w in windows:
-                        try:
-                            ent_val = float(w.split("ent=")[1])
-                            ents.append(ent_val)
-                        except:
-                            pass
-                    if ents:
-                        high_ratio = round(sum(1 for e in ents if e >= threshold) / len(ents), 4)
-                        stats = f"min={min(ents)}  max={max(ents)}  avg={round(sum(ents)/len(ents), 4)}  high={high_ratio}"
-                    else:
-                        stats = f"ent={ent}"
+                    ents = [w[2] for w in windows]
+                    high_ratio = round(sum(1 for e in ents if e >= threshold) / len(ents), 4)
+                    stats = f"min={min(ents)}  max={max(ents)}  avg={round(sum(ents)/len(ents), 4)}  high={high_ratio}"
                 else:
                     stats = f"ent={ent}"
                 packed = "PACKED" if ent > threshold else ""
@@ -180,15 +175,11 @@ def entropy(
                 scan_size = min(seg.size(), 0x200000)
                 windows = window_scan(seg.start_ea, scan_size)
                 seg_name = ida_segment.get_segm_name(seg)
-                for w in windows:
-                    try:
-                        ent_val = float(w.split("ent=")[1])
-                        if ent_val >= threshold:
-                            finding_lines.append(f"{seg_name}  {w}  HIGH_ENTROPY")
-                            if len(finding_lines) >= limit:
-                                break
-                    except:
-                        pass
+                for addr, sz, ent_val in windows:
+                    if ent_val >= threshold:
+                        finding_lines.append(f"{seg_name}  {hex(addr)}  size={sz}  ent={ent_val}  HIGH_ENTROPY")
+                        if len(finding_lines) >= limit:
+                            break
                 if len(finding_lines) >= limit:
                     break
             return {"ok": True, "findings": "\n".join(finding_lines), "count": len(finding_lines)}
@@ -245,7 +236,7 @@ def entropy(
             s_ea, e_ea, err = validate_range(addr, end_addr)
             if err: return err
             windows = window_scan(s_ea, e_ea - s_ea)
-            return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "windows": "\n".join(windows), "count": len(windows)}
+            return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "windows": format_windows(windows), "count": len(windows)}
 
         elif action == "summary":
             section_lines = []
