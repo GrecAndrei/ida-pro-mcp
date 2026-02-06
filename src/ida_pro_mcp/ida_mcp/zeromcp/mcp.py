@@ -447,7 +447,7 @@ class McpServer:
             from ..truncation import truncate_response
             if isinstance(result, dict):
                 result = truncate_response(result)
-        except (ImportError, Exception):
+        except Exception:
             pass
 
         # Inject execution timing for LLM awareness
