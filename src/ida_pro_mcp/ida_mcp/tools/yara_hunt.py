@@ -3,6 +3,14 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+
+@tool
+@idaread
+def yara_hunt(
+    action: Annotated[Literal["scan", "compile", "list_rules"], "Action: scan|compile|list_rules"],
+    rules: Annotated[Optional[str], "YARA rules text or file path"] = None,
+    addr: Annotated[Optional[str], "Specific address or segment to scan"] = None,
+    size: Annotated[int, "Scan size (if addr specified)"] = 0,
     **kwargs
 ) -> dict:
     """
