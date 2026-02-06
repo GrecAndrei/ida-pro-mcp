@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def search(
-    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants"],
-                      "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants"],
+    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled"],
+                      "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern (for compatibility)"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -97,6 +97,11 @@ def search(
         
     func_by_sig - Find functions by signature characteristics
         Params: pattern (e.g. "args:3+", "calls:malloc", "size:>100")
+
+    decompiled - Search through decompiled pseudocode (Hex-Rays)
+        Params: pattern (regex), case_sensitive, limit
+        Returns: {matches: "addr  func_name  L42: matching line\\n...", count}
+        Example: search(action="decompiled", pattern="memcpy.*sizeof")
     """
     try:
         # Support both pattern and query for compatibility
@@ -991,7 +996,47 @@ def search(
                 "findings": "\n".join(found_lines),
                 "truncated": truncated
             }
-        
+
+        elif action == "decompiled":
+            # Search through decompiled pseudocode of all functions
+            if not pat:
+                return make_error(MCPError.INVALID_ARGS, "pattern required for decompiled search")
+            import re
+            try:
+                search_re = re.compile(pat, 0 if case_sensitive else re.IGNORECASE)
+            except re.error as e:
+                return make_error(MCPError.INVALID_ARGS, f"Invalid regex: {e}")
+
+            matches = []
+            skipped = 0
+            for func_ea in idautils.Functions():
+                if len(matches) >= limit + offset:
+                    break
+                try:
+                    cfunc = ida_hexrays.decompile(func_ea)
+                    if not cfunc:
+                        continue
+                    pseudocode = str(cfunc)
+                    for line_num, line in enumerate(pseudocode.splitlines(), 1):
+                        if search_re.search(line):
+                            if skipped < offset:
+                                skipped += 1
+                                continue
+                            if len(matches) >= limit:
+                                break
+                            func_name = idc.get_func_name(func_ea) or hex(func_ea)
+                            matches.append(f"{hex(func_ea)}  {func_name}  L{line_num}: {line.strip()}")
+                except Exception:
+                    continue
+
+            return {
+                "ok": True,
+                "action": "decompiled",
+                "pattern": pat,
+                "matches": "\n".join(matches),
+                "count": len(matches),
+            }
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
