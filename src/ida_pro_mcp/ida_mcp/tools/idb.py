@@ -1,25 +1,10 @@
-from typing import Annotated, Optional, Literal, Union, Any
-import os
-import idaapi
-import idautils
-import idc
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_entry
-import ida_bytes
-import ida_name
-import ida_typeinf
-import ida_ida
-
 try:
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from error_handling import MCPError, make_error, handle_error
+    from ._common import *
 except ImportError:
-    from ..rpc import tool, unsafe
-    from ..sync import idaread, idawrite, IDAError
-    from ..error_handling import MCPError, make_error, handle_error
+    from _common import *  # type: ignore[import-not-found]
+
+import ida_entry
+import ida_ida
 
 def _get_path(module, names):
     for name in names:
