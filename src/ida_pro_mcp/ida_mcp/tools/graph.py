@@ -88,7 +88,7 @@ def graph(
             nodes, edges, visited = {}, [], set()
             def add_node(f_ea):
                 if f_ea not in nodes:
-                    nodes[f_ea] = {"id": hex(f_ea), "name": idc.get_func_name(f_ea) or f"sub_{f_ea:x}"}
+                    nodes[f_ea] = idc.get_func_name(f_ea) or f"sub_{f_ea:x}"
             
             def traverse(f_ea, d):
                 if d > depth or f_ea in visited: return
@@ -99,7 +99,7 @@ def graph(
                         target = ida_funcs.get_func(xref)
                         if target and target.start_ea != f_ea:
                             add_node(target.start_ea)
-                            edge = {"from": hex(f_ea), "to": hex(target.start_ea)}
+                            edge = (f_ea, target.start_ea)
                             if edge not in edges: edges.append(edge)
                             traverse(target.start_ea, d + 1)
             
@@ -107,13 +107,15 @@ def graph(
             
             if format == "mermaid":
                 mm = ["graph TD"]
-                for edge in edges:
-                    u_name = nodes[int(edge["from"], 16)]["name"]
-                    v_name = nodes[int(edge["to"], 16)]["name"]
+                for src, dst in edges:
+                    u_name = nodes[src]
+                    v_name = nodes[dst]
                     mm.append(f'  {u_name}["{u_name}"] --> {v_name}["{v_name}"]')
                 return {"ok": True, "mermaid": "\n".join(mm)}
-                
-            return {"ok": True, "nodes": list(nodes.values()), "edges": edges}
+            
+            node_lines = [f"{hex(ea)}  {name}" for ea, name in sorted(nodes.items())]
+            edge_lines = [f"{hex(src)} -> {hex(dst)}" for src, dst in edges]
+            return {"ok": True, "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)}
         
         elif action == "cfg":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -122,20 +124,20 @@ def graph(
             
             import ida_gdl
             func = ida_funcs.get_func(ea)
-            nodes, edges = [], []
+            node_lines, edge_lines = [], []
             for block in ida_gdl.FlowChart(func):
-                b_id = hex(block.start_ea)
-                nodes.append({"id": b_id, "start": b_id, "end": hex(block.end_ea)})
+                node_lines.append(f"{hex(block.start_ea)}-{hex(block.end_ea)}")
                 for succ in block.succs():
-                    edges.append({"from": b_id, "to": hex(succ.start_ea)})
+                    edge_lines.append(f"{hex(block.start_ea)} -> {hex(succ.start_ea)}")
             
             if format == "mermaid":
                 mm = ["graph TD"]
-                for edge in edges:
-                    mm.append(f'  {edge["from"]} --> {edge["to"]}')
+                for block in ida_gdl.FlowChart(func):
+                    for succ in block.succs():
+                        mm.append(f'  {hex(block.start_ea)} --> {hex(succ.start_ea)}')
                 return {"ok": True, "mermaid": "\n".join(mm)}
                 
-            return {"ok": True, "function": idc.get_func_name(ea), "nodes": nodes, "edges": edges}
+            return {"ok": True, "function": idc.get_func_name(ea), "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)}
         
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
