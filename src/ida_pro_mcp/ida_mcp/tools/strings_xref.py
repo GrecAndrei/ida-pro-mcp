@@ -106,17 +106,14 @@ def strings_xref(
         if action == "analyze":
             if not addr:
                 # Global analysis: find most referenced strings
-                top_strings = []
+                top_list = []
                 for s in idautils.Strings():
                     count = len(list(idautils.XrefsTo(s.ea)))
                     if count > 0:
-                        top_strings.append({
-                            "addr": hex(s.ea),
-                            "string": str(s),
-                            "xrefs": count
-                        })
-                top_strings.sort(key=lambda x: x["xrefs"], reverse=True)
-                return {"ok": True, "top_strings": top_strings[:50], "note": "Global string summary (most referenced)"}
+                        top_list.append((s.ea, str(s), count))
+                top_list.sort(key=lambda x: x[2], reverse=True)
+                top_lines = [f"{hex(ea)}  xrefs={cnt}  {text}" for ea, text, cnt in top_list[:50]]
+                return {"ok": True, "top_strings": "\n".join(top_lines), "note": "Global string summary (most referenced)"}
 
             ea = parse_address(addr)
 
@@ -137,13 +134,11 @@ def strings_xref(
                 encoding = "utf-32"
             
             # Get xrefs to this string
-            xrefs = []
+            xref_lines = []
             for xref in idautils.XrefsTo(ea):
                 func = ida_funcs.get_func(xref.frm)
-                xrefs.append({
-                    "from": hex(xref.frm),
-                    "func": idc.get_func_name(xref.frm) if func else None
-                })
+                fn_name = idc.get_func_name(xref.frm) if func else ""
+                xref_lines.append(f"{hex(xref.frm)}  {fn_name}")
             
             # Check for decryption indicators
             indicators = []
@@ -161,23 +156,24 @@ def strings_xref(
                 "string": string_val,
                 "encoding": encoding,
                 "size": idc.get_item_size(ea),
-                "xrefs": xrefs[:20],
+                "xrefs": "\n".join(xref_lines[:20]),
                 "decryption_indicators": indicators
             }
         
         elif action == "xref_chain":
             if not addr:
                 # List top referenced strings as suggestions
-                top_strings = []
+                top_list = []
                 for s in idautils.Strings():
                     count = len(list(idautils.XrefsTo(s.ea)))
                     if count > 1:
-                        top_strings.append({"addr": hex(s.ea), "string": str(s), "xrefs": count})
-                top_strings.sort(key=lambda x: x["xrefs"], reverse=True)
-                return {"ok": True, "top_strings": top_strings[:20], "hint": "Provide 'addr' to trace a specific string"}
+                        top_list.append((s.ea, str(s), count))
+                top_list.sort(key=lambda x: x[2], reverse=True)
+                top_lines = [f"{hex(ea)}  xrefs={cnt}  {text}" for ea, text, cnt in top_list[:20]]
+                return {"ok": True, "top_strings": "\n".join(top_lines), "hint": "Provide 'addr' to trace a specific string"}
             
             ea = parse_address(addr)
-            chain = []
+            chain_lines = []
             visited = set()
             
             def trace_up(current_ea, current_depth):
@@ -188,21 +184,17 @@ def strings_xref(
                 for xref in idautils.XrefsTo(current_ea):
                     if xref.type in [1, 17, 18, 19, 20, 21]:
                         func = ida_funcs.get_func(xref.frm)
-                        entry = {
-                            "addr": hex(xref.frm),
-                            "depth": current_depth
-                        }
                         if func:
-                            entry["func"] = idc.get_func_name(func.start_ea)
-                            chain.append(entry)
+                            indent = "  " * current_depth
+                            chain_lines.append(f"{indent}{hex(xref.frm)}  d={current_depth}  {idc.get_func_name(func.start_ea)}")
                             if current_depth < depth:
                                 trace_up(func.start_ea, current_depth + 1)
             
             trace_up(ea, 0)
-            return {"ok": True, "addr": hex(ea), "depth": depth, "chain": chain[:50]}
+            return {"ok": True, "addr": hex(ea), "depth": depth, "chain": "\n".join(chain_lines[:50])}
         
         elif action == "detect_encoded":
-            suspicious = []
+            suspicious_lines = []
             
             for s in idautils.Strings():
                 raw = ida_bytes.get_bytes(s.ea, s.length)
@@ -215,11 +207,9 @@ def strings_xref(
                 if ent > 0.85:
                     reasons.append("high_entropy")
                 
-                # Check for XOR patterns
                 if raw and len(set(raw)) < len(raw) // 4:
                     reasons.append("repetitive_pattern")
                 
-                # Check for base64-like
                 try:
                     str_val = raw.decode('ascii', errors='strict')
                     if all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in str_val):
@@ -229,20 +219,15 @@ def strings_xref(
                     pass
                 
                 if reasons:
-                    suspicious.append({
-                        "addr": hex(s.ea),
-                        "string": str(s)[:50],
-                        "entropy": round(ent, 3),
-                        "reasons": reasons
-                    })
+                    suspicious_lines.append(f"{hex(s.ea)}  ent={round(ent, 3)}  [{','.join(reasons)}]  {str(s)[:50]}")
                 
-                if len(suspicious) >= 100:
+                if len(suspicious_lines) >= 100:
                     break
             
-            return {"ok": True, "suspicious": suspicious}
+            return {"ok": True, "suspicious": "\n".join(suspicious_lines)}
         
         elif action == "find_format":
-            format_strings = []
+            fmt_lines = []
             
             for s in idautils.Strings():
                 try:
@@ -252,23 +237,18 @@ def strings_xref(
                         if '%' in str_val:
                             if query and query.lower() not in str_val.lower():
                                 continue
-                            # Count format specifiers
                             import re
                             specs = re.findall(r'%[-+0 #]*\d*\.?\d*[hlL]*[diouxXeEfFgGcspn%]', str_val)
                             if specs:
-                                format_strings.append({
-                                    "addr": hex(s.ea),
-                                    "format": str_val[:100],
-                                    "specifiers": specs[:10],
-                                    "args_count": len([s for s in specs if s != '%%'])
-                                })
+                                args_count = len([sp for sp in specs if sp != '%%'])
+                                fmt_lines.append(f"{hex(s.ea)}  args={args_count}  {str_val[:100]}")
                 except:
                     continue
                 
-                if len(format_strings) >= 100:
+                if len(fmt_lines) >= 100:
                     break
             
-            return {"ok": True, "format_strings": format_strings}
+            return {"ok": True, "format_strings": "\n".join(fmt_lines)}
         
         elif action == "clusters":
             clusters = {}
@@ -281,13 +261,14 @@ def strings_xref(
                         if func_name not in clusters:
                             clusters[func_name] = {"addr": hex(func.start_ea), "strings": []}
                         if len(clusters[func_name]["strings"]) < 20:
-                            clusters[func_name]["strings"].append({
-                                "addr": hex(s.ea),
-                                "string": str(s)[:50]
-                            })
+                            clusters[func_name]["strings"].append(f"{hex(s.ea)}  {str(s)[:50]}")
             
-            result = [{"func": k, **v} for k, v in list(clusters.items())[:50]]
-            return {"ok": True, "clusters": result}
+            cluster_lines = []
+            for func_name, info in list(clusters.items())[:50]:
+                cluster_lines.append(f"[{func_name} @ {info['addr']}]")
+                for st in info["strings"]:
+                    cluster_lines.append(f"  {st}")
+            return {"ok": True, "clusters": "\n".join(cluster_lines)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

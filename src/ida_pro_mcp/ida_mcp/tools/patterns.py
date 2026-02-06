@@ -127,8 +127,8 @@ def patterns(
                 if all(fb[i] == p_bytes[i] for i in range(len(p_bytes)) if mask[i]):
                     total += 1
                     if total > offset and (count == 0 or len(matches) < count):
-                        matches.append({"addr": hex(ea), "name": idc.get_func_name(ea)})
-            return {"ok": True, "pattern": pattern, "matches": matches, "total": total, "offset": offset, "count": len(matches)}
+                        matches.append(f"{hex(ea)}  {idc.get_func_name(ea)}")
+            return {"ok": True, "pattern": pattern, "matches": "\n".join(matches), "total": total, "offset": offset, "count": len(matches)}
         
         elif action == "list_sigs":
             # IDA 9.2 changed idadir() - try multiple approaches
@@ -187,8 +187,7 @@ def patterns(
         
         elif action == "matched":
             # Show functions that were identified by FLIRT signatures
-            # These are library functions that IDA recognized
-            matched_funcs = []
+            matched_lines = []
             unmatched_count = 0
             
             for ea in idautils.Functions():
@@ -197,28 +196,14 @@ def patterns(
                 if not func:
                     continue
                 
-                # Check if function has library flag (FUNC_LIB)
                 is_lib = bool(func.flags & ida_funcs.FUNC_LIB)
-                
-                # Check if function has a "real" name (not sub_XXXX)
                 has_name = func_name and not func_name.startswith("sub_") and not func_name.startswith("nullsub_")
-                
-                # Check if it's a thunk (wrapper to another function)
                 is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
                 
                 if is_lib or (has_name and not func_name.startswith("_")):
-                    # Likely identified by FLIRT or symbols
-                    entry = {
-                        "addr": hex(ea),
-                        "name": func_name,
-                        "size": func.end_ea - func.start_ea,
-                        "is_lib": is_lib,
-                        "is_thunk": is_thunk
-                    }
+                    size = func.end_ea - func.start_ea
                     
-                    # Try to determine the source library
-                    # Check for common library prefixes
-                    lib_hint = None
+                    lib_hint = ""
                     if func_name.startswith("_"): lib_hint = "crt"
                     elif "printf" in func_name.lower() or "scanf" in func_name.lower(): lib_hint = "stdio"
                     elif "malloc" in func_name.lower() or "free" in func_name.lower(): lib_hint = "stdlib"
@@ -226,32 +211,26 @@ def patterns(
                     elif "mem" in func_name.lower()[:4]: lib_hint = "memory"
                     elif func_name.startswith("__"): lib_hint = "compiler_rt"
                     
-                    if lib_hint:
-                        entry["lib_hint"] = lib_hint
+                    flags_str = []
+                    if is_lib: flags_str.append("lib")
+                    if is_thunk: flags_str.append("thunk")
+                    if lib_hint: flags_str.append(lib_hint)
                     
-                    matched_funcs.append(entry)
+                    matched_lines.append(f"{hex(ea)}  size={size}  {func_name}  [{','.join(flags_str)}]")
                 else:
                     unmatched_count += 1
                 
-                if len(matched_funcs) >= count:
+                if len(matched_lines) >= count:
                     break
             
-            # Group by library hint
-            by_lib = {}
-            for f in matched_funcs:
-                lib = f.get("lib_hint", "other")
-                if lib not in by_lib:
-                    by_lib[lib] = 0
-                by_lib[lib] += 1
-            
+            page = matched_lines[offset:offset+count]
             return {
                 "ok": True,
-                "matched_functions": matched_funcs[offset:offset+count],
-                "total_matched": len(matched_funcs),
+                "matched_functions": "\n".join(page),
+                "total_matched": len(matched_lines),
                 "total_unmatched": unmatched_count,
-                "by_library": by_lib,
                 "offset": offset,
-                "count": min(count, len(matched_funcs) - offset)
+                "count": len(page)
             }
         
         else:

@@ -84,6 +84,7 @@ def funcs(
     - set_name: Rename function at `addr`.
     - add_comment: Set function-level comment.
     - list: Paginated listing with optional name filtering.
+      Returns compact text: "addr  size  name [prototype]" per line.
     - info: Detailed info about a single function.
     """
     try:
@@ -95,9 +96,16 @@ def funcs(
                 if name:
                     idc.set_name(ea, name, ida_name.SN_FORCE)
                 return {"ok": True, "addr": hex(ea), "name": name, "note": "Function already exists"}
+            if existing:
+                # Address is inside an existing function but not at its start
+                return make_error(
+                    MCPError.ADDRESS_INVALID,
+                    f"Address {hex(ea)} is inside function {ida_funcs.get_func_name(existing.start_ea)} ({hex(existing.start_ea)}-{hex(existing.end_ea)})",
+                    "Delete the existing function first with funcs(action='delete') or use its start address",
+                )
             # Ensure code exists at the start address
-            flags = ida_bytes.get_flags(ea)
-            if not ida_bytes.is_code(flags):
+            byte_flags = ida_bytes.get_flags(ea)
+            if not ida_bytes.is_code(byte_flags):
                 created = idc.create_insn(ea)
                 if created == 0 or not ida_bytes.is_code(ida_bytes.get_flags(ea)):
                     return make_error(
@@ -145,7 +153,7 @@ def funcs(
             return {"ok": True, "comment": comment}
 
         elif action == "list":
-            funcs = []
+            func_lines = []
             total = 0
             query_l = query.lower() if query else None
 
@@ -159,21 +167,18 @@ def funcs(
                 total += 1
                 if total <= offset:
                     continue
-                if count != 0 and len(funcs) >= count:
+                if count != 0 and len(func_lines) >= count:
                     continue
 
                 fn = idaapi.get_func(ea)
-                entry = {
-                    "addr": hex_ea(ea),
-                    "name": name,
-                    "size": hex_size(fn.end_ea - fn.start_ea),
-                    "flags": hex(fn.flags),
-                }
+                size = hex_size(fn.end_ea - fn.start_ea)
                 if include_prototype:
-                    entry["prototype"] = get_prototype(fn)
-                funcs.append(entry)
+                    proto = get_prototype(fn)
+                    func_lines.append(f"{hex_ea(ea)}  {size}  {name}  {proto}")
+                else:
+                    func_lines.append(f"{hex_ea(ea)}  {size}  {name}")
 
-            return {"ok": True, "functions": funcs, "total": total, "offset": offset, "count": len(funcs)}
+            return {"ok": True, "functions": "\n".join(func_lines), "total": total, "offset": offset, "count": len(func_lines)}
 
         elif action == "info":
             ea, err = validate_addr(addr)
