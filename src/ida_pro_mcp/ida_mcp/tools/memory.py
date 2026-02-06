@@ -4,6 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+MAX_HEXDUMP_SIZE = 4096
+
 
 # ============================================================================
 # 6. MEMORY - Read/Write operations
@@ -123,8 +125,8 @@ def memory(
 
         elif action == "hexdump":
             # Formatted hexdump like xxd
-            if size > 4096:
-                return make_error(MCPError.SIZE_LIMIT_EXCEEDED, "hexdump limited to 4096 bytes",
+            if size > MAX_HEXDUMP_SIZE:
+                return make_error(MCPError.SIZE_LIMIT_EXCEEDED, f"hexdump limited to {MAX_HEXDUMP_SIZE} bytes",
                                 hint="Use smaller size or action=read with type=bytes")
             raw = ida_bytes.get_bytes(ea, size)
             if not raw:
