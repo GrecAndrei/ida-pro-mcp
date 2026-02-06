@@ -1,16 +1,9 @@
-from typing import Annotated, Optional, Literal, Union, Any
-import sys
-import io
 import traceback
 
 try:
-    from rpc import tool, unsafe
-    from sync import idawrite
-    from error_handling import handle_error
+    from ._common import *
 except ImportError:
-    from ..rpc import tool, unsafe
-    from ..sync import idawrite
-    from ..error_handling import handle_error
+    from _common import *  # type: ignore[import-not-found]
 
 @tool
 def misc(

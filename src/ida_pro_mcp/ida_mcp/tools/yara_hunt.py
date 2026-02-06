@@ -1,31 +1,8 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import os
-import sys
-import idc
-import idautils
-import ida_bytes
-import idaapi
-
-# Infrastructure discovery
 try:
-    from ida_mcp.rpc import tool
-    from ida_mcp.sync import idaread, IDAError
-    from ida_mcp.utils import hex_ea, parse_address
-    from ida_mcp.error_handling import MCPError, make_error, handle_error, validate_path_safe
-except (ImportError, ValueError):
-    from rpc import tool
-    from sync import idaread, IDAError
-    from utils import hex_ea, parse_address
-    from error_handling import MCPError, make_error, handle_error, validate_path_safe
-
-@tool
-@idaread
-def yara_hunt(
-    action: Annotated[Literal["scan", "compile", "list_rules"], "Action: scan|compile|list_rules"],
-    rules: Annotated[Optional[str], "YARA rules text or file path"] = None,
-    addr: Annotated[Optional[str], "Specific address or segment to scan"] = None,
-    size: Annotated[int, "Scan size (if addr specified)"] = 0,
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
     **kwargs
 ) -> dict:
     """
