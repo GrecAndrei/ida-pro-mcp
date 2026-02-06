@@ -117,6 +117,16 @@ def idawrite(f):
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        # Invalidate read cache on any write operation
+        try:
+            from ida_pro_mcp.ida_mcp.cache import TOOL_CACHE
+            TOOL_CACHE.invalidate_all()
+        except ImportError:
+            try:
+                from cache import TOOL_CACHE
+                TOOL_CACHE.invalidate_all()
+            except ImportError:
+                pass
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
         return sync_wrapper(ff, idaapi.MFF_WRITE)
@@ -129,9 +139,32 @@ def idaread(f):
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        # Check cache first
+        cache = None
+        try:
+            from ida_pro_mcp.ida_mcp.cache import TOOL_CACHE
+            cache = TOOL_CACHE
+        except ImportError:
+            try:
+                from cache import TOOL_CACHE
+                cache = TOOL_CACHE
+            except ImportError:
+                pass
+
+        if cache is not None:
+            cached = cache.get(f.__name__, kwargs)
+            if cached is not None:
+                return cached
+
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
-        return sync_wrapper(ff, idaapi.MFF_READ)
+        result = sync_wrapper(ff, idaapi.MFF_READ)
+
+        # Store in cache (only dict results that aren't errors)
+        if cache is not None and isinstance(result, dict) and not result.get("error"):
+            cache.put(f.__name__, kwargs, result)
+
+        return result
 
     return wrapper
 

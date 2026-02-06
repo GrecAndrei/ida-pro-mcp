@@ -1,54 +1,8 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
-
-# Infrastructure discovery
 try:
-    # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 
 # ============================================================================
@@ -58,8 +12,8 @@ except (ImportError, ValueError):
 @tool
 @idaread
 def search(
-    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants"],
-                      "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants"],
+    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled"],
+                      "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern (for compatibility)"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -143,6 +97,11 @@ def search(
         
     func_by_sig - Find functions by signature characteristics
         Params: pattern (e.g. "args:3+", "calls:malloc", "size:>100")
+
+    decompiled - Search through decompiled pseudocode (Hex-Rays)
+        Params: pattern (regex), case_sensitive, limit
+        Returns: {matches: "addr  func_name  L42: matching line\\n...", count}
+        Example: search(action="decompiled", pattern="memcpy.*sizeof")
     """
     try:
         # Support both pattern and query for compatibility
@@ -259,14 +218,14 @@ def search(
                                     line += f"  xrefs={xref_count}"
                                 if maybe_add(line):
                                     break
-                    except:
+                    except Exception:
                         pass
             return _search_result(pattern=pattern)
         
         elif action == "immediate":
             try: 
                 value = int(pattern, 0)
-            except: 
+            except Exception:
                 return make_error(MCPError.INVALID_ARGS, "Invalid immediate value")
 
             import ida_ua
@@ -636,7 +595,7 @@ def search(
                         results_by_type["code_refs"] = "\n".join(code_lines)
                     if data_lines:
                         results_by_type["data_refs"] = "\n".join(data_lines)
-                except:
+                except Exception:
                     pass
             
             # 2. Search names (functions, globals)
@@ -665,7 +624,7 @@ def search(
                             if pattern_check in s.lower():
                                 xref_count = len(list(idautils.XrefsTo(sc.ea)))
                                 string_lines.append(f"{hex(sc.ea)}  xrefs={xref_count}  {s[:200]}")
-                    except:
+                    except Exception:
                         pass
             results_by_type["strings"] = "\n".join(string_lines)
             
@@ -1037,7 +996,47 @@ def search(
                 "findings": "\n".join(found_lines),
                 "truncated": truncated
             }
-        
+
+        elif action == "decompiled":
+            # Search through decompiled pseudocode of all functions
+            if not pat:
+                return make_error(MCPError.INVALID_ARGS, "pattern required for decompiled search")
+            import re
+            try:
+                search_re = re.compile(pat, 0 if case_sensitive else re.IGNORECASE)
+            except re.error as e:
+                return make_error(MCPError.INVALID_ARGS, f"Invalid regex: {e}")
+
+            matches = []
+            skipped = 0
+            for func_ea in idautils.Functions():
+                if len(matches) >= limit + offset:
+                    break
+                try:
+                    cfunc = ida_hexrays.decompile(func_ea)
+                    if not cfunc:
+                        continue
+                    pseudocode = str(cfunc)
+                    for line_num, line in enumerate(pseudocode.splitlines(), 1):
+                        if search_re.search(line):
+                            if skipped < offset:
+                                skipped += 1
+                                continue
+                            if len(matches) >= limit:
+                                break
+                            func_name = idc.get_func_name(func_ea) or hex(func_ea)
+                            matches.append(f"{hex(func_ea)}  {func_name}  L{line_num}: {line.strip()}")
+                except Exception:
+                    continue
+
+            return {
+                "ok": True,
+                "action": "decompiled",
+                "pattern": pat,
+                "matches": "\n".join(matches),
+                "count": len(matches),
+            }
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

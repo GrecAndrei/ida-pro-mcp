@@ -1,56 +1,8 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
-
-# Infrastructure discovery
 try:
-    # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size  
-    )
-    from ida_mcp.utils import resolve_symbol
-    from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size  
-    )
-    from utils import resolve_symbol
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 
 # ============================================================================
@@ -212,7 +164,7 @@ def data(
                             if total > offset and (count == 0 or len(str_lines) < count):
                                 xref_count = len(list(idautils.XrefsTo(sc.ea)))
                                 str_lines.append(f"{hex_ea(sc.ea)}  xrefs={xref_count}  {s[:500]}")
-                    except:
+                    except Exception:
                         pass
             
             return {"ok": True, "strings": "\n".join(str_lines), "total": total, "offset": offset, "count": len(str_lines)}

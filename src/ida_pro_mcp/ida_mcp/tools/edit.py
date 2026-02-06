@@ -3,23 +3,10 @@ Unified Edit Hub - Routes edit operations to appropriate tools.
 This provides a single entry point for all write operations.
 """
 
-from typing import Annotated, Optional, Literal, Any
-import sys
-import os
-
-# Infrastructure discovery
 try:
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idawrite
-    from ida_mcp.error_handling import MCPError, make_error, handle_error
-except (ImportError, ValueError):
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-    from rpc import tool, unsafe
-    from sync import idawrite
-    from error_handling import MCPError, make_error, handle_error
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 
 @tool

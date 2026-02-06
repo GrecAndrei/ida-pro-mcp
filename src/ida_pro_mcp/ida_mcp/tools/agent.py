@@ -1,54 +1,9 @@
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
 import time
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
 
-# Infrastructure discovery
 try:
-    # Package mode
-    from ..rpc import tool, unsafe
-    from ..sync import idaread, idawrite, IDAError
-    from ..utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from ..error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 # Absolute imports for sub-tools to prevent IDA -S context issues
 from ida_mcp.tools.code import code as code_tool
@@ -136,7 +91,7 @@ def agent(
                 try:
                     with open(os.path.join(os.environ.get("TEMP", "C:\\temp"), "ida_mcp_emergency.log"), "a") as f:
                         f.write(f"[{time.ctime()}] AGENT: {msg}\n")
-                except: pass
+                except Exception: pass
 
             # Aggregate multi-modal analysis
             debug_log_agent(f"Starting code analysis for {addr}...")
@@ -346,7 +301,7 @@ def agent(
                             result["pseudocode_preview"] = '\n'.join(lines[:15])
                             if len(lines) > 15:
                                 result["pseudocode_preview"] += f"\n... ({len(lines) - 15} more lines)"
-                    except:
+                    except Exception:
                         pass
                 
                 # Quick xrefs
@@ -457,7 +412,7 @@ def agent(
                             if '(' in line and ')' in line:
                                 context["signature"] = line.strip()
                                 break
-                except:
+                except Exception:
                     pass
             
             return context

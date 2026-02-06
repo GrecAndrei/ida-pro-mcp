@@ -1,54 +1,10 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
-
-# Infrastructure discovery
 try:
-    # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
+
+MAX_HEXDUMP_SIZE = 4096
 
 
 # ============================================================================
@@ -58,11 +14,11 @@ except (ImportError, ValueError):
 @tool 
 @idawrite
 def memory(
-    action: Annotated[Literal["read", "write"], "Action: read|write"],
+    action: Annotated[Literal["read", "write", "hexdump"], "Action: read|write|hexdump"],
     addr: Annotated[str, "Address"],
     type: Annotated[Literal["bytes", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "ptr", "string"],
                     "Data type (for read)"] = "u32",
-    size: Annotated[int, "Size in bytes (for type=bytes)"] = 16,
+    size: Annotated[int, "Size in bytes (for type=bytes or hexdump)"] = 16,
     data: Annotated[Optional[str], "Hex data to write (for write)"] = None,
     **kwargs
 ) -> dict:
@@ -72,11 +28,12 @@ def memory(
     Actions:
     - read: Read values from `addr`. Returns hex or native value.
     - write: Patch bytes at `addr`.
+    - hexdump: Formatted hex dump with ASCII sidebar (like xxd).
     
     Arguments:
     - addr: Address to read/write.
     - type: Data type for read (u8/u16/u32/u64, s8/s16/s32/s64, f32/f64, ptr, bytes, string). Default 'u32'.
-    - size: Number of bytes to read (only for type='bytes').
+    - size: Number of bytes to read (only for type='bytes' or action='hexdump'). Default 16.
     - data: Hex string to write (e.g. "90 90 90"). REQUIRED for write.
     """
     try:
@@ -165,7 +122,31 @@ def memory(
 
             ida_bytes.patch_bytes(ea, bytes_data)
             return {"ok": True, "addr": addr, "size": len(bytes_data), "data": data}
-        
+
+        elif action == "hexdump":
+            # Formatted hexdump like xxd
+            if size > MAX_HEXDUMP_SIZE:
+                return make_error(MCPError.SIZE_LIMIT_EXCEEDED, f"hexdump limited to {MAX_HEXDUMP_SIZE} bytes",
+                                hint="Use smaller size or action=read with type=bytes")
+            raw = ida_bytes.get_bytes(ea, size)
+            if not raw:
+                return make_error(MCPError.IDA_ERROR, f"Could not read {size} bytes from {hex(ea)}")
+
+            lines = []
+            for i in range(0, len(raw), 16):
+                chunk = raw[i:i + 16]
+                hex_part = " ".join(f"{b:02x}" for b in chunk)
+                hex_part = hex_part.ljust(48)
+                ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                lines.append(f"{hex(ea + i)}  {hex_part}  |{ascii_part}|")
+
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "size": len(raw),
+                "hexdump": "\n".join(lines),
+            }
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

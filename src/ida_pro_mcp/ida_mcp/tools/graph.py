@@ -1,54 +1,8 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
-
-# Infrastructure discovery
 try:
-    # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 
 # ============================================================================
@@ -105,17 +59,7 @@ def graph(
             
             traverse(ea, 0)
             
-            if format == "mermaid":
-                mm = ["graph TD"]
-                for src, dst in edges:
-                    u_name = nodes[src]
-                    v_name = nodes[dst]
-                    mm.append(f'  {u_name}["{u_name}"] --> {v_name}["{v_name}"]')
-                return {"ok": True, "mermaid": "\n".join(mm)}
-            
-            node_lines = [f"{hex(ea)}  {name}" for ea, name in sorted(nodes.items())]
-            edge_lines = [f"{hex(src)} -> {hex(dst)}" for src, dst in edges]
-            return {"ok": True, "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)}
+            return _format_graph(nodes, edges, format)
         
         elif action == "cfg":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -124,25 +68,100 @@ def graph(
             
             import ida_gdl
             func = ida_funcs.get_func(ea)
-            node_lines, edge_lines = [], []
+            nodes = {}
+            edges = []
             for block in ida_gdl.FlowChart(func):
-                node_lines.append(f"{hex(block.start_ea)}-{hex(block.end_ea)}")
+                label = f"{hex(block.start_ea)}-{hex(block.end_ea)}"
+                nodes[block.start_ea] = label
                 for succ in block.succs():
-                    edge_lines.append(f"{hex(block.start_ea)} -> {hex(succ.start_ea)}")
-            
-            if format == "mermaid":
-                mm = ["graph TD"]
-                for block in ida_gdl.FlowChart(func):
-                    for succ in block.succs():
-                        mm.append(f'  {hex(block.start_ea)} --> {hex(succ.start_ea)}')
-                return {"ok": True, "mermaid": "\n".join(mm)}
-                
-            return {"ok": True, "function": idc.get_func_name(ea), "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)}
-        
+                    edges.append((block.start_ea, succ.start_ea))
+                    if succ.start_ea not in nodes:
+                        nodes[succ.start_ea] = f"{hex(succ.start_ea)}-{hex(succ.end_ea)}"
+
+            result = _format_graph(nodes, edges, format)
+            result["function"] = idc.get_func_name(ea)
+            return result
+
+        elif action == "xref_graph":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err: return err
+
+            nodes, edges, visited = {}, [], set()
+            name = idc.get_name(ea) or hex(ea)
+            nodes[ea] = name
+
+            def traverse_xrefs(target_ea, d):
+                if d > depth or target_ea in visited: return
+                visited.add(target_ea)
+                # Traverse callers (xrefs TO this address)
+                if direction in ("up", "both"):
+                    for xref in idautils.XrefsTo(target_ea):
+                        if not xref.iscode: continue
+                        src_func = ida_funcs.get_func(xref.frm)
+                        src_ea = src_func.start_ea if src_func else xref.frm
+                        src_name = idc.get_name(src_ea) or hex(src_ea)
+                        if src_ea not in nodes: nodes[src_ea] = src_name
+                        edge = (src_ea, target_ea)
+                        if edge not in edges: edges.append(edge)
+                        traverse_xrefs(src_ea, d + 1)
+                # Traverse callees (xrefs FROM this address)
+                if direction in ("down", "both"):
+                    func = ida_funcs.get_func(target_ea)
+                    if func:
+                        for item in idautils.FuncItems(target_ea):
+                            for xref in idautils.XrefsFrom(item, 0):
+                                if not xref.iscode: continue
+                                dst_func = ida_funcs.get_func(xref.to)
+                                dst_ea = dst_func.start_ea if dst_func else xref.to
+                                if dst_ea == target_ea: continue
+                                dst_name = idc.get_name(dst_ea) or hex(dst_ea)
+                                if dst_ea not in nodes: nodes[dst_ea] = dst_name
+                                edge = (target_ea, dst_ea)
+                                if edge not in edges: edges.append(edge)
+                                traverse_xrefs(dst_ea, d + 1)
+
+            traverse_xrefs(ea, 0)
+            return _format_graph(nodes, edges, format)
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
+
+
+def _format_graph(nodes, edges, format):
+    """Format graph nodes/edges into the requested output format."""
+    if format == "mermaid":
+        mm = ["graph TD"]
+        for src, dst in edges:
+            u_name = nodes.get(src, hex(src))
+            v_name = nodes.get(dst, hex(dst))
+            # Sanitize names for mermaid (replace special chars)
+            u_id = u_name.replace(" ", "_").replace("-", "_")
+            v_id = v_name.replace(" ", "_").replace("-", "_")
+            mm.append(f'  {u_id}["{u_name}"] --> {v_id}["{v_name}"]')
+        return {"ok": True, "format": "mermaid", "graph": "\n".join(mm),
+                "node_count": len(nodes), "edge_count": len(edges)}
+
+    elif format == "dot":
+        dot = ["digraph G {", "  rankdir=TB;", '  node [shape=box, style=filled, fillcolor="#e8e8e8"];']
+        for ea, name in sorted(nodes.items()):
+            dot.append(f'  "{name}" [label="{name}\\n{hex(ea)}"];')
+        for src, dst in edges:
+            u_name = nodes.get(src, hex(src))
+            v_name = nodes.get(dst, hex(dst))
+            dot.append(f'  "{u_name}" -> "{v_name}";')
+        dot.append("}")
+        return {"ok": True, "format": "dot", "graph": "\n".join(dot),
+                "node_count": len(nodes), "edge_count": len(edges)}
+
+    else:  # json
+        node_lines = [f"{hex(ea)}  {name}" for ea, name in sorted(nodes.items())]
+        edge_lines = [f"{hex(src)} -> {hex(dst)}" for src, dst in edges]
+        return {"ok": True, "format": "json", "nodes": "\n".join(node_lines),
+                "edges": "\n".join(edge_lines),
+                "node_count": len(nodes), "edge_count": len(edges)}
 
 
 # ============================================================================
