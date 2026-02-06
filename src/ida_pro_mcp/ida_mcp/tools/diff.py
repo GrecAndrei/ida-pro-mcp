@@ -117,10 +117,10 @@ def diff(
             changes = []
             for i in range(min(len(b1), len(b2))):
                 if b1[i] != b2[i]:
-                    changes.append({"off": i, "v1": hex(b1[i]), "v2": hex(b2[i])})
+                    changes.append(f"+{i}  {hex(b1[i])} -> {hex(b2[i])}")
                     if len(changes) >= 50: break
             
-            return {"ok": True, "similarity": round(1.0 - (len(changes)/len(b1)), 3), "changes": changes}
+            return {"ok": True, "similarity": round(1.0 - (len(changes)/len(b1)), 3), "changes": "\n".join(changes)}
 
         elif action == "signatures":
             if not addr1: return make_error(MCPError.INVALID_ARGS, "addr1 (target function) required")
@@ -142,10 +142,11 @@ def diff(
                 
                 sim = difflib.SequenceMatcher(None, target_b, other_b).ratio()
                 if sim >= threshold:
-                    matches.append({"addr": hex(other_ea), "name": idc.get_func_name(other_ea), "sim": round(sim, 3)})
+                    matches.append(f"{hex(other_ea)}  sim={round(sim, 3)}  {idc.get_func_name(other_ea)}")
                 if len(matches) >= 20: break
             
-            return {"ok": True, "matches": sorted(matches, key=lambda x: x["sim"], reverse=True)}
+            matches.sort(reverse=True, key=lambda x: float(x.split("sim=")[1].split()[0]))
+            return {"ok": True, "matches": "\n".join(matches)}
 
         elif action == "export_binexport":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")

@@ -134,7 +134,7 @@ def structs(
                     else:
                         break # Stop at non-code pointer
                 
-                methods.append({"offset": curr - ea, "ptr": hex(ptr), "name": method_name})
+                methods.append(f"+{curr - ea}  {hex(ptr)}  {method_name}")
                 curr += ptr_size
                 if len(methods) > 200: break # Safety limit
             
@@ -148,10 +148,10 @@ def structs(
             udt = ida_typeinf.udt_type_data_t()
             til = ida_typeinf.get_idati()
             
-            for m in methods:
+            for i in range(len(methods)):
                 mem = ida_typeinf.udt_member_t()
-                mem.name = f"method_{m['offset'] // ptr_size}"
-                mem.offset = m['offset'] * 8
+                mem.name = f"method_{i}"
+                mem.offset = i * ptr_size * 8
                 
                 # Create function pointer type: void (*)(void)
                 # Ideally we'd use the actual prototype of the target function
@@ -169,7 +169,7 @@ def structs(
                 if ida_typeinf.set_numbered_type(til, ordinal, ida_typeinf.NTF_TYPE, vtable_name, tf):
                     # Apply it to the address
                     ida_typeinf.apply_tinfo(ea, tf, ida_typeinf.TINFO_DEFINITE)
-                    return {"ok": True, "vtable": vtable_name, "methods": len(methods), "size": len(methods) * ptr_size}
+                    return {"ok": True, "vtable": vtable_name, "methods": "\n".join(methods), "count": len(methods), "size": len(methods) * ptr_size}
             
             return make_error(MCPError.IDA_ERROR, "Failed to create VTable struct")
 
@@ -198,14 +198,10 @@ def structs(
                         # This is a pointer - might be a struct pointer
                         pointed_type = lvar.type().get_pointed_object()
                         if pointed_type and not pointed_type.is_scalar():
-                            struct_candidates.append({
-                                "var_name": lvar.name,
-                                "type": str(lvar.type()),
-                                "pointed_type": str(pointed_type)
-                            })
+                            struct_candidates.append(f"{lvar.name}  {str(lvar.type())}  -> {str(pointed_type)}")
                 
                 # Look for field accesses
-                accesses = []
+                access_lines = []
                 
                 class AccessFinder(ida_hexrays.ctree_visitor_t):
                     def __init__(self):
@@ -213,11 +209,9 @@ def structs(
                     
                     def visit_expr(self, e):
                         if e.op == ida_hexrays.cot_memptr or e.op == ida_hexrays.cot_memref:
-                            accesses.append({
-                                "ea": hex(e.ea) if e.ea != idaapi.BADADDR else None,
-                                "op": ida_hexrays.get_ctype_name(e.op),
-                                "offset": e.m if hasattr(e, 'm') else None
-                            })
+                            ea_str = hex(e.ea) if e.ea != idaapi.BADADDR else "?"
+                            offset = e.m if hasattr(e, 'm') else "?"
+                            access_lines.append(f"{ea_str}  {ida_hexrays.get_ctype_name(e.op)}  offset={offset}")
                         return 0
                 
                 finder = AccessFinder()
@@ -226,8 +220,8 @@ def structs(
                 return {
                     "ok": True,
                     "function": idc.get_func_name(ea) or hex(ea),
-                    "struct_candidates": struct_candidates,
-                    "field_accesses": accesses[:50]
+                    "struct_candidates": "\n".join(struct_candidates),
+                    "field_accesses": "\n".join(access_lines[:50])
                 }
                 
             except ida_hexrays.DecompilationFailure:
@@ -241,21 +235,18 @@ def structs(
             if error: return error
             
             # Analyze memory accesses from this point
-            accesses = []
+            access_lines = []
             
             # Get xrefs from this address
             for xref in idautils.XrefsFrom(ea):
                 size = idc.get_item_size(xref.to)
-                accesses.append({
-                    "target": hex(xref.to),
-                    "type": "code" if xref.type in [1, 17, 18, 19, 20, 21] else "data",
-                    "size": size
-                })
+                kind = "code" if xref.type in [1, 17, 18, 19, 20, 21] else "data"
+                access_lines.append(f"{hex(xref.to)}  {kind}  size={size}")
             
-            return {"ok": True, "addr": hex(ea), "accesses": accesses[:100]}
+            return {"ok": True, "addr": hex(ea), "accesses": "\n".join(access_lines[:100])}
         
         elif action == "list":
-            structs_list = []
+            struct_lines = []
             
             # Iterate through all local types
             til = ida_typeinf.get_idati()
@@ -270,15 +261,11 @@ def structs(
                             type_name = tinfo.get_type_name() or f"struct_{ordinal}"
                             if not query or query.lower() in type_name.lower():
                                 found += 1
-                                if found > offset and (count == 0 or len(structs_list) < count):
-                                    structs_list.append({
-                                        "name": type_name,
-                                        "ordinal": ordinal,
-                                        "size": tinfo.get_size(),
-                                        "is_union": tinfo.is_union()
-                                    })
+                                if found > offset and (count == 0 or len(struct_lines) < count):
+                                    kind = "union" if tinfo.is_union() else "struct"
+                                    struct_lines.append(f"{type_name}  {kind}  size={tinfo.get_size()}  ord={ordinal}")
             
-            return {"ok": True, "structs": structs_list, "total": found, "offset": offset, "count": len(structs_list)}
+            return {"ok": True, "structs": "\n".join(struct_lines), "total": found, "offset": offset, "count": len(struct_lines)}
         
         elif action == "create":
             if not decl:

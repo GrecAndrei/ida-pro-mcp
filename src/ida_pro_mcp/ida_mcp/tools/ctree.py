@@ -107,7 +107,7 @@ def ctree(
                     if e.op == ida_hexrays.cot_call:
                         self.count += 1
                         text = ida_lines.tag_remove(e.print1(None))
-                        flow.append({"type": "call", "ea": hex(e.ea), "text": text})
+                        flow.append(f"{hex(e.ea)}  call  {text}")
                     return 0
                 def visit_insn(self, i):
                     if self.count > 500: return 1
@@ -118,19 +118,19 @@ def ctree(
                             if i.cif.expr: cond = ida_lines.tag_remove(i.cif.expr.print1(None))
                         except Exception:
                             pass
-                        flow.append({"type": "if", "ea": hex(i.ea), "cond": cond})
+                        flow.append(f"{hex(i.ea)}  if  {cond}")
                     elif i.op == ida_hexrays.cit_return:
-                        flow.append({"type": "return", "ea": hex(i.ea)})
+                        flow.append(f"{hex(i.ea)}  return")
                     elif i.op in [ida_hexrays.cit_while, ida_hexrays.cit_for, ida_hexrays.cit_do]:
-                        flow.append({"type": "loop", "ea": hex(i.ea)})
+                        flow.append(f"{hex(i.ea)}  loop")
                     return 0
 
             visitor = LogicVisitor()
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "logic_flow": flow, "count": len(flow)}
+            return {"ok": True, "function": func_name, "logic_flow": "\n".join(flow), "count": len(flow)}
 
         if action == "get":
-            nodes = []
+            node_lines = []
             class NodeVisitor(ida_hexrays.ctree_visitor_t):
                 def __init__(self):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
@@ -138,20 +138,20 @@ def ctree(
                 def visit_expr(self, e):
                     if self.count > 200: return 1
                     self.count += 1
-                    nodes.append({"op": ida_hexrays.get_ctype_name(e.op), "ea":  hex(e.ea), "text": ida_lines.tag_remove(e.print1(None))})
+                    node_lines.append(f"{hex(e.ea)}  {ida_hexrays.get_ctype_name(e.op)}  {ida_lines.tag_remove(e.print1(None))}")
                     return 0
                 def visit_insn(self, i):
                     if self.count > 200: return 1
                     self.count += 1
-                    nodes.append({"op": ida_hexrays.get_ctype_name(i.op), "ea":  hex(i.ea)})
+                    node_lines.append(f"{hex(i.ea)}  {ida_hexrays.get_ctype_name(i.op)}")
                     return 0
 
             visitor = NodeVisitor()
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "nodes": nodes, "total":  len(nodes)}
+            return {"ok": True, "function": func_name, "nodes": "\n".join(node_lines), "total": len(node_lines)}
 
         elif action == "find_calls":
-            calls = []
+            call_lines = []
             class CallVisitor(ida_hexrays.ctree_visitor_t):
                 def __init__(self):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
@@ -170,16 +170,17 @@ def ctree(
                             pass
                         text = ida_lines.tag_remove(e.print1(None))
                         if match_filter(text) or match_filter(callee) or any(match_filter(a) for a in args):
-                            calls.append({"addr": hex(e.ea), "callee": callee, "args": args, "text": text})
+                            args_str = ", ".join(args) if args else ""
+                            call_lines.append(f"{hex(e.ea)}  {callee}({args_str})")
                     return 0
 
             visitor = CallVisitor()
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "calls": calls, "count": len(calls)}
+            return {"ok": True, "function": func_name, "calls": "\n".join(call_lines), "count": len(call_lines)}
 
         elif action == "find_vars":
-            vars = [{"name": v.name, "type": str(v.type()), "is_arg": v.is_arg_var} for v in cfunc.lvars]
-            uses = []
+            var_lines = [f"{v.name}  {str(v.type())}  {'arg' if v.is_arg_var else 'local'}" for v in cfunc.lvars]
+            use_lines = []
             class VarUseVisitor(ida_hexrays.ctree_visitor_t):
                 def __init__(self):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
@@ -190,16 +191,16 @@ def ctree(
                             name = v.name
                             text = ida_lines.tag_remove(e.print1(None))
                             if match_filter(name) or match_filter(text):
-                                uses.append({"addr": hex(e.ea), "name": name, "text": text})
+                                use_lines.append(f"{hex(e.ea)}  {name}  {text}")
                         except Exception:
                             pass
                     return 0
             visitor = VarUseVisitor()
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "variables": vars, "uses": uses, "count": len(uses)}
+            return {"ok": True, "function": func_name, "variables": "\n".join(var_lines), "uses": "\n".join(use_lines), "count": len(use_lines)}
 
         elif action == "find_conditions":
-            conds = []
+            cond_lines = []
             class CondVisitor(ida_hexrays.ctree_visitor_t):
                 def __init__(self):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
@@ -213,15 +214,15 @@ def ctree(
                         elif i.op == ida_hexrays.cit_for and i.cfor.cond:
                             expr_text = ida_lines.tag_remove(i.cfor.cond.print1(None))
                         if match_filter(expr_text):
-                            conds.append({"type": ida_hexrays.get_ctype_name(i.op), "addr": hex(i.ea), "expr": expr_text})
+                            cond_lines.append(f"{hex(i.ea)}  {ida_hexrays.get_ctype_name(i.op)}  {expr_text}")
                     return 0
 
             visitor = CondVisitor()
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "logic_points": conds, "count": len(conds)}
+            return {"ok": True, "function": func_name, "logic_points": "\n".join(cond_lines), "count": len(cond_lines)}
 
         elif action == "find_strings":
-            strings = []
+            str_lines = []
             class StringVisitor(ida_hexrays.ctree_visitor_t):
                 def __init__(self):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
@@ -233,7 +234,7 @@ def ctree(
                         except Exception:
                             pass
                         if match_filter(text):
-                            strings.append({"addr": hex(e.ea), "text": text})
+                            str_lines.append(f"{hex(e.ea)}  {text}")
                     elif e.op == ida_hexrays.cot_obj:
                         obj_ea = getattr(e, "obj_ea", idaapi.BADADDR)
                         if obj_ea != idaapi.BADADDR:
@@ -241,14 +242,14 @@ def ctree(
                             if s:
                                 text = s.decode("utf-8", "replace")
                                 if match_filter(text):
-                                    strings.append({"addr": hex(obj_ea), "text": text, "xref": hex(e.ea)})
+                                    str_lines.append(f"{hex(obj_ea)}  xref@{hex(e.ea)}  {text}")
                     return 0
             visitor = StringVisitor()
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "strings": strings, "count": len(strings)}
+            return {"ok": True, "function": func_name, "strings": "\n".join(str_lines), "count": len(str_lines)}
 
         elif action == "traverse":
-            nodes = []
+            node_lines = []
             class TraverseVisitor(ida_hexrays.ctree_visitor_t):
                 def __init__(self, max_depth):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
@@ -262,11 +263,12 @@ def ctree(
                     except Exception:
                         pass
                     if match_filter(text):
-                        nodes.append({"depth": self.level, "op": ida_hexrays.get_ctype_name(e.op), "ea": hex(e.ea), "text": text})
+                        indent = "  " * self.level
+                        node_lines.append(f"{indent}{hex(e.ea)}  {ida_hexrays.get_ctype_name(e.op)}  {text}")
                     return 0
             visitor = TraverseVisitor(depth)
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "nodes": nodes, "count": len(nodes)}
+            return {"ok": True, "function": func_name, "nodes": "\n".join(node_lines), "count": len(node_lines)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
