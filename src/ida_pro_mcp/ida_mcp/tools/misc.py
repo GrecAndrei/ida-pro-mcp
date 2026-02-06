@@ -1,25 +1,26 @@
-from typing import Annotated, Optional, Literal, Union, Any
-import sys
-import io
 import traceback
 
 try:
-    from rpc import tool, unsafe
-    from sync import idawrite
-    from error_handling import handle_error
+    from ._common import *
 except ImportError:
-    from ..rpc import tool, unsafe
-    from ..sync import idawrite
-    from ..error_handling import handle_error
+    from _common import *  # type: ignore[import-not-found]
 
 @tool
 def misc(
-    action: Literal["python", "idc", "load_sig"] = "python",
+    action: Literal["python", "idc", "load_sig", "cache_stats"] = "python",
     expr: Optional[str] = None,
     code: Optional[str] = None,
     name: Optional[str] = None
 ) -> Any:
-    """Miscellaneous utility tools for IDA."""
+    """
+    Miscellaneous utility tools for IDA.
+
+    Actions:
+    - python: Execute Python code in IDA context (use 'expr' or 'code')
+    - idc: Execute IDC script (use 'expr' or 'code')
+    - load_sig: Load a FLIRT signature by name
+    - cache_stats: Show read-only tool cache statistics
+    """
     if action == "python":
         # Support both 'expr' and 'code' for backward compatibility
         script = expr if expr else code
@@ -48,6 +49,16 @@ def misc(
             return {"ok": True, "name": name, "note": "Signature application planned"}
         except Exception:
             return {"error": True, "message": traceback.format_exc()}
+    if action == "cache_stats":
+        try:
+            from ida_mcp.cache import TOOL_CACHE
+            return {"ok": True, **TOOL_CACHE.stats()}
+        except ImportError:
+            try:
+                from cache import TOOL_CACHE
+                return {"ok": True, **TOOL_CACHE.stats()}
+            except ImportError:
+                return {"ok": True, "message": "Cache not available"}
     return {"error": True, "message": f"Unknown action: {action}"}
 
 @idawrite

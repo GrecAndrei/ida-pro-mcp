@@ -1,54 +1,8 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
-
-# Infrastructure discovery
 try:
-    # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 
 # ============================================================================
@@ -172,9 +126,9 @@ def coverage(
                             if line.startswith("DRCOV"): raise ValueError("Is binary")
                             try:
                                 addresses.add(parse_address(line))
-                            except: pass
+                            except Exception: pass
                 if addresses: return addresses
-            except: pass
+            except Exception: pass
             
             # 2. Try drcov
             result, _ = parse_drcov(filepath)
@@ -223,7 +177,7 @@ def coverage(
                             # Strict: entry point must be executed
                             if func.start_ea in cov_set:
                                 executed.append(addr_str)
-                except: pass
+                except Exception: pass
             
             return {"ok": True, "path": path, "executed": executed, "count": len(executed)}
 
@@ -259,7 +213,7 @@ def coverage(
                         try:
                             addr = int(line, 16) if line.startswith('0x') else int(line)
                             addresses.append(addr)
-                        except:
+                        except Exception:
                             pass
             
             return {
@@ -283,7 +237,7 @@ def coverage(
                         if line and not line.startswith('#'):
                             try:
                                 addresses.add(parse_address(line))
-                            except:
+                            except Exception:
                                 pass
             
             if not addresses:
@@ -335,7 +289,7 @@ def coverage(
                         if line:
                             try:
                                 covered_addrs.add(parse_address(line))
-                            except:
+                            except Exception:
                                 pass
             
             # Analyze function blocks
@@ -364,7 +318,7 @@ def coverage(
                     "blocks": blocks[:20],
                     "note": "No coverage data loaded" if not covered_addrs else ""
                 }
-            except:
+            except Exception:
                 return make_error(MCPError.IDA_ERROR, "Could not analyze function")
         
         elif action == "uncovered":
@@ -378,7 +332,7 @@ def coverage(
                             func = ida_funcs.get_func(ea)
                             if func:
                                 covered_funcs.add(func.start_ea)
-                        except:
+                        except Exception:
                             pass
             
             # Find uncovered functions

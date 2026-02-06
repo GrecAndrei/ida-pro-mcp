@@ -402,6 +402,8 @@ class McpServer:
 
     def _mcp_tools_call(self, name: str, arguments: dict | None = None, _meta: dict | None = None) -> dict:
         """MCP tools/call method"""
+        t0 = time.time()
+
         # Wrap tool call in JSON-RPC request
         tool_response = self.tools.dispatch({
             "jsonrpc": "2.0",
@@ -410,6 +412,8 @@ class McpServer:
             "id": None,
         })
         assert tool_response is not None, "Only notification requests return None"
+
+        elapsed_ms = round((time.time() - t0) * 1000)
 
         # Check for error response
         if "error" in tool_response:
@@ -443,8 +447,12 @@ class McpServer:
             from ..truncation import truncate_response
             if isinstance(result, dict):
                 result = truncate_response(result)
-        except:
+        except Exception:
             pass
+
+        # Inject execution timing for LLM awareness
+        if isinstance(result, dict):
+            result["_elapsed_ms"] = elapsed_ms
 
         return {
             "content": [{"type": "text", "text": json.dumps(result, indent=2)}],

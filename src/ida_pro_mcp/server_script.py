@@ -9,7 +9,8 @@ import difflib
 from typing import get_args, get_origin, Literal, Annotated
 
 # HEARTBEAT
-ALIVE_FILE = os.path.join(os.environ.get("TEMP", "C:\\temp"), "ida_mcp_heartbeat.txt")
+import tempfile
+ALIVE_FILE = os.path.join(os.environ.get("TEMP", tempfile.gettempdir()), "ida_mcp_heartbeat.txt")
 with open(ALIVE_FILE, "w") as f: f.write(str(time.time()))
 
 def log_ev(msg):

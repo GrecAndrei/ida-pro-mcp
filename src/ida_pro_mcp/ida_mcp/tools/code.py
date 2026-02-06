@@ -1,54 +1,8 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
-import os
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
-
-# Infrastructure discovery
 try:
-    # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
-    )
-    from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
-    )
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 
 
 # ============================================================================
@@ -61,7 +15,7 @@ def code(
     action: Annotated[Literal[
         "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
         "callees", "callers", "blocks", "analyze", "callgraph", "export",
-        "find_paths", "strings_in_func"
+        "find_paths", "strings_in_func", "diff_functions"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,  # Alias for compatibility
@@ -133,6 +87,11 @@ def code(
         Params: addrs (REQUIRED)
         Returns: [{addr, strings: "addr  string_value\\n...", count}]
         Example: code(action="strings_in_func", addrs="main")
+
+    diff_functions - Compare two functions' decompilation side by side
+        Params: addrs (REQUIRED - exactly 2 addresses)
+        Returns: {func_a, func_b, diff: "unified diff text", similarity: float}
+        Example: code(action="diff_functions", addrs=["0x401000", "0x402000"])
     """
     try:
         # Support both addr (singular) and addrs (plural) for compatibility
@@ -297,13 +256,13 @@ def code(
                         info["pseudocode"] = str(cfunc) if cfunc else None
                     else:
                         info["pseudocode"] = "Decompiler not available"
-                except:
+                except Exception:
                     info["pseudocode"] = None
                 
                 # Prototype
                 try:
                     info["prototype"] = get_prototype(func)
-                except:
+                except Exception:
                     info["prototype"] = None
                 
                 # Callees
@@ -316,7 +275,7 @@ def code(
                                 if tf and tf.start_ea != func.start_ea:
                                     callees.add((hex_ea(tf.start_ea), ida_funcs.get_func_name(tf.start_ea)))
                     info["callees"] = "\n".join(f"{a}  {n}" for a, n in sorted(list(callees))[:50])
-                except:
+                except Exception:
                     info["callees"] = ""
                 
                 # Callers
@@ -328,7 +287,7 @@ def code(
                             if cf:
                                 callers.add((hex_ea(cf.start_ea), ida_funcs.get_func_name(cf.start_ea)))
                     info["callers"] = "\n".join(f"{a}  {n}" for a, n in sorted(list(callers))[:50])
-                except:
+                except Exception:
                     info["callers"] = ""
                 
                 # Strings
@@ -341,13 +300,13 @@ def code(
                                 if s:
                                     strings.append(f"{hex_ea(xref.to)}  {s.decode('utf-8', errors='replace')}")
                     info["strings"] = "\n".join(strings[:25])
-                except:
+                except Exception:
                     info["strings"] = ""
                 
                 # Stack vars
                 try:
                     info["stack_vars"] = get_stack_frame_variables_internal(func.start_ea, False)
-                except:
+                except Exception:
                     info["stack_vars"] = []
                 
                 results.append(info)
@@ -511,6 +470,46 @@ def code(
                             if s:
                                 str_lines.append(f"{hex(xref.to)}  {s.decode('utf-8', errors='replace')}")
                 results.append({"ok": True, "addr": addr, "strings": "\n".join(str_lines), "count": len(str_lines)})
+
+            elif action == "diff_functions":
+                # Compare two functions' decompilation
+                addr_list = normalize_list_input(addrs)
+                if len(addr_list) != 2:
+                    return make_error(MCPError.INVALID_ARGS, "diff_functions requires exactly 2 addresses",
+                                    hint='Use addrs=["0x401000", "0x402000"]')
+                ea_a, err = validate_addr(addr_list[0], require_func=True)
+                if err: return err
+                ea_b, err = validate_addr(addr_list[1], require_func=True)
+                if err: return err
+
+                import difflib
+                try:
+                    cfunc_a = ida_hexrays.decompile(ea_a)
+                    cfunc_b = ida_hexrays.decompile(ea_b)
+                except Exception as e:
+                    return make_error(MCPError.IDA_ERROR, f"Decompilation failed: {e}")
+
+                code_a = str(cfunc_a) if cfunc_a else ""
+                code_b = str(cfunc_b) if cfunc_b else ""
+                name_a = idc.get_func_name(ea_a) or hex(ea_a)
+                name_b = idc.get_func_name(ea_b) or hex(ea_b)
+
+                diff = difflib.unified_diff(
+                    code_a.splitlines(), code_b.splitlines(),
+                    fromfile=name_a, tofile=name_b, lineterm=""
+                )
+                diff_text = "\n".join(diff)
+
+                # Compute similarity ratio
+                ratio = difflib.SequenceMatcher(None, code_a, code_b).ratio()
+
+                return {
+                    "ok": True,
+                    "func_a": {"addr": hex(ea_a), "name": name_a, "lines": len(code_a.splitlines())},
+                    "func_b": {"addr": hex(ea_b), "name": name_b, "lines": len(code_b.splitlines())},
+                    "diff": diff_text if diff_text else "(identical)",
+                    "similarity": round(ratio, 4),
+                }
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
