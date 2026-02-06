@@ -153,6 +153,13 @@ def calc(
 
         def eval_expr(expression):
             import re
+            # Safety: limit expression length
+            if len(expression) > 1024:
+                raise ValueError("Expression too long (max 1024 chars)")
+            # Safety: reject dangerous patterns
+            _forbidden = re.compile(r'__\w+__|import\s*\(|exec\s*\(|eval\s*\(|compile\s*\(|open\s*\(|getattr\s*\(|setattr\s*\(')
+            if _forbidden.search(expression):
+                raise ValueError("Expression contains forbidden constructs")
             names = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', expression)
             namespace = {
                 "hex": hex, "int": int, "abs": abs,
@@ -176,7 +183,7 @@ def calc(
                     ea = idc.get_name_ea_simple(name)
                     if ea != idaapi.BADADDR:
                         namespace[name] = ea
-            return eval(expression, {"__builtins__": {}}, namespace)
+            return eval(expression, {"__builtins__": {}}, namespace)  # noqa: S307
 
         if action == "eval":
             if not expr:
@@ -229,7 +236,7 @@ def calc(
                         ascii_val += chr(b)
                     else:
                         ascii_val += "."
-            except:
+            except Exception:
                 ascii_val = "n/a"
                 
             return {

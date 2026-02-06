@@ -157,7 +157,7 @@ def debug(
                      try:
                          val = rv.pyval(reg_info.dtype)
                          regs[name] = hex(val) if isinstance(val, int) else str(val)
-                     except: regs[name] = "?"
+                     except Exception: regs[name] = "?"
             return {"ok": True, "registers": regs, "tid": target_tid}
 
         elif action == "set_reg":
@@ -220,7 +220,7 @@ def debug(
             ea, err = validate_addr(addr)
             if err: return err
             try: bytes_data = bytes.fromhex(data.replace(" ", ""))
-            except: return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
+            except Exception: return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
             if ida_dbg.write_dbg_memory(ea, bytes_data): return {"ok": True, "addr": hex(ea), "size": len(bytes_data)}
             return make_error(MCPError.IDA_ERROR, "Failed to write memory")
         

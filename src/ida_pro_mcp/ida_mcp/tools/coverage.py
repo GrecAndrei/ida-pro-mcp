@@ -126,9 +126,9 @@ def coverage(
                             if line.startswith("DRCOV"): raise ValueError("Is binary")
                             try:
                                 addresses.add(parse_address(line))
-                            except: pass
+                            except Exception: pass
                 if addresses: return addresses
-            except: pass
+            except Exception: pass
             
             # 2. Try drcov
             result, _ = parse_drcov(filepath)
@@ -177,7 +177,7 @@ def coverage(
                             # Strict: entry point must be executed
                             if func.start_ea in cov_set:
                                 executed.append(addr_str)
-                except: pass
+                except Exception: pass
             
             return {"ok": True, "path": path, "executed": executed, "count": len(executed)}
 
@@ -213,7 +213,7 @@ def coverage(
                         try:
                             addr = int(line, 16) if line.startswith('0x') else int(line)
                             addresses.append(addr)
-                        except:
+                        except Exception:
                             pass
             
             return {
@@ -237,7 +237,7 @@ def coverage(
                         if line and not line.startswith('#'):
                             try:
                                 addresses.add(parse_address(line))
-                            except:
+                            except Exception:
                                 pass
             
             if not addresses:
@@ -289,7 +289,7 @@ def coverage(
                         if line:
                             try:
                                 covered_addrs.add(parse_address(line))
-                            except:
+                            except Exception:
                                 pass
             
             # Analyze function blocks
@@ -318,7 +318,7 @@ def coverage(
                     "blocks": blocks[:20],
                     "note": "No coverage data loaded" if not covered_addrs else ""
                 }
-            except:
+            except Exception:
                 return make_error(MCPError.IDA_ERROR, "Could not analyze function")
         
         elif action == "uncovered":
@@ -332,7 +332,7 @@ def coverage(
                             func = ida_funcs.get_func(ea)
                             if func:
                                 covered_funcs.add(func.start_ea)
-                        except:
+                        except Exception:
                             pass
             
             # Find uncovered functions

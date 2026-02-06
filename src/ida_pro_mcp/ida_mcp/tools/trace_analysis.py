@@ -41,7 +41,7 @@ def trace_analysis(
                 with open(p, 'r') as f:
                     for line in f:
                         try: addrs.add(int(line.strip(), 0))
-                        except: pass
+                        except Exception: pass
                 return addrs
             return set()
 

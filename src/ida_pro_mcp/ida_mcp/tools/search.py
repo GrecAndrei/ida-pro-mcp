@@ -213,14 +213,14 @@ def search(
                                     line += f"  xrefs={xref_count}"
                                 if maybe_add(line):
                                     break
-                    except:
+                    except Exception:
                         pass
             return _search_result(pattern=pattern)
         
         elif action == "immediate":
             try: 
                 value = int(pattern, 0)
-            except: 
+            except Exception:
                 return make_error(MCPError.INVALID_ARGS, "Invalid immediate value")
 
             import ida_ua
@@ -590,7 +590,7 @@ def search(
                         results_by_type["code_refs"] = "\n".join(code_lines)
                     if data_lines:
                         results_by_type["data_refs"] = "\n".join(data_lines)
-                except:
+                except Exception:
                     pass
             
             # 2. Search names (functions, globals)
@@ -619,7 +619,7 @@ def search(
                             if pattern_check in s.lower():
                                 xref_count = len(list(idautils.XrefsTo(sc.ea)))
                                 string_lines.append(f"{hex(sc.ea)}  xrefs={xref_count}  {s[:200]}")
-                    except:
+                    except Exception:
                         pass
             results_by_type["strings"] = "\n".join(string_lines)
             

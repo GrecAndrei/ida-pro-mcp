@@ -96,13 +96,13 @@ def parse_address_safe(addr_str: Union[str, int]) -> Tuple[Optional[int], Option
                 ea = idc.get_name_ea_simple(addr_str)
                 if ea != idc.BADADDR:
                     return ea, None
-            except:
+            except Exception:
                 pass
 
             # Try hex without prefix if it looks like hex
             try:
                 return int(addr_str, 16), None
-            except:
+            except Exception:
                 pass
 
         return None, make_error(MCPError.ADDRESS_INVALID, f"Invalid address format: {addr_str}", "Use hex format (0x401000) or a valid symbol name")
