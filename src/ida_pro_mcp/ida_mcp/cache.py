@@ -37,7 +37,7 @@ class ToolResultCache:
         """Create a stable cache key from tool name and arguments."""
         # Sort keys for deterministic hashing
         canonical = json.dumps({"tool": tool_name, "args": kwargs}, sort_keys=True, default=str)
-        return hashlib.md5(canonical.encode()).hexdigest()
+        return hashlib.sha256(canonical.encode()).hexdigest()
 
     def get(self, tool_name: str, kwargs: dict) -> Optional[Any]:
         """Retrieve a cached result, or None if not found/expired."""

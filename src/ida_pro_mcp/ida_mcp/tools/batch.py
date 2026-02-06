@@ -46,6 +46,9 @@ def batch(
     tools_registry = {}
 
     def get_tool(name):
+        # Validate tool name to prevent arbitrary module loading
+        if not isinstance(name, str) or not name.replace("_", "").isalnum():
+            return None
         if name not in tools_registry:
             try:
                 mod = importlib.import_module(f".{name}", package=__package__)
