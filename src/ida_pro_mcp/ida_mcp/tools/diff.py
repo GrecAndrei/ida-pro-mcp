@@ -63,7 +63,7 @@ def diff(
                 s2, e2 = addr2.split(':')
                 ea1_s, ea1_e = parse_address(s1), parse_address(e1)
                 ea2_s, ea2_e = parse_address(s2), parse_address(e2)
-            except: return make_error(MCPError.INVALID_ARGS, "Invalid range format (start:end)")
+            except Exception: return make_error(MCPError.INVALID_ARGS, "Invalid range format (start:end)")
             
             b1, b2 = ida_bytes.get_bytes(ea1_s, ea1_e - ea1_s), ida_bytes.get_bytes(ea2_s, ea2_e - ea2_s)
             if not b1 or not b2: return make_error(MCPError.IDA_ERROR, "Could not read bytes")

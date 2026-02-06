@@ -692,7 +692,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 else:
                     json.dump(config, f, indent=2)
             os.replace(temp_path, config_path)
-        except:
+        except Exception:
             os.unlink(temp_path)
             raise
 

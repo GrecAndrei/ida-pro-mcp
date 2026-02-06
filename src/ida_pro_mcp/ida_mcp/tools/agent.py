@@ -91,7 +91,7 @@ def agent(
                 try:
                     with open(os.path.join(os.environ.get("TEMP", "C:\\temp"), "ida_mcp_emergency.log"), "a") as f:
                         f.write(f"[{time.ctime()}] AGENT: {msg}\n")
-                except: pass
+                except Exception: pass
 
             # Aggregate multi-modal analysis
             debug_log_agent(f"Starting code analysis for {addr}...")
@@ -301,7 +301,7 @@ def agent(
                             result["pseudocode_preview"] = '\n'.join(lines[:15])
                             if len(lines) > 15:
                                 result["pseudocode_preview"] += f"\n... ({len(lines) - 15} more lines)"
-                    except:
+                    except Exception:
                         pass
                 
                 # Quick xrefs
@@ -412,7 +412,7 @@ def agent(
                             if '(' in line and ')' in line:
                                 context["signature"] = line.strip()
                                 break
-                except:
+                except Exception:
                     pass
             
             return context

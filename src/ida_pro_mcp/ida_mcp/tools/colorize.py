@@ -49,7 +49,7 @@ def colorize(
                 if len(c_str) == 6:
                     r, g, b = int(c_str[0:2], 16), int(c_str[2:4], 16), int(c_str[4:6], 16)
                     return (b << 16) | (g << 8) | r
-            except: pass
+            except Exception: pass
             return COLORS["yellow"]
 
         if action == "set_func":

@@ -247,9 +247,9 @@ def types(
                                   tif = cfunc.type
                                   method = "hexrays"
                                   confidence = "high"
-                          except:
+                          except Exception:
                               pass
-             except:
+             except Exception:
                  pass
              
              if method == "none":
@@ -307,7 +307,7 @@ def types(
                         val_str = hex(val)
                     else:
                         val_str = "..."
-                except:
+                except Exception:
                     pass
                 
                 members.append({

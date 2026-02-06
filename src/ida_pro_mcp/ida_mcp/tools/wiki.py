@@ -11,7 +11,7 @@ def protocol_resource() -> str:
     try:
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
-    except:
+    except Exception:
         return "CRITICAL: Name everything. Define structs. Debug is truth. Use wiki(topic='workflows/ForensicProtocol') for details."
 
 @tool

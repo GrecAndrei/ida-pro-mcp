@@ -164,7 +164,7 @@ def data(
                             if total > offset and (count == 0 or len(str_lines) < count):
                                 xref_count = len(list(idautils.XrefsTo(sc.ea)))
                                 str_lines.append(f"{hex_ea(sc.ea)}  xrefs={xref_count}  {s[:500]}")
-                    except:
+                    except Exception:
                         pass
             
             return {"ok": True, "strings": "\n".join(str_lines), "total": total, "offset": offset, "count": len(str_lines)}

@@ -210,7 +210,7 @@ def bulk(
                                         success += 1
                                         break
                             member_offset += 1
-                        except:
+                        except Exception:
                             break
                     
                     if not renamed:
