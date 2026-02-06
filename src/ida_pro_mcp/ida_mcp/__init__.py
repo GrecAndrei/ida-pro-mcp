@@ -44,6 +44,9 @@ from . import utils
 # ============================================================================
 from . import tools
 
+# Prompts (LLM workflow guides)
+from . import prompts
+
 # Additional consolidated tools (separate files for organization)
 # from . import api_enums      # enum tool (list, info, create, delete, add/del_member, apply, search)
 # from . import api_bookmarks  # bookmark tool (list, set, delete, jump)
@@ -54,7 +57,7 @@ from . import tools
 
 # Re-export key components for external use
 from .sync import idaread, idawrite, IDAError, IDASyncError
-from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource
+from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource, prompt
 from .mcp_http import IdaMcpHttpRequestHandler
 
 __all__ = [
@@ -64,6 +67,8 @@ __all__ = [
     "utils",
     # Modular API
     "tools",
+    # Prompts
+    "prompts",
     # Re-exported components
     "idaread",
     "idawrite",
@@ -74,5 +79,6 @@ __all__ = [
     "tool",
     "unsafe",
     "resource",
+    "prompt",
     "IdaMcpHttpRequestHandler",
 ]

@@ -23,6 +23,10 @@ def resource(uri):
     return MCP_SERVER.resource(uri)
 
 
+def prompt(func):
+    return MCP_SERVER.prompt(func)
+
+
 def unsafe(func):
     MCP_UNSAFE.add(func.__name__)
     return func
@@ -38,4 +42,5 @@ __all__ = [
     "tool",
     "unsafe",
     "resource",
+    "prompt",
 ]
