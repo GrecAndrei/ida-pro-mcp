@@ -1,16 +1,7 @@
-from typing import Annotated, Optional, Literal, Union, Any
-import os
-import sys
-
-# Infrastructure discovery
 try:
-    from ida_mcp.rpc import tool, resource
-    from ida_mcp.error_handling import MCPError, make_error, handle_error, validate_path_safe
-except (ImportError, ValueError):
-    from rpc import tool, resource
-    from error_handling import MCPError, make_error, handle_error, validate_path_safe
-
-@resource("mcp://protocol/forensic-re")
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
 def protocol_resource() -> str:
     """The Master Forensic RE Protocol - Rules of Engagement for AI Agents."""
     _script_dir = os.path.dirname(os.path.abspath(__file__))
