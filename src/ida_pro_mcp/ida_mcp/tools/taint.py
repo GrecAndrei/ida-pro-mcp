@@ -96,7 +96,7 @@ def taint(
                             v = cfunc.lvars[e.v.idx]
                             if v.name == arg_name:
                                 text = ida_lines.tag_remove(e.print1(None))
-                                uses.append({"addr": hex(e.ea), "text": text})
+                                uses.append(f"{hex(e.ea)}  {text}")
                         except Exception:
                             pass
                     return 0
@@ -116,7 +116,7 @@ def taint(
                         if name:
                             for cat, patterns in DANGEROUS_SINKS.items():
                                 if any(p.lower() in name.lower() for p in patterns):
-                                    sinks.append({"name": name, "addr": hex(xref.to), "site": hex(item), "category": cat})
+                                    sinks.append(f"{hex(item)}  {cat}  {name}  target={hex(xref.to)}")
                                     if len(sinks) >= max_results:
                                         return sinks
             return sinks
@@ -137,12 +137,12 @@ def taint(
 
                 target = args[arg_num]
                 uses = collect_arg_uses(cfunc, target.name)[:max_hits]
-                lines = []
+                line_matches = []
                 try:
                     for idx, ln in enumerate(str(cfunc).splitlines(), 1):
                         if target.name in ln:
-                            lines.append({"line": idx, "text": ln.strip()})
-                            if len(lines) >= max_hits:
+                            line_matches.append(f"L{idx}  {ln.strip()}")
+                            if len(line_matches) >= max_hits:
                                 break
                 except Exception:
                     pass
@@ -150,8 +150,8 @@ def taint(
                     "ok": True,
                     "function": idc.get_func_name(ea),
                     "arg": {"name": target.name, "type": str(target.type())},
-                    "uses": uses,
-                    "lines": lines,
+                    "uses": "\n".join(uses),
+                    "lines": "\n".join(line_matches),
                 }
             except Exception:
                 return make_error(MCPError.IDA_ERROR, "Decompiler required for arg usage")
@@ -179,7 +179,7 @@ def taint(
                             if name:
                                 for cat, patterns in DANGEROUS_SINKS.items():
                                     if any(p.lower() in name.lower() for p in patterns):
-                                        sinks.append({"name": name, "addr": hex(xref.to), "site": hex(item), "category": cat, "depth": curr_depth})
+                                        sinks.append(f"{hex(item)}  d={curr_depth}  {cat}  {name}")
                                         if len(sinks) >= max_hits:
                                             break
                             if xref.to not in visited:
@@ -190,25 +190,23 @@ def taint(
                     if len(sinks) >= max_hits:
                         break
 
-            return {"ok": True, "start": hex(ea), "sinks": sinks, "count": len(sinks)}
+            return {"ok": True, "start": hex(ea), "sinks": "\n".join(sinks), "count": len(sinks)}
 
         elif action == "trace_return":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
 
-            results = []
+            result_lines = []
             for xref in idautils.XrefsTo(ea):
                 if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                     next_ea = idc.next_head(xref.frm)
-                    results.append({
-                        "call_site": hex(xref.frm),
-                        "caller": idc.get_func_name(xref.frm),
-                        "next_insn": ida_lines.tag_remove(idc.generate_disasm_line(next_ea, 0)) if next_ea != idaapi.BADADDR else None
-                    })
-                    if len(results) >= max_hits:
+                    next_insn = ida_lines.tag_remove(idc.generate_disasm_line(next_ea, 0)) if next_ea != idaapi.BADADDR else ""
+                    caller = idc.get_func_name(xref.frm)
+                    result_lines.append(f"{hex(xref.frm)}  {caller}  next:{next_insn}")
+                    if len(result_lines) >= max_hits:
                         break
-            return {"ok": True, "function": idc.get_func_name(ea), "usages": results}
+            return {"ok": True, "function": idc.get_func_name(ea), "usages": "\n".join(result_lines)}
 
         elif action == "data_flow":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -222,27 +220,27 @@ def taint(
                 proto = None
 
             func = ida_funcs.get_func(ea)
-            callees = []
+            callee_lines = []
             if func:
                 for item in idautils.FuncItems(func.start_ea):
                     for xref in idautils.XrefsFrom(item, 0):
                         if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                             name = idc.get_name(xref.to)
                             if name:
-                                callees.append({"name": name, "addr": hex(xref.to), "site": hex(item)})
-                                if len(callees) >= max_hits:
+                                callee_lines.append(f"{hex(item)}  {name}  target={hex(xref.to)}")
+                                if len(callee_lines) >= max_hits:
                                     break
-                    if len(callees) >= max_hits:
+                    if len(callee_lines) >= max_hits:
                         break
 
-            args = []
+            arg_lines = []
             if ida_hexrays.init_hexrays_plugin():
                 try:
                     cfunc = ida_hexrays.decompile(ea)
                     if cfunc:
-                        args = [{"name": v.name, "type": str(v.type())} for v in cfunc.lvars if v.is_arg_var]
+                        arg_lines = [f"{v.name}  {str(v.type())}" for v in cfunc.lvars if v.is_arg_var]
                 except Exception:
-                    args = []
+                    arg_lines = []
 
             sinks = find_sinks_in_function(ea, max_hits)
 
@@ -250,9 +248,9 @@ def taint(
                 "ok": True,
                 "function": idc.get_func_name(ea),
                 "prototype": proto,
-                "args": args,
-                "callees": callees,
-                "sinks": sinks,
+                "args": "\n".join(arg_lines),
+                "callees": "\n".join(callee_lines),
+                "sinks": "\n".join(sinks),
             }
 
         elif action == "backward_trace":
@@ -261,16 +259,16 @@ def taint(
             if err: return err
 
             func = ida_funcs.get_func(ea)
-            trace = []
+            trace_lines = []
             curr = ea
             for _ in range(depth * 10): # Trace back N instructions
                 curr = idc.prev_head(curr)
                 if curr == idaapi.BADADDR or (func and curr < func.start_ea): break
-                trace.append({"addr": hex(curr), "disasm": ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))})
-                if len(trace) >= max_hits:
+                trace_lines.append(f"{hex(curr)}  {ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))}")
+                if len(trace_lines) >= max_hits:
                     break
 
-            return {"ok": True, "target": hex(ea), "trace": list(reversed(trace))}
+            return {"ok": True, "target": hex(ea), "trace": "\n".join(reversed(trace_lines))}
 
         elif action == "slice":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -297,7 +295,7 @@ def taint(
                 for cat, patterns in DANGEROUS_SINKS.items():
                     for ln in lines:
                         if arg_name in ln and any(p.lower() in ln.lower() for p in patterns):
-                            sinks.append({"category": cat, "line": ln})
+                            sinks.append(f"{cat}  {ln}")
                             if len(sinks) >= max_hits:
                                 break
                     if len(sinks) >= max_hits:
@@ -307,7 +305,7 @@ def taint(
                     "ok": True,
                     "function": idc.get_func_name(ea),
                     "arg": {"name": arg_name, "type": str(args[arg_num].type())},
-                    "sinks": sinks,
+                    "sinks": "\n".join(sinks),
                     "note": "Heuristic slice based on decompiler text; confirm in ctree for precision."
                 }
             except Exception as e:

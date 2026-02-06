@@ -97,7 +97,7 @@ def imports_deep(
     """
     try:
         if action == "thunks":
-            thunks = []
+            thunk_lines = []
             
             # Find IAT/thunk sections
             for seg_ea in idautils.Segments():
@@ -118,20 +118,16 @@ def imports_deep(
                                 ea += 8 if is_64 else 4
                                 continue
 
-                            thunks.append({
-                                "thunk_addr": hex(ea),
-                                "target": hex(target) if target else None,
-                                "name": name
-                            })
+                            thunk_lines.append(f"{hex(ea)}  -> {hex(target)}  {name}")
                         
                         ea += 8 if is_64 else 4
                         
-                        if count != 0 and len(thunks) >= offset + count:
+                        if count != 0 and len(thunk_lines) >= offset + count:
                             break
 
-            total = len(thunks)
-            page = thunks[offset:offset + count] if count != 0 else thunks[offset:]
-            return {"ok": True, "thunks": page, "total": total, "offset": offset, "count": len(page)}
+            total = len(thunk_lines)
+            page = thunk_lines[offset:offset + count] if count != 0 else thunk_lines[offset:]
+            return {"ok": True, "thunks": "\n".join(page), "total": total, "offset": offset, "count": len(page)}
         
         elif action == "delay":
             delay_imports = {}
@@ -142,44 +138,36 @@ def imports_deep(
                 if 'delay' in seg_name.lower() or '.didat' in seg_name.lower():
                     seg = ida_segment.getseg(seg_ea)
                     if seg:
-                        # Parse delay import entries
                         ea = seg.start_ea
                         while ea < seg.end_ea:
                             name = idc.get_name(ea)
                             if name:
-                                # Extract DLL name from import name
                                 parts = name.split('_')
                                 if len(parts) >= 2:
                                     dll = parts[0]
                                     if dll not in delay_imports:
                                         delay_imports[dll] = []
-                                    delay_imports[dll].append({
-                                        "addr": hex(ea),
-                                        "name": name
-                                    })
+                                    delay_imports[dll].append(f"{hex(ea)}  {name}")
                             ea = idc.next_head(ea, seg.end_ea)
                             if ea == idaapi.BADADDR:
                                 break
             
-            result = [{"dll": k, "functions": v[:20]} for k, v in delay_imports.items()]
-            page = result[offset:offset + count] if count != 0 else result[offset:]
-            return {"ok": True, "delay_imports": page, "total": len(result), "offset": offset, "count": len(page)}
+            result_lines = []
+            for dll, funcs in delay_imports.items():
+                result_lines.append(f"[{dll}]")
+                for f in funcs[:20]:
+                    result_lines.append(f"  {f}")
+            page = result_lines[offset:offset + count] if count != 0 else result_lines[offset:]
+            return {"ok": True, "delay_imports": "\n".join(page), "total": len(result_lines), "offset": offset, "count": len(page)}
         
         elif action == "forwarded":
-            # This requires parsing the actual DLL exports which IDA doesn't do directly
-            # We can detect forwarded imports by looking at import names that reference other DLLs
-            forwarded = []
+            fwd_lines = []
             
             def imp_cb(ea, name, ordinal):
                 if name and '.' in name:
-                    # Might be a forwarded export reference
                     parts = name.split('.')
                     if len(parts) == 2:
-                        forwarded.append({
-                            "addr": hex(ea),
-                            "name": name,
-                            "forward_target": parts[1]
-                        })
+                        fwd_lines.append(f"{hex(ea)}  {name}  -> {parts[1]}")
                 return True
             
             nimps = ida_nalt.get_import_module_qty()
@@ -188,20 +176,15 @@ def imports_deep(
                 if mod_name:
                     ida_nalt.enum_import_names(i, imp_cb)
             
-            page = forwarded[offset:offset + count] if count != 0 else forwarded[offset:]
-            return {"ok": True, "forwarded": page, "total": len(forwarded), "offset": offset, "count": len(page), "note": "Limited detection - full analysis requires DLL parsing"}
+            page = fwd_lines[offset:offset + count] if count != 0 else fwd_lines[offset:]
+            return {"ok": True, "forwarded": "\n".join(page), "total": len(fwd_lines), "offset": offset, "count": len(page), "note": "Limited detection - full analysis requires DLL parsing"}
         
         elif action == "ordinal":
-            ordinal_imports = []
+            ord_lines = []
             
             def imp_cb(ea, name, ordinal):
                 if ordinal and ordinal > 0:
-                    entry = {
-                        "addr": hex(ea),
-                        "ordinal": ordinal,
-                        "name": name or f"Ordinal_{ordinal}"
-                    }
-                    ordinal_imports.append(entry)
+                    ord_lines.append(f"{hex(ea)}  ord={ordinal}  {name or f'Ordinal_{ordinal}'}")
                 return True
             
             nimps = ida_nalt.get_import_module_qty()
@@ -211,55 +194,44 @@ def imports_deep(
                     continue
                 ida_nalt.enum_import_names(i, imp_cb)
             
-            page = ordinal_imports[offset:offset + count] if count != 0 else ordinal_imports[offset:]
-            return {"ok": True, "ordinal_imports": page, "total": len(ordinal_imports), "offset": offset, "count": len(page)}
+            page = ord_lines[offset:offset + count] if count != 0 else ord_lines[offset:]
+            return {"ok": True, "ordinal_imports": "\n".join(page), "total": len(ord_lines), "offset": offset, "count": len(page)}
         
         elif action == "api_sets":
-            api_sets = []
+            set_lines = []
             
-            # Look for api-ms-* imports
             nimps = ida_nalt.get_import_module_qty()
             for i in range(nimps):
                 mod_name = ida_nalt.get_import_module_name(i)
                 if mod_name and mod_name.lower().startswith('api-ms-'):
-                    # These are API set DLLs that redirect to real DLLs
-                    actual = "kernel32.dll"  # Default guess
+                    actual = "kernel32.dll"
                     if 'win-core' in mod_name.lower():
                         actual = "kernelbase.dll"
                     elif 'crt' in mod_name.lower():
                         actual = "ucrtbase.dll"
                     
-                    api_sets.append({
-                        "virtual_dll": mod_name,
-                        "actual_dll": actual,
-                        "note": "Actual target depends on Windows version"
-                    })
+                    set_lines.append(f"{mod_name}  -> {actual}")
             
-            page = api_sets[offset:offset + count] if count != 0 else api_sets[offset:]
-            return {"ok": True, "api_sets": page, "total": len(api_sets), "offset": offset, "count": len(page)}
+            page = set_lines[offset:offset + count] if count != 0 else set_lines[offset:]
+            return {"ok": True, "api_sets": "\n".join(page), "total": len(set_lines), "offset": offset, "count": len(page)}
         
         elif action == "resolve":
             if not addr:
                 # Perform batch resolution of all imports
-                resolved = []
+                resolve_lines = []
                 nimps = ida_nalt.get_import_module_qty()
                 for i in range(nimps):
                     mod_name = ida_nalt.get_import_module_name(i)
                     
                     def collect_cb(ea, name, ordinal):
-                        resolved.append({
-                            "addr": hex(ea),
-                            "name": name or f"ordinal_{ordinal}",
-                            "dll": mod_name,
-                            "type": "import"
-                        })
-                        return len(resolved) < (offset + count if count != 0 else 1000000)
+                        resolve_lines.append(f"{hex(ea)}  {mod_name}  {name or f'ordinal_{ordinal}'}")
+                        return len(resolve_lines) < (offset + count if count != 0 else 1000000)
                         
                     ida_nalt.enum_import_names(i, collect_cb)
-                    if len(resolved) >= 100:
+                    if len(resolve_lines) >= 100:
                         break
-                page = resolved[offset:offset + count] if count != 0 else resolved[offset:]
-                return {"ok": True, "resolved": page, "total": len(resolved), "offset": offset, "count": len(page)}
+                page = resolve_lines[offset:offset + count] if count != 0 else resolve_lines[offset:]
+                return {"ok": True, "resolved": "\n".join(page), "total": len(resolve_lines), "offset": offset, "count": len(page)}
 
             ea, err = validate_addr(addr)
             if err: return err

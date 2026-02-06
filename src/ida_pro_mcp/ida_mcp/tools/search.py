@@ -72,89 +72,77 @@ def search(
 ) -> dict:
     """
     Search for patterns, specific bytes, or references in the binary.
+    All results use compact text format (one match per line) to minimize LLM context usage.
     
     QUICK ACTIONS (LLM-friendly):
     
     find - Smart unified search (auto-detects what you want)
         Params: pattern (any text, address, or name)
-        Returns: {names, strings, imports, code_refs?, data_refs?}
+        Returns: {names, strings, imports, code_refs?, data_refs?} as compact text
         Example: search(action="find", pattern="malloc") - finds all malloc-related items
         
     callers - Find all functions that call a target function
         Params: pattern (function name or address)
-        Returns: {callers: [{addr, name, call_site}]}
+        Returns: {callers: "addr  name  call@site\\n...", count}
         Example: search(action="callers", pattern="malloc")
         
     callees - Find all functions called by a target function
         Params: pattern (function name or address)
-        Returns: {callees: [{addr, name, call_site, is_import}]}
+        Returns: {callees: "addr  name  call@site\\n...", count}
         Example: search(action="callees", pattern="main")
         
     api - Find all uses of an API/import function
         Params: pattern (API name, supports wildcards)
-        Returns: {usages: [{func, addr, calls}], unique_functions, total_calls}
+        Returns: {usages: "call_addr  func_name\\n...", total_calls}
         Example: search(action="api", pattern="*alloc*")
     
     vulnerable - Find potentially vulnerable code patterns
         Params: limit, include_context
-        Returns: {findings: [{addr, dangerous_func, vuln_type, func}], by_type: {counts}}
+        Returns: {findings: "addr  vuln_type  dangerous_func  in:caller\\n...", total_findings}
         Example: search(action="vulnerable") - finds strcpy, printf format strings, etc.
-        Detected: format_string, buffer_overflow, command_injection, memory issues, weak_crypto
         
     constants - Find crypto/magic constants in code
         Params: limit, include_context, start, end
-        Returns: {findings: [{addr, value, constant, func}], crypto_constants, magic_numbers}
+        Returns: {findings: "addr  value  const_name  in:func\\n...", total_found}
         Example: search(action="constants") - finds MD5/SHA/AES constants, magic numbers
     
-    DETAILED ACTIONS:
+    DETAILED ACTIONS (all return {matches: "line\\nline\\n...", count, total, truncated}):
     
     bytes - Search for byte patterns with wildcards
         Params: pattern (e.g. "55 8B EC" or "E8 ?? ?? ?? ??"), start, end
-        Returns: {matches: [{addr, bytes?}]}
         
     string - Search string literals by content
         Params: pattern (substring), case_sensitive
-        Returns: {matches: [{addr, string, length}]}
         
     immediate - Search for immediate value usage in code
         Params: pattern/query (value as hex or decimal)
-        Returns: {matches: [{addr, insn, value}]}
         
     name - Search symbol names by glob pattern
         Params: pattern (e.g. "*printf*", "sub_*")
-        Returns: {matches: [{addr, name, type}]}
         
     insns - Search for instruction mnemonic sequences
         Params: pattern (comma-separated, e.g. "push, mov, sub"), wildcards supported (*)
-        Returns: {matches: [{addr, sequence}]}
         
     text - Search disassembly text
         Params: pattern (substring), case_sensitive, include_context
-        Returns: {matches: [{addr, text, func?}]}
         
     operand - Search operands for patterns
         Params: pattern (e.g. "rsp", "qword ptr")
-        Returns: {matches: [{addr, operands, mnem}]}
         
     comment - Search comments
         Params: pattern
-        Returns: {matches: [{addr, comment, type}]}
         
     data_ref - Find data references to target
         Params: pattern (address or name)
-        Returns: {matches: [{from, to, type}]}
         
     code_ref - Find code references to target
         Params: pattern (address or name)
-        Returns: {matches: [{from, to, type, func}]}
         
     regex - Search with regular expression in disassembly
         Params: pattern (regex)
-        Returns: {matches: [{addr, text, groups}]}
         
     func_by_sig - Find functions by signature characteristics
         Params: pattern (e.g. "args:3+", "calls:malloc", "size:>100")
-        Returns: {matches: [{addr, name, reason}]}
     """
     try:
         # Support both pattern and query for compatibility
@@ -184,17 +172,21 @@ def search(
         except Exception:
             offset = 0
 
-        def maybe_add(entry):
+        def maybe_add(line):
             nonlocal matches_seen, truncated
             matches_seen += 1
             if matches_seen <= offset:
                 return False
-            results.append(entry)
+            results.append(line)
             if len(results) >= limit:
                 truncated = True
                 return True
             return False
             
+        def _search_result(**extra):
+            """Common return format for search results."""
+            return {"ok": True, "matches": "\n".join(results), "offset": offset, "count": len(results), "total": matches_seen, "truncated": truncated, **extra}
+
         range_start = None
         range_end = None
         if start is not None or end is not None:
@@ -231,14 +223,13 @@ def search(
 
                     ea, _ = ida_bytes.bin_search(seg_start, seg_end, pt, ida_bytes.BIN_SEARCH_FORWARD)
                     while ea != idaapi.BADADDR:
-                        entry = {"addr": hex(ea)}
+                        line = hex(ea)
                         if include_context:
-                            # Include matched bytes
                             match_bytes = ida_bytes.get_bytes(ea, min(32, seg_end - ea))
                             if match_bytes:
-                                entry["bytes"] = match_bytes.hex()
-                            entry["disasm"] = idc.generate_disasm_line(ea, 0)
-                        if maybe_add(entry):
+                                line += f"  {match_bytes.hex()}"
+                            line += f"  {idc.generate_disasm_line(ea, 0)}"
+                        if maybe_add(line):
                             break
                         ea, _ = ida_bytes.bin_search(ea + 1, seg_end, pt, ida_bytes.BIN_SEARCH_FORWARD)
                 else:
@@ -247,15 +238,7 @@ def search(
                 if range_end is not None and seg.end_ea >= range_end:
                     break
                 seg = idaapi.get_next_seg(seg.end_ea)
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
         
         elif action == "string":
             pattern_check = pattern.lower() if not case_sensitive else pattern
@@ -270,22 +253,15 @@ def search(
                             s = content.decode("utf-8", errors="replace")
                             s_check = s.lower() if not case_sensitive else s
                             if pattern_check in s_check:
-                                entry = {"addr": hex(sc.ea), "string": s[:500], "length": len(s)}
+                                line = f"{hex(sc.ea)}  {s[:500]}"
                                 if include_context:
-                                    entry["xrefs"] = len(list(idautils.XrefsTo(sc.ea)))
-                                if maybe_add(entry):
+                                    xref_count = len(list(idautils.XrefsTo(sc.ea)))
+                                    line += f"  xrefs={xref_count}"
+                                if maybe_add(line):
                                     break
                     except:
                         pass
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
         
         elif action == "immediate":
             try: 
@@ -303,13 +279,13 @@ def search(
                     if ida_ua.decode_insn(insn, curr) > 0:
                         for op in insn.ops:
                             if op.type == ida_ua.o_imm and op.value == value:
-                                entry = {"addr": hex(curr), "value": hex(value)}
+                                line = f"{hex(curr)}  {hex(value)}"
                                 if include_context:
-                                    entry["insn"] = idc.generate_disasm_line(curr, 0)
+                                    line += f"  {idc.generate_disasm_line(curr, 0)}"
                                     func = idaapi.get_func(curr)
                                     if func:
-                                        entry["func"] = ida_funcs.get_func_name(func.start_ea)
-                                if maybe_add(entry):
+                                        line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                                if maybe_add(line):
                                     break
                                 break
                         curr += insn.size
@@ -319,40 +295,17 @@ def search(
                         break
                 if truncated:
                     break
-            return {
-                "ok": True,
-                "matches": results,
-                "value": hex(value),
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(value=hex(value))
         
         elif action == "name":
             for ea, name in idautils.Names():
                 if truncated:
                     break
                 if fnmatch.fnmatch(name.lower(), pattern.lower()):
-                    entry = {"addr": hex(ea), "name": name}
-                    # Classify type
-                    if idaapi.get_func(ea):
-                        entry["type"] = "function"
-                    elif ida_bytes.is_data(ida_bytes.get_flags(ea)):
-                        entry["type"] = "data"
-                    else:
-                        entry["type"] = "label"
-                    if maybe_add(entry):
+                    kind = "func" if idaapi.get_func(ea) else ("data" if ida_bytes.is_data(ida_bytes.get_flags(ea)) else "label")
+                    if maybe_add(f"{hex(ea)}  {kind}  {name}"):
                         break
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
         
         elif action == "insns":
             mnemonics = [m.strip().lower() for m in pattern.split(",")]
@@ -375,8 +328,8 @@ def search(
 
                 ea = seg_start
                 while ea < seg_end and not truncated:
-                    flags = ida_bytes.get_flags(ea)
-                    if ida_bytes.is_code(flags):
+                    flags_val = ida_bytes.get_flags(ea)
+                    if ida_bytes.is_code(flags_val):
                         match = True
                         check_ea = ea
                         sequence = []
@@ -391,24 +344,16 @@ def search(
                                 match = False
                                 break
                         if match:
-                            entry = {"addr": hex(ea)}
+                            line = hex(ea)
                             if include_context:
-                                entry["sequence"] = sequence
+                                line += f"  [{','.join(sequence)}]"
                                 func = idaapi.get_func(ea)
                                 if func:
-                                    entry["func"] = ida_funcs.get_func_name(func.start_ea)
-                            if maybe_add(entry):
+                                    line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                            if maybe_add(line):
                                 break
                     ea = idc.next_head(ea, seg_end)
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
 
         elif action == "text":
             pattern_check = pattern.lower() if not case_sensitive else pattern
@@ -432,23 +377,15 @@ def search(
                     if line:
                         line_check = line.lower() if not case_sensitive else line
                         if pattern_check in line_check:
-                            entry = {"addr": hex(ea), "text": ida_lines.tag_remove(line)}
+                            result_line = f"{hex(ea)}  {ida_lines.tag_remove(line)}"
                             if include_context:
                                 func = idaapi.get_func(ea)
                                 if func:
-                                    entry["func"] = ida_funcs.get_func_name(func.start_ea)
-                            if maybe_add(entry):
+                                    result_line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                            if maybe_add(result_line):
                                 break
                     ea = idc.next_head(ea, seg_end)
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
 
         elif action == "operand":
             pattern_check = pattern.lower() if not case_sensitive else pattern
@@ -476,21 +413,13 @@ def search(
                     op_text = ", ".join(ops)
                     op_check = op_text.lower() if not case_sensitive else op_text
                     if op_text and pattern_check in op_check:
-                        entry = {"addr": hex(ea), "operands": op_text, "mnem": idc.print_insn_mnem(ea)}
+                        line = f"{hex(ea)}  {idc.print_insn_mnem(ea)}  {op_text}"
                         if include_context:
-                            entry["disasm"] = idc.generate_disasm_line(ea, 0)
-                        if maybe_add(entry):
+                            line += f"  {idc.generate_disasm_line(ea, 0)}"
+                        if maybe_add(line):
                             break
                     ea = idc.next_head(ea, seg_end)
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
 
         elif action == "comment":
             pattern_check = pattern.lower() if not case_sensitive else pattern
@@ -518,18 +447,10 @@ def search(
                     if cmt:
                         cmt_check = cmt.lower() if not case_sensitive else cmt
                         if pattern_check in cmt_check:
-                            if maybe_add({"addr": hex(ea), "comment": cmt, "type": cmt_type}):
+                            if maybe_add(f"{hex(ea)}  {cmt_type}  {cmt}"):
                                 break
                     ea = idc.next_head(ea, seg_end)
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
 
         elif action == "data_ref":
             target_ea, error = validate_addr(pattern)
@@ -542,20 +463,14 @@ def search(
                 if truncated:
                     break
                 if not xref.iscode:
-                    entry = {"from": hex(xref.frm), "to": hex(xref.to), "type": "data"}
+                    line = f"{hex(xref.frm)} -> {hex(xref.to)}  data"
                     if include_context:
-                        entry["from_name"] = idc.get_name(xref.frm)
-                    if maybe_add(entry):
+                        from_name = idc.get_name(xref.frm)
+                        if from_name:
+                            line += f"  {from_name}"
+                    if maybe_add(line):
                         break
-            return {
-                "ok": True,
-                "matches": results,
-                "target": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(target=pattern)
         
         elif action == "code_ref":
             target_ea, error = validate_addr(pattern)
@@ -569,22 +484,13 @@ def search(
                     break
                 if xref.iscode:
                     func = idaapi.get_func(xref.frm)
-                    entry = {"from": hex(xref.frm), "to": hex(xref.to), "type": "code"}
-                    if func:
-                        entry["func"] = ida_funcs.get_func_name(func.start_ea)
+                    fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
+                    line = f"{hex(xref.frm)} -> {hex(xref.to)}  code  {fn_name}"
                     if include_context:
-                        entry["disasm"] = idc.generate_disasm_line(xref.frm, 0)
-                    if maybe_add(entry):
+                        line += f"  {idc.generate_disasm_line(xref.frm, 0)}"
+                    if maybe_add(line):
                         break
-            return {
-                "ok": True,
-                "matches": results,
-                "target": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(target=pattern)
         
         elif action == "regex":
             try:
@@ -611,25 +517,15 @@ def search(
                         line_clean = ida_lines.tag_remove(line)
                         match = regex.search(line_clean)
                         if match:
-                            entry = {"addr": hex(ea), "text": line_clean}
-                            if match.groups():
-                                entry["groups"] = list(match.groups())
+                            result_line = f"{hex(ea)}  {line_clean}"
                             if include_context:
                                 func = idaapi.get_func(ea)
                                 if func:
-                                    entry["func"] = ida_funcs.get_func_name(func.start_ea)
-                            if maybe_add(entry):
+                                    result_line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                            if maybe_add(result_line):
                                 break
                     ea = idc.next_head(ea, seg_end)
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
             
         elif action == "func_by_sig":
             # Parse signature criteria
@@ -709,25 +605,15 @@ def search(
                                     reason.append(f"args={actual_args}")
                 
                 if matched:
-                    entry = {"addr": hex(ea), "name": name, "size": size, "reason": ", ".join(reason)}
-                    if maybe_add(entry):
+                    if maybe_add(f"{hex(ea)}  {name}  size={size}  {', '.join(reason)}"):
                         break
                         
-            return {
-                "ok": True,
-                "matches": results,
-                "pattern": pattern,
-                "offset": offset,
-                "count": len(results),
-                "total": matches_seen,
-                "truncated": truncated,
-            }
+            return _search_result(pattern=pattern)
         
         elif action == "find":
             # Smart unified search - auto-detects what user wants
             import fnmatch
             
-            # Detect query type
             query_lower = pattern.lower()
             results_by_type = {}
             
@@ -735,44 +621,40 @@ def search(
             if pattern.startswith("0x") or (len(pattern) >= 6 and all(c in "0123456789abcdefABCDEF" for c in pattern)):
                 try:
                     ea = int(pattern, 16)
-                    code_xrefs = []
-                    data_xrefs = []
+                    code_lines = []
+                    data_lines = []
                     for xref in idautils.XrefsTo(ea, 0):
-                        if len(code_xrefs) + len(data_xrefs) >= limit:
+                        if len(code_lines) + len(data_lines) >= limit:
                             break
-                        entry = {"from": hex(xref.frm), "to": hex(xref.to)}
                         func = idaapi.get_func(xref.frm)
-                        if func:
-                            entry["func"] = ida_funcs.get_func_name(func.start_ea)
+                        fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
                         if xref.iscode:
-                            code_xrefs.append(entry)
+                            code_lines.append(f"{hex(xref.frm)}  {fn_name}")
                         else:
-                            data_xrefs.append(entry)
-                    results_by_type["code_refs"] = code_xrefs
-                    results_by_type["data_refs"] = data_xrefs
+                            data_lines.append(f"{hex(xref.frm)}  {fn_name}")
+                    if code_lines:
+                        results_by_type["code_refs"] = "\n".join(code_lines)
+                    if data_lines:
+                        results_by_type["data_refs"] = "\n".join(data_lines)
                 except:
                     pass
             
             # 2. Search names (functions, globals)
-            name_matches = []
+            name_lines = []
             glob_pattern = f"*{pattern}*" if not any(c in pattern for c in "*?[]") else pattern
             for ea, name in idautils.Names():
-                if len(name_matches) >= limit:
+                if len(name_lines) >= limit:
                     break
                 if fnmatch.fnmatch(name.lower(), glob_pattern.lower()):
-                    entry = {"addr": hex(ea), "name": name}
-                    if idaapi.get_func(ea):
-                        entry["type"] = "function"
-                    else:
-                        entry["type"] = "data"
-                    name_matches.append(entry)
-            results_by_type["names"] = name_matches
+                    kind = "func" if idaapi.get_func(ea) else "data"
+                    name_lines.append(f"{hex(ea)}  {kind}  {name}")
+            results_by_type["names"] = "\n".join(name_lines)
             
             # 3. Search strings
-            string_matches = []
+            string_lines = []
             pattern_check = pattern.lower()
             for i in range(idaapi.get_strlist_qty()):
-                if len(string_matches) >= limit:
+                if len(string_lines) >= limit:
                     break
                 sc = idaapi.string_info_t()
                 if idaapi.get_strlist_item(sc, i):
@@ -781,38 +663,29 @@ def search(
                         if content:
                             s = content.decode("utf-8", errors="replace")
                             if pattern_check in s.lower():
-                                string_matches.append({
-                                    "addr": hex(sc.ea),
-                                    "string": s[:200],
-                                    "xrefs": len(list(idautils.XrefsTo(sc.ea)))
-                                })
+                                xref_count = len(list(idautils.XrefsTo(sc.ea)))
+                                string_lines.append(f"{hex(sc.ea)}  xrefs={xref_count}  {s[:200]}")
                     except:
                         pass
-            results_by_type["strings"] = string_matches
+            results_by_type["strings"] = "\n".join(string_lines)
             
             # 4. Search imports
-            import_matches = []
+            import_lines = []
             for i in range(ida_nalt.get_import_module_qty()):
                 mod_name = ida_nalt.get_import_module_name(i)
                 def cb(ea, name, ordinal):
-                    if len(import_matches) >= limit:
+                    if len(import_lines) >= limit:
                         return False
                     if name and pattern_check in name.lower():
-                        import_matches.append({
-                            "addr": hex(ea),
-                            "name": name,
-                            "module": mod_name,
-                            "xrefs": len(list(idautils.XrefsTo(ea)))
-                        })
+                        xref_count = len(list(idautils.XrefsTo(ea)))
+                        import_lines.append(f"{hex(ea)}  {mod_name}  {name}  xrefs={xref_count}")
                     return True
                 ida_nalt.enum_import_names(i, cb)
-            results_by_type["imports"] = import_matches
+            results_by_type["imports"] = "\n".join(import_lines)
             
-            total_results = sum(len(v) for v in results_by_type.values())
             return {
                 "ok": True,
                 "query": pattern,
-                "total_matches": total_results,
                 **results_by_type
             }
         
@@ -828,32 +701,28 @@ def search(
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
             
-            callers = []
+            caller_lines = []
             seen = set()
             for xref in idautils.XrefsTo(func.start_ea, 0):
-                if len(callers) >= limit:
+                if len(caller_lines) >= limit:
                     truncated = True
                     break
                 if xref.iscode:
                     caller_func = idaapi.get_func(xref.frm)
                     if caller_func and caller_func.start_ea not in seen:
                         seen.add(caller_func.start_ea)
-                        entry = {
-                            "addr": hex(caller_func.start_ea),
-                            "name": ida_funcs.get_func_name(caller_func.start_ea),
-                            "call_site": hex(xref.frm)
-                        }
+                        line = f"{hex(caller_func.start_ea)}  {ida_funcs.get_func_name(caller_func.start_ea)}  call@{hex(xref.frm)}"
                         if include_context:
-                            entry["disasm"] = idc.generate_disasm_line(xref.frm, 0)
-                        callers.append(entry)
+                            line += f"  {idc.generate_disasm_line(xref.frm, 0)}"
+                        caller_lines.append(line)
             
             return {
                 "ok": True,
                 "target": idc.get_name(target_ea) or hex(target_ea),
                 "target_addr": hex(func.start_ea),
-                "callers": callers,
-                "count": len(callers),
-                "truncated": len(callers) >= limit
+                "callers": "\n".join(caller_lines),
+                "count": len(caller_lines),
+                "truncated": len(caller_lines) >= limit
             }
         
         elif action == "callees":
@@ -868,10 +737,10 @@ def search(
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
             
-            callees = []
+            callee_lines = []
             seen = set()
             for item in idautils.FuncItems(func.start_ea):
-                if len(callees) >= limit:
+                if len(callee_lines) >= limit:
                     truncated = True
                     break
                 for xref in idautils.XrefsFrom(item, 0):
@@ -880,24 +749,17 @@ def search(
                         if callee_func and callee_func.start_ea not in seen:
                             seen.add(callee_func.start_ea)
                             name = ida_funcs.get_func_name(callee_func.start_ea)
-                            entry = {
-                                "addr": hex(callee_func.start_ea),
-                                "name": name,
-                                "call_site": hex(item),
-                                "is_import": name.startswith("__imp_") or ida_nalt.get_import_module_name(0) is not None
-                            }
-                            callees.append(entry)
+                            callee_lines.append(f"{hex(callee_func.start_ea)}  {name}  call@{hex(item)}")
             
-            # Sort by address
-            callees.sort(key=lambda x: int(x["addr"], 16))
+            callee_lines.sort()
             
             return {
                 "ok": True,
                 "target": idc.get_name(target_ea) or hex(target_ea),
                 "target_addr": hex(func.start_ea),
-                "callees": callees,
-                "count": len(callees),
-                "truncated": len(callees) >= limit
+                "callees": "\n".join(callee_lines),
+                "count": len(callee_lines),
+                "truncated": len(callee_lines) >= limit
             }
         
         elif action == "api":
@@ -931,38 +793,26 @@ def search(
                 return make_error(MCPError.NOT_FOUND, f"API '{pattern}' not found")
             
             # Find all call sites
-            usages = []
+            usage_lines = []
             for xref in idautils.XrefsTo(target_ea, 0):
-                if len(usages) >= limit:
+                if len(usage_lines) >= limit:
                     truncated = True
                     break
                 if xref.iscode:
                     func = idaapi.get_func(xref.frm)
-                    entry = {
-                        "addr": hex(xref.frm),
-                        "func": ida_funcs.get_func_name(func.start_ea) if func else None,
-                        "func_addr": hex(func.start_ea) if func else None
-                    }
+                    fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                    line = f"{hex(xref.frm)}  {fn_name}"
                     if include_context:
-                        entry["disasm"] = ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))
-                    usages.append(entry)
-            
-            # Group by function
-            by_func = {}
-            for u in usages:
-                fname = u.get("func") or "unknown"
-                if fname not in by_func:
-                    by_func[fname] = {"func": fname, "addr": u.get("func_addr"), "calls": []}
-                by_func[fname]["calls"].append(u["addr"])
+                        line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
+                    usage_lines.append(line)
             
             return {
                 "ok": True,
                 "api": target_name,
                 "api_addr": hex(target_ea),
-                "total_calls": len(usages),
-                "unique_functions": len(by_func),
-                "usages": list(by_func.values())[:limit],
-                "truncated": len(usages) >= limit
+                "total_calls": len(usage_lines),
+                "usages": "\n".join(usage_lines),
+                "truncated": len(usage_lines) >= limit
             }
         
         elif action == "vulnerable":
@@ -1059,32 +909,18 @@ def search(
                                 return False
                             if xref.iscode:
                                 func = idaapi.get_func(xref.frm)
-                                finding = {
-                                    "addr": hex(xref.frm),
-                                    "dangerous_func": name,
-                                    "vuln_type": vuln_type,
-                                    "func": ida_funcs.get_func_name(func.start_ea) if func else None,
-                                    "func_addr": hex(func.start_ea) if func else None
-                                }
+                                fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                                line = f"{hex(xref.frm)}  {vuln_type}  {name}  in:{fn_name}"
                                 if include_context:
-                                    finding["disasm"] = ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))
-                                findings.append(finding)
+                                    line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
+                                findings.append(line)
                     return True
                 ida_nalt.enum_import_names(i, cb)
-            
-            # Group by vulnerability type
-            by_type = {}
-            for f in findings:
-                vtype = f["vuln_type"]
-                if vtype not in by_type:
-                    by_type[vtype] = []
-                by_type[vtype].append(f)
             
             return {
                 "ok": True,
                 "total_findings": len(findings),
-                "by_type": {k: len(v) for k, v in by_type.items()},
-                "findings": findings,
+                "findings": "\n".join(findings),
                 "truncated": len(findings) >= limit
             }
         
@@ -1150,20 +986,20 @@ def search(
                 0x02014B50: "ZIP_CENTRAL_HEADER",
             }
             
-            found_constants = []
+            found_lines = []
             truncated = False
             
             # Search for immediates matching known constants
             segments = seg_list if seg_list is not None else list(idautils.Segments())
             
             for const_val, const_name in KNOWN_CONSTANTS.items():
-                if len(found_constants) >= limit:
+                if len(found_lines) >= limit:
                     truncated = True
                     break
                 
                 # Search each segment for this constant
                 for seg_ea in segments:
-                    if len(found_constants) >= limit:
+                    if len(found_lines) >= limit:
                         truncated = True
                         break
                     
@@ -1177,18 +1013,14 @@ def search(
                             for op in insn.ops:
                                 if op.type == ida_ua.o_imm and op.value == const_val:
                                     func = idaapi.get_func(curr)
-                                    entry = {
-                                        "addr": hex(curr),
-                                        "value": hex(const_val),
-                                        "constant": const_name,
-                                        "func": ida_funcs.get_func_name(func.start_ea) if func else None
-                                    }
+                                    fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                                    line = f"{hex(curr)}  {hex(const_val)}  {const_name}  in:{fn_name}"
                                     if include_context:
-                                        entry["disasm"] = ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))
-                                    found_constants.append(entry)
+                                        line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))}"
+                                    found_lines.append(line)
                                     search_count += 1
                                     
-                                    if len(found_constants) >= limit:
+                                    if len(found_lines) >= limit:
                                         truncated = True
                                         break
                                     break
@@ -1199,16 +1031,10 @@ def search(
                         if truncated:
                             break
             
-            # Group by constant type
-            crypto_findings = [f for f in found_constants if any(x in f["constant"] for x in ["MD5", "SHA", "AES", "RC4", "RSA", "CRC", "BLOW", "TEA", "SALSA", "CHACHA"])]
-            magic_findings = [f for f in found_constants if "MAGIC" in f["constant"] or f["constant"] in ["MZ_HEADER", "PE_SIGNATURE", "ELF_MAGIC", "ZIP_LOCAL_HEADER", "ZIP_CENTRAL_HEADER"]]
-            
             return {
                 "ok": True,
-                "total_found": len(found_constants),
-                "crypto_constants": len(crypto_findings),
-                "magic_numbers": len(magic_findings),
-                "findings": found_constants,
+                "total_found": len(found_lines),
+                "findings": "\n".join(found_lines),
                 "truncated": truncated
             }
         

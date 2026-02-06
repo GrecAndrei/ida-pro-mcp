@@ -97,12 +97,13 @@ def entropy(
 
         def histogram(data, top=10):
             if not data:
-                return []
+                return ""
             occ = Counter(data)
             common = occ.most_common(top)
-            return [{"byte": b, "count": c} for b, c in common]
+            return ", ".join(f"0x{b:02x}={c}" for b, c in common)
 
         def window_scan(start_ea, length):
+            """Returns list of (addr, window_size, entropy) tuples for internal use."""
             results = []
             if length <= 0:
                 return results
@@ -110,9 +111,13 @@ def entropy(
             cur = start_ea
             while cur + window <= end_ea and len(results) < limit:
                 ent = calc_entropy(cur, window)
-                results.append({"addr": hex(cur), "size": window, "entropy": ent})
+                results.append((cur, window, ent))
                 cur += max(1, step)
             return results
+
+        def format_windows(windows):
+            """Format window tuples as compact text lines."""
+            return "\n".join(f"{hex(addr)}  size={sz}  ent={ent}" for addr, sz, ent in windows)
 
         def search_pattern(pattern_bytes):
             hits = []
@@ -145,7 +150,7 @@ def entropy(
             }
 
         elif action == "section":
-            sections = []
+            section_lines = []
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
                 if not seg: continue
@@ -153,45 +158,31 @@ def entropy(
                 ent = calc_entropy(seg.start_ea, scan_size) # Cap at 1MB for speed
                 windows = window_scan(seg.start_ea, scan_size)
                 if windows:
-                    ents = [w["entropy"] for w in windows]
-                    stats = {
-                        "min": min(ents),
-                        "max": max(ents),
-                        "avg": round(sum(ents) / len(ents), 4),
-                        "high_ratio": round(sum(1 for e in ents if e >= threshold) / len(ents), 4),
-                    }
+                    ents = [w[2] for w in windows]
+                    high_ratio = round(sum(1 for e in ents if e >= threshold) / len(ents), 4)
+                    stats = f"min={min(ents)}  max={max(ents)}  avg={round(sum(ents)/len(ents), 4)}  high={high_ratio}"
                 else:
-                    stats = {"min": ent, "max": ent, "avg": ent, "high_ratio": 0.0}
-                sections.append({
-                    "name": ida_segment.get_segm_name(seg),
-                    "start": hex(seg.start_ea),
-                    "entropy": ent,
-                    "stats": stats,
-                    "is_packed": ent > threshold
-                })
-            return {"ok": True, "sections": sections}
+                    stats = f"ent={ent}"
+                packed = "PACKED" if ent > threshold else ""
+                section_lines.append(f"{ida_segment.get_segm_name(seg)}  {hex(seg.start_ea)}  ent={ent}  {stats}  {packed}")
+            return {"ok": True, "sections": "\n".join(section_lines)}
 
         elif action == "packed_detect":
-            findings = []
+            finding_lines = []
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
                 if not seg: continue
                 scan_size = min(seg.size(), 0x200000)
                 windows = window_scan(seg.start_ea, scan_size)
-                for w in windows:
-                    if w["entropy"] >= threshold:
-                        findings.append({
-                            "segment": ida_segment.get_segm_name(seg),
-                            "addr": w["addr"],
-                            "size": w["size"],
-                            "entropy": w["entropy"],
-                            "note": "High entropy window"
-                        })
-                        if len(findings) >= limit:
+                seg_name = ida_segment.get_segm_name(seg)
+                for addr, sz, ent_val in windows:
+                    if ent_val >= threshold:
+                        finding_lines.append(f"{seg_name}  {hex(addr)}  size={sz}  ent={ent_val}  HIGH_ENTROPY")
+                        if len(finding_lines) >= limit:
                             break
-                if len(findings) >= limit:
+                if len(finding_lines) >= limit:
                     break
-            return {"ok": True, "findings": findings, "count": len(findings)}
+            return {"ok": True, "findings": "\n".join(finding_lines), "count": len(finding_lines)}
 
         elif action == "crypto_detect":
             # AES S-Box and SHA-256 K constants
@@ -245,20 +236,20 @@ def entropy(
             s_ea, e_ea, err = validate_range(addr, end_addr)
             if err: return err
             windows = window_scan(s_ea, e_ea - s_ea)
-            return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "windows": windows, "count": len(windows)}
+            return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "windows": format_windows(windows), "count": len(windows)}
 
         elif action == "summary":
-            sections = []
+            section_lines = []
             total_entropy = []
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
                 if not seg: continue
                 scan_size = min(seg.size(), 0x100000)
                 ent = calc_entropy(seg.start_ea, scan_size)
-                sections.append({"name": ida_segment.get_segm_name(seg), "entropy": ent})
+                section_lines.append(f"{ida_segment.get_segm_name(seg)}  ent={ent}")
                 total_entropy.append(ent)
             avg = round(sum(total_entropy) / len(total_entropy), 4) if total_entropy else 0.0
-            return {"ok": True, "avg_entropy": avg, "sections": sections}
+            return {"ok": True, "avg_entropy": avg, "sections": "\n".join(section_lines)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
