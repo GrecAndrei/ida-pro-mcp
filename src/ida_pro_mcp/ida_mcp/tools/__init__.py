@@ -50,6 +50,7 @@ from .vuln_scan import vuln_scan
 from .deobfuscate import deobfuscate
 from .crypto_id import crypto_id
 from .abi import abi
+from .summarize import summarize
 
 __all__ = [
     "idb",
@@ -102,4 +103,5 @@ __all__ = [
     "deobfuscate",
     "crypto_id",
     "abi",
+    "summarize",
 ]
