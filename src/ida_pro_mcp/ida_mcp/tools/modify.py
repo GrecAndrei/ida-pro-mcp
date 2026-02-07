@@ -15,7 +15,7 @@ def modify(
     action: Annotated[Literal["rename", "comment", "set_type", "patch_asm"], 
                       "Action: rename|comment|set_type|patch_asm"],
     addr: Annotated[str, "Address"],
-    value: Annotated[Optional[str], "New name, comment text, type declaration, or assembly instruction"] = None,
+    value: Annotated[Optional[str], "New name, comment text, type declaration, or assembly instruction(s)"] = None,
     # Aliases for compatibility
     name: Annotated[Optional[str], "Alias for value (when action=rename)"] = None,
     text: Annotated[Optional[str], "Alias for value (when action=comment)"] = None,
@@ -32,7 +32,10 @@ def modify(
     - rename: Change the name of a function, label, or data item at `addr`.
     - comment: Add a comment. Supports regular, repeatable, anterior (above), posterior (below).
     - set_type: Apply a type declaration to `addr` (similar to types.apply).
-    - patch_asm: Assemble and patch instructions at `addr` (e.g. "mov eax, 1").
+    - patch_asm: Assemble and patch instructions at `addr`.
+      Supports single instructions (e.g. "mov eax, 1") or multiple instructions
+      separated by semicolons (e.g. "nop; nop; nop" or "push ebp; mov ebp, esp").
+      Each instruction is assembled and patched sequentially at consecutive addresses.
     
     Arguments:
     - value (or name/text/type_str/asm): The content to apply.
@@ -85,25 +88,48 @@ def modify(
             return make_error(MCPError.IDA_ERROR, "Failed to apply type", "Check if type is compatible with address")
         
         elif action == "patch_asm":
-            # Assemble and patch
+            # Assemble and patch - supports multiple instructions separated by semicolons
             import ida_idp
             import ida_ua
             
-            # IDA 9.2 assemble returns (bool success, bytes code)
-            res = ida_idp.assemble(ea, 0, ea, True, value)
-            if isinstance(res, tuple):
-                success, code = res
-            else:
-                # Fallback for older IDA versions where it might return bytes or None
-                success = res is not None
-                code = res
+            # Split multiple instructions by semicolons
+            instructions = [inst.strip() for inst in value.split(";") if inst.strip()]
+            if not instructions:
+                return make_error(MCPError.INVALID_ARGS, "No valid instructions provided")
+            
+            current_ea = ea
+            total_size = 0
+            patched = []
+            
+            for inst in instructions:
+                # IDA assemble API
+                res = ida_idp.assemble(current_ea, 0, current_ea, True, inst)
+                if isinstance(res, tuple):
+                    success, code = res
+                else:
+                    # Fallback for older IDA versions
+                    success = res is not None and res != b'' and res != 0
+                    code = res
 
-            if success and code:
-                # Ensure it's a standard bytes object for IDA 9.2
+                if not success or not code:
+                    hint = f"Check instruction syntax for your target architecture. Failed at instruction: '{inst}'"
+                    if patched:
+                        hint += f". Note: {len(patched)} instruction(s) were already patched before this failure."
+                    return make_error(
+                        MCPError.IDA_ERROR,
+                        f"Failed to assemble: '{inst}' at {hex(current_ea)}",
+                        hint,
+                    )
+                
                 code_bytes = bytes(code)
-                ida_bytes.patch_bytes(ea, code_bytes)
-                return {"ok": True, "addr": addr, "size": len(code_bytes), "asm": value}
-            return make_error(MCPError.IDA_ERROR, f"Failed to assemble: {value}", "Check instruction syntax and operands")
+                ida_bytes.patch_bytes(current_ea, code_bytes)
+                patched.append({"addr": hex(current_ea), "size": len(code_bytes), "asm": inst})
+                current_ea += len(code_bytes)
+                total_size += len(code_bytes)
+            
+            if len(patched) == 1:
+                return {"ok": True, "addr": addr, "size": total_size, "asm": instructions[0]}
+            return {"ok": True, "addr": addr, "total_size": total_size, "instructions": patched, "count": len(patched)}
         
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
