@@ -87,7 +87,7 @@ def symbols(
                 if name and not name.startswith("sub_"):
                     item = {"addr": hex(ea), "name": name}
                     tif = ida_typeinf.tinfo_t()
-                    if ida_typeinf.get_tinfo(tif, ea): item["type"] = str(tif)
+                    if ida_nalt.get_tinfo(tif, ea): item["type"] = str(tif)
                     export_data["functions"].append(item)
             
             import json
