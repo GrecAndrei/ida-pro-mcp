@@ -750,19 +750,84 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
     }
 
 
-def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
+def _is_regex(pattern: str) -> bool:
+    """Detect if a pattern string looks like a regular expression.
+
+    Returns True when the pattern contains regex-specific metacharacters that
+    would not appear in a plain substring search.  Explicit ``/pattern/flags``
+    syntax is also recognised.
+
+    Glob-only wildcards (``*`` and ``?`` without other regex syntax) are *not*
+    treated as regex so that simple wildcard searches keep working via
+    ``fnmatch``.
+    """
     if not pattern:
-        return data
+        return False
+
+    # Explicit /pattern/flags notation
+    if pattern.startswith("/") and pattern.count("/") >= 2:
+        return True
+
+    # Characters / sequences that are strong regex indicators
+    _REGEX_INDICATORS = (
+        r"\d", r"\w", r"\s", r"\b", r"\D", r"\W", r"\S", r"\B",
+        r"\A", r"\Z",
+    )
+    for ind in _REGEX_INDICATORS:
+        if ind in pattern:
+            return True
+
+    # Backslash-escaped metacharacters (e.g. \., \(, \), \*, \+) are regex
+    if re.search(r"\\[.^$*+?{}()|[\]\\]", pattern):
+        return True
+
+    # Regex-only metacharacters (not glob wildcards)
+    _REGEX_META = set("^$+{}()|")
+    if _REGEX_META.intersection(pattern):
+        return True
+
+    # Character classes like [a-z]
+    if re.search(r"\[.+\]", pattern):
+        return True
+
+    # Quantifiers attached to a character e.g. a{2,4}, .+, .?
+    if re.search(r".\{[0-9]", pattern):
+        return True
+
+    return False
+
+
+def smart_match(pattern: str, text: str, case_sensitive: bool = False) -> bool:
+    """Match *text* against *pattern*, auto-detecting the match strategy.
+
+    1. ``/pattern/flags`` – explicit regex
+    2. Auto-detected regex (see :func:`_is_regex`) – compiled & searched
+    3. Glob wildcards (``*`` / ``?``) – ``fnmatch``
+    4. Plain substring containment (default)
+    """
+    if not pattern:
+        return True
+
+    compiled = compile_smart_pattern(pattern, case_sensitive)
+    return compiled(text)
+
+
+def compile_smart_pattern(pattern: str, case_sensitive: bool = False):
+    """Return a *callable(text) -> bool* for the given pattern.
+
+    Compiling the pattern once and reusing the callable in a tight loop is
+    more efficient than calling :func:`smart_match` per item.
+    """
+    if not pattern:
+        return lambda _text: True
 
     regex = None
-    use_glob = False
 
-    # Regex pattern: /pattern/flags
+    # 1. Explicit /pattern/flags
     if pattern.startswith("/") and pattern.count("/") >= 2:
         last_slash = pattern.rfind("/")
         body = pattern[1:last_slash]
-        flag_str = pattern[last_slash + 1 :]
-
+        flag_str = pattern[last_slash + 1:]
         flags = 0
         for ch in flag_str:
             if ch == "i":
@@ -771,14 +836,39 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
                 flags |= re.MULTILINE
             elif ch == "s":
                 flags |= re.DOTALL
-
         try:
-            regex = re.compile(body, flags or re.IGNORECASE)
+            regex = re.compile(body, flags or (0 if case_sensitive else re.IGNORECASE))
         except re.error:
             regex = None
-    # Glob pattern: contains * or ?
-    elif "*" in pattern or "?" in pattern:
-        use_glob = True
+
+    # 2. Auto-detected regex
+    elif _is_regex(pattern):
+        try:
+            regex = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
+        except re.error:
+            regex = None  # fall through to substring
+
+    if regex is not None:
+        return lambda _text, _re=regex: bool(_re.search(_text))
+
+    # 3. Glob wildcards
+    if "*" in pattern or "?" in pattern:
+        pat_lower = pattern.lower()
+        return lambda _text, _p=pat_lower: fnmatch.fnmatch(_text.lower(), _p)
+
+    # 4. Plain substring
+    if case_sensitive:
+        return lambda _text, _p=pattern: _p in _text
+    else:
+        pat_lower = pattern.lower()
+        return lambda _text, _p=pat_lower: _p in _text.lower()
+
+
+def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
+    if not pattern:
+        return data
+
+    matcher = compile_smart_pattern(pattern)
 
     def get_value(item) -> str:
         try:
@@ -787,15 +877,7 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
             v = getattr(item, key, "")
         return "" if v is None else str(v)
 
-    def matches(item) -> bool:
-        text = get_value(item)
-        if regex is not None:
-            return bool(regex.search(text))
-        if use_glob:
-            return fnmatch.fnmatch(text.lower(), pattern.lower())
-        return pattern.lower() in text.lower()
-
-    return [item for item in data if matches(item)]
+    return [item for item in data if matcher(get_value(item))]
 
 
 def refresh_decompiler_widget():
