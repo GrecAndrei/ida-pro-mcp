@@ -53,6 +53,7 @@ from .abi import abi
 from .summarize import summarize
 from .compare import compare
 from .stack_analysis import stack_analysis
+from .classify import classify
 
 __all__ = [
     "idb",
@@ -108,4 +109,5 @@ __all__ = [
     "summarize",
     "compare",
     "stack_analysis",
+    "classify",
 ]
