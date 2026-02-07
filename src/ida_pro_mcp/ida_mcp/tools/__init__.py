@@ -52,6 +52,7 @@ from .crypto_id import crypto_id
 from .abi import abi
 from .summarize import summarize
 from .compare import compare
+from .stack_analysis import stack_analysis
 
 __all__ = [
     "idb",
@@ -106,4 +107,5 @@ __all__ = [
     "abi",
     "summarize",
     "compare",
+    "stack_analysis",
 ]
