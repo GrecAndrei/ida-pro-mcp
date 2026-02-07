@@ -336,7 +336,7 @@ def search(
                     if line:
                         line_clean = ida_lines.tag_remove(line)
                         if _matcher(line_clean):
-                            result_line = f"{hex(ea)}  {ida_lines.tag_remove(line)}"
+                            result_line = f"{hex(ea)}  {line_clean}"
                             if include_context:
                                 func = idaapi.get_func(ea)
                                 if func:
