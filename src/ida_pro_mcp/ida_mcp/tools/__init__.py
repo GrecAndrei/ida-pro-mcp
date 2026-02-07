@@ -54,6 +54,7 @@ from .summarize import summarize
 from .compare import compare
 from .stack_analysis import stack_analysis
 from .classify import classify
+from .protocol import protocol
 
 __all__ = [
     "idb",
@@ -110,4 +111,5 @@ __all__ = [
     "compare",
     "stack_analysis",
     "classify",
+    "protocol",
 ]
