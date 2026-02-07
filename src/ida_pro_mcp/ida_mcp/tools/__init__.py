@@ -46,6 +46,7 @@ from .analysis import analysis
 from .query import query
 from .edit import edit
 from .batch import batch
+from .vuln_scan import vuln_scan
 
 __all__ = [
     "idb",
@@ -94,4 +95,5 @@ __all__ = [
     "query",
     "edit",
     "batch",
+    "vuln_scan",
 ]
