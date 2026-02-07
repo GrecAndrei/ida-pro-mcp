@@ -91,7 +91,7 @@ def trace_analysis(
             from collections import Counter
             return {"ok": True, "api_calls": Counter(calls).most_common(50)}
 
-        if action == "basic_blocks_hit":
+        elif action == "basic_blocks_hit":
             trace_set = load_trace()
             if not trace_set: return make_error(MCPError.INVALID_ARGS, "No trace data loaded", "Run import_trace first")
             

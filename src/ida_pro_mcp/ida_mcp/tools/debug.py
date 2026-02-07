@@ -140,6 +140,20 @@ def debug(
             if ida_dbg.add_bpt(ea, 0, 0): return {"ok": True, "addr": hex(ea)}
             return make_error(MCPError.IDA_ERROR, "Failed to add breakpoint")
         
+        elif action == "del_bp":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err: return err
+            if ida_dbg.del_bpt(ea): return {"ok": True, "addr": hex(ea)}
+            return make_error(MCPError.IDA_ERROR, "Failed to delete breakpoint")
+        
+        elif action == "enable_bp":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err: return err
+            if ida_dbg.enable_bpt(ea, enabled): return {"ok": True, "addr": hex(ea), "enabled": enabled}
+            return make_error(MCPError.IDA_ERROR, "Failed to enable/disable breakpoint")
+        
         elif action == "regs":
             err = check_debugger(require_active=True)
             if err: return err
