@@ -47,6 +47,7 @@ from .query import query
 from .edit import edit
 from .batch import batch
 from .vuln_scan import vuln_scan
+from .deobfuscate import deobfuscate
 
 __all__ = [
     "idb",
@@ -96,4 +97,5 @@ __all__ = [
     "edit",
     "batch",
     "vuln_scan",
+    "deobfuscate",
 ]
