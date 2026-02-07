@@ -55,6 +55,7 @@ from .compare import compare
 from .stack_analysis import stack_analysis
 from .classify import classify
 from .protocol import protocol
+from .c2_detect import c2_detect
 
 __all__ = [
     "idb",
@@ -112,4 +113,5 @@ __all__ = [
     "stack_analysis",
     "classify",
     "protocol",
+    "c2_detect",
 ]
