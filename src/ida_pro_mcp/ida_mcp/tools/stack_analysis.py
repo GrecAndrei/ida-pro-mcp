@@ -1,0 +1,613 @@
+
+try:
+    from ._common import *
+except ImportError:
+    from _common import *  # type: ignore[import-not-found]
+
+import ida_struct
+
+
+# Canary symbol names across architectures
+_CANARY_SYMBOLS = [
+    "__stack_chk_guard",       # GCC / ARM / Linux
+    "__stack_chk_fail",        # GCC canary check failure handler
+    "___stack_chk_guard",      # macOS / iOS (underscore-prefixed)
+    "___stack_chk_fail",       # macOS / iOS
+    "__security_cookie",       # MSVC x86/x64
+    "__security_check_cookie", # MSVC cookie check
+    "@__security_check_cookie@4",  # MSVC __fastcall variant
+    "__stack_chk_fail_local",  # some GCC builds
+]
+
+# Dynamic allocation patterns
+_ALLOCA_SYMBOLS = [
+    "alloca", "_alloca", "__alloca",
+    "__chkstk", "_chkstk", "__chkstk_ms",
+    "__alloca_probe", "__alloca_probe_16",
+]
+
+
+def _get_func_or_error(addr):
+    """Resolve addr to a function object, returning (func, error_dict_or_None)."""
+    if addr is not None:
+        ea, err = validate_addr(addr)
+        if err:
+            return None, err
+    else:
+        ea = idc.get_screen_ea()
+    func = idaapi.get_func(ea)
+    if not func:
+        return None, make_error(MCPError.INVALID_ARGS,
+                                f"No function at {hex(ea)}")
+    return func, None
+
+
+def _get_frame_or_error(func):
+    """Get stack frame for a function, returning (frame, error_dict_or_None)."""
+    frame = ida_frame.get_frame(func)
+    if not frame:
+        return None, {"ok": True, "members": [],
+                      "note": "No stack frame for this function"}
+    return frame, None
+
+
+def _member_name(frame, member, idx):
+    """Get a member name, handling IDA version differences."""
+    if hasattr(ida_frame, "get_member_name"):
+        name = ida_frame.get_member_name(member.id)
+    elif hasattr(idc, "get_member_name"):
+        name = idc.get_member_name(frame.id, member.soff)
+    else:
+        name = None
+    return name or f"var_{idx}"
+
+
+def _member_type_str(member):
+    """Get type string for a frame member."""
+    tif = ida_typeinf.tinfo_t()
+    if hasattr(ida_frame, "get_member_tinfo"):
+        try:
+            if ida_frame.get_member_tinfo(tif, member):
+                return str(tif)
+        except Exception:
+            pass
+    return ""
+
+
+def _iter_frame_members(frame):
+    """Iterate over all frame members, yielding (index, member, name, offset, size, type_str)."""
+    for i in range(frame.memqty):
+        member = frame.get_member(i)
+        if not member:
+            continue
+        name = _member_name(frame, member, i)
+        offset = member.soff
+        size = member.eoff - member.soff
+        type_str = _member_type_str(member)
+        yield i, member, name, offset, size, type_str
+
+
+def _get_arch_info():
+    """Return architecture info dict for context."""
+    info = idaapi.get_inf_structure()
+    is_64 = info.is_64bit() if hasattr(info, "is_64bit") else False
+    is_32 = info.is_32bit() if hasattr(info, "is_32bit") else (not is_64)
+    proc = info.procname if hasattr(info, "procname") else ""
+    ptr_size = 8 if is_64 else 4
+    return {
+        "proc": proc.strip().upper(),
+        "bits": 64 if is_64 else (32 if is_32 else 16),
+        "ptr_size": ptr_size,
+    }
+
+
+def _is_arm(arch):
+    """Check if architecture is ARM/AArch64."""
+    p = arch["proc"]
+    return "ARM" in p or "AARCH" in p
+
+
+@tool
+@idaread
+def stack_analysis(
+    action: Annotated[Literal["frame", "buffers", "canary", "alignment", "spills",
+                              "usage", "variables", "arrays", "uninitialized", "summary"],
+                      "Stack analysis action"],
+    addr: Annotated[Optional[str], "Function address to analyze"] = None,
+    limit: Annotated[int, "Max results for scanning actions"] = 50,
+) -> dict:
+    """
+    Deep stack frame analysis for LLM-assisted reverse engineering.
+
+    ACTIONS:
+
+    frame - Full stack frame layout (all variables, args, saved regs with offsets/types)
+        Returns: {function, frame_size, members[]}
+        Example: stack_analysis(action="frame", addr="main")
+
+    buffers - Find stack buffers and their sizes (potential overflow targets)
+        Returns: {function, buffers[], count}
+        Example: stack_analysis(action="buffers", addr="0x401000")
+
+    canary - Detect stack canary/cookie usage in a function
+        Returns: {function, has_canary, canary_type, details}
+        Example: stack_analysis(action="canary", addr="main")
+
+    alignment - Analyze stack alignment requirements
+        Returns: {function, frame_size, alignment, aligned_to}
+        Example: stack_analysis(action="alignment", addr="0x401000")
+
+    spills - Find register spills to stack
+        Returns: {function, spills[], count}
+        Example: stack_analysis(action="spills", addr="main")
+
+    usage - Stack usage analysis (max depth, dynamic alloca)
+        Returns: {function, frame_size, has_dynamic_alloc, max_spd}
+        Example: stack_analysis(action="usage", addr="0x401000")
+
+    variables - Enhanced local variable analysis with types and access patterns
+        Returns: {function, variables[], count}
+        Example: stack_analysis(action="variables", addr="main")
+
+    arrays - Detect array variables on the stack and their element sizes
+        Returns: {function, arrays[], count}
+        Example: stack_analysis(action="arrays", addr="0x401000")
+
+    uninitialized - Find potentially uninitialized stack variables
+        Returns: {function, uninitialized[], count}
+        Example: stack_analysis(action="uninitialized", addr="main")
+
+    summary - Quick stack frame summary for LLM context
+        Returns: {function, frame_size, local_count, arg_count, has_canary, has_buffers}
+        Example: stack_analysis(action="summary", addr="0x401000")
+    """
+    try:
+        func, err = _get_func_or_error(addr)
+        if err:
+            return err
+        func_name = ida_funcs.get_func_name(func.start_ea)
+        arch = _get_arch_info()
+
+        # ---- frame: Full stack frame layout ----
+        if action == "frame":
+            frame, err = _get_frame_or_error(func)
+            if err:
+                return err
+            frame_size = ida_struct.get_struc_size(frame)
+            members = []
+            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                members.append({
+                    "index": i,
+                    "name": name,
+                    "offset": hex(offset),
+                    "size": size,
+                    "type": type_str,
+                })
+                if len(members) >= limit:
+                    break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "frame_size": frame_size,
+                "member_count": len(members),
+                "members": members,
+                "arch": arch,
+            }
+
+        # ---- buffers: Find stack buffers ----
+        elif action == "buffers":
+            frame, err = _get_frame_or_error(func)
+            if err:
+                return err
+            buffers = []
+            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                is_buffer = False
+                # Arrays are buffers
+                if "[" in type_str:
+                    is_buffer = True
+                # Large variables (>= 8 bytes without pointer type) likely buffers
+                elif size >= 8 and "char" in type_str.lower():
+                    is_buffer = True
+                elif size >= 16 and "*" not in type_str:
+                    is_buffer = True
+                if is_buffer:
+                    buffers.append({
+                        "name": name,
+                        "offset": hex(offset),
+                        "size": size,
+                        "type": type_str,
+                    })
+                    if len(buffers) >= limit:
+                        break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "buffers": buffers,
+                "count": len(buffers),
+            }
+
+        # ---- canary: Detect stack canary/cookie ----
+        elif action == "canary":
+            has_canary = False
+            canary_type = None
+            canary_refs = []
+            # Check for xrefs from this function to canary symbols
+            for sym in _CANARY_SYMBOLS:
+                sym_ea = idc.get_name_ea_simple(sym)
+                if sym_ea == idaapi.BADADDR:
+                    continue
+                for xref in idautils.XrefsTo(sym_ea, 0):
+                    ref_func = idaapi.get_func(xref.frm)
+                    if ref_func and ref_func.start_ea == func.start_ea:
+                        has_canary = True
+                        if "security_cookie" in sym.lower():
+                            canary_type = "MSVC_security_cookie"
+                        elif "stack_chk" in sym.lower():
+                            canary_type = "GCC_stack_chk"
+                        canary_refs.append({
+                            "symbol": sym,
+                            "ref_addr": hex_ea(xref.frm),
+                        })
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "has_canary": has_canary,
+                "canary_type": canary_type,
+                "references": canary_refs,
+                "arch": arch["proc"],
+            }
+
+        # ---- alignment: Stack alignment requirements ----
+        elif action == "alignment":
+            frame, err = _get_frame_or_error(func)
+            if err:
+                return err
+            frame_size = ida_struct.get_struc_size(frame)
+            # Determine alignment from frame size and architecture
+            if frame_size == 0:
+                alignment = arch["ptr_size"]
+            else:
+                alignment = 1
+                for a in (32, 16, 8, 4, 2):
+                    if frame_size % a == 0:
+                        alignment = a
+                        break
+            # Check member alignments
+            max_member_align = 1
+            member_details = []
+            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                m_align = 1
+                for a in (16, 8, 4, 2):
+                    if offset % a == 0 and size >= a:
+                        m_align = a
+                        break
+                if m_align > max_member_align:
+                    max_member_align = m_align
+                member_details.append({
+                    "name": name,
+                    "offset": hex(offset),
+                    "size": size,
+                    "natural_alignment": m_align,
+                })
+                if len(member_details) >= limit:
+                    break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "frame_size": frame_size,
+                "frame_alignment": alignment,
+                "max_member_alignment": max_member_align,
+                "members": member_details,
+                "arch": arch,
+            }
+
+        # ---- spills: Find register spills to stack ----
+        elif action == "spills":
+            frame, err = _get_frame_or_error(func)
+            if err:
+                return err
+            spills = []
+            is_arm = _is_arm(arch)
+            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                is_spill = False
+                n = name.lower()
+                # Saved register detection
+                if n.startswith(" s") or n.startswith("__saved"):
+                    is_spill = True
+                elif n in ("r", "s"):
+                    is_spill = True
+                # x86: saved rbp, rdi, rsi, rbx, etc.
+                elif any(n == reg for reg in
+                         ("rbp", "rbx", "rdi", "rsi", "r12", "r13", "r14", "r15",
+                          "ebp", "ebx", "edi", "esi")):
+                    is_spill = True
+                # ARM: saved registers
+                elif is_arm and any(n == reg for reg in
+                                    ("r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11",
+                                     "lr", "fp", "x19", "x20", "x21", "x22", "x23",
+                                     "x24", "x25", "x26", "x27", "x28", "x29", "x30")):
+                    is_spill = True
+                if is_spill:
+                    spills.append({
+                        "name": name,
+                        "offset": hex(offset),
+                        "size": size,
+                    })
+                    if len(spills) >= limit:
+                        break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "spills": spills,
+                "count": len(spills),
+                "arch": arch["proc"],
+            }
+
+        # ---- usage: Stack usage analysis ----
+        elif action == "usage":
+            frame, _ = _get_frame_or_error(func)
+            frame_size = ida_struct.get_struc_size(frame) if frame else 0
+            # Track stack pointer delta across the function
+            max_spd = 0
+            min_spd = 0
+            ea = func.start_ea
+            while ea < func.end_ea and ea != idaapi.BADADDR:
+                spd = ida_frame.get_spd(func, ea)
+                if spd is not None:
+                    if spd > max_spd:
+                        max_spd = spd
+                    if spd < min_spd:
+                        min_spd = spd
+                ea = idc.next_head(ea)
+            # Check for dynamic allocation (alloca/__chkstk)
+            has_dynamic_alloc = False
+            alloca_calls = []
+            for sym in _ALLOCA_SYMBOLS:
+                sym_ea = idc.get_name_ea_simple(sym)
+                if sym_ea == idaapi.BADADDR:
+                    continue
+                for xref in idautils.XrefsTo(sym_ea, 0):
+                    ref_func = idaapi.get_func(xref.frm)
+                    if ref_func and ref_func.start_ea == func.start_ea:
+                        has_dynamic_alloc = True
+                        alloca_calls.append({
+                            "symbol": sym,
+                            "call_addr": hex_ea(xref.frm),
+                        })
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "frame_size": frame_size,
+                "max_spd": max_spd,
+                "min_spd": min_spd,
+                "has_dynamic_alloc": has_dynamic_alloc,
+                "alloca_calls": alloca_calls,
+                "func_size": func.end_ea - func.start_ea,
+            }
+
+        # ---- variables: Enhanced local variable analysis ----
+        elif action == "variables":
+            frame, err = _get_frame_or_error(func)
+            if err:
+                return err
+            frame_size = ida_struct.get_struc_size(frame)
+            variables = []
+            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                # Classify the variable
+                n = name.lower()
+                kind = "local"
+                if n.startswith("arg_") or n.startswith("param_"):
+                    kind = "argument"
+                elif n.startswith(" s") or n.startswith("__saved"):
+                    kind = "saved_reg"
+                elif n.startswith(" r") or n == "r":
+                    kind = "return_addr"
+                # Infer type category
+                category = "unknown"
+                tl = type_str.lower()
+                if "*" in type_str or "ptr" in tl:
+                    category = "pointer"
+                elif "[" in type_str:
+                    category = "array"
+                elif any(t in tl for t in ("int", "long", "short", "dword", "qword", "word")):
+                    category = "integer"
+                elif "char" in tl or "byte" in tl:
+                    category = "byte"
+                elif "float" in tl or "double" in tl:
+                    category = "float"
+                elif "bool" in tl:
+                    category = "boolean"
+                elif size in (1, 2, 4, 8) and not type_str:
+                    category = "integer"
+                variables.append({
+                    "name": name,
+                    "offset": hex(offset),
+                    "size": size,
+                    "type": type_str,
+                    "kind": kind,
+                    "category": category,
+                })
+                if len(variables) >= limit:
+                    break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "frame_size": frame_size,
+                "variables": variables,
+                "count": len(variables),
+            }
+
+        # ---- arrays: Detect array variables ----
+        elif action == "arrays":
+            frame, err = _get_frame_or_error(func)
+            if err:
+                return err
+            arrays = []
+            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                is_array = False
+                element_size = 0
+                element_count = 0
+                if "[" in type_str:
+                    is_array = True
+                    # Parse element count from type like "char[64]"
+                    import re
+                    m = re.search(r'\[(\d+)\]', type_str)
+                    if m:
+                        element_count = int(m.group(1))
+                        if element_count > 0:
+                            element_size = size // element_count
+                elif size >= 16 and "*" not in type_str:
+                    # Heuristic: large non-pointer might be array
+                    is_array = True
+                    # Guess element size from type
+                    tl = type_str.lower()
+                    if "char" in tl or "byte" in tl:
+                        element_size = 1
+                    elif "short" in tl or "word" in tl:
+                        element_size = 2
+                    elif "int" in tl or "dword" in tl:
+                        element_size = 4
+                    elif "long" in tl or "qword" in tl:
+                        element_size = 8
+                    else:
+                        element_size = 1  # default to byte array
+                    if element_size > 0:
+                        element_count = size // element_size
+                if is_array:
+                    arrays.append({
+                        "name": name,
+                        "offset": hex(offset),
+                        "total_size": size,
+                        "element_size": element_size,
+                        "element_count": element_count,
+                        "type": type_str,
+                    })
+                    if len(arrays) >= limit:
+                        break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "arrays": arrays,
+                "count": len(arrays),
+            }
+
+        # ---- uninitialized: Find potentially uninitialized stack variables ----
+        elif action == "uninitialized":
+            frame, err = _get_frame_or_error(func)
+            if err:
+                return err
+            # Collect all local variable offsets
+            local_vars = []
+            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                n = name.lower()
+                # Skip saved regs, return addr, and arguments
+                if (n.startswith(" s") or n.startswith("__saved") or
+                        n.startswith(" r") or n == "r" or
+                        n.startswith("arg_") or n.startswith("param_")):
+                    continue
+                local_vars.append({
+                    "name": name,
+                    "offset": offset,
+                    "size": size,
+                    "type": type_str,
+                })
+            # Scan instructions for writes to stack frame offsets
+            written_offsets = set()
+            ea = func.start_ea
+            while ea < func.end_ea and ea != idaapi.BADADDR:
+                mnem = idc.print_insn_mnem(ea)
+                if mnem:
+                    ml = mnem.lower()
+                    # x86/x64: mov/lea to [rbp-X] or [rsp+X]
+                    # ARM: str to [fp, #-X] or [sp, #X]
+                    op0_type = idc.get_operand_type(ea, 0)
+                    # Memory write: operand 0 is a memory reference
+                    if op0_type in (idc.o_displ, idc.o_phrase):
+                        op0_val = idc.get_operand_value(ea, 0)
+                        if op0_val is not None:
+                            written_offsets.add(op0_val & 0xFFFFFFFF)
+                ea = idc.next_head(ea)
+            # Find locals with no detected write
+            uninitialized = []
+            for var in local_vars:
+                off = var["offset"] & 0xFFFFFFFF
+                if off not in written_offsets:
+                    uninitialized.append({
+                        "name": var["name"],
+                        "offset": hex(var["offset"]),
+                        "size": var["size"],
+                        "type": var["type"],
+                        "note": "No direct write detected (heuristic)",
+                    })
+                    if len(uninitialized) >= limit:
+                        break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "uninitialized": uninitialized,
+                "count": len(uninitialized),
+                "note": "Heuristic analysis; may have false positives",
+            }
+
+        # ---- summary: Quick stack frame summary ----
+        elif action == "summary":
+            frame, _ = _get_frame_or_error(func)
+            frame_size = ida_struct.get_struc_size(frame) if frame else 0
+            local_count = 0
+            arg_count = 0
+            saved_count = 0
+            buffer_count = 0
+            has_canary = False
+            if frame:
+                for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                    n = name.lower()
+                    if n.startswith("arg_") or n.startswith("param_"):
+                        arg_count += 1
+                    elif n.startswith(" s") or n.startswith("__saved"):
+                        saved_count += 1
+                    elif n.startswith(" r") or n == "r":
+                        pass  # return addr
+                    else:
+                        local_count += 1
+                    if "[" in type_str or (size >= 16 and "*" not in type_str):
+                        buffer_count += 1
+            # Quick canary check
+            for sym in _CANARY_SYMBOLS:
+                sym_ea = idc.get_name_ea_simple(sym)
+                if sym_ea == idaapi.BADADDR:
+                    continue
+                for xref in idautils.XrefsTo(sym_ea, 0):
+                    ref_func = idaapi.get_func(xref.frm)
+                    if ref_func and ref_func.start_ea == func.start_ea:
+                        has_canary = True
+                        break
+                if has_canary:
+                    break
+            return {
+                "ok": True,
+                "function": func_name,
+                "addr": hex_ea(func.start_ea),
+                "frame_size": frame_size,
+                "local_count": local_count,
+                "arg_count": arg_count,
+                "saved_reg_count": saved_count,
+                "buffer_count": buffer_count,
+                "has_canary": has_canary,
+                "func_size": func.end_ea - func.start_ea,
+                "arch": arch,
+            }
+
+        else:
+            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+
+    except Exception as e:
+        return handle_error(e)
