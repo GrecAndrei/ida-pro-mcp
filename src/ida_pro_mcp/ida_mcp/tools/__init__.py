@@ -51,6 +51,7 @@ from .deobfuscate import deobfuscate
 from .crypto_id import crypto_id
 from .abi import abi
 from .summarize import summarize
+from .compare import compare
 
 __all__ = [
     "idb",
@@ -104,4 +105,5 @@ __all__ = [
     "crypto_id",
     "abi",
     "summarize",
+    "compare",
 ]
