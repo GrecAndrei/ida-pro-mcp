@@ -129,6 +129,46 @@ def types(
             
             return result
         
+        elif action == "set_prototype":
+            # Set function prototype at address
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            if not decl: return make_error(MCPError.INVALID_ARGS, "decl required (function prototype)")
+            ea, err = validate_addr(addr, require_func=True)
+            if err: return err
+            tif = ida_typeinf.tinfo_t()
+            if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
+                return make_error(MCPError.INVALID_ARGS, f"Failed to parse prototype: {decl}")
+            if ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
+                return {"ok": True, "addr": hex(ea), "prototype": str(tif)}
+            return make_error(MCPError.IDA_ERROR, "Failed to apply prototype")
+
+        elif action == "parse_decl":
+            # Parse a C declaration string to verify validity
+            if not decl: return make_error(MCPError.INVALID_ARGS, "decl required")
+            tif = ida_typeinf.tinfo_t()
+            if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
+                return make_error(MCPError.INVALID_ARGS, f"Failed to parse: {decl}")
+            return {"ok": True, "type": str(tif), "size": tif.get_size(), "is_func": tif.is_func(), "is_struct": tif.is_struct()}
+
+        elif action == "declare":
+            # Define a new local type from a C declaration
+            if not decl: return make_error(MCPError.INVALID_ARGS, "decl required")
+            til = ida_typeinf.get_idati()
+            tif = ida_typeinf.tinfo_t()
+            result = ida_typeinf.parse_decl(tif, til, decl, ida_typeinf.PT_TYP)
+            if result is None:
+                return make_error(MCPError.INVALID_ARGS, f"Failed to parse declaration: {decl}")
+            type_name = tif.get_type_name() or name
+            if not type_name:
+                import re
+                match = re.search(r'(?:struct|enum|union)\s+(\w+)', decl)
+                if match:
+                    type_name = match.group(1)
+            ordinal = ida_typeinf.alloc_type_ordinal(til)
+            if ida_typeinf.set_numbered_type(til, ordinal, ida_typeinf.NTF_TYPE, type_name, tif):
+                return {"ok": True, "name": type_name, "ordinal": ordinal, "size": tif.get_size()}
+            return make_error(MCPError.IDA_ERROR, "Failed to save type to type library")
+
         elif action == "apply":
             # Apply type to address (enhanced for locals)
             if not addr or not decl:

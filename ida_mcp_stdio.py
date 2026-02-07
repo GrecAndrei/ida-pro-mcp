@@ -257,6 +257,16 @@ class SessionManager:
             self._save_metadata(session)
         return session
 
+    def find_session_by_path(self, path: str) -> Optional[Session]:
+        """Find a session by binary_path or idb_path (normalized comparison)."""
+        norm = os.path.normpath(os.path.abspath(path))
+        for s in self.sessions.values():
+            if os.path.normpath(os.path.abspath(s.binary_path)) == norm:
+                return s
+            if os.path.normpath(os.path.abspath(s.idb_path)) == norm:
+                return s
+        return None
+
     def discover_sessions(self, query: str = "") -> List[Session]:
         """Return all active sessions, optionally filtered by query.
 
@@ -521,7 +531,7 @@ TOOLS = [
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create, list (supports limit/offset for pagination, query for regex/glob/substring filtering), switch, close (PERMANENTLY DELETES session and all associated files including IDB), status, rebuild (recreate IDB with new analysis options). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary, supports processor/bitness/endian/loader params), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
     # Analysis configuration
@@ -537,12 +547,12 @@ TOOL_DESCRIPTIONS = {
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
     "memory": "Direct database memory access. Actions: read, write.",
     # Modification tools
-    "modify": "Rename, comment, set types, and patch assembly. Actions: rename, comment, set_type, patch_asm.",
-    "funcs": "Function boundary management. Actions: create, delete, set_flags, set_name, add_comment, list, info.",
+    "modify": "Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set_type, patch_asm (assembles instruction(s) and patches bytes, supports multi-line separated by semicolons).",
+    "funcs": "Function boundary management. Actions: create (auto-converts bytes to code, handles overlapping functions, supports end address), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).",
     "segments": "Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.",
     "bulk": "Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.",
     # Utilities
-    "misc": "Utilities. Actions: python, idc, load_sig. Use python for full IDAPython access.",
+    "misc": "Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file. Use python for full IDAPython access. read_file/write_file for host filesystem I/O.",
     "calc": "Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.",
     "nav": "Navigation and triage. Actions: goto, cursor, interesting.",
     # Debugging and tracing
@@ -585,7 +595,7 @@ TOOL_DESCRIPTIONS = {
 
 TOOL_ACTIONS = {
     # Core session tools
-    "session": ["discover", "create", "list", "switch", "close", "status", "rebuild"],
+    "session": ["discover", "create", "get", "list", "switch", "close", "status", "rebuild"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
     # Analysis configuration
     "analysis": [
@@ -665,6 +675,7 @@ TOOL_ACTIONS = {
         "delete",
         "set_flags",
         "set_name",
+        "rename",
         "add_comment",
         "list",
         "info",
@@ -679,7 +690,7 @@ TOOL_ACTIONS = {
         "export_annotations",
     ],
     # Utilities
-    "misc": ["python", "idc", "load_sig"],
+    "misc": ["python", "idc", "load_sig", "cache_stats", "read_file", "write_file"],
     "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
     "nav": ["goto", "cursor", "interesting"],
     # Debugging and tracing
@@ -930,9 +941,12 @@ TOOL_ARG_SCHEMAS = {
     },
     "misc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["misc"]},
-        "expr": {"type": "string"},
-        "code": {"type": "string"},
-        "name": {"type": "string"},
+        "expr": {"type": "string", "description": "Python expression or IDC script to evaluate"},
+        "code": {"type": "string", "description": "Multi-line Python code to execute"},
+        "name": {"type": "string", "description": "Signature name for load_sig"},
+        "path": {"type": "string", "description": "File path for read_file/write_file"},
+        "content": {"type": "string", "description": "Content to write for write_file"},
+        "encoding": {"type": "string", "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data."},
     },
     "analysis": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["analysis"]},
@@ -1550,9 +1564,30 @@ class IDAMCPServer:
             action = args.get("action")
             if action == "create":
                 path = args.get("binary_path")
-                if not path or not os.path.exists(path):
-                    return make_error(MCPError.FILE_NOT_FOUND, str(path))
+                if not path:
+                    return make_error(MCPError.INVALID_ARGS, "binary_path is required")
+                # Resolve relative paths
+                if not os.path.isabs(path):
+                    path = os.path.abspath(path)
+                if not os.path.exists(path):
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND,
+                        f"Binary not found: {path}",
+                        details={"binary_path": path, "hint": "Provide an absolute path to an existing binary file"},
+                    )
                 use_existing = args.get("use_existing")
+                # Check if a session for this binary already exists
+                existing = self.session_mgr.find_session_by_path(path)
+                if existing and not use_existing:
+                    # Reuse existing session instead of creating a duplicate
+                    self.current_session = existing
+                    existing.update_access()
+                    self.session_mgr._save_metadata(existing)
+                    return {
+                        "ok": True,
+                        "session": existing.to_dict(),
+                        "note": "Reusing existing session for this binary. Use use_existing=<idb_path> to force a new session.",
+                    }
                 analysis_options = {}
                 for key in ("processor", "flags", "loader", "value", "bitness", "endian", "reanalyze"):
                     if key in args:
@@ -1567,6 +1602,24 @@ class IDAMCPServer:
                 q = args.get("query", "")
                 sessions = [s.to_dict() for s in self.session_mgr.discover_sessions(query=q)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
+            if action == "get":
+                sid = args.get("session_id")
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                session = self.session_mgr.get_session(sid)
+                if not session:
+                    return make_error(MCPError.INVALID_ARGS, f"Session {sid} not found")
+                runtime = self.session_runtimes.get(sid)
+                is_running = bool(
+                    runtime
+                    and runtime.get("process")
+                    and runtime["process"].poll() is None
+                )
+                result = session.to_dict()
+                result["is_running"] = is_running
+                if is_running:
+                    result["port"] = runtime.get("port")
+                return {"ok": True, "session": result}
             if action == "list":
                 all_sessions = list(self.session_mgr.sessions.values())
 
@@ -1593,16 +1646,37 @@ class IDAMCPServer:
                     else all_sessions[offset:]
                 )
 
+                # Include runtime status for each session
+                session_dicts = []
+                for s in paginated:
+                    d = s.to_dict()
+                    runtime = self.session_runtimes.get(s.session_id)
+                    d["is_running"] = bool(
+                        runtime
+                        and runtime.get("process")
+                        and runtime["process"].poll() is None
+                    )
+                    session_dicts.append(d)
+
                 return {
                     "ok": True,
-                    "sessions": [s.to_dict() for s in paginated],
+                    "sessions": session_dicts,
                     "total": total,
-                    "count": len(paginated),
+                    "count": len(session_dicts),
                     "offset": offset,
                     "limit": limit,
                 }
             if action == "switch":
                 sid = args.get("session_id")
+                if not sid:
+                    # Try to find by binary_path
+                    path = args.get("binary_path")
+                    if path:
+                        found = self.session_mgr.find_session_by_path(path)
+                        if found:
+                            sid = found.session_id
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id or binary_path required")
                 session = self.session_mgr.get_session(sid)
                 if session:
                     self.current_session = session
@@ -1613,7 +1687,7 @@ class IDAMCPServer:
                     self.current_session.session_id if self.current_session else None
                 )
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                    return make_error(MCPError.INVALID_ARGS, "session_id required (or have an active session)")
                 self._cleanup_runtime(sid)
                 closed = self.session_mgr.delete_session(sid)
                 if (
@@ -1624,10 +1698,17 @@ class IDAMCPServer:
                     self.current_session = None
                 return {"ok": closed, "session_id": sid}
             if action == "status":
-                session = (
-                    self.current_session.to_dict() if self.current_session else None
-                )
-                return {"ok": True, "session": session}
+                if self.current_session:
+                    result = self.current_session.to_dict()
+                    runtime = self.session_runtimes.get(self.current_session.session_id)
+                    result["is_running"] = bool(
+                        runtime
+                        and runtime.get("process")
+                        and runtime["process"].poll() is None
+                    )
+                else:
+                    result = None
+                return {"ok": True, "session": result, "total_sessions": len(self.session_mgr.sessions)}
             if action == "rebuild":
                 sid = args.get("session_id") or (
                     self.current_session.session_id if self.current_session else None
