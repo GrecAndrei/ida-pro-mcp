@@ -200,7 +200,7 @@ def search(
             return _search_result(pattern=pattern)
         
         elif action == "string":
-            pattern_check = pattern.lower() if not case_sensitive else pattern
+            _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             for i in range(idaapi.get_strlist_qty()):
                 if truncated:
                     break
@@ -210,8 +210,7 @@ def search(
                         content = idc.get_strlit_contents(sc.ea)
                         if content:
                             s = content.decode("utf-8", errors="replace")
-                            s_check = s.lower() if not case_sensitive else s
-                            if pattern_check in s_check:
+                            if _matcher(s):
                                 line = f"{hex(sc.ea)}  {s[:500]}"
                                 if include_context:
                                     xref_count = len(list(idautils.XrefsTo(sc.ea)))
@@ -257,10 +256,11 @@ def search(
             return _search_result(value=hex(value))
         
         elif action == "name":
+            _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             for ea, name in idautils.Names():
                 if truncated:
                     break
-                if fnmatch.fnmatch(name.lower(), pattern.lower()):
+                if _matcher(name):
                     kind = "func" if idaapi.get_func(ea) else ("data" if ida_bytes.is_data(ida_bytes.get_flags(ea)) else "label")
                     if maybe_add(f"{hex(ea)}  {kind}  {name}"):
                         break
@@ -315,7 +315,7 @@ def search(
             return _search_result(pattern=pattern)
 
         elif action == "text":
-            pattern_check = pattern.lower() if not case_sensitive else pattern
+            _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             segments = seg_list if seg_list is not None else list(idautils.Segments())
             for seg_ea in segments:
                 if truncated:
@@ -334,9 +334,9 @@ def search(
                 while ea < seg_end and not truncated:
                     line = idc.generate_disasm_line(ea, 0)
                     if line:
-                        line_check = line.lower() if not case_sensitive else line
-                        if pattern_check in line_check:
-                            result_line = f"{hex(ea)}  {ida_lines.tag_remove(line)}"
+                        line_clean = ida_lines.tag_remove(line)
+                        if _matcher(line_clean):
+                            result_line = f"{hex(ea)}  {line_clean}"
                             if include_context:
                                 func = idaapi.get_func(ea)
                                 if func:
@@ -347,7 +347,7 @@ def search(
             return _search_result(pattern=pattern)
 
         elif action == "operand":
-            pattern_check = pattern.lower() if not case_sensitive else pattern
+            _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             segments = seg_list if seg_list is not None else list(idautils.Segments())
             for seg_ea in segments:
                 if truncated:
@@ -370,8 +370,7 @@ def search(
                             break
                         ops.append(idc.print_operand(ea, i) or "")
                     op_text = ", ".join(ops)
-                    op_check = op_text.lower() if not case_sensitive else op_text
-                    if op_text and pattern_check in op_check:
+                    if op_text and _matcher(op_text):
                         line = f"{hex(ea)}  {idc.print_insn_mnem(ea)}  {op_text}"
                         if include_context:
                             line += f"  {idc.generate_disasm_line(ea, 0)}"
@@ -381,7 +380,7 @@ def search(
             return _search_result(pattern=pattern)
 
         elif action == "comment":
-            pattern_check = pattern.lower() if not case_sensitive else pattern
+            _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             segments = seg_list if seg_list is not None else list(idautils.Segments())
             for seg_ea in segments:
                 if truncated:
@@ -404,8 +403,7 @@ def search(
                         cmt = idc.get_cmt(ea, 1)
                         cmt_type = "repeatable"
                     if cmt:
-                        cmt_check = cmt.lower() if not case_sensitive else cmt
-                        if pattern_check in cmt_check:
+                        if _matcher(cmt):
                             if maybe_add(f"{hex(ea)}  {cmt_type}  {cmt}"):
                                 break
                     ea = idc.next_head(ea, seg_end)
@@ -571,9 +569,8 @@ def search(
         
         elif action == "find":
             # Smart unified search - auto-detects what user wants
-            import fnmatch
+            _find_matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             
-            query_lower = pattern.lower()
             results_by_type = {}
             
             # 1. If looks like hex/address, search xrefs
@@ -600,18 +597,16 @@ def search(
             
             # 2. Search names (functions, globals)
             name_lines = []
-            glob_pattern = f"*{pattern}*" if not any(c in pattern for c in "*?[]") else pattern
             for ea, name in idautils.Names():
                 if len(name_lines) >= limit:
                     break
-                if fnmatch.fnmatch(name.lower(), glob_pattern.lower()):
+                if _find_matcher(name):
                     kind = "func" if idaapi.get_func(ea) else "data"
                     name_lines.append(f"{hex(ea)}  {kind}  {name}")
             results_by_type["names"] = "\n".join(name_lines)
             
             # 3. Search strings
             string_lines = []
-            pattern_check = pattern.lower()
             for i in range(idaapi.get_strlist_qty()):
                 if len(string_lines) >= limit:
                     break
@@ -621,7 +616,7 @@ def search(
                         content = idc.get_strlit_contents(sc.ea)
                         if content:
                             s = content.decode("utf-8", errors="replace")
-                            if pattern_check in s.lower():
+                            if _find_matcher(s):
                                 xref_count = len(list(idautils.XrefsTo(sc.ea)))
                                 string_lines.append(f"{hex(sc.ea)}  xrefs={xref_count}  {s[:200]}")
                     except Exception:
@@ -635,7 +630,7 @@ def search(
                 def cb(ea, name, ordinal):
                     if len(import_lines) >= limit:
                         return False
-                    if name and pattern_check in name.lower():
+                    if name and _find_matcher(name):
                         xref_count = len(list(idautils.XrefsTo(ea)))
                         import_lines.append(f"{hex(ea)}  {mod_name}  {name}  xrefs={xref_count}")
                     return True
