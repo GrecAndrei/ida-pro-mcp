@@ -65,6 +65,8 @@ except ImportError:
         for ind in (r"\d", r"\w", r"\s", r"\b", r"\D", r"\W", r"\S", r"\B"):
             if ind in pattern:
                 return True
+        if re.search(r"\\[.^$*+?{}()|[\]\\]", pattern):
+            return True
         if set("^$+{}()|").intersection(pattern):
             return True
         if re.search(r"\[.+\]", pattern):

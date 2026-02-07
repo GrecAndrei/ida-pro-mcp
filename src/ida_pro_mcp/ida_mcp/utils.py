@@ -777,6 +777,10 @@ def _is_regex(pattern: str) -> bool:
         if ind in pattern:
             return True
 
+    # Backslash-escaped metacharacters (e.g. \., \(, \), \*, \+) are regex
+    if re.search(r"\\[.^$*+?{}()|[\]\\]", pattern):
+        return True
+
     # Regex-only metacharacters (not glob wildcards)
     _REGEX_META = set("^$+{}()|")
     if _REGEX_META.intersection(pattern):
