@@ -79,6 +79,14 @@ def colorize(
                 curr = idc.next_head(curr, ee)
             return {"ok": True, "start": hex(ea), "end": hex(ee)}
 
+        elif action == "set_insn":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err: return err
+            bgr = parse_color(color)
+            idc.set_color(ea, idc.CIC_ITEM, bgr)
+            return {"ok": True, "addr": hex(ea), "color": color or "yellow"}
+
         elif action == "get":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
