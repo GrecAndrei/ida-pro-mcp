@@ -244,7 +244,8 @@ def export(
             til = ida_typeinf.get_idati()
             type_count = 0
             if til:
-                count = ida_typeinf.get_ordinal_count(til)
+                qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
+                count = qty_func(til) if qty_func else 0
                 for ordinal in range(1, min(count + 1, 500)):  # Limit
                     tinfo = ida_typeinf.tinfo_t()
                     if tinfo.get_numbered_type(til, ordinal):

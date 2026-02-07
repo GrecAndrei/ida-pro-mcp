@@ -7,10 +7,13 @@ except ImportError:
 
 @tool
 def misc(
-    action: Literal["python", "idc", "load_sig", "cache_stats"] = "python",
+    action: Literal["python", "idc", "load_sig", "cache_stats", "read_file", "write_file"] = "python",
     expr: Optional[str] = None,
     code: Optional[str] = None,
-    name: Optional[str] = None
+    name: Optional[str] = None,
+    path: Annotated[Optional[str], "File path for read_file/write_file"] = None,
+    content: Annotated[Optional[str], "Content to write for write_file"] = None,
+    encoding: Annotated[Optional[str], "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data."] = None,
 ) -> Any:
     """
     Miscellaneous utility tools for IDA.
@@ -20,6 +23,10 @@ def misc(
     - idc: Execute IDC script (use 'expr' or 'code')
     - load_sig: Load a FLIRT signature by name
     - cache_stats: Show read-only tool cache statistics
+    - read_file: Read a file from the host filesystem. Returns text content (utf-8 by default)
+      or hex-encoded bytes if encoding='binary'. Params: path, encoding (optional)
+    - write_file: Write content to a file on the host filesystem. Writes text (utf-8 by default)
+      or decodes hex content if encoding='binary'. Params: path, content, encoding (optional)
     """
     if action == "python":
         # Support both 'expr' and 'code' for backward compatibility
@@ -59,6 +66,53 @@ def misc(
                 return {"ok": True, **TOOL_CACHE.stats()}
             except ImportError:
                 return {"ok": True, "message": "Cache not available"}
+    if action == "read_file":
+        if not path:
+            return {"error": True, "message": "path required for read_file"}
+        import os as _os
+        try:
+            resolved = _os.path.normpath(_os.path.abspath(path))
+            if not _os.path.exists(resolved):
+                return {"error": True, "message": f"File not found: {resolved}"}
+            if not _os.path.isfile(resolved):
+                return {"error": True, "message": f"Not a file: {resolved}"}
+            enc = (encoding or "utf-8").strip().lower()
+            if enc == "binary":
+                with open(resolved, "rb") as f:
+                    data = f.read()
+                return {"ok": True, "path": resolved, "size": len(data), "content": data.hex(), "encoding": "binary"}
+            else:
+                with open(resolved, "r", encoding=enc, errors="replace") as f:
+                    text = f.read()
+                return {"ok": True, "path": resolved, "size": len(text), "content": text, "encoding": enc}
+        except Exception:
+            return {"error": True, "message": traceback.format_exc()}
+    if action == "write_file":
+        if not path:
+            return {"error": True, "message": "path required for write_file"}
+        if content is None:
+            return {"error": True, "message": "content required for write_file"}
+        import os as _os
+        try:
+            resolved = _os.path.normpath(_os.path.abspath(path))
+            # Ensure parent directory exists
+            parent = _os.path.dirname(resolved)
+            if parent and not _os.path.exists(parent):
+                _os.makedirs(parent, exist_ok=True)
+            enc = (encoding or "utf-8").strip().lower()
+            if enc == "binary":
+                data = bytes.fromhex(content)
+                with open(resolved, "wb") as f:
+                    f.write(data)
+                return {"ok": True, "path": resolved, "size": len(data), "encoding": "binary"}
+            else:
+                with open(resolved, "w", encoding=enc) as f:
+                    f.write(content)
+                return {"ok": True, "path": resolved, "size": len(content), "encoding": enc}
+        except ValueError as ve:
+            return {"error": True, "message": f"Invalid hex content for binary mode: {ve}"}
+        except Exception:
+            return {"error": True, "message": traceback.format_exc()}
     return {"error": True, "message": f"Unknown action: {action}"}
 
 @idawrite
