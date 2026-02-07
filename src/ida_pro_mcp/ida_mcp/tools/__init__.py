@@ -48,6 +48,7 @@ from .edit import edit
 from .batch import batch
 from .vuln_scan import vuln_scan
 from .deobfuscate import deobfuscate
+from .crypto_id import crypto_id
 
 __all__ = [
     "idb",
@@ -98,4 +99,5 @@ __all__ = [
     "batch",
     "vuln_scan",
     "deobfuscate",
+    "crypto_id",
 ]
