@@ -14,6 +14,8 @@ _real_stdout = sys.stdout
 sys.stdout = sys.stderr
 
 import io
+import re
+import fnmatch
 import threading
 import subprocess
 import time
@@ -49,6 +51,59 @@ except ImportError:
 
     def truncate_response(resp, **kwargs):
         return resp
+
+# Import smart pattern matching (regex auto-detection)
+try:
+    from ida_pro_mcp.ida_mcp.utils import _is_regex, smart_match, compile_smart_pattern
+except ImportError:
+    # Inline fallback for standalone mode
+    def _is_regex(pattern):
+        if not pattern:
+            return False
+        if pattern.startswith("/") and pattern.count("/") >= 2:
+            return True
+        for ind in (r"\d", r"\w", r"\s", r"\b", r"\D", r"\W", r"\S", r"\B"):
+            if ind in pattern:
+                return True
+        if set("^$+{}()|").intersection(pattern):
+            return True
+        if re.search(r"\[.+\]", pattern):
+            return True
+        return False
+
+    def compile_smart_pattern(pattern, case_sensitive=False):
+        if not pattern:
+            return lambda _t: True
+        regex = None
+        if pattern.startswith("/") and pattern.count("/") >= 2:
+            ls = pattern.rfind("/")
+            body, fs = pattern[1:ls], pattern[ls+1:]
+            flags = 0
+            for c in fs:
+                if c == "i": flags |= re.IGNORECASE
+                elif c == "m": flags |= re.MULTILINE
+                elif c == "s": flags |= re.DOTALL
+            try:
+                regex = re.compile(body, flags or (0 if case_sensitive else re.IGNORECASE))
+            except re.error:
+                pass
+        elif _is_regex(pattern):
+            try:
+                regex = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
+            except re.error:
+                pass
+        if regex is not None:
+            return lambda _t, _r=regex: bool(_r.search(_t))
+        if "*" in pattern or "?" in pattern:
+            pl = pattern.lower()
+            return lambda _t, _p=pl: fnmatch.fnmatch(_t.lower(), _p)
+        if case_sensitive:
+            return lambda _t, _p=pattern: _p in _t
+        pl = pattern.lower()
+        return lambda _t, _p=pl: _p in _t.lower()
+
+    def smart_match(pattern, text, case_sensitive=False):
+        return compile_smart_pattern(pattern, case_sensitive)(text)
 
 
 # Suppress ALL warnings
@@ -200,9 +255,21 @@ class SessionManager:
             self._save_metadata(session)
         return session
 
-    def discover_sessions(self) -> List[Session]:
-        """Return all active sessions"""
-        return list(self.sessions.values())
+    def discover_sessions(self, query: str = "") -> List[Session]:
+        """Return all active sessions, optionally filtered by query.
+
+        The *query* is matched against session_id, binary_path and idb_path
+        using automatic regex / glob / substring detection.
+        """
+        if not query:
+            return list(self.sessions.values())
+        matcher = compile_smart_pattern(query, case_sensitive=False)
+        result = []
+        for s in self.sessions.values():
+            searchable = f"{s.session_id} {s.binary_path} {s.idb_path}"
+            if matcher(searchable):
+                result.append(s)
+        return result
 
     def delete_session(self, sid: str) -> bool:
         if sid in self.sessions:
@@ -278,14 +345,25 @@ class BookmarkManager:
         f_cat = filters.get("category")
         f_tag = filters.get("tag")
         f_pri = filters.get("priority")
+        f_query = filters.get("query")
 
         filtered = bookmarks
         if f_cat:
-            filtered = [b for b in filtered if b.get("category") == f_cat]
+            cat_matcher = compile_smart_pattern(f_cat, case_sensitive=False)
+            filtered = [b for b in filtered if cat_matcher(b.get("category", ""))]
         if f_tag:
-            filtered = [b for b in filtered if f_tag in b.get("tags", [])]
+            tag_matcher = compile_smart_pattern(f_tag, case_sensitive=False)
+            filtered = [b for b in filtered if any(tag_matcher(t) for t in b.get("tags", []))]
         if f_pri:
             filtered = [b for b in filtered if b.get("priority", 0) >= int(f_pri)]
+        if f_query:
+            q_matcher = compile_smart_pattern(f_query, case_sensitive=False)
+            filtered = [
+                b for b in filtered
+                if q_matcher(b.get("name", ""))
+                or q_matcher(b.get("notes", ""))
+                or q_matcher(b.get("addr", ""))
+            ]
 
         return {
             "ok": True,
@@ -336,13 +414,15 @@ class BookmarkManager:
 
     def find(self, sid: str, query: str) -> dict:
         bookmarks = self.load(sid)
-        query = query.lower()
+        matcher = compile_smart_pattern(query, case_sensitive=False)
         results = []
         for b in bookmarks:
             if (
-                query in b.get("name", "").lower()
-                or query in b.get("notes", "").lower()
-                or any(query in t.lower() for t in b.get("tags", []))
+                matcher(b.get("name", ""))
+                or matcher(b.get("notes", ""))
+                or any(matcher(t) for t in b.get("tags", []))
+                or matcher(b.get("addr", ""))
+                or matcher(b.get("category", ""))
             ):
                 results.append(b)
         return {"ok": True, "results": results, "count": len(results)}
@@ -439,8 +519,8 @@ TOOLS = [
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create, list (supports limit/offset for pagination), switch, close (PERMANENTLY DELETES session and all associated files including IDB), status, rebuild (recreate IDB with new analysis options). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
-    "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find, export.",
+    "session": "Session management. Actions: discover, create, list (supports limit/offset for pagination, query for regex/glob/substring filtering), switch, close (PERMANENTLY DELETES session and all associated files including IDB), status, rebuild (recreate IDB with new analysis options). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
     # Analysis configuration
     "analysis": "Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze.",
@@ -450,8 +530,8 @@ TOOL_DESCRIPTIONS = {
     # Primary data access
     "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks.",
     "code": "Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
-    "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters.",
-    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref, regex, func_by_sig. Supports case_sensitive, include_context.",
+    "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.",
+    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref, regex, func_by_sig. Supports case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
     "memory": "Direct database memory access. Actions: read, write.",
     # Modification tools
@@ -766,6 +846,10 @@ TOOL_ARG_SCHEMAS = {
         "binary_path": {"type": "string", "description": "Path to target binary"},
         "use_existing": {"type": "string", "description": "Existing IDB path to reuse"},
         "session_id": {"type": "string", "description": "Session ID for switch/close"},
+        "query": {
+            "type": "string",
+            "description": "Filter sessions by name/path (supports regex, glob, substring)",
+        },
         "processor": {"type": "string"},
         "flags": {"type": "integer"},
         "loader": {"type": "string"},
@@ -1478,10 +1562,21 @@ class IDAMCPServer:
                 )
                 return {"ok": True, "session": self.current_session.to_dict()}
             if action == "discover":
-                sessions = [s.to_dict() for s in self.session_mgr.discover_sessions()]
+                q = args.get("query", "")
+                sessions = [s.to_dict() for s in self.session_mgr.discover_sessions(query=q)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "list":
                 all_sessions = list(self.session_mgr.sessions.values())
+
+                # Filter by query (regex/glob/substring auto-detected)
+                q = args.get("query", "")
+                if q:
+                    matcher = compile_smart_pattern(q, case_sensitive=False)
+                    all_sessions = [
+                        s for s in all_sessions
+                        if matcher(f"{s.session_id} {s.binary_path} {s.idb_path}")
+                    ]
+
                 # Sort by last_accessed (most recent first)
                 all_sessions.sort(key=lambda s: s.last_accessed, reverse=True)
 

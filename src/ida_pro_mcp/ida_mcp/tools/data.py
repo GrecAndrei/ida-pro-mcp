@@ -63,6 +63,7 @@ def data(
             func_lines = []
             
             total = 0
+            _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             for ea in idautils.Functions():
                 name = ida_funcs.get_func_name(ea)
                 
@@ -79,7 +80,7 @@ def data(
                 if min_size and func_size < min_size:
                     continue
                     
-                if not query or query.lower() in name.lower():
+                if not _matcher or _matcher(name):
                     total += 1
                     
                     # Collect paginated results
@@ -105,6 +106,7 @@ def data(
         elif action == "globals":
             glob_lines = []
             total = 0
+            _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             for ea, name in idautils.Names():
                 if idaapi.get_func(ea):
                     continue
@@ -115,7 +117,7 @@ def data(
                                    name.startswith("qword_")):
                     continue
                     
-                if not query or query.lower() in name.lower():
+                if not _matcher or _matcher(name):
                     total += 1
                     if total > offset and (count == 0 or len(glob_lines) < count):
                         parts = [hex_ea(ea), name]
@@ -139,6 +141,7 @@ def data(
         elif action == "strings":
             str_lines = []
             total = 0
+            _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             for i in range(idaapi.get_strlist_qty()):
                 sc = idaapi.string_info_t()
                 if idaapi.get_strlist_item(sc, i):
@@ -159,7 +162,7 @@ def data(
                             alnum_count = sum(1 for c in s if c.isalnum() or c in ' ._-/:=()[]{}\\n\\t')
                             if alnum_count / len(s) < 0.6: continue
                         
-                        if not query or query.lower() in s.lower():
+                        if not _matcher or _matcher(s):
                             total += 1
                             if total > offset and (count == 0 or len(str_lines) < count):
                                 xref_count = len(list(idautils.XrefsTo(sc.ea)))
@@ -172,13 +175,13 @@ def data(
         elif action == "imports":
             import_lines = []
             total = 0
-            query_lower = query.lower() if query else None
+            _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             
             for i in range(ida_nalt.get_import_module_qty()):
                 module = ida_nalt.get_import_module_name(i)
                 
                 # Check module filter
-                if query_lower and query_lower not in module.lower():
+                if _matcher and not _matcher(module):
                     # Still check individual function names
                     pass
                 
@@ -186,7 +189,7 @@ def data(
                 mod_imports = []
                 def cb(ea, name, ordinal):
                     imp_name = name or f"ord_{ordinal}"
-                    if not query_lower or query_lower in module.lower() or query_lower in imp_name.lower():
+                    if not _matcher or _matcher(module) or _matcher(imp_name):
                         mod_imports.append((ea, imp_name, module, ordinal))
                     return True
                 ida_nalt.enum_import_names(i, cb)
@@ -201,6 +204,7 @@ def data(
         elif action == "exports":
             export_lines = []
             total = 0
+            _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             
             # Resolve API
             _qty = getattr(idaapi, "get_entry_qty", None)
@@ -232,7 +236,7 @@ def data(
                 ea = _entry(ordinal)
                 name = _name(ordinal)
                 
-                if query and query.lower() not in (name or "").lower():
+                if query and not _matcher((name or "")):
                     continue
                     
                 total += 1
