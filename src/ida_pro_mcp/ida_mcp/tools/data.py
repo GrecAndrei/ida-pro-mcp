@@ -242,8 +242,8 @@ def data(
                 total += 1
                 if total > offset and (count == 0 or len(export_lines) < count):
                     func = idaapi.get_func(ea)
-                    size_str = hex(func.end_ea - func.start_ea) if func else ""
-                    export_lines.append(f"{hex(ea)}  {name}  {size_str}")
+                    size_str = hex_size(func.end_ea - func.start_ea) if func else ""
+                    export_lines.append(f"{hex_ea(ea)}  {name}  {size_str}")
                     
             return {"ok": True, "exports": "\n".join(export_lines), "total": total, "offset": offset, "count": len(export_lines)}
         
