@@ -62,8 +62,12 @@ def funcs(
                 return {"ok": True, "addr": hex(ea), "name": name or ida_funcs.get_func_name(ea), "note": "Function already exists at this address"}
             if existing:
                 # Address is inside an existing function but not at its start
-                if force and ida_funcs.del_func(existing.start_ea):
-                    existing = None
+                if force:
+                    if not ida_funcs.del_func(existing.start_ea):
+                        return make_error(
+                            MCPError.IDA_ERROR,
+                            f"Failed to delete containing function at {hex(existing.start_ea)}",
+                        )
                 else:
                     return make_error(
                         MCPError.ADDRESS_INVALID,

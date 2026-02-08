@@ -47,11 +47,33 @@ def log_rpc(msg):
 
 # Import truncation middleware
 try:
-    from ida_pro_mcp.ida_mcp.truncation import truncate_response
+    from ida_pro_mcp.ida_mcp.truncation import truncate_response, continue_truncated
 except ImportError:
+    try:
+        import importlib.util
 
-    def truncate_response(resp, **kwargs):
-        return resp
+        _trunc_path = os.path.join(
+            SCRIPT_DIR, "src", "ida_pro_mcp", "ida_mcp", "truncation.py"
+        )
+        _spec = importlib.util.spec_from_file_location("ida_mcp_truncation", _trunc_path)
+        if _spec and _spec.loader:
+            _module = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_module)
+            truncate_response = _module.truncate_response
+            continue_truncated = _module.continue_truncated
+        else:
+            raise ImportError("Unable to load truncation module")
+    except Exception:
+
+        def truncate_response(resp, **kwargs):
+            return resp
+
+        def continue_truncated(*_args, **_kwargs):
+            return {
+                "error": True,
+                "code": "NOT_IMPLEMENTED",
+                "message": "Truncation middleware unavailable",
+            }
 
 # Import smart pattern matching (regex auto-detection)
 try:
@@ -531,6 +553,7 @@ class BookmarkManager:
 TOOLS = [
     # Core session and batch tools (host-side)
     "session",
+    "truncation",
     "bookmarks",
     "batch",
     # Analysis configuration
@@ -625,6 +648,7 @@ TOOLS = [
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
     "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
     # Analysis configuration
@@ -706,6 +730,7 @@ TOOL_DESCRIPTIONS = {
 TOOL_ACTIONS = {
     # Core session tools
     "session": ["discover", "create", "get", "list", "switch", "close", "status", "rebuild"],
+    "truncation": ["continue"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
     # Analysis configuration
     "analysis": [
@@ -1073,6 +1098,13 @@ TOOL_ARG_SCHEMAS = {
             "description": "Skip first N sessions (list action)",
         },
     },
+    "truncation": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["truncation"]},
+        "token": {"type": "string"},
+        "field": {"type": "string"},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+    },
     "bookmarks": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["bookmarks"]},
         "addr": {"type": "string"},
@@ -1090,6 +1122,7 @@ TOOL_ARG_SCHEMAS = {
         "end": {"type": "string"},
         "name": {"type": "string"},
         "flags": {"type": "integer"},
+        "force": {"type": "boolean"},
         "comment": {"type": "string"},
         "repeatable": {"type": "boolean"},
         "query": {"type": "string"},
@@ -1357,13 +1390,16 @@ class IDAMCPServer:
         else:
             raise ValueError("ida_args must be a string or list of strings")
         cleaned = []
+        # Reserved for server-managed script/log/output IDB wiring.
         forbidden_prefixes = ("-S", "-L", "-o")
         for arg in parts:
             if not arg or "\x00" in arg:
+                log_rpc(f"Ignoring malformed ida_args entry: {arg!r}")
                 continue
             if any(arg.startswith(prefix) for prefix in forbidden_prefixes):
                 raise ValueError(f"ida_args cannot include {arg} (reserved by server)")
             if arg == "-A":
+                log_rpc("Ignoring redundant -A flag in ida_args")
                 continue
             cleaned.append(arg)
         return cleaned
@@ -1401,7 +1437,7 @@ class IDAMCPServer:
         base = idb_path.rsplit(".", 1)[0]
 
         lock_exts = [
-            ".mcp.lock",
+            ".mcp.lock",  # MCP session lock to avoid concurrent IDB writers
             ".lock",
         ]
         all_exts = [
@@ -1872,6 +1908,7 @@ class IDAMCPServer:
                 if binary_path:
                     if not os.path.isabs(binary_path):
                         binary_path = os.path.abspath(binary_path)
+                    args["binary_path"] = binary_path
                     if not os.path.exists(binary_path):
                         if not idb_path or not os.path.exists(idb_path):
                             return make_error(
@@ -2084,6 +2121,27 @@ class IDAMCPServer:
             return make_error(
                 MCPError.INVALID_ARGS, f"Unsupported session action: {action}"
             )
+
+        if tool_name == "truncation":
+            action = args.get("action")
+            if action == "continue":
+                token = args.get("token")
+                if not token:
+                    return make_error(MCPError.INVALID_ARGS, "token required")
+                result = continue_truncated(
+                    token,
+                    field=args.get("field"),
+                    offset=args.get("offset"),
+                    count=args.get("count"),
+                )
+                if result.get("error"):
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        result.get("message", "Invalid continuation request"),
+                        details={k: v for k, v in result.items() if k != "error"},
+                    )
+                return result
+            return make_error(MCPError.INVALID_ARGS, f"Unsupported truncation action: {action}")
 
         if tool_name == "bookmarks":
             if not self.current_session:

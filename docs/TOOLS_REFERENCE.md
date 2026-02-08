@@ -47,6 +47,18 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `limit`: integer
 - `offset`: integer
 
+## truncation
+
+### Actions
+- `continue`
+
+### Args
+- `action`: enum(continue)
+- `token`: string
+- `field`: string
+- `offset`: integer
+- `count`: integer
+
 ## bookmarks
 
 ### Actions
@@ -305,6 +317,7 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `end`: string
 - `name`: string
 - `flags`: integer
+- `force`: boolean
 - `comment`: string
 - `repeatable`: boolean
 - `query`: string
