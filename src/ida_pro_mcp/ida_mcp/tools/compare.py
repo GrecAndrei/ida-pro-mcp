@@ -244,8 +244,7 @@ def compare(
                         best_sim = sim
                         best_j = j
                 if best_sim >= threshold and best_j >= 0:
-                    matched.append({"block1": blk1["start"], "block2": b2[best_j]["start"],
-                                    "similarity": round(best_sim, 3)})
+                    matched.append(f"{blk1['start']}={b2[best_j]['start']}  sim={round(best_sim, 3)}")
                     if i in unmatched1:
                         unmatched1.remove(i)
                     if best_j in unmatched2:
@@ -406,14 +405,10 @@ def compare(
                 other_lines = _decompile_lines(ea_other)
                 sim = difflib.SequenceMatcher(None, target_lines, other_lines).ratio()
                 if sim >= threshold:
-                    results.append({
-                        "addr": hex_ea(ea_other),
-                        "name": idc.get_func_name(ea_other) or hex_ea(ea_other),
-                        "similarity": round(sim, 3),
-                    })
-            results.sort(key=lambda r: r["similarity"], reverse=True)
+                    results.append((round(sim, 3), f"{hex_ea(ea_other)}  {idc.get_func_name(ea_other) or hex_ea(ea_other)}  sim={round(sim, 3)}"))
+            results.sort(key=lambda r: r[0], reverse=True)
             return {"ok": True, "target": idc.get_func_name(ea1) or hex_ea(ea1),
-                    "results": results[:limit]}
+                    "results": "\n".join(r[1] for r in results[:limit])}
 
         elif action == "find_clones":
             # Hash each function by its mnemonic sequence, group duplicates
@@ -434,12 +429,12 @@ def compare(
             clones = []
             for h, funcs_list in hash_map.items():
                 if len(funcs_list) >= 2:
-                    clones.append({"hash": h, "count": len(funcs_list),
-                                   "functions": funcs_list[:limit]})
+                    funcs_str = ", ".join(funcs_list[:5])
+                    clones.append((len(funcs_list), f"hash={h}  count={len(funcs_list)}  {funcs_str}"))
                 if len(clones) >= limit:
                     break
-            clones.sort(key=lambda c: c["count"], reverse=True)
-            return {"ok": True, "clone_groups": len(clones), "clones": clones[:limit]}
+            clones.sort(key=lambda c: c[0], reverse=True)
+            return {"ok": True, "clone_groups": len(clones), "clones": "\n".join(c[1] for c in clones[:limit])}
 
         elif action == "changelog":
             ea1, err = _resolve_func(addr, "addr")

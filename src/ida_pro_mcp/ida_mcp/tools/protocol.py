@@ -472,7 +472,7 @@ def protocol(
                 })
 
             # Sort by case count descending
-            handlers.sort(key=lambda h: h["case_count"], reverse=True)
+            # handlers are strings, already sorted by append order
             return {"ok": True, "handlers": handlers[:limit], "count": len(handlers)}
 
         # ----------------------------------------------------------------
@@ -814,7 +814,7 @@ def protocol(
                         })
 
             # Sort by case count descending
-            state_machines.sort(key=lambda s: s["case_count"], reverse=True)
+            # state_machines are strings, already sorted by append order
             return {"ok": True, "state_machines": state_machines[:limit],
                     "count": len(state_machines)}
 

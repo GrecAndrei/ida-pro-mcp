@@ -197,8 +197,9 @@ def xref_analysis(
                 callees = _get_callees(func_ea)
                 if callers and callees:
                     score = len(callers) * len(callees)
-                    hubs.append(f"{hex_ea(func_ea)}  {_func_label(func_ea)}  callers={len(callers)}  callees={len(callees)}  score={score}")
-            hubs.sort(key=lambda h: h["score"], reverse=True)
+                    hubs.append((score, f"{hex_ea(func_ea)}  {_func_label(func_ea)}  callers={len(callers)}  callees={len(callees)}  score={score}"))
+            hubs.sort(key=lambda h: h[0], reverse=True)
+            hubs = [h[1] for h in hubs]
             hubs = hubs[:limit]
             return {"ok": True, "hubs": "\n".join(hubs), "count": len(hubs)}
 
@@ -345,13 +346,14 @@ def xref_analysis(
                     continue
                 visited.add(cur)
                 if cur != ea:
-                    reachable.append(f"{hex_ea(cur)}  {_func_label(cur)}  depth={d}")
+                    reachable.append((d, f"{hex_ea(cur)}  {_func_label(cur)}  depth={d}"))
                 if d < depth:
                     for callee in _get_callees(cur):
                         if callee not in visited:
                             queue.append((callee, d + 1))
 
-            reachable.sort(key=lambda r: r["depth"])
+            reachable.sort(key=lambda r: r[0])
+            reachable = [r[1] for r in reachable]
             return {
                 "ok": True,
                 "function": _func_label(ea),
