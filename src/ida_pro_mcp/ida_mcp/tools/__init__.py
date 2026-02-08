@@ -58,6 +58,7 @@ from .protocol import protocol
 from .c2_detect import c2_detect
 from .gadgets import gadgets
 from .annotation import annotation
+from .xref_analysis import xref_analysis
 
 __all__ = [
     "idb",
@@ -118,4 +119,5 @@ __all__ = [
     "c2_detect",
     "gadgets",
     "annotation",
+    "xref_analysis",
 ]
