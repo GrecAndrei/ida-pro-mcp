@@ -57,6 +57,7 @@ from .classify import classify
 from .protocol import protocol
 from .c2_detect import c2_detect
 from .gadgets import gadgets
+from .annotation import annotation
 
 __all__ = [
     "idb",
@@ -116,4 +117,5 @@ __all__ = [
     "protocol",
     "c2_detect",
     "gadgets",
+    "annotation",
 ]
