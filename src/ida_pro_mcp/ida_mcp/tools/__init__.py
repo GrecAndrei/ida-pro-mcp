@@ -59,6 +59,10 @@ from .c2_detect import c2_detect
 from .gadgets import gadgets
 from .annotation import annotation
 from .xref_analysis import xref_analysis
+from .string_ops import string_ops
+from .cfg_analysis import cfg_analysis
+from .binary_info import binary_info
+from .llm_helpers import llm_helpers
 
 __all__ = [
     "idb",
@@ -120,4 +124,8 @@ __all__ = [
     "gadgets",
     "annotation",
     "xref_analysis",
+    "string_ops",
+    "cfg_analysis",
+    "binary_info",
+    "llm_helpers",
 ]
