@@ -1386,16 +1386,29 @@ class IDAMCPServer:
         if isinstance(ida_args, str):
             parts = shlex.split(ida_args)
         elif isinstance(ida_args, list):
-            parts = [str(p) for p in ida_args if p is not None]
+            parts = []
+            for p in ida_args:
+                if p is None:
+                    continue
+                part = str(p)
+                # Explicitly reject empty entries after normalization.
+                if part == "":
+                    raise ValueError("ida_args cannot include empty entries")
+                parts.append(part)
         else:
             raise ValueError("ida_args must be a string or list of strings")
         cleaned = []
         # Reserved for server-managed script/log/output IDB wiring.
         forbidden_prefixes = ("-S", "-L", "-o")
         for arg in parts:
-            if not arg or "\x00" in arg:
-                log_rpc(f"Ignoring malformed ida_args entry: {arg!r}")
-                continue
+            if "\x00" in arg:
+                raise ValueError("ida_args cannot include null bytes")
+            # Args are passed via subprocess list (no shell), so metacharacters aren't interpreted.
+            if any(
+                (ord(ch) < 32 and ch not in ("\t", "\n", "\r")) or ch == "\x7f"
+                for ch in arg
+            ):
+                raise ValueError("ida_args cannot include control characters")
             if any(arg.startswith(prefix) for prefix in forbidden_prefixes):
                 raise ValueError(f"ida_args cannot include {arg} (reserved by server)")
             if arg == "-A":
@@ -1417,7 +1430,7 @@ class IDAMCPServer:
                 cmd.append(session.binary_path)
         return cmd
 
-    def _backup_corrupt_idb(self, idb_path: str) -> Optional[str]:
+    def _backup_idb(self, idb_path: str) -> Optional[str]:
         if not idb_path or not os.path.exists(idb_path):
             return None
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1437,7 +1450,7 @@ class IDAMCPServer:
         base = idb_path.rsplit(".", 1)[0]
 
         lock_exts = [
-            ".mcp.lock",  # MCP session lock to avoid concurrent IDB writers
+            ".mcp.lock",  # Legacy MCP session lock for exclusive IDB access
             ".lock",
         ]
         all_exts = [
@@ -1678,7 +1691,7 @@ class IDAMCPServer:
 
         backup_path = None
         if opts.get("backup_on_recover", True):
-            backup_path = self._backup_corrupt_idb(session.idb_path)
+            backup_path = self._backup_idb(session.idb_path)
         self._nuclear_reset(session.idb_path, aggressive=True)
 
         if not session.binary_path or not os.path.exists(session.binary_path):
@@ -1719,7 +1732,8 @@ class IDAMCPServer:
         if not opts:
             return {"ok": True}
         if session.analysis_applied and opts.get("apply_once", True):
-            return {"ok": True, "skipped": True}
+            log_rpc(f"Skipping analysis options for session {session.session_id} (already applied)")
+            return {"ok": True, "skipped": True, "note": "analysis_options already applied"}
 
         port = runtime.get("port")
         if not port:
@@ -1868,6 +1882,8 @@ class IDAMCPServer:
             if action == "create":
                 binary_path = args.get("binary_path")
                 idb_path = args.get("idb_path") or args.get("use_existing")
+                if idb_path == "":
+                    idb_path = None
                 force_new = bool(args.get("force_new"))
 
                 analysis_options = {}
@@ -1923,7 +1939,8 @@ class IDAMCPServer:
                 if idb_path:
                     if not os.path.isabs(idb_path):
                         idb_path = os.path.abspath(idb_path)
-                    if os.path.exists(idb_path) and not idb_path.lower().endswith((".i64", ".idb")):
+                    ext = os.path.splitext(idb_path)[1].lower()
+                    if ext and ext not in (".i64", ".idb"):
                         return make_error(
                             MCPError.INVALID_ARGS,
                             "idb_path must point to a .i64 or .idb file",

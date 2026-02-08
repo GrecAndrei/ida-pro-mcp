@@ -112,7 +112,6 @@ def data(
                     continue
                 if idaapi.get_func(ea):
                     continue
-                    
                 if named_only and (name.startswith("unk_") or name.startswith("off_") or 
                                    name.startswith("loc_") or name.startswith("byte_") or
                                    name.startswith("word_") or name.startswith("dword_") or
@@ -133,7 +132,7 @@ def data(
                         try:
                             if ida_nalt.get_tinfo(tif, ea):
                                 parts.append(str(tif))
-                        except Exception:
+                        except (TypeError, AttributeError, RuntimeError):
                             pass
                             
                         if include_xrefs:
