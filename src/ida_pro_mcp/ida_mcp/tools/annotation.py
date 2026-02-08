@@ -309,7 +309,7 @@ def annotation(
                         new_cmt = f"{existing}\n{func_cmt}" if existing else func_cmt
                         idc.set_func_cmt(ea, new_cmt, 1)
 
-            return {"ok": True, "function": fname, "annotations": annotations,
+            return {"ok": True, "function": fname, "annotations": "\n".join(str(x) for x in annotations),
                     "count": len(annotations), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -348,7 +348,7 @@ def annotation(
                                 new_cmt = f"{existing}  {cmt}" if existing else cmt
                                 idc.set_cmt(loop_head, new_cmt, 0)
 
-            return {"ok": True, "function": fname, "loops": loops,
+            return {"ok": True, "function": fname, "loops": "\n".join(str(x) for x in loops),
                     "count": len(loops), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -392,7 +392,7 @@ def annotation(
                             new_cmt = f"{existing}  {cmt}" if existing else cmt
                             idc.set_cmt(last_insn, new_cmt, 0)
 
-            return {"ok": True, "function": fname, "branches": branches,
+            return {"ok": True, "function": fname, "branches": "\n".join(str(x) for x in branches),
                     "count": len(branches), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -435,7 +435,7 @@ def annotation(
                                 new_cmt = f"{existing}  {cmt}" if existing else cmt
                                 idc.set_cmt(call_addr, new_cmt, 0)
 
-            return {"ok": True, "warnings": warnings,
+            return {"ok": True, "warnings": "\n".join(str(x) for x in warnings),
                     "count": len(warnings), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -474,7 +474,7 @@ def annotation(
                                 idc.set_cmt(head, new_cmt, 0)
                         break  # one annotation per instruction
 
-            return {"ok": True, "function": fname, "constants": constants,
+            return {"ok": True, "function": fname, "constants": "\n".join(str(x) for x in constants),
                     "count": len(constants), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -520,7 +520,7 @@ def annotation(
                             new_cmt = f"{existing}\n{cmt}" if existing else cmt
                             idc.set_func_cmt(func_ea, new_cmt, 1)
 
-            return {"ok": True, "tagged": tagged,
+            return {"ok": True, "tagged": "\n".join(str(x) for x in tagged),
                     "count": len(tagged), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -580,7 +580,7 @@ def annotation(
                     idc.set_func_cmt(ea, new_cmt, 1)
 
             return {"ok": True, "function": fname, "params": result_params,
-                    "apis_used": api_usage[:10], "annotations": annotations,
+                    "apis_used": api_usage[:10], "annotations": "\n".join(str(x) for x in annotations),
                     "count": len(annotations), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -651,7 +651,7 @@ def annotation(
                         break
                     check_ea = idc.next_head(check_ea, fn.end_ea)
 
-            return {"ok": True, "function": fname, "error_paths": error_paths,
+            return {"ok": True, "function": fname, "error_paths": "\n".join(str(x) for x in error_paths),
                     "count": len(error_paths), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -699,7 +699,7 @@ def annotation(
                             new_cmt = f"{existing}\n{cmt}" if existing else cmt
                             idc.set_func_cmt(callee_ea, new_cmt, 1)
 
-            return {"ok": True, "function": fname, "suggestions": suggestions,
+            return {"ok": True, "function": fname, "suggestions": "\n".join(str(x) for x in suggestions),
                     "count": len(suggestions), "dry_run": dry_run}
 
         # ----------------------------------------------------------------
@@ -761,7 +761,7 @@ def annotation(
                             })
                     curr = idc.next_head(curr, fn.end_ea)
 
-            return {"ok": True, "removed": removed,
+            return {"ok": True, "removed": "\n".join(str(x) for x in removed),
                     "count": len(removed), "dry_run": dry_run}
 
         else:

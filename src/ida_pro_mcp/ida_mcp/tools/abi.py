@@ -192,7 +192,7 @@ def abi(
                 # Fallback: check first few instructions for common register usage
                 insns = _disasm_range(fn.start_ea, fn.end_ea, max_insns=10)
                 note = "No type info available; inspect prologue instructions for register usage"
-                return {"ok": True, "addr": hex(fn.start_ea), "name": ida_funcs.get_func_name(fn.start_ea), "reg_args": [], "prologue_insns": insns, "note": note}
+                return {"ok": True, "addr": hex(fn.start_ea), "name": ida_funcs.get_func_name(fn.start_ea), "reg_args": [], "prologue_insns": "\n".join(str(x) for x in insns), "note": note}
             return {"ok": True, "addr": hex(fn.start_ea), "name": ida_funcs.get_func_name(fn.start_ea), "reg_args": reg_args}
 
         elif action == "return_type":
@@ -373,7 +373,7 @@ def abi(
                 "addr": hex(fn.start_ea),
                 "name": ida_funcs.get_func_name(fn.start_ea),
                 "pattern": pattern,
-                "instructions": insns,
+                "instructions": "\n".join(str(x) for x in insns),
             }
 
         elif action == "epilogue":
@@ -427,7 +427,7 @@ def abi(
                 "addr": hex(fn.start_ea),
                 "name": ida_funcs.get_func_name(fn.start_ea),
                 "pattern": pattern,
-                "instructions": insns,
+                "instructions": "\n".join(str(x) for x in insns),
             }
 
         elif action == "abi_violations":

@@ -516,17 +516,12 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
             has_exec = True
         if has_write and has_exec:
             name = idaapi.get_segm_name(seg) or ""
-            regions.append({
-                "addr": hex_ea(seg.start_ea),
-                "end": hex_ea(seg.end_ea),
-                "size": hex_size(seg.end_ea - seg.start_ea),
-                "name": name,
-                "perms": "{}{}{}".format(
-                    "R" if seg.perm & 4 else "-",
-                    "W" if seg.perm & 2 else "-",
-                    "X" if seg.perm & 1 else "-",
-                ),
-            })
+            perms = "{}{}{}".format(
+                "R" if seg.perm & 4 else "-",
+                "W" if seg.perm & 2 else "-",
+                "X" if seg.perm & 1 else "-",
+            )
+            regions.append(f"{hex_ea(seg.start_ea)}-{hex_ea(seg.end_ea)}  {name}  {perms}  size={hex_size(seg.end_ea - seg.start_ea)}")
     return regions
 
 
@@ -691,14 +686,10 @@ def _find_seh_handlers(addr, limit, _max_insns, _query):
                                 func = idaapi.get_func(handler_ea)
                                 fname = ida_funcs.get_func_name(func.start_ea) \
                                     if func else idc.get_name(handler_ea) or ""
-                                handlers.append({
-                                    "setup_addr": hex_ea(prev),
-                                    "handler_addr": hex_ea(handler_ea),
-                                    "handler_name": fname,
-                                    "function": (ida_funcs.get_func_name(
-                                        idaapi.get_func(ea).start_ea)
-                                        if idaapi.get_func(ea) else "unknown"),
-                                })
+                                func_name = (ida_funcs.get_func_name(
+                                    idaapi.get_func(ea).start_ea)
+                                    if idaapi.get_func(ea) else "unknown")
+                                handlers.append(f"{hex_ea(prev)}  handler={hex_ea(handler_ea)}  {fname}  in={func_name}")
             ea = idc.next_head(ea)
             if ea == idaapi.BADADDR:
                 break
@@ -864,7 +855,7 @@ def gadgets(
             return {
                 "ok": True,
                 "action": "shellcode_space",
-                "regions": regions,
+                "regions": "\n".join(regions),
                 "count": len(regions),
                 "arch": _get_arch(),
             }
@@ -882,7 +873,7 @@ def gadgets(
             return {
                 "ok": True,
                 "action": "seh_handlers",
-                "handlers": handlers,
+                "handlers": "\n".join(handlers),
                 "count": len(handlers),
                 "arch": _get_arch(),
             }
