@@ -191,7 +191,7 @@ def stack_analysis(
                 "addr": hex_ea(func.start_ea),
                 "frame_size": frame_size,
                 "member_count": len(members),
-                "members": members,
+                "members": "\n".join(str(x) for x in members),
                 "arch": arch,
             }
 
@@ -224,7 +224,7 @@ def stack_analysis(
                 "ok": True,
                 "function": func_name,
                 "addr": hex_ea(func.start_ea),
-                "buffers": buffers,
+                "buffers": "\n".join(str(x) for x in buffers),
                 "count": len(buffers),
             }
 
@@ -256,7 +256,7 @@ def stack_analysis(
                 "addr": hex_ea(func.start_ea),
                 "has_canary": has_canary,
                 "canary_type": canary_type,
-                "references": canary_refs,
+                "references": "\n".join(str(x) for x in canary_refs),
                 "arch": arch["proc"],
             }
 
@@ -301,7 +301,7 @@ def stack_analysis(
                 "frame_size": frame_size,
                 "frame_alignment": alignment,
                 "max_member_alignment": max_member_align,
-                "members": member_details,
+                "members": "\n".join(str(x) for x in member_details),
                 "arch": arch,
             }
 
@@ -343,7 +343,7 @@ def stack_analysis(
                 "ok": True,
                 "function": func_name,
                 "addr": hex_ea(func.start_ea),
-                "spills": spills,
+                "spills": "\n".join(str(x) for x in spills),
                 "count": len(spills),
                 "arch": arch["proc"],
             }
@@ -387,7 +387,7 @@ def stack_analysis(
                 "max_spd": max_spd,
                 "min_spd": min_spd,
                 "has_dynamic_alloc": has_dynamic_alloc,
-                "alloca_calls": alloca_calls,
+                "alloca_calls": "\n".join(str(x) for x in alloca_calls),
                 "func_size": func.end_ea - func.start_ea,
             }
 
@@ -440,7 +440,7 @@ def stack_analysis(
                 "function": func_name,
                 "addr": hex_ea(func.start_ea),
                 "frame_size": frame_size,
-                "variables": variables,
+                "variables": "\n".join(str(x) for x in variables),
                 "count": len(variables),
             }
 
@@ -495,7 +495,7 @@ def stack_analysis(
                 "ok": True,
                 "function": func_name,
                 "addr": hex_ea(func.start_ea),
-                "arrays": arrays,
+                "arrays": "\n".join(str(x) for x in arrays),
                 "count": len(arrays),
             }
 
@@ -553,7 +553,7 @@ def stack_analysis(
                 "ok": True,
                 "function": func_name,
                 "addr": hex_ea(func.start_ea),
-                "uninitialized": uninitialized,
+                "uninitialized": "\n".join(str(x) for x in uninitialized),
                 "count": len(uninitialized),
                 "note": "Heuristic analysis; may have false positives",
             }

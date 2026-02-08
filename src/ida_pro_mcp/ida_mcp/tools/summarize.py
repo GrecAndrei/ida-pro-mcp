@@ -355,9 +355,9 @@ def summarize(
                 "import_count": len(all_imports),
                 "import_categories": import_cats,
                 "string_count": len(all_strings),
-                "key_functions": key_functions[:max_items],
+                "key_functions": "\n".join(str(x) for x in key_functions[:max_items]),
                 "interesting_strings": interesting[:max_items],
-                "entry_points": entries,
+                "entry_points": "\n".join(str(x) for x in entries),
             }
 
         # ----------------------------------------------------------------
@@ -615,7 +615,7 @@ def summarize(
                 return {
                     "name": name,
                     "addr": hex_ea(func_ea),
-                    "calls": children,
+                    "calls": "\n".join(str(x) for x in children),
                 }
 
             tree = build_tree(ea, depth)
@@ -632,7 +632,7 @@ def summarize(
             return {
                 "ok": True,
                 "root": tree,
-                "callers": callers,
+                "callers": "\n".join(str(x) for x in callers),
                 "total_unique_functions": len(visited),
             }
 
@@ -712,7 +712,7 @@ def summarize(
                     "strings_used": strings_used[:max_items],
                 },
                 "transformations": {
-                    "function_calls": transformations[:max_items],
+                    "function_calls": "\n".join(str(x) for x in transformations[:max_items]),
                     "arithmetic_operations": arithmetic_ops,
                     "comparisons": comparison_ops,
                     "branches": branch_ops,
@@ -797,7 +797,7 @@ def summarize(
             return {
                 "ok": True,
                 "dangerous_apis": dangerous_found,
-                "dangerous_usage": dangerous_usage[:max_items],
+                "dangerous_usage": "\n".join(str(x) for x in dangerous_usage[:max_items]),
                 "mitigations": mitigations_found,
                 "risk_score": risk_score,
                 "mitigation_score": mitigation_score,

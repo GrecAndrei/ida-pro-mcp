@@ -255,7 +255,7 @@ def compare(
                 "ok": True,
                 "blocks1": len(b1),
                 "blocks2": len(b2),
-                "matched": matched[:limit],
+                "matched": "\n".join(str(x) for x in matched[:limit]),
                 "unmatched1": [b1[i]["start"] for i in unmatched1][:limit],
                 "unmatched2": [b2[j]["start"] for j in unmatched2][:limit],
             }

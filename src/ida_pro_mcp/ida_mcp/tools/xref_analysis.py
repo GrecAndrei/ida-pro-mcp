@@ -197,29 +197,20 @@ def xref_analysis(
                 callees = _get_callees(func_ea)
                 if callers and callees:
                     score = len(callers) * len(callees)
-                    hubs.append({
-                        "addr": hex_ea(func_ea),
-                        "name": _func_label(func_ea),
-                        "caller_count": len(callers),
-                        "callee_count": len(callees),
-                        "score": score,
-                    })
+                    hubs.append(f"{hex_ea(func_ea)}  {_func_label(func_ea)}  callers={len(callers)}  callees={len(callees)}  score={score}")
             hubs.sort(key=lambda h: h["score"], reverse=True)
             hubs = hubs[:limit]
-            return {"ok": True, "hubs": hubs, "count": len(hubs)}
+            return {"ok": True, "hubs": "\n".join(hubs), "count": len(hubs)}
 
         # ---- leaf_functions ----
         elif action == "leaf_functions":
             leaves = []
             for func_ea in _all_functions():
                 if not _get_callees(func_ea):
-                    leaves.append({
-                        "addr": hex_ea(func_ea),
-                        "name": _func_label(func_ea),
-                    })
+                    leaves.append(f"{hex_ea(func_ea)}  {_func_label(func_ea)}")
                     if len(leaves) >= limit:
                         break
-            return {"ok": True, "leaves": leaves, "count": len(leaves)}
+            return {"ok": True, "leaves": "\n".join(leaves), "count": len(leaves)}
 
         # ---- recursive ----
         elif action == "recursive":
@@ -238,11 +229,7 @@ def xref_analysis(
                     if direct:
                         break
                 if direct:
-                    recursive.append({
-                        "addr": hex_ea(func_ea),
-                        "name": _func_label(func_ea),
-                        "type": "direct",
-                    })
+                    recursive.append(f"{hex_ea(func_ea)}  {_func_label(func_ea)}  direct")
                     continue
 
                 # Mutual recursion: check if func_ea is reachable from its callees
@@ -269,13 +256,8 @@ def xref_analysis(
                     stack = next_stack
                     d += 1
                 if mutual:
-                    recursive.append({
-                        "addr": hex_ea(func_ea),
-                        "name": _func_label(func_ea),
-                        "type": "mutual",
-                        "cycle_depth": d + 1,
-                    })
-            return {"ok": True, "recursive": recursive, "count": len(recursive)}
+                    recursive.append(f"{hex_ea(func_ea)}  {_func_label(func_ea)}  mutual  depth={d + 1}")
+            return {"ok": True, "recursive": "\n".join(recursive), "count": len(recursive)}
 
         # ---- dominator ----
         elif action == "dominator":
@@ -340,15 +322,11 @@ def xref_analysis(
                             queue.append(callee)
                 disconnected = len(full_reachable) - len(reachable_without) - 1
                 if disconnected > 0:
-                    dominators.append({
-                        "addr": hex_ea(func_ea),
-                        "name": _func_label(func_ea),
-                        "disconnects": disconnected,
-                        "caller_count": caller_cnt,
-                    })
-            dominators.sort(key=lambda d: d["disconnects"], reverse=True)
+                    dominators.append((disconnected, f"{hex_ea(func_ea)}  {_func_label(func_ea)}  disconnects={disconnected}  callers={caller_cnt}"))
+            dominators.sort(key=lambda d: d[0], reverse=True)
+            dominators = [d[1] for d in dominators]
             dominators = dominators[:limit]
-            return {"ok": True, "dominators": dominators, "count": len(dominators)}
+            return {"ok": True, "dominators": "\n".join(dominators), "count": len(dominators)}
 
         # ---- influence ----
         elif action == "influence":
@@ -367,11 +345,7 @@ def xref_analysis(
                     continue
                 visited.add(cur)
                 if cur != ea:
-                    reachable.append({
-                        "addr": hex_ea(cur),
-                        "name": _func_label(cur),
-                        "depth": d,
-                    })
+                    reachable.append(f"{hex_ea(cur)}  {_func_label(cur)}  depth={d}")
                 if d < depth:
                     for callee in _get_callees(cur):
                         if callee not in visited:
@@ -444,13 +418,10 @@ def xref_analysis(
                     continue
                 callers = _get_callers(func_ea)
                 if not callers:
-                    dead.append({
-                        "addr": hex_ea(func_ea),
-                        "name": _func_label(func_ea),
-                    })
+                    dead.append(f"{hex_ea(func_ea)}  {_func_label(func_ea)}")
                     if len(dead) >= limit:
                         break
-            return {"ok": True, "dead": dead, "count": len(dead)}
+            return {"ok": True, "dead": "\n".join(dead), "count": len(dead)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

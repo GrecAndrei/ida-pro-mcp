@@ -372,7 +372,7 @@ def protocol(
                         "strings": fn_strs[:10],
                     })
 
-            return {"ok": True, "parsers": parsers, "count": len(parsers)}
+            return {"ok": True, "parsers": "\n".join(str(x) for x in parsers), "count": len(parsers)}
 
         # ----------------------------------------------------------------
         # ACTION: serializers
@@ -424,7 +424,7 @@ def protocol(
                                              (write_apis | {a.lower() for a in pack_apis})],
                     })
 
-            return {"ok": True, "serializers": serializers, "count": len(serializers)}
+            return {"ok": True, "serializers": "\n".join(str(x) for x in serializers), "count": len(serializers)}
 
         # ----------------------------------------------------------------
         # ACTION: handlers
@@ -534,7 +534,7 @@ def protocol(
                     endpoints["ports"].append(entry)
 
             total = sum(len(v) for v in endpoints.values())
-            return {"ok": True, "endpoints": endpoints, "total": total}
+            return {"ok": True, "endpoints": "\n".join(str(x) for x in endpoints), "total": total}
 
         # ----------------------------------------------------------------
         # ACTION: tls_config
@@ -635,15 +635,10 @@ def protocol(
                     phase_order = ["create", "configure", "connect", "listen",
                                    "io", "close"]
                     ordered = [p for p in phase_order if p in phases]
-                    flows.append({
-                        "address": hex(func_ea),
-                        "name": fname,
-                        "phases": phases,
-                        "phase_order": ordered,
-                        "complete": "create" in phases and "close" in phases,
-                    })
+                    complete = "create" in phases and "close" in phases
+                    flows.append(f"{hex(func_ea)}  {fname}  phases={','.join(ordered)}  complete={complete}")
 
-            return {"ok": True, "flows": flows, "count": len(flows)}
+            return {"ok": True, "flows": "\n".join(str(x) for x in flows), "count": len(flows)}
 
         # ----------------------------------------------------------------
         # ACTION: packet_struct
@@ -688,11 +683,7 @@ def protocol(
                         # Filter for plausible struct sizes/offsets
                         if 1 <= val <= 65536 and val not in seen_imms:
                             seen_imms.add(val)
-                            size_hints.append({
-                                "address": hex(head),
-                                "value": val,
-                                "hex": hex(val),
-                            })
+                            size_hints.append(f"{hex(head)}  value={val}  {hex(val)}")
 
             # Try to get decompiled output for richer analysis
             fields = []
@@ -739,12 +730,7 @@ def protocol(
                         if val in _KNOWN_MAGIC:
                             proto, desc = _KNOWN_MAGIC[val]
                             if _match_query(proto, query):
-                                results.append({
-                                    "address": hex(ea_cursor),
-                                    "value": hex(val),
-                                    "protocol": proto,
-                                    "description": desc,
-                                })
+                                results.append(f"{hex(ea_cursor)}  {hex(val)}  {proto}  {desc}")
                     ea_cursor = ida_bytes.next_head(ea_cursor, seg_end)
                     if ea_cursor == idaapi.BADADDR:
                         break
@@ -757,12 +743,7 @@ def protocol(
                     break
                 for m in version_re.finditer(s_val):
                     if _match_query(s_val, query):
-                        results.append({
-                            "address": hex(s_ea),
-                            "value": m.group(),
-                            "protocol": "version_id",
-                            "description": f"Version string in: \"{s_val[:80]}\"",
-                        })
+                        results.append(f"{hex(s_ea)}  {m.group()}  version_id  {s_val[:80]}")
                         break
 
             return {"ok": True, "magic_numbers": results, "count": len(results)}
