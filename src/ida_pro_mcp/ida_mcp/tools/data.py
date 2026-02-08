@@ -39,8 +39,8 @@ def data(
         Returns: {globals: "addr  name  size=N [type] [xrefs=N]\\n...", total, offset, count}
         
     strings - List string literals with filtering
-        Params: query (content filter), offset, count
-        Returns: {strings: "addr  xrefs=N  string_value\\n...", total, offset, count}
+        Params: query (content filter), offset, count, include_xrefs
+        Returns: {strings: "addr  [xrefs=N]  string_value\\n...", total, offset, count}
         
     imports - List imported modules and functions
         Params: query (filter by module or function name), offset, count
@@ -55,7 +55,7 @@ def data(
         Returns: {addr, name, type, size}
         
     bulk_query - Execute multiple queries in one call
-        Params: items (list of {kind, query, offset, count})
+        Params: items (list of {kind, query, offset, count, include_prototype, include_xrefs, min_size, named_only})
         Returns: {results: [{index, kind, result}]}
     """
     try:
@@ -108,9 +108,10 @@ def data(
             total = 0
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             for ea, name in idautils.Names():
+                if not name:
+                    continue
                 if idaapi.get_func(ea):
                     continue
-                    
                 if named_only and (name.startswith("unk_") or name.startswith("off_") or 
                                    name.startswith("loc_") or name.startswith("byte_") or
                                    name.startswith("word_") or name.startswith("dword_") or
@@ -128,8 +129,11 @@ def data(
                         
                         # Try to get type
                         tif = ida_typeinf.tinfo_t()
-                        if ida_nalt.get_tinfo(tif, ea):
-                            parts.append(str(tif))
+                        try:
+                            if ida_nalt.get_tinfo(tif, ea):
+                                parts.append(str(tif))
+                        except (TypeError, AttributeError, RuntimeError):
+                            pass
                             
                         if include_xrefs:
                             parts.append(f"xrefs={len(list(idautils.XrefsTo(ea)))}")
@@ -142,33 +146,86 @@ def data(
             str_lines = []
             total = 0
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
-            for i in range(idaapi.get_strlist_qty()):
-                sc = idaapi.string_info_t()
-                if idaapi.get_strlist_item(sc, i):
+            strings_iter = None
+            try:
+                strings_iter = idautils.Strings()
+            except Exception:
+                strings_iter = None
+
+            if strings_iter is not None:
+                for s in strings_iter:
                     try:
-                        content = idc.get_strlit_contents(sc.ea)
-                        if not content: continue
-                        
-                        s = content.decode("utf-8", errors="replace")
-                        if len(s) < 4: continue
-                        
-                        # Section check - skip strings in executable sections (likely false positives)
-                        seg = idaapi.getseg(sc.ea)
-                        if seg and (seg.perm & idaapi.SEGPERM_EXEC) and len(s) < 12:
+                        content = str(s)
+                        if isinstance(content, bytes):
+                            content = content.decode("utf-8", errors="replace")
+                        if not content:
                             continue
-                        
-                        # Meaningful check - relax for longer strings
-                        if len(s) < 20:
-                            alnum_count = sum(1 for c in s if c.isalnum() or c in ' ._-/:=()[]{}\\n\\t')
-                            if alnum_count / len(s) < 0.6: continue
-                        
-                        if not _matcher or _matcher(s):
+                        if len(content) < 4:
+                            continue
+
+                        seg = idaapi.getseg(s.ea)
+                        if seg and (seg.perm & idaapi.SEGPERM_EXEC) and len(content) < 12:
+                            continue
+
+                        if len(content) < 20:
+                            alnum_count = sum(
+                                1 for c in content if c.isalnum() or c in " ._-/:=()[]{}\\n\\t"
+                            )
+                            if alnum_count / len(content) < 0.6:
+                                continue
+
+                        if not _matcher or _matcher(content):
                             total += 1
                             if total > offset and (count == 0 or len(str_lines) < count):
-                                xref_count = len(list(idautils.XrefsTo(sc.ea)))
-                                str_lines.append(f"{hex_ea(sc.ea)}  xrefs={xref_count}  {s[:500]}")
+                                parts = [hex_ea(s.ea)]
+                                if include_xrefs:
+                                    xref_count = len(list(idautils.XrefsTo(s.ea)))
+                                    parts.append(f"xrefs={xref_count}")
+                                parts.append(content[:500])
+                                str_lines.append("  ".join(parts))
                     except Exception:
-                        pass
+                        continue
+            else:
+                strlist_qty = getattr(idaapi, "get_strlist_qty", None)
+                strlist_item = getattr(idaapi, "get_strlist_item", None)
+                if strlist_qty and strlist_item:
+                    for i in range(strlist_qty()):
+                        sc = idaapi.string_info_t()
+                        if strlist_item(sc, i):
+                            try:
+                                # get_strlit_contents signature varies across IDA versions.
+                                try:
+                                    content = idc.get_strlit_contents(sc.ea, sc.length, sc.type)
+                                except TypeError:
+                                    content = idc.get_strlit_contents(sc.ea)
+                                if not content:
+                                    continue
+                                s = content.decode("utf-8", errors="replace")
+                                if len(s) < 4:
+                                    continue
+
+                                seg = idaapi.getseg(sc.ea)
+                                if seg and (seg.perm & idaapi.SEGPERM_EXEC) and len(s) < 12:
+                                    continue
+
+                                if len(s) < 20:
+                                    alnum_count = sum(
+                                        1 for c in s if c.isalnum() or c in " ._-/:=()[]{}\\n\\t"
+                                    )
+                                    if alnum_count / len(s) < 0.6:
+                                        continue
+
+                                if not _matcher or _matcher(s):
+                                    total += 1
+                                    if total > offset and (count == 0 or len(str_lines) < count):
+                                        parts = [hex_ea(sc.ea)]
+                                        if include_xrefs:
+                                            xref_count = len(list(idautils.XrefsTo(sc.ea)))
+                                            parts.append(f"xrefs={xref_count}")
+                                        parts.append(s[:500])
+                                        str_lines.append("  ".join(parts))
+                            except Exception:
+                                continue
             
             return {"ok": True, "strings": "\n".join(str_lines), "total": total, "offset": offset, "count": len(str_lines)}
         
@@ -178,7 +235,7 @@ def data(
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             
             for i in range(ida_nalt.get_import_module_qty()):
-                module = ida_nalt.get_import_module_name(i)
+                module = ida_nalt.get_import_module_name(i) or f"module_{i}"
                 
                 # Check module filter
                 if _matcher and not _matcher(module):
@@ -279,10 +336,16 @@ def data(
                 if not kind:
                     results.append({"index": i, "error": "missing kind"})
                     continue
-                sub_query = item.get("query")
-                sub_offset = item.get("offset", 0)
-                sub_count = item.get("count", 100)
-                res = data(action=kind, query=sub_query, offset=sub_offset, count=sub_count)
+                sub_args = {
+                    "action": kind,
+                    "query": item.get("query"),
+                    "offset": item.get("offset", 0),
+                    "count": item.get("count", 100),
+                }
+                for key in ("include_prototype", "include_xrefs", "min_size", "named_only"):
+                    if key in item:
+                        sub_args[key] = item.get(key)
+                res = data(**sub_args)
                 results.append({"index": i, "kind": kind, "result": res})
             return {"ok": True, "results": results, "count": len(results)}
         

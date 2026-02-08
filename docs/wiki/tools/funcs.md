@@ -22,6 +22,8 @@ Return function metadata and prototype.
 ### `create`
 Create a new entity using the provided parameters.
 Defines a new function at `addr`.
+Supports `end` for explicit ranges, `flags` to apply function flags, and `force=true`
+to delete overlapping functions/data before creation.
 
 ### `delete`
 Remove the specified item.

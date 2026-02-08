@@ -7,6 +7,7 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 ### Actions
 - `discover`
 - `create`
+- `get`
 - `list`
 - `switch`
 - `close`
@@ -14,17 +15,49 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `rebuild`
 
 ### Args
-- `action`: enum(discover, create, list, switch, close, status)
+- `action`: enum(discover, create, get, list, switch, close, status, rebuild)
 - `binary_path`: string
 - `use_existing`: string
+- `idb_path`: string
+- `force_new`: boolean
+- `analysis_options`: object
+- `ida_args`: ['string', 'array']
 - `session_id`: string
 - `processor`: string
 - `flags`: integer
 - `loader`: string
 - `value`: ['string', 'object']
+- `loader_options`: ['string', 'object']
 - `bitness`: integer
 - `endian`: string
 - `reanalyze`: boolean
+- `options`: object
+- `analysis_actions`: array
+- `apply_once`: boolean
+- `recover`: boolean
+- `backup_on_recover`: boolean
+- `aggressive_cleanup`: boolean
+- `start`: ['string', 'integer']
+- `end`: ['string', 'integer']
+- `baseaddr`: ['string', 'integer']
+- `start_ea`: ['string', 'integer']
+- `min_ea`: ['string', 'integer']
+- `max_ea`: ['string', 'integer']
+- `query`: string
+- `limit`: integer
+- `offset`: integer
+
+## truncation
+
+### Actions
+- `continue`
+
+### Args
+- `action`: enum(continue)
+- `token`: string
+- `field`: string
+- `offset`: integer
+- `count`: integer
 
 ## bookmarks
 
@@ -284,6 +317,7 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `end`: string
 - `name`: string
 - `flags`: integer
+- `force`: boolean
 - `comment`: string
 - `repeatable`: boolean
 - `query`: string
