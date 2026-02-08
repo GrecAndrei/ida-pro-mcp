@@ -141,11 +141,7 @@ def _search_bytes_in_segments(pattern, limit=50):
             seg_name = ida_segment.get_segm_name(seg)
             func = ida_funcs.get_func(ea)
             func_name = idc.get_func_name(func.start_ea) if func else None
-            hits.append({
-                "addr": hex(ea),
-                "segment": seg_name,
-                "func": func_name,
-            })
+            hits.append(f"{hex(ea)}  {seg_name}  {func_name or 'no_func'}")
             offset = idx + len(pattern)
         if len(hits) >= limit:
             break
@@ -199,13 +195,8 @@ def _scan_for_xor_shift_loops(ea_start, ea_end, limit=50):
                             has_loop = True
                             break
                 if has_loop:
-                    results.append({
-                        "addr": hex(ea),
-                        "mnemonic": mnem,
-                        "disasm": idc.generate_disasm_line(ea, 0),
-                        "func": idc.get_func_name(func.start_ea),
-                        "loop": True,
-                    })
+                    disasm = idc.generate_disasm_line(ea, 0)
+                    results.append(f"{hex(ea)}  {idc.get_func_name(func.start_ea)}  {mnem}  {disasm}  [loop]")
         ea = idc.next_head(ea, ea_end)
     return results
 
@@ -305,7 +296,7 @@ def crypto_id(
                     break
 
             algos = sorted(set(f["algorithm"] for f in findings))
-            return {"ok": True, "findings": findings, "algorithms_found": algos, "count": len(findings)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in findings), "algorithms_found": algos, "count": len(findings)}
 
         elif action == "constants":
             findings = []
@@ -328,7 +319,7 @@ def crypto_id(
                     findings.append(entry)
                 if len(findings) >= limit:
                     break
-            return {"ok": True, "findings": findings, "count": len(findings)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in findings), "count": len(findings)}
 
         elif action == "key_schedule":
             results = []
@@ -376,7 +367,7 @@ def crypto_id(
                             if include_context:
                                 entry["context"] = _get_context_at(func_ea)
                             results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "block_cipher":
             # Detect SPN (substitution-permutation network) patterns
@@ -418,7 +409,7 @@ def crypto_id(
                         if include_context:
                             entry["context"] = _get_context_at(func_ea)
                         results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "hash_detect":
             results = []
@@ -470,7 +461,7 @@ def crypto_id(
                         if include_context:
                             entry["context"] = _get_context_at(func_ea)
                         results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "rng_detect":
             results = []
@@ -525,7 +516,7 @@ def crypto_id(
                             if include_context:
                                 entry["context"] = _get_context_at(func_ea)
                             results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "asymmetric":
             results = []
@@ -582,7 +573,7 @@ def crypto_id(
                         if include_context:
                             entry["context"] = _get_context_at(func_ea)
                         results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "custom_crypto":
             results = []
@@ -623,7 +614,7 @@ def crypto_id(
                         if include_context:
                             entry["context"] = _get_context_at(func_ea)
                         results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "encoding":
             results = []
@@ -666,7 +657,7 @@ def crypto_id(
                         if include_context:
                             entry["context"] = _get_context_at(func_ea)
                         results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "checksums":
             results = []
@@ -714,7 +705,7 @@ def crypto_id(
                         if include_context:
                             entry["context"] = _get_context_at(func_ea)
                         results.append(entry)
-            return {"ok": True, "findings": results, "count": len(results)}
+            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
