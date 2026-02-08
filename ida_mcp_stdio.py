@@ -508,7 +508,6 @@ TOOLS = [
     "entropy",
     # Structure and type recovery
     "structs",
-    "strings_xref",
     "imports_deep",
     "patterns",
     "symbols",
@@ -568,7 +567,7 @@ TOOL_DESCRIPTIONS = {
     # Analysis configuration
     "analysis": "Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze.",
     # Unified query/edit hubs
-    "query": "Unified read-only query hub. Actions: data, search, strings_xref, imports_deep, symbols, patterns, idb.",
+    "query": "Unified read-only query hub. Actions: data, search, imports_deep, symbols, patterns, idb.",
     "edit": "Unified write/edit hub. Actions: modify, funcs, segments, data_ops, fixups, colorize, comments_ai, bulk.",
     # Primary data access
     "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks.",
@@ -603,7 +602,6 @@ TOOL_DESCRIPTIONS = {
     "entropy": "Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
     # Structure and type recovery
     "structs": "Structure recovery and reconstruction. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.",
-    "strings_xref": "Deep string analysis. Actions: analyze, xref_chain, detect_encoded, find_format, clusters.",
     "imports_deep": "Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
     "patterns": "Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, create_sig.",
     "symbols": "PDB/DWARF symbol management. Actions: load_pdb, load_dwarf, status, apply, export.",
@@ -846,13 +844,6 @@ TOOL_ACTIONS = {
         "add_member",
         "apply",
         "reconstruct_vtable",
-    ],
-    "strings_xref": [
-        "analyze",
-        "xref_chain",
-        "detect_encoded",
-        "find_format",
-        "clusters",
     ],
     "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
     "patterns": [

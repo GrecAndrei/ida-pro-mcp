@@ -123,21 +123,14 @@ def _detect_encoding_in_func(func_ea, limit):
 
     methods = []
     if loop_xor:
-        methods.append({"method": "xor_loop", "confidence": "high",
-                        "xor_insn_count": xor_count})
+        methods.append(f"xor_loop(high,{xor_count}xor)")
     elif xor_count > 0:
-        methods.append({"method": "xor_single", "confidence": "medium",
-                        "xor_insn_count": xor_count})
+        methods.append(f"xor_single(medium,{xor_count}xor)")
     if b64_refs > 0:
-        methods.append({"method": "base64", "confidence": "high",
-                        "charset_refs": b64_refs})
+        methods.append(f"base64(high,{b64_refs}refs)")
 
     if methods:
-        findings.append({
-            "addr": hex_ea(func_ea),
-            "function": _get_func_name_safe(func_ea),
-            "methods": methods,
-        })
+        findings.append(f"{hex_ea(func_ea)}  {_get_func_name_safe(func_ea)}  {' '.join(methods)}")
 
     return findings[:limit]
 
@@ -176,14 +169,8 @@ def _xor_scan_func(func_ea, limit):
                     continue
                 segment = decoded[:null_pos]
                 if _is_printable_ascii(segment) and len(segment) >= 4:
-                    findings.append({
-                        "addr": hex_ea(data_ea),
-                        "ref_from": hex_ea(ea),
-                        "function": _get_func_name_safe(ea),
-                        "xor_key": f"0x{key:02x}",
-                        "decoded": segment.decode("ascii", errors="replace")[:80],
-                        "length": len(segment),
-                    })
+                    decoded_str = segment.decode("ascii", errors="replace")[:80]
+                    findings.append(f"{hex_ea(data_ea)}  key=0x{key:02x}  len={len(segment)}  {_get_func_name_safe(ea)}  {decoded_str}")
                     if len(findings) >= limit:
                         return findings
                     break  # found a key for this data, move on
@@ -238,13 +225,7 @@ def _find_stack_strings(func_ea, limit):
         else:
             if len(current_str) >= 3:
                 built = "".join(c for _, c in current_str)
-                findings.append({
-                    "addr": hex_ea(current_str[0][0]),
-                    "function": _get_func_name_safe(func_ea),
-                    "string": built,
-                    "length": len(built),
-                    "insn_count": len(current_str),
-                })
+                findings.append(f"{hex_ea(current_str[0][0])}  {_get_func_name_safe(func_ea)}  len={len(built)}  {built}")
                 if len(findings) >= limit:
                     return findings
             current_str = [char_stores[i]]
@@ -252,13 +233,7 @@ def _find_stack_strings(func_ea, limit):
     # Final group
     if len(current_str) >= 3:
         built = "".join(c for _, c in current_str)
-        findings.append({
-            "addr": hex_ea(current_str[0][0]),
-            "function": _get_func_name_safe(func_ea),
-            "string": built,
-            "length": len(built),
-            "insn_count": len(current_str),
-        })
+        findings.append(f"{hex_ea(current_str[0][0])}  {_get_func_name_safe(func_ea)}  len={len(built)}  {built}")
 
     return findings[:limit]
 
@@ -349,14 +324,7 @@ def _detect_opaque_predicates(func_ea, limit):
                 pred_type = "dead_branch"
 
         if is_opaque:
-            findings.append({
-                "addr": hex_ea(ea),
-                "function": _get_func_name_safe(func_ea),
-                "type": pred_type,
-                "mnemonic": mnem_l,
-                "jump_target": hex_ea(jump_target),
-                "fall_through": hex_ea(fall_through),
-            })
+            findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  {pred_type}  {mnem_l}  jmp={hex_ea(jump_target)}  fall={hex_ea(fall_through)}")
             if len(findings) >= limit:
                 return findings
 
@@ -398,15 +366,8 @@ def _detect_cff(func_ea, limit, depth):
         if len(cmp_eas) >= 4:
             # Ratio of conditional jumps to instructions
             ratio = jmp_count / max(insn_count, 1)
-            findings.append({
-                "addr": hex_ea(func_ea),
-                "function": _get_func_name_safe(func_ea),
-                "dispatcher_var": var,
-                "case_count": len(cmp_eas),
-                "cond_jump_count": jmp_count,
-                "jump_ratio": round(ratio, 4),
-                "confidence": "high" if len(cmp_eas) >= 8 else "medium",
-            })
+            conf = "high" if len(cmp_eas) >= 8 else "medium"
+            findings.append(f"{hex_ea(func_ea)}  {_get_func_name_safe(func_ea)}  dispatcher={var}  cases={len(cmp_eas)}  cond_jumps={jmp_count}  [{conf}]")
             if len(findings) >= limit:
                 return findings
 
@@ -473,13 +434,8 @@ def _find_dead_code(func_ea, limit):
                     if has_ref:
                         break
 
-                findings.append({
-                    "addr": hex_ea(ea),
-                    "function": _get_func_name_safe(func_ea),
-                    "dead_insn_count": dead_count,
-                    "disasm": ida_lines.tag_remove(
-                        idc.generate_disasm_line(ea, 0)),
-                })
+                disasm = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))
+                findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  dead_insns={dead_count}  {disasm}")
                 if len(findings) >= limit:
                     return findings
 
@@ -546,14 +502,9 @@ def _detect_api_hashing(func_ea, limit):
                         hash_insns.append((name, hex_ea(ea)))
 
     if has_ror or has_hash_const:
-        findings.append({
-            "addr": hex_ea(func_ea),
-            "function": _get_func_name_safe(func_ea),
-            "resolve_call": hex_ea(resolve_ea),
-            "has_ror": has_ror,
-            "hash_constants": hash_insns,
-            "confidence": "high" if has_ror and has_hash_const else "medium",
-        })
+        conf = "high" if has_ror and has_hash_const else "medium"
+        hash_info = " ".join(f"{n}@{a}" for n, a in hash_insns) if hash_insns else ""
+        findings.append(f"{hex_ea(func_ea)}  {_get_func_name_safe(func_ea)}  resolve={hex_ea(resolve_ea)}  [{conf}]  {hash_info}")
 
     return findings[:limit]
 
@@ -581,21 +532,12 @@ def _find_dynamic_dispatch(func_ea, limit):
 
         operand = idc.print_operand(ea, 0)
         # Try to trace what's being called
-        dispatch_info = {
-            "addr": hex_ea(ea),
-            "function": _get_func_name_safe(func_ea),
-            "call_target": operand,
-            "call_type": "register" if op_type == idc.o_reg else "memory_indirect",
-        }
-
-        # Check preceding instructions for context
+        call_type = "register" if op_type == idc.o_reg else "memory_indirect"
         prev = idc.prev_head(ea)
+        prev_info = ""
         if prev != idaapi.BADADDR:
-            prev_disasm = ida_lines.tag_remove(
-                idc.generate_disasm_line(prev, 0))
-            dispatch_info["preceding_insn"] = prev_disasm
-
-        findings.append(dispatch_info)
+            prev_info = "  prev=" + ida_lines.tag_remove(idc.generate_disasm_line(prev, 0))
+        findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  {call_type}  {operand}{prev_info}")
         if len(findings) >= limit:
             return findings
 
@@ -626,13 +568,7 @@ def _detect_anti_disasm(func_ea, limit):
                 next_after_prev = idc.next_head(prev_of_target)
                 if next_after_prev != idaapi.BADADDR and next_after_prev > target:
                     # Target falls within the bytes of prev instruction
-                    findings.append({
-                        "addr": hex_ea(ea),
-                        "function": _get_func_name_safe(func_ea),
-                        "type": "jump_into_instruction",
-                        "target": hex_ea(target),
-                        "overlapping_insn": hex_ea(prev_of_target),
-                    })
+                    findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  jump_into_instruction  target={hex_ea(target)}  overlap={hex_ea(prev_of_target)}")
                     if len(findings) >= limit:
                         return findings
 
@@ -641,12 +577,7 @@ def _detect_anti_disasm(func_ea, limit):
             target = idc.get_operand_value(ea, 0)
             insn_size = idc.next_head(ea) - ea
             if target == ea + insn_size:
-                findings.append({
-                    "addr": hex_ea(ea),
-                    "function": _get_func_name_safe(func_ea),
-                    "type": "call_next_insn",
-                    "description": "CALL $+N used to push return address (PIC/anti-disasm)",
-                })
+                findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  call_next_insn  CALL_$+N_push_return_address")
                 if len(findings) >= limit:
                     return findings
 
@@ -657,13 +588,7 @@ def _detect_anti_disasm(func_ea, limit):
             if next_ea != idaapi.BADADDR and next_ea < func.end_ea:
                 next_mnem = idc.print_insn_mnem(next_ea)
                 if next_mnem:
-                    findings.append({
-                        "addr": hex_ea(ea),
-                        "function": _get_func_name_safe(func_ea),
-                        "type": "trap_instruction",
-                        "mnemonic": mnem_l,
-                        "description": "Trap/undefined instruction mid-function",
-                    })
+                    findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  trap_instruction  {mnem_l}")
                     if len(findings) >= limit:
                         return findings
 
@@ -698,14 +623,7 @@ def _decode_attempt_at(ea, key_hex, limit):
         else:
             segment = decoded
 
-        results.append({
-            "method": "xor",
-            "key": key_hex,
-            "decoded_hex": segment[:64].hex(),
-            "decoded_ascii": segment[:64].decode("ascii", errors="replace"),
-            "is_printable": _is_printable_ascii(segment),
-            "length": len(segment),
-        })
+        results.append(f"xor  key={key_hex}  len={len(segment)}  printable={_is_printable_ascii(segment)}  \"{segment[:64].decode('ascii', errors='replace')}\"")
     else:
         # Auto-detect: try single-byte XOR keys
         for key in range(1, 256):
@@ -715,19 +633,13 @@ def _decode_attempt_at(ea, key_hex, limit):
                 continue
             segment = decoded[:null_pos]
             if _is_printable_ascii(segment) and len(segment) >= 4:
-                results.append({
-                    "method": "xor_single",
-                    "key": f"0x{key:02x}",
-                    "decoded": segment.decode("ascii", errors="replace")[:80],
-                    "length": len(segment),
-                })
+                results.append(f"xor_single  key=0x{key:02x}  len={len(segment)}  \"{segment.decode('ascii', errors='replace')[:80]}\"")
                 if len(results) >= limit:
                     break
 
         # Try base64 detection
         import base64
         try:
-            # Find potential base64 segment (alphanumeric + /+=)
             b64_chars = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
             end = 0
             for i, b in enumerate(raw):
@@ -739,14 +651,7 @@ def _decode_attempt_at(ea, key_hex, limit):
                 b64_segment = raw[:end]
                 try:
                     decoded_b64 = base64.b64decode(b64_segment, validate=True)
-                    results.append({
-                        "method": "base64",
-                        "encoded": b64_segment.decode("ascii", errors="replace")[:80],
-                        "decoded_hex": decoded_b64[:64].hex(),
-                        "decoded_ascii": decoded_b64[:64].decode(
-                            "ascii", errors="replace"),
-                        "length": len(decoded_b64),
-                    })
+                    results.append(f"base64  len={len(decoded_b64)}  \"{decoded_b64[:64].decode('ascii', errors='replace')}\"")
                 except Exception:
                     pass
         except Exception:
@@ -756,7 +661,7 @@ def _decode_attempt_at(ea, key_hex, limit):
         "ok": True,
         "addr": hex_ea(ea),
         "raw_hex": raw[:32].hex(),
-        "results": results,
+        "results": "\n".join(results),
         "count": len(results),
     }
 
@@ -838,7 +743,7 @@ def deobfuscate(
         return {
             "ok": True,
             "action": action,
-            "findings": all_findings[:limit],
+            "findings": "\n".join(all_findings[:limit]),
             "count": len(all_findings[:limit]),
             "truncated": len(all_findings) >= limit,
         }
