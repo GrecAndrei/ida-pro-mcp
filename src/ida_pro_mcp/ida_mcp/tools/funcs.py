@@ -18,6 +18,7 @@ def funcs(
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name"] = None,
     flags: Annotated[int, "Function flags (e.g. FUNC_NORET)"] = 0,
+    force: Annotated[bool, "Force creation by deleting overlapping functions/data"] = False,
     comment: Annotated[Optional[str], "Function comment"] = None,
     repeatable: Annotated[bool, "Is comment repeatable?"] = False,
     query: Annotated[Optional[str], "Filter for function names - supports regex, glob, or substring (list action)"] = None,
@@ -34,7 +35,8 @@ def funcs(
     Actions:
     - create: Define a new function at `addr`. Automatically converts bytes to code
       if needed. If address is inside an existing function, offers to split or
-      suggests using the existing function's start. Optionally set `end` and `name`.
+      suggests using the existing function's start. Optionally set `end`, `name`,
+      `flags`, or `force` to delete overlapping functions/data.
     - delete: Remove function definition at `addr`. If addr is inside a function
       (but not at its start), the containing function is deleted.
     - set_flags: Update function attribute flags.
@@ -60,11 +62,14 @@ def funcs(
                 return {"ok": True, "addr": hex(ea), "name": name or ida_funcs.get_func_name(ea), "note": "Function already exists at this address"}
             if existing:
                 # Address is inside an existing function but not at its start
-                return make_error(
-                    MCPError.ADDRESS_INVALID,
-                    f"Address {hex(ea)} is inside function {ida_funcs.get_func_name(existing.start_ea)} ({hex(existing.start_ea)}-{hex(existing.end_ea)})",
-                    "Delete the existing function first with funcs(action='delete', addr='" + hex(ea) + "') which will delete the containing function, then create the new one",
-                )
+                if force and ida_funcs.del_func(existing.start_ea):
+                    existing = None
+                else:
+                    return make_error(
+                        MCPError.ADDRESS_INVALID,
+                        f"Address {hex(ea)} is inside function {ida_funcs.get_func_name(existing.start_ea)} ({hex(existing.start_ea)}-{hex(existing.end_ea)})",
+                        "Delete the existing function first with funcs(action='delete', addr='" + hex(ea) + "') which will delete the containing function, then create the new one",
+                    )
             # Ensure code exists at the start address - auto-convert if possible
             byte_flags = ida_bytes.get_flags(ea)
             if not ida_bytes.is_code(byte_flags):
@@ -84,13 +89,38 @@ def funcs(
             if end:
                 end_ea, err = validate_addr(end)
                 if err: return err
+                if end_ea <= ea:
+                    return make_error(MCPError.INVALID_ARGS, "end must be greater than start address")
+                if force:
+                    ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
             if ida_funcs.add_func(ea, end_ea or idaapi.BADADDR):
                 if name:
                     idc.set_name(ea, name, ida_name.SN_FORCE)
-                # Get the created function's actual boundaries
                 fn = ida_funcs.get_func(ea)
+                if fn and flags:
+                    fn.flags |= flags
+                    ida_funcs.update_func(fn)
+                try:
+                    import ida_auto
+                    ida_auto.auto_wait()
+                except Exception:
+                    pass
+                # Get the created function's actual boundaries
                 actual_end = hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None)
                 return {"ok": True, "addr": hex(ea), "end": actual_end, "name": name or (ida_funcs.get_func_name(ea) if fn else None)}
+            if end_ea and hasattr(idaapi, "auto_mark_range"):
+                try:
+                    idaapi.auto_mark_range(ea, end_ea, idaapi.AU_FINAL)
+                    idaapi.auto_wait()
+                except Exception:
+                    pass
+                if ida_funcs.add_func(ea, end_ea):
+                    fn = ida_funcs.get_func(ea)
+                    if fn and flags:
+                        fn.flags |= flags
+                        ida_funcs.update_func(fn)
+                    actual_end = hex(fn.end_ea) if fn else hex(end_ea)
+                    return {"ok": True, "addr": hex(ea), "end": actual_end, "name": name or (ida_funcs.get_func_name(ea) if fn else None), "note": "Function created after auto-analysis retry"}
             return make_error(MCPError.IDA_ERROR, f"Failed to create function at {hex(ea)}", "Ensure code exists at the address and there are no overlapping functions. Try specifying an explicit end address.")
 
         elif action == "delete":
