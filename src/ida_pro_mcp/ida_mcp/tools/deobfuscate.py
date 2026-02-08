@@ -23,15 +23,27 @@ _KNOWN_HASH_CONSTANTS = {
     "fnv1a_32":      0x811C9DC5,  # FNV-1a 32-bit offset basis
 }
 
-# Stack-string mov mnemonics
-_MOV_MNEMONICS = {"mov", "movabs"}
+# Stack-string mov mnemonics (x86 + ARM)
+_MOV_MNEMONICS = {"mov", "movabs", "strb", "movb"}
 
-# Conditional jump mnemonics
+# Conditional jump mnemonics (x86 + ARM)
 _COND_JUMPS = {
+    # x86
     "je", "jne", "jz", "jnz", "ja", "jae", "jb", "jbe",
     "jg", "jge", "jl", "jle", "jo", "jno", "js", "jns",
     "jp", "jpe", "jnp", "jpo", "jcxz", "jecxz", "jrcxz",
+    # ARM
+    "beq", "bne", "bcs", "bcc", "bmi", "bpl", "bvs", "bvc",
+    "bhi", "bls", "bge", "blt", "bgt", "ble",
+    "cbz", "cbnz", "tbz", "tbnz",
 }
+
+# Unconditional terminators (x86 + ARM)
+_TERMINATORS = {"jmp", "ret", "retn", "int3", "hlt", "ud2",
+                "b", "bx", "br", "eret"}
+
+# Call mnemonics (x86 + ARM)
+_CALL_MNEMONICS = {"call", "bl", "blx", "blr"}
 
 
 def _get_func_name_safe(ea):
@@ -425,7 +437,7 @@ def _find_dead_code(func_ea, limit):
                 if prev_mnem:
                     pm_l = prev_mnem.lower()
                     # Previous instruction doesn't break flow
-                    if pm_l not in ("jmp", "ret", "retn", "int3", "hlt", "ud2"):
+                    if pm_l not in _TERMINATORS:
                         reachable.add(ea)
 
     # Find unreachable basic block starts
@@ -472,8 +484,7 @@ def _find_dead_code(func_ea, limit):
                     return findings
 
         if mnem:
-            prev_was_terminator = mnem.lower() in (
-                "jmp", "ret", "retn", "int3", "hlt", "ud2")
+            prev_was_terminator = mnem.lower() in _TERMINATORS
         else:
             prev_was_terminator = False
 
@@ -492,7 +503,7 @@ def _detect_api_hashing(func_ea, limit):
     resolve_ea = None
     for ea in idautils.FuncItems(func_ea):
         mnem = idc.print_insn_mnem(ea)
-        if not mnem or mnem.lower() != "call":
+        if not mnem or mnem.lower() not in _CALL_MNEMONICS:
             continue
         for xref in idautils.XrefsFrom(ea, 0):
             name = idc.get_name(xref.to)
@@ -559,7 +570,7 @@ def _find_dynamic_dispatch(func_ea, limit):
         if not mnem:
             continue
         mnem_l = mnem.lower()
-        if mnem_l != "call":
+        if mnem_l not in _CALL_MNEMONICS:
             continue
 
         op_type = idc.get_operand_type(ea, 0)
@@ -605,7 +616,7 @@ def _detect_anti_disasm(func_ea, limit):
         mnem_l = mnem.lower()
 
         # Pattern 1: Jump into the middle of an instruction
-        if mnem_l in ("jmp", "jz", "jnz", "je", "jne", "jb", "ja"):
+        if mnem_l in _COND_JUMPS or mnem_l in ("jmp", "b"):
             target = idc.get_operand_value(ea, 0)
             if target == idaapi.BADADDR:
                 continue
@@ -626,7 +637,7 @@ def _detect_anti_disasm(func_ea, limit):
                         return findings
 
         # Pattern 2: call $+5 (push return address trick)
-        if mnem_l == "call":
+        if mnem_l in _CALL_MNEMONICS:
             target = idc.get_operand_value(ea, 0)
             insn_size = idc.next_head(ea) - ea
             if target == ea + insn_size:
