@@ -291,6 +291,7 @@ Patch "Opaque Predicates" to simplify the control flow graph.
 ### 8.1 Truncation and Pagination
 The `truncation.py` middleware is your context window guardrail.
 If a tool returns `_truncated: true`, do not repeat the same request.
+If a `_continue` token is present, call `truncation(action='continue', token=..., field=...)` to read the next chunk.
 Identify the `total` count provided in the response.
 Use `offset` and `count` parameters to surgically pull the next slice.
 Never ask the user for data that can be retrieved via pagination.

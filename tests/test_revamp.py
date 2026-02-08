@@ -13,7 +13,15 @@ import unittest
 # Add parent dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from ida_mcp_stdio import SessionManager, Session, IDAMCPServer, make_error, MCPError
+from ida_mcp_stdio import (
+    SessionManager,
+    Session,
+    IDAMCPServer,
+    make_error,
+    MCPError,
+    truncate_response,
+    continue_truncated,
+)
 
 
 class TestSessionManagerRevamp(unittest.TestCase):
@@ -196,6 +204,8 @@ class TestSessionExecuteTool(unittest.TestCase):
         })
         self.assertTrue(result.get("ok"))
         self.assertEqual(result["session"]["idb_path"], idb_path)
+        self.assertFalse(result["session"]["binary_exists"])
+        self.assertTrue(result["session"]["idb_exists"])
 
     def test_create_session_with_ida_args(self):
         result = self.server._execute_tool("session", {
@@ -373,6 +383,30 @@ class TestModifyToolDescription(unittest.TestCase):
         from ida_mcp_stdio import TOOL_DESCRIPTIONS
         desc = TOOL_DESCRIPTIONS["modify"]
         self.assertIn("semicolons", desc)
+
+
+class TestTruncationContinue(unittest.TestCase):
+    def test_truncate_and_continue_list(self):
+        payload = {"items": list(range(1000))}
+        truncated = truncate_response(payload, max_tokens=500)
+        self.assertTrue(truncated.get("_truncated"))
+        token = truncated["_continue"]["token"]
+        expected_offset = truncated["_continue"]["fields"]["items"]["next_offset"]
+        cont = continue_truncated(token, field="items")
+        self.assertTrue(cont.get("ok"))
+        self.assertEqual(cont.get("offset"), expected_offset)
+        self.assertEqual(cont.get("items"), list(range(expected_offset, expected_offset + cont["count"])))
+
+    def test_truncate_and_continue_string(self):
+        payload = {"text": "A" * 5000}
+        truncated = truncate_response(payload, max_tokens=500)
+        self.assertTrue(truncated.get("_truncated"))
+        token = truncated["_continue"]["token"]
+        expected_offset = truncated["_continue"]["fields"]["text"]["next_offset"]
+        cont = continue_truncated(token, field="text")
+        self.assertTrue(cont.get("ok"))
+        self.assertEqual(cont.get("offset"), expected_offset)
+        self.assertEqual(len(cont.get("text", "")), cont.get("count"))
 
 
 if __name__ == "__main__":

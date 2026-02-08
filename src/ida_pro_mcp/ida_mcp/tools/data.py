@@ -194,6 +194,7 @@ def data(
                         sc = idaapi.string_info_t()
                         if strlist_item(sc, i):
                             try:
+                                # get_strlit_contents signature varies across IDA versions.
                                 try:
                                     content = idc.get_strlit_contents(sc.ea, sc.length, sc.type)
                                 except TypeError:
