@@ -155,8 +155,7 @@ def _search_dwords_in_segments(dwords, limit=50):
         pattern = _dwords_to_bytes(dwords, endian)
         found = _search_bytes_in_segments(pattern, limit - len(hits))
         for h in found:
-            h["endian"] = endian
-            hits.append(h)
+            hits.append(f"{h}  endian={endian}")
         if len(hits) >= limit:
             break
     return hits
@@ -260,6 +259,7 @@ def crypto_id(
         if action == "identify":
             # Comprehensive identification: search all known constants
             findings = []
+            algos_found = set()
             search_scope = None
             if addr:
                 ea, err = validate_addr(addr)
@@ -273,30 +273,23 @@ def crypto_id(
                 else:
                     hits = _search_bytes_in_segments(pattern, limit)
                 for h in hits:
+                    # h is a string like "0x12345  .text  func_name"
+                    hit_addr_str = h.split()[0] if h else "0x0"
+                    hit_ea = int(hit_addr_str, 16)
                     if search_scope is not None:
-                        hit_ea = int(h["addr"], 16)
                         func = ida_funcs.get_func(search_scope)
                         if func and not (func.start_ea <= hit_ea < func.end_ea):
                             continue
                         elif not func and abs(hit_ea - search_scope) > 0x10000:
                             continue
-                    entry = {
-                        "constant": name,
-                        "algorithm": algo,
-                        "addr": h["addr"],
-                        "segment": h.get("segment"),
-                        "func": h.get("func"),
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(int(h["addr"], 16))
-                    findings.append(entry)
+                    findings.append(f"{h}  const={name}  algo={algo}")
+                    algos_found.add(algo)
                     if len(findings) >= limit:
                         break
                 if len(findings) >= limit:
                     break
 
-            algos = sorted(set(f["algorithm"] for f in findings))
-            return {"ok": True, "findings": "\n".join(str(f) for f in findings), "algorithms_found": algos, "count": len(findings)}
+            return {"ok": True, "findings": "\n".join(findings), "algorithms_found": sorted(algos_found), "count": len(findings)}
 
         elif action == "constants":
             findings = []
@@ -306,17 +299,7 @@ def crypto_id(
                 else:
                     hits = _search_bytes_in_segments(pattern, limit - len(findings))
                 for h in hits:
-                    entry = {
-                        "constant": name,
-                        "algorithm": algo,
-                        "addr": h["addr"],
-                        "segment": h.get("segment"),
-                        "endian": h.get("endian"),
-                        "func": h.get("func"),
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(int(h["addr"], 16))
-                    findings.append(entry)
+                    findings.append(f"{h}  const={name}  algo={algo}")
                 if len(findings) >= limit:
                     break
             return {"ok": True, "findings": "\n".join(str(f) for f in findings), "count": len(findings)}
@@ -375,16 +358,7 @@ def crypto_id(
             # First check for known S-box constants
             sbox_hits = _search_bytes_in_segments(_AES_SBOX[:16], limit)
             for h in sbox_hits:
-                entry = {
-                    "type": "sbox_reference",
-                    "algorithm": "AES (likely)",
-                    "addr": h["addr"],
-                    "segment": h.get("segment"),
-                    "func": h.get("func"),
-                }
-                if include_context:
-                    entry["context"] = _get_context_at(int(h["addr"], 16))
-                results.append(entry)
+                results.append(f"{h}")
 
             # Scan functions for SPN-like patterns: high XOR + shift + table lookups
             if len(results) < limit:
@@ -427,16 +401,7 @@ def crypto_id(
                     break
                 hits = _search_dwords_in_segments(dwords, limit - len(results))
                 for h in hits:
-                    entry = {
-                        "type": "hash_constant",
-                        "constant": cname,
-                        "addr": h["addr"],
-                        "endian": h.get("endian"),
-                        "func": h.get("func"),
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(int(h["addr"], 16))
-                    results.append(entry)
+                    results.append(f"{h}")
 
             # Scan for Merkle-Damgard-like functions: many rotates/shifts + XOR + add
             if len(results) < limit:
@@ -477,15 +442,7 @@ def crypto_id(
                     break
                 hits = _search_dwords_in_segments(dwords, limit - len(results))
                 for h in hits:
-                    entry = {
-                        "type": "rng_constant",
-                        "constant": cname,
-                        "addr": h["addr"],
-                        "func": h.get("func"),
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(int(h["addr"], 16))
-                    results.append(entry)
+                    results.append(f"{h}")
 
             # Scan for RNG patterns: mul + add + and (masking)
             if len(results) < limit:
@@ -528,16 +485,7 @@ def crypto_id(
                     break
                 hits = _search_bytes_in_segments(pat, limit - len(results))
                 for h in hits:
-                    entry = {
-                        "type": "rsa_public_exponent",
-                        "constant": "0x10001 (65537)",
-                        "addr": h["addr"],
-                        "endian": endian,
-                        "func": h.get("func"),
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(int(h["addr"], 16))
-                    results.append(entry)
+                    results.append(f"{h}")
 
             # Scan for modular exponentiation patterns: many mul + and + shift (squaring)
             if len(results) < limit:
@@ -630,17 +578,7 @@ def crypto_id(
                     break
                 hits = _search_bytes_in_segments(pat, limit - len(results))
                 for h in hits:
-                    entry = {
-                        "type": "encoding_table",
-                        "constant": cname,
-                        "algorithm": algo,
-                        "addr": h["addr"],
-                        "segment": h.get("segment"),
-                        "func": h.get("func"),
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(int(h["addr"], 16))
-                    results.append(entry)
+                    results.append(f"{h}  const={cname}  algo={algo}")
 
             # Look for functions with encoding-related names
             if len(results) < limit:
@@ -664,31 +602,14 @@ def crypto_id(
             # CRC32 table detection
             crc_hits = _search_dwords_in_segments(_CRC32_TABLE_PREFIX[:4], limit)
             for h in crc_hits:
-                entry = {
-                    "type": "crc32_table",
-                    "algorithm": "CRC32",
-                    "addr": h["addr"],
-                    "endian": h.get("endian"),
-                    "func": h.get("func"),
-                }
-                if include_context:
-                    entry["context"] = _get_context_at(int(h["addr"], 16))
-                results.append(entry)
+                results.append(f"{h}")
 
             # Adler32 MOD constant (65521 = 0xFFF1)
             if len(results) < limit:
                 adler_le = struct.pack("<H", _ADLER32_MOD)
                 adler_hits = _search_bytes_in_segments(adler_le, limit - len(results))
                 for h in adler_hits:
-                    entry = {
-                        "type": "adler32_mod",
-                        "algorithm": "Adler32",
-                        "addr": h["addr"],
-                        "func": h.get("func"),
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(int(h["addr"], 16))
-                    results.append(entry)
+                    results.append(f"{h}")
 
             # Scan for checksum function names
             if len(results) < limit:
