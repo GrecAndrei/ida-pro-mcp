@@ -30,7 +30,6 @@ from .structs import structs
 from .emulate import emulate
 from .export import export
 from .history import history
-from .strings_xref import strings_xref
 from .entropy import entropy
 from .imports_deep import imports_deep
 from .comments_ai import comments_ai
@@ -46,6 +45,23 @@ from .analysis import analysis
 from .query import query
 from .edit import edit
 from .batch import batch
+from .vuln_scan import vuln_scan
+from .deobfuscate import deobfuscate
+from .crypto_id import crypto_id
+from .abi import abi
+from .summarize import summarize
+from .compare import compare
+from .stack_analysis import stack_analysis
+from .classify import classify
+from .protocol import protocol
+from .c2_detect import c2_detect
+from .gadgets import gadgets
+from .annotation import annotation
+from .xref_analysis import xref_analysis
+from .string_ops import string_ops
+from .cfg_analysis import cfg_analysis
+from .binary_info import binary_info
+from .llm_helpers import llm_helpers
 
 __all__ = [
     "idb",
@@ -78,7 +94,6 @@ __all__ = [
     "emulate",
     "export",
     "history",
-    "strings_xref",
     "entropy",
     "imports_deep",
     "comments_ai",
@@ -94,4 +109,21 @@ __all__ = [
     "query",
     "edit",
     "batch",
+    "vuln_scan",
+    "deobfuscate",
+    "crypto_id",
+    "abi",
+    "summarize",
+    "compare",
+    "stack_analysis",
+    "classify",
+    "protocol",
+    "c2_detect",
+    "gadgets",
+    "annotation",
+    "xref_analysis",
+    "string_ops",
+    "cfg_analysis",
+    "binary_info",
+    "llm_helpers",
 ]
