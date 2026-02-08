@@ -630,7 +630,10 @@ def annotation(
                     if check_ea >= fn.end_ea or check_ea == idaapi.BADADDR:
                         break
                     mnem = idc.print_insn_mnem(check_ea)
-                    if mnem and mnem.lower().startswith("j") and mnem.lower() != "jmp":
+                    if mnem and ((mnem.lower().startswith("j") and mnem.lower() != "jmp") or
+                                  mnem.lower() in ("cbz", "cbnz", "beq", "bne", "bcs", "bcc",
+                                                    "bmi", "bpl", "bvs", "bvc", "bhi", "bls",
+                                                    "bge", "blt", "bgt", "ble", "tbz", "tbnz")):
                         cmt = (f"{prefix}error check: {callee_name} return value "
                                f"tested here")
                         error_paths.append({

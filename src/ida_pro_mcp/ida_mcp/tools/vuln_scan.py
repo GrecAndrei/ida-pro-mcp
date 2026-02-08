@@ -91,6 +91,9 @@ def _matches_win_api_variant(name, target):
     n = name.lower()
     t = target.lower()
     return n == t or n == t + "a" or n == t + "w"
+
+
+def _get_func_name_safe(ea):
     """Get function name for an address, or 'unknown'."""
     func = idaapi.get_func(ea)
     if func:
@@ -240,7 +243,9 @@ def _scan_integer_overflow(addr, limit, include_context):
                 if curr == idaapi.BADADDR:
                     break
                 mnem = idc.print_insn_mnem(curr)
-                if mnem and mnem.lower() in ("add", "mul", "imul", "shl", "shr"):
+                if mnem and mnem.lower() in ("add", "mul", "imul", "shl", "shr",
+                                              # ARM variants
+                                              "adds", "muls", "lsl", "lsr", "madd", "umull", "smull"):
                     f = _make_finding(
                         curr, "integer_overflow",
                         f"Unchecked arithmetic ({mnem}) before {alloc}() at {hex_ea(call_ea)}",
@@ -278,7 +283,9 @@ def _scan_use_after_free(addr, limit, include_context):
                 if not mnem:
                     continue
                 # Skip if we hit another call to free or a return
-                if mnem.lower() in ("ret", "retn", "jmp"):
+                if mnem.lower() in ("ret", "retn", "jmp",
+                                    # ARM return variants
+                                    "bx", "b", "pop"):
                     break
                 # Look for dereference patterns after free
                 disasm = ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))
@@ -400,7 +407,9 @@ def _scan_null_deref(addr, limit, include_context):
                 if curr == idaapi.BADADDR or curr >= func.end_ea:
                     break
                 mnem = idc.print_insn_mnem(curr)
-                if mnem and mnem.lower() in ("test", "cmp", "je", "jz", "jne", "jnz"):
+                if mnem and mnem.lower() in ("test", "cmp", "je", "jz", "jne", "jnz",
+                                              # ARM variants
+                                              "cbz", "cbnz", "tst", "beq", "bne"):
                     has_null_check = True
                     break
                 if mnem and mnem.lower() in ("call", "ret", "retn"):

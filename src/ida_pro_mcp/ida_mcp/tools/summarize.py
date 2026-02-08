@@ -668,11 +668,17 @@ def summarize(
                 mnem_l = mnem.lower()
 
                 if mnem_l in ("add", "sub", "mul", "imul", "div", "idiv",
-                              "shl", "shr", "sar", "and", "or", "xor", "not", "neg"):
+                              "shl", "shr", "sar", "and", "or", "xor", "not", "neg",
+                              # ARM arithmetic
+                              "adds", "subs", "muls", "lsl", "lsr", "asr", "eor", "orr", "mvn"):
                     arithmetic_ops += 1
-                elif mnem_l in ("cmp", "test"):
+                elif mnem_l in ("cmp", "test", "tst", "cmn"):
                     comparison_ops += 1
-                elif mnem_l.startswith("j") and mnem_l != "jmp":
+                elif (mnem_l.startswith("j") and mnem_l != "jmp") or \
+                     (mnem_l.startswith("b") and mnem_l not in (
+                         "b", "bl", "blx", "blr", "bx",  # unconditional branch/call
+                         "bic", "bfi", "bfxil",  # ARM logical/bitfield ops starting with 'b'
+                     )):
                     branch_ops += 1
 
                 # Check for global references

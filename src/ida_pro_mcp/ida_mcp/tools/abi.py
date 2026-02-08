@@ -339,7 +339,7 @@ def abi(
                 if not mnem:
                     continue
                 mnem_lower = mnem.lower()
-                if mnem_lower == "jmp":
+                if mnem_lower in ("jmp", "b"):  # x86: jmp, ARM: b
                     target_op = idc.print_operand(ea, 0)
                     fname = ida_funcs.get_func_name(fn.start_ea)
                     results.append(f"{hex(fn.start_ea)}  {fname}  tail_jmp={target_op}")
@@ -360,6 +360,10 @@ def abi(
                 mnems = [i["mnem"].lower() for i in insns[:5]]
                 if "push" in mnems and "mov" in mnems:
                     pattern = "standard_frame_setup"
+                elif "stp" in mnems:
+                    pattern = "aarch64_frame_setup"
+                elif "stmdb" in mnems or "stmfd" in mnems:
+                    pattern = "arm32_frame_setup"
                 elif "sub" in mnems[:3]:
                     pattern = "stack_alloc"
                 elif "endbr64" in mnems or "endbr32" in mnems:
@@ -409,7 +413,12 @@ def abi(
                         pattern = "standard_frame_teardown"
                     else:
                         pattern = "simple_ret"
-                elif "jmp" in mnems:
+                elif "bx" in mnems:
+                    if "ldp" in mnems or "pop" in mnems:
+                        pattern = "arm_frame_teardown"
+                    else:
+                        pattern = "arm_simple_ret"
+                elif "jmp" in mnems or "b" in mnems:
                     pattern = "tail_call"
                 elif "int" in mnems:
                     pattern = "interrupt"
@@ -451,7 +460,7 @@ def abi(
                             last_ea = idc.prev_head(fn.end_ea, fn.start_ea)
                             if last_ea != idaapi.BADADDR:
                                 mnem = idc.print_insn_mnem(last_ea)
-                                if mnem and mnem.lower() in ("ret", "retn"):
+                                if mnem and mnem.lower() in ("ret", "retn", "bx"):
                                     op = idc.print_operand(last_ea, 0)
                                     # stdcall with args should have ret N
                                     if fdet.size() > 0 and (not op or op == ""):
@@ -461,7 +470,7 @@ def abi(
                     last_ea = idc.prev_head(fn.end_ea, fn.start_ea)
                     if last_ea != idaapi.BADADDR:
                         mnem = idc.print_insn_mnem(last_ea)
-                        if mnem and mnem.lower() in ("ret", "retn"):
+                        if mnem and mnem.lower() in ("ret", "retn", "bx"):
                             results.append(f"{hex(fn.start_ea)}  {fname}  noret_has_ret")
                 if len(results) >= limit:
                     break
