@@ -56,6 +56,7 @@ from .stack_analysis import stack_analysis
 from .classify import classify
 from .protocol import protocol
 from .c2_detect import c2_detect
+from .gadgets import gadgets
 
 __all__ = [
     "idb",
@@ -114,4 +115,5 @@ __all__ = [
     "classify",
     "protocol",
     "c2_detect",
+    "gadgets",
 ]
