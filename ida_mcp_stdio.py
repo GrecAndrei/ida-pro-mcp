@@ -527,6 +527,37 @@ TOOLS = [
     # Documentation and YARA
     "wiki",
     "yara_hunt",
+    # --- New LLM-optimized tools ---
+    # Security & vulnerability analysis
+    "vuln_scan",
+    "gadgets",
+    "c2_detect",
+    # Deobfuscation & crypto
+    "deobfuscate",
+    "crypto_id",
+    # ABI & calling conventions
+    "abi",
+    # Summarization & classification
+    "summarize",
+    "classify",
+    # Function comparison
+    "compare",
+    # Stack analysis
+    "stack_analysis",
+    # Protocol analysis
+    "protocol",
+    # Intelligent annotation
+    "annotation",
+    # Deep cross-reference analysis
+    "xref_analysis",
+    # String operations
+    "string_ops",
+    # CFG analysis
+    "cfg_analysis",
+    # Binary info
+    "binary_info",
+    # LLM helpers
+    "llm_helpers",
 ]
 
 TOOL_DESCRIPTIONS = {
@@ -591,6 +622,24 @@ TOOL_DESCRIPTIONS = {
     # Documentation and YARA
     "wiki": "Built-in documentation system. Actions: list_topics, read, search, sections, index.",
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
+    # --- New LLM-optimized tools ---
+    "vuln_scan": "Automated vulnerability scanner with CWE classification. Actions: buffer_overflow (CWE-120), format_string (CWE-134), integer_overflow (CWE-190), use_after_free (CWE-416), command_injection (CWE-78), race_condition (CWE-362), null_deref (CWE-476), info_leak (CWE-200), auth_bypass (CWE-287), hardcoded_creds (CWE-798), scan_all (run all scans), classify (classify address by CWE).",
+    "deobfuscate": "Deobfuscation analysis. Actions: detect_encoding, xor_scan, stack_strings, opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt.",
+    "crypto_id": "Cryptographic algorithm identification. Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
+    "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
+    "summarize": "LLM-friendly binary/function summarization. Actions: binary, function, segment, imports_by_category, strings_by_category, complexity, call_hierarchy, data_flow, security_posture, statistics.",
+    "compare": "Function comparison and similarity analysis. Actions: functions, blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.",
+    "stack_analysis": "Deep stack frame analysis. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
+    "classify": "Function purpose classification. Actions: function, binary, all_functions, library_code, wrappers, callbacks, initializers, error_handlers, hot_functions, orphans.",
+    "protocol": "Network protocol structure analysis. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine.",
+    "c2_detect": "C2/malware behavior detection. Actions: indicators, persistence, evasion, injection, exfiltration, lateral_movement, privilege_escalation, capabilities, config_extract, ioc_extract.",
+    "gadgets": "ROP/JOP/COP gadget and exploit primitive discovery. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains. Supports x86/x64 and ARM/AArch64.",
+    "annotation": "Intelligent bulk annotation (writes to DB). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup. Supports dry_run mode.",
+    "xref_analysis": "Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
+    "string_ops": "Advanced string operations. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious.",
+    "cfg_analysis": "Control flow graph analysis. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
+    "binary_info": "Binary metadata and format analysis. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
+    "llm_helpers": "LLM-specific helper actions. Actions: context_window, function_digest, binary_digest, explain_address, suggest_next, progress_report, focus_area, question_answer, guided_analysis, cheatsheet.",
 }
 
 TOOL_ACTIONS = {
@@ -851,6 +900,80 @@ TOOL_ACTIONS = {
     # Documentation and YARA
     "wiki": ["list_topics", "read", "search", "sections", "index"],
     "yara_hunt": ["scan", "compile", "list_rules"],
+    # --- New LLM-optimized tools ---
+    "vuln_scan": [
+        "buffer_overflow", "format_string", "integer_overflow", "use_after_free",
+        "command_injection", "race_condition", "null_deref", "info_leak",
+        "auth_bypass", "hardcoded_creds", "scan_all", "classify",
+    ],
+    "deobfuscate": [
+        "detect_encoding", "xor_scan", "stack_strings", "opaque_predicates",
+        "control_flow_flatten", "dead_code", "api_hashing", "dynamic_dispatch",
+        "anti_disasm", "decode_attempt",
+    ],
+    "crypto_id": [
+        "identify", "constants", "key_schedule", "block_cipher", "hash_detect",
+        "rng_detect", "asymmetric", "custom_crypto", "encoding", "checksums",
+    ],
+    "abi": [
+        "detect", "stack_args", "reg_args", "return_type", "varargs",
+        "struct_return", "tail_calls", "prologue", "epilogue", "abi_violations",
+    ],
+    "summarize": [
+        "binary", "function", "segment", "imports_by_category", "strings_by_category",
+        "complexity", "call_hierarchy", "data_flow", "security_posture", "statistics",
+    ],
+    "compare": [
+        "functions", "blocks", "apis", "strings", "constants", "structure",
+        "semantics", "batch_compare", "find_clones", "changelog",
+    ],
+    "stack_analysis": [
+        "frame", "buffers", "canary", "alignment", "spills",
+        "usage", "variables", "arrays", "uninitialized", "summary",
+    ],
+    "classify": [
+        "function", "binary", "all_functions", "library_code", "wrappers",
+        "callbacks", "initializers", "error_handlers", "hot_functions", "orphans",
+    ],
+    "protocol": [
+        "detect", "parsers", "serializers", "handlers", "endpoints",
+        "tls_config", "socket_flow", "packet_struct", "magic_numbers", "state_machine",
+    ],
+    "c2_detect": [
+        "indicators", "persistence", "evasion", "injection", "exfiltration",
+        "lateral_movement", "privilege_escalation", "capabilities", "config_extract", "ioc_extract",
+    ],
+    "gadgets": [
+        "rop", "jop", "cop", "syscall", "write_what_where",
+        "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains",
+    ],
+    "annotation": [
+        "auto_comment", "label_loops", "label_branches", "mark_dangerous",
+        "annotate_constants", "tag_functions", "document_args", "mark_error_paths",
+        "propagate_names", "cleanup",
+    ],
+    "xref_analysis": [
+        "call_chain", "common_callers", "common_callees", "hub_functions",
+        "leaf_functions", "recursive", "dominator", "influence",
+        "dependency_graph", "dead_functions",
+    ],
+    "string_ops": [
+        "decode_all", "find_urls", "find_paths", "find_registry", "find_ips",
+        "find_emails", "find_commands", "encoding_stats", "multilingual", "suspicious",
+    ],
+    "cfg_analysis": [
+        "complexity", "loops", "branches", "paths", "dominators",
+        "post_dominators", "back_edges", "natural_loops", "irreducible", "flatten_detect",
+    ],
+    "binary_info": [
+        "headers", "sections", "relocations", "resources", "debug_info",
+        "compiler", "linker", "timestamps", "checksums", "overlay",
+    ],
+    "llm_helpers": [
+        "context_window", "function_digest", "binary_digest", "explain_address",
+        "suggest_next", "progress_report", "focus_area", "question_answer",
+        "guided_analysis", "cheatsheet",
+    ],
 }
 
 TOOL_ARG_SCHEMAS = {

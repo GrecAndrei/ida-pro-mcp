@@ -32,7 +32,7 @@ def quickref() -> list[dict]:
 
 @prompt
 def workflow(
-    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|diff|debug"] = "triage"
+    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|diff|debug|crypto|protocol|exploit|deobfuscate"] = "triage"
 ) -> list[dict]:
     """Get a step-by-step workflow guide for a specific analysis task."""
     workflows = {
@@ -41,6 +41,10 @@ def workflow(
         "malware": WORKFLOW_MALWARE,
         "diff": WORKFLOW_DIFF,
         "debug": WORKFLOW_DEBUG,
+        "crypto": WORKFLOW_CRYPTO,
+        "protocol": WORKFLOW_PROTOCOL,
+        "exploit": WORKFLOW_EXPLOIT,
+        "deobfuscate": WORKFLOW_DEOBFUSCATE,
     }
     text = workflows.get(task, f"Unknown task '{task}'. Available: {', '.join(workflows.keys())}")
     return [
@@ -164,4 +168,60 @@ WORKFLOW_DEBUG = """\
 6. **Read Memory**: `memory(action="read", addr="0x401000", size=64)`
 7. **Check Stack**: `debug(action="stack")`
 8. **Trace Execution**: `trace(action="start")` → run → `trace(action="stop")` → `trace(action="get")`
+"""
+
+WORKFLOW_CRYPTO = """\
+# Cryptographic Analysis Workflow
+
+1. **Identify Algorithms**: `crypto_id(action="identify")` → scan for known crypto constants
+2. **Find Constants**: `crypto_id(action="constants")` → AES S-box, SHA magic numbers, CRC tables
+3. **Key Schedule**: `crypto_id(action="key_schedule")` → detect key expansion loops
+4. **Block Ciphers**: `crypto_id(action="block_cipher")` → substitution-permutation patterns
+5. **Hash Functions**: `crypto_id(action="hash_detect")` → Merkle-Damgard, round functions
+6. **Encoding**: `crypto_id(action="encoding")` → Base64, Base32, hex encoding tables
+7. **Checksums**: `crypto_id(action="checksums")` → CRC32, Adler32, Fletcher
+8. **Custom Crypto**: `crypto_id(action="custom_crypto")` → homebrew implementations
+9. **Classify Functions**: `classify(action="function", addr="<crypto_func>")` → confirm category
+"""
+
+WORKFLOW_PROTOCOL = """\
+# Network Protocol Reverse Engineering Workflow
+
+1. **Detect Protocols**: `protocol(action="detect")` → identify HTTP, DNS, TLS, custom protocols
+2. **Find Endpoints**: `protocol(action="endpoints")` → extract URLs, IPs, hostnames, ports
+3. **Locate Parsers**: `protocol(action="parsers")` → functions reading structured data from buffers
+4. **Find Handlers**: `protocol(action="handlers")` → message/command dispatch tables
+5. **Analyze Structure**: `protocol(action="packet_struct")` → infer packet format from parsing code
+6. **TLS Config**: `protocol(action="tls_config")` → cipher suites, certificate handling
+7. **Socket Flow**: `protocol(action="socket_flow")` → trace socket lifecycle
+8. **State Machine**: `protocol(action="state_machine")` → protocol state transitions
+9. **Document**: Use `annotation(action="auto_comment")` to annotate protocol functions
+"""
+
+WORKFLOW_EXPLOIT = """\
+# Exploit Development Workflow
+
+1. **Scan Vulnerabilities**: `vuln_scan(action="scan_all")` → find all vulnerability classes
+2. **Check Mitigations**: `gadgets(action="mitigations")` → ASLR, DEP, stack cookies, CFI
+3. **Find ROP Gadgets**: `gadgets(action="rop", limit=100)` → ret-terminated sequences
+4. **Stack Pivots**: `gadgets(action="stack_pivot")` → xchg rsp/mov sp gadgets
+5. **Write Primitives**: `gadgets(action="write_what_where")` → arbitrary write gadgets
+6. **Shellcode Space**: `gadgets(action="shellcode_space")` → W+X memory regions
+7. **Build Chain**: `gadgets(action="pivot_chains")` → categorized building blocks
+8. **Analyze Stack**: `stack_analysis(action="buffers")` → overflow targets
+9. **Stack Canary**: `stack_analysis(action="canary")` → check for cookie protection
+"""
+
+WORKFLOW_DEOBFUSCATE = """\
+# Deobfuscation Workflow
+
+1. **Detect Encoding**: `deobfuscate(action="detect_encoding")` → XOR, Base64, RC4, custom
+2. **XOR Scan**: `deobfuscate(action="xor_scan")` → find and auto-decode XOR-encoded strings
+3. **Stack Strings**: `deobfuscate(action="stack_strings")` → character-by-character construction
+4. **API Hashing**: `deobfuscate(action="api_hashing")` → hash-resolved API calls
+5. **Opaque Predicates**: `deobfuscate(action="opaque_predicates")` → always-true/false branches
+6. **CF Flattening**: `deobfuscate(action="control_flow_flatten")` → dispatcher patterns
+7. **Dead Code**: `deobfuscate(action="dead_code")` → unreachable blocks
+8. **Anti-Disasm**: `deobfuscate(action="anti_disasm")` → jump-into-instruction tricks
+9. **Decode Data**: `deobfuscate(action="decode_attempt", addr="0x...", key="0xAB")` → manual decode
 """
