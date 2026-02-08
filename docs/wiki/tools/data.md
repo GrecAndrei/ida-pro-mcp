@@ -29,6 +29,7 @@ Lists all functions in the binary.
 List string literals with pagination and optional filtering.
 Lists all strings found by IDA.
 *   **Note**: Use `search.string` for targeted searching; use this for global discovery.
+*   **Tip**: Pass `include_xrefs=true` to annotate xref counts.
 
 ### `imports` / `exports`
 List imported modules and symbols.
@@ -42,6 +43,7 @@ Resolves a name to an address (or vice versa).
 ### `bulk_query`
 Run multiple data queries in one call.
 Run multiple data queries in one call with per-item pagination controls.
+Supports per-item flags like `include_prototype`, `include_xrefs`, `min_size`, `named_only`.
 
 ## Pagination
 Most `data` actions support `offset` and `count`. Always use these if the tool reports more than 100 items to avoid context window overflow.

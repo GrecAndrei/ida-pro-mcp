@@ -98,6 +98,16 @@ class TestSessionManagerRevamp(unittest.TestCase):
         opts = {"processor": "arm", "bitness": 32, "endian": "le"}
         session = self.mgr.create_session(self.test_binary, analysis_options=opts)
         self.assertEqual(session.analysis_options, opts)
+        self.assertFalse(session.analysis_applied)
+
+    def test_create_session_with_idb_path_and_args(self):
+        idb_path = os.path.join(self.tmpdir, "custom_idb")
+        session = self.mgr.create_session(
+            self.test_binary, idb_path=idb_path, ida_args=["-P+"]
+        )
+        self.assertTrue(session.idb_path.endswith(".i64"))
+        self.assertEqual(session.ida_args, ["-P+"])
+        self.assertFalse(session.analysis_applied)
 
 
 class TestSessionExecuteTool(unittest.TestCase):
@@ -161,6 +171,40 @@ class TestSessionExecuteTool(unittest.TestCase):
         self.assertTrue(r2.get("ok"))
         self.assertEqual(r2["session"]["session_id"], sid1)
         self.assertIn("note", r2)
+
+    def test_create_session_force_new(self):
+        r1 = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary
+        })
+        self.assertTrue(r1.get("ok"))
+        r2 = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary,
+            "force_new": True
+        })
+        self.assertTrue(r2.get("ok"))
+        self.assertNotEqual(r2["session"]["session_id"], r1["session"]["session_id"])
+
+    def test_create_session_with_idb_path_only(self):
+        idb_path = os.path.join(self.tmpdir, "existing.i64")
+        with open(idb_path, "wb") as f:
+            f.write(b"")
+        result = self.server._execute_tool("session", {
+            "action": "create",
+            "idb_path": idb_path
+        })
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result["session"]["idb_path"], idb_path)
+
+    def test_create_session_with_ida_args(self):
+        result = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary,
+            "ida_args": ["-P+"]
+        })
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result["session"]["ida_args"], ["-P+"])
 
     def test_get_session(self):
         r = self.server._execute_tool("session", {

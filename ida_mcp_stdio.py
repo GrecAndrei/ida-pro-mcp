@@ -22,6 +22,7 @@ import time
 import warnings
 import glob
 import uuid
+import shlex
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
 from datetime import datetime
@@ -152,6 +153,8 @@ class Session:
         idb_path: str,
         binary_path: str,
         analysis_options: Optional[dict] = None,
+        analysis_applied: bool = False,
+        ida_args: Optional[List[str]] = None,
         created_at: Optional[datetime] = None,
         last_accessed: Optional[datetime] = None,
     ):
@@ -159,6 +162,8 @@ class Session:
         self.idb_path = idb_path
         self.binary_path = binary_path
         self.analysis_options = analysis_options or {}
+        self.analysis_applied = bool(analysis_applied)
+        self.ida_args = ida_args or []
         self.created_at = created_at or datetime.now()
         self.last_accessed = last_accessed or datetime.now()
 
@@ -172,6 +177,10 @@ class Session:
             "idb_path": self.idb_path,
             "binary_path": self.binary_path,
             "analysis_options": self.analysis_options,
+            "analysis_applied": self.analysis_applied,
+            "ida_args": self.ida_args,
+            "binary_exists": bool(self.binary_path and os.path.exists(self.binary_path)),
+            "idb_exists": bool(self.idb_path and os.path.exists(self.idb_path)),
             "created_at": self.created_at.isoformat(),
             "last_accessed": self.last_accessed.isoformat(),
         }
@@ -192,6 +201,8 @@ class Session:
             data["idb_path"],
             data.get("binary_path", ""),
             data.get("analysis_options", {}) or {},
+            data.get("analysis_applied", False),
+            data.get("ida_args", []) or [],
             created,
             accessed,
         )
@@ -200,6 +211,7 @@ class Session:
 class SessionManager:
     def __init__(self, cache_dir: str):
         self.sessions: Dict[str, Session] = {}
+        self.cache_dir = cache_dir
         self.session_dir = os.path.join(cache_dir, "sessions")
         os.makedirs(self.session_dir, exist_ok=True)
         # Auto-load existing sessions on startup
@@ -232,18 +244,60 @@ class SessionManager:
                     log_rpc(f"Loaded session {session.session_id} from metadata")
             except Exception as e:
                 log_rpc(f"Failed to load session metadata from {meta_path}: {e}")
+        self._load_orphaned_idbs()
+
+    def _extract_sid(self, path: str) -> Optional[str]:
+        base = os.path.basename(path)
+        match = re.match(r"SID_([A-Za-z0-9]{8})", base)
+        return match.group(1) if match else None
+
+    def _guess_binary_name(self, sid: str, filename: str) -> str:
+        prefix = f"SID_{sid}_"
+        if filename.startswith(prefix):
+            name = filename[len(prefix) :]
+            return os.path.splitext(name)[0]
+        return ""
+
+    def _load_orphaned_idbs(self):
+        """Recover sessions from IDB files missing metadata."""
+        pattern = os.path.join(self.session_dir, "SID_*.*")
+        for idb_path in glob.glob(pattern):
+            if not idb_path.lower().endswith((".i64", ".idb")):
+                continue
+            sid = self._extract_sid(idb_path)
+            if not sid or sid in self.sessions:
+                continue
+            binary_guess = self._guess_binary_name(sid, os.path.basename(idb_path))
+            session = Session(sid, idb_path, binary_guess or "")
+            self.sessions[sid] = session
+            self._save_metadata(session)
+            log_rpc(f"Recovered orphaned session {sid} from {idb_path}")
 
     def create_session(
         self,
         binary_path: str,
         use_existing: Optional[str] = None,
         analysis_options: Optional[dict] = None,
+        idb_path: Optional[str] = None,
+        ida_args: Optional[List[str]] = None,
     ) -> Session:
         sid = "".join(uuid.uuid4().hex[:8].upper())
         # Use SID-specific name to avoid collisions and track metadata easily
-        idb_name = f"SID_{sid}_{os.path.basename(binary_path)}.i64"
-        idb_path = use_existing or os.path.join(self.session_dir, idb_name)
-        session = Session(sid, idb_path, binary_path, analysis_options=analysis_options)
+        idb_base = os.path.basename(binary_path) if binary_path else f"session_{sid}"
+        idb_name = f"SID_{sid}_{idb_base}.i64"
+        resolved_idb = idb_path or use_existing or os.path.join(self.session_dir, idb_name)
+        if resolved_idb and os.path.isdir(resolved_idb):
+            resolved_idb = os.path.join(resolved_idb, idb_name)
+        if resolved_idb and not os.path.splitext(resolved_idb)[1]:
+            resolved_idb = f"{resolved_idb}.i64"
+        session = Session(
+            sid,
+            resolved_idb,
+            binary_path or "",
+            analysis_options=analysis_options,
+            analysis_applied=False,
+            ida_args=ida_args or [],
+        )
         self.sessions[sid] = session
         # Persist metadata immediately
         self._save_metadata(session)
@@ -261,9 +315,9 @@ class SessionManager:
         """Find a session by binary_path or idb_path (normalized comparison)."""
         norm = os.path.normpath(os.path.abspath(path))
         for s in self.sessions.values():
-            if os.path.normpath(os.path.abspath(s.binary_path)) == norm:
+            if s.binary_path and os.path.normpath(os.path.abspath(s.binary_path)) == norm:
                 return s
-            if os.path.normpath(os.path.abspath(s.idb_path)) == norm:
+            if s.idb_path and os.path.normpath(os.path.abspath(s.idb_path)) == norm:
                 return s
         return None
 
@@ -284,18 +338,27 @@ class SessionManager:
         return result
 
     def delete_session(self, sid: str) -> bool:
-        if sid in self.sessions:
-            session = self.sessions.pop(sid)
-            # Cleanup actual IDB and all associated SID files (bookmarks, logs, metadata, etc.)
-            base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
-            for f in glob.glob(base_pattern):
+        session = self.sessions.pop(sid, None)
+        deleted = False
+        # Cleanup actual IDB and all associated SID files (bookmarks, logs, metadata, etc.)
+        base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
+        for f in glob.glob(base_pattern):
+            try:
+                os.remove(f)
+                deleted = True
+                log_rpc(f"Deleted session file: {f}")
+            except Exception as e:
+                log_rpc(f"Failed to delete {f}: {e}")
+        for log_name in (f"ida_mcp_{sid}.log", f"ida_stdout_{sid}.log", f"ida_stderr_{sid}.log"):
+            log_path = os.path.join(self.cache_dir, log_name)
+            if os.path.exists(log_path):
                 try:
-                    os.remove(f)
-                    log_rpc(f"Deleted session file: {f}")
+                    os.remove(log_path)
+                    deleted = True
+                    log_rpc(f"Deleted session log: {log_path}")
                 except Exception as e:
-                    log_rpc(f"Failed to delete {f}: {e}")
-            return True
-        return False
+                    log_rpc(f"Failed to delete {log_path}: {e}")
+        return bool(session) or deleted
 
 
 class BookmarkManager:
@@ -561,7 +624,7 @@ TOOLS = [
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary, supports processor/bitness/endian/loader params), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
     # Analysis configuration
@@ -578,7 +641,7 @@ TOOL_DESCRIPTIONS = {
     "memory": "Direct database memory access. Actions: read, write.",
     # Modification tools
     "modify": "Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set_type, patch_asm (assembles instruction(s) and patches bytes, supports multi-line separated by semicolons).",
-    "funcs": "Function boundary management. Actions: create (auto-converts bytes to code, handles overlapping functions, supports end address), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).",
+    "funcs": "Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force deletion of overlaps), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).",
     "segments": "Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.",
     "bulk": "Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.",
     # Utilities
@@ -972,6 +1035,10 @@ TOOL_ARG_SCHEMAS = {
         "action": {"type": "string", "enum": TOOL_ACTIONS["session"]},
         "binary_path": {"type": "string", "description": "Path to target binary"},
         "use_existing": {"type": "string", "description": "Existing IDB path to reuse"},
+        "idb_path": {"type": "string", "description": "Existing IDB path (alias of use_existing)"},
+        "force_new": {"type": "boolean", "description": "Force creation of a new session even if one exists"},
+        "analysis_options": {"type": "object", "description": "Advanced analysis options payload"},
+        "ida_args": {"type": ["string", "array"], "items": {"type": "string"}},
         "session_id": {"type": "string", "description": "Session ID for switch/close"},
         "query": {
             "type": "string",
@@ -981,9 +1048,22 @@ TOOL_ARG_SCHEMAS = {
         "flags": {"type": "integer"},
         "loader": {"type": "string"},
         "value": {"type": ["string", "object"]},
+        "loader_options": {"type": ["string", "object"]},
         "bitness": {"type": "integer"},
         "endian": {"type": "string"},
         "reanalyze": {"type": "boolean"},
+        "options": {"type": "object"},
+        "analysis_actions": {"type": "array", "items": {"type": "object"}},
+        "apply_once": {"type": "boolean"},
+        "recover": {"type": "boolean"},
+        "backup_on_recover": {"type": "boolean"},
+        "aggressive_cleanup": {"type": "boolean"},
+        "start": {"type": ["string", "integer"]},
+        "end": {"type": ["string", "integer"]},
+        "baseaddr": {"type": ["string", "integer"]},
+        "start_ea": {"type": ["string", "integer"]},
+        "min_ea": {"type": ["string", "integer"]},
+        "max_ea": {"type": ["string", "integer"]},
         "limit": {
             "type": "integer",
             "description": "Max sessions to return (list action)",
@@ -1267,12 +1347,63 @@ class IDAMCPServer:
                 pass
         return "No log available."
 
-    def _nuclear_reset(self, idb_path):
+    def _normalize_ida_args(self, ida_args: Optional[Union[str, List[str]]]) -> List[str]:
+        if ida_args is None:
+            return []
+        if isinstance(ida_args, str):
+            parts = shlex.split(ida_args)
+        elif isinstance(ida_args, list):
+            parts = [str(p) for p in ida_args if p is not None]
+        else:
+            raise ValueError("ida_args must be a string or list of strings")
+        cleaned = []
+        forbidden_prefixes = ("-S", "-L", "-o")
+        for arg in parts:
+            if not arg or "\x00" in arg:
+                continue
+            if any(arg.startswith(prefix) for prefix in forbidden_prefixes):
+                raise ValueError(f"ida_args cannot include {arg} (reserved by server)")
+            if arg == "-A":
+                continue
+            cleaned.append(arg)
+        return cleaned
+
+    def _build_ida_command(self, session, log_file, script_path, use_existing_idb: bool):
+        cmd = [self.idat_exe, "-A"]
+        cmd.extend(session.ida_args or [])
+        cmd.append(f"-S{script_path}")
+        cmd.append(f"-L{log_file}")
+        if use_existing_idb:
+            cmd.append(session.idb_path)
+        else:
+            cmd.append(f"-o{session.idb_path}")
+            if session.binary_path:
+                cmd.append(session.binary_path)
+        return cmd
+
+    def _backup_corrupt_idb(self, idb_path: str) -> Optional[str]:
+        if not idb_path or not os.path.exists(idb_path):
+            return None
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{idb_path}.corrupt.{timestamp}"
+        try:
+            os.replace(idb_path, backup_path)
+            log_rpc(f"Backed up corrupt IDB to {backup_path}")
+            return backup_path
+        except Exception as e:
+            log_rpc(f"Failed to backup corrupt IDB {idb_path}: {e}")
+        return None
+
+    def _nuclear_reset(self, idb_path, aggressive: bool = False):
         if not idb_path:
             return
 
         base = idb_path.rsplit(".", 1)[0]
 
+        lock_exts = [
+            ".mcp.lock",
+            ".lock",
+        ]
         all_exts = [
             ".id0",
             ".id1",
@@ -1281,15 +1412,14 @@ class IDAMCPServer:
             ".id4",
             ".nam",
             ".til",
-            ".mcp.lock",
-            ".lock",
             ".idb_info",
             ".seg",
             ".sig",
             ".ids",
         ]
 
-        for ext in all_exts:
+        cleanup_exts = all_exts if aggressive else lock_exts
+        for ext in cleanup_exts:
             try:
                 p = base + ext
                 if os.path.exists(p):
@@ -1298,7 +1428,7 @@ class IDAMCPServer:
             except Exception as e:
                 log_rpc(f"Failed to clean up {base + ext}: {e}")
 
-        if os.path.exists(idb_path):
+        if aggressive and os.path.exists(idb_path):
             try:
                 if os.path.getsize(idb_path) < 100:
                     log_rpc(f"IDB appears corrupted (too small): {idb_path}")
@@ -1335,7 +1465,8 @@ class IDAMCPServer:
             s.close()
 
     def _start_server(self, session):
-        self._nuclear_reset(session.idb_path)
+        opts = session.analysis_options or {}
+        self._nuclear_reset(session.idb_path, aggressive=bool(opts.get("aggressive_cleanup")))
 
         # Validate IDA installation
         if not self.idat_exe or not os.path.exists(self.idat_exe):
@@ -1369,29 +1500,16 @@ class IDAMCPServer:
         stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
 
         # Launch IDA: Open existing IDB if present, otherwise analyze binary
-        if os.path.exists(session.idb_path):
+        use_existing_idb = os.path.exists(session.idb_path)
+        if use_existing_idb:
             log_rpc(f"Opening existing session IDB: {session.idb_path}")
-            cmd = [
-                self.idat_exe,
-                "-A",
-                f"-S{script_path}",
-                f"-L{log_file}",
-                session.idb_path,
-            ]
         else:
             log_rpc(
                 f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
             )
             # Ensure session directory exists
             os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
-            cmd = [
-                self.idat_exe,
-                "-A",
-                f"-o{session.idb_path}",
-                f"-S{script_path}",
-                f"-L{log_file}",
-                session.binary_path,
-            ]
+        cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb)
 
         log_rpc(f"Launching IDA: {' '.join(cmd)}")
 
@@ -1439,33 +1557,7 @@ class IDAMCPServer:
         if ida_crashed:
             diag = self._get_ida_diagnostics(stdout_log)
             if "library init failed" in diag.lower() or "err 2" in diag:
-                log_rpc(
-                    "Detected 'library init failed err 2' - attempting aggressive cleanup and retry..."
-                )
-                self._cleanup_runtime(session.session_id)
-                time.sleep(1)
-
-                for attempt in range(2):
-                    log_rpc(
-                        f"Retry attempt {attempt + 1} for session {session.session_id}..."
-                    )
-                    self._nuclear_reset(session.idb_path)
-                    time.sleep(0.5)
-                    result = self._launch_and_wait(session, server_port)
-                    if "error" not in result:
-                        runtime = self.session_runtimes.get(session.session_id)
-                        if runtime:
-                            apply_res = self._apply_session_options(session, runtime)
-                            if apply_res.get("error"):
-                                return apply_res
-                            result["current_options"] = apply_res.get("current_options")
-                        return result
-
-                return make_error(
-                    MCPError.IDA_CRASHED,
-                    "IDA failed with 'library init failed err 2' after multiple recovery attempts. The IDB may be severely corrupted. Try deleting the IDB file manually and creating a new session.",
-                    details={"log": diag, "recovery_attempted": True},
-                )
+                return self._attempt_session_recovery(session, diag, server_port)
             return make_error(
                 MCPError.IDA_CRASHED,
                 f"IDA exited with code {exit_code}",
@@ -1489,28 +1581,15 @@ class IDAMCPServer:
         stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
         stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
 
-        if os.path.exists(session.idb_path):
+        use_existing_idb = os.path.exists(session.idb_path)
+        if use_existing_idb:
             log_rpc(f"Opening existing session IDB: {session.idb_path}")
-            cmd = [
-                self.idat_exe,
-                "-A",
-                f"-S{script_path}",
-                f"-L{log_file}",
-                session.idb_path,
-            ]
         else:
             log_rpc(
                 f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
             )
             os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
-            cmd = [
-                self.idat_exe,
-                "-A",
-                f"-o{session.idb_path}",
-                f"-S{script_path}",
-                f"-L{log_file}",
-                session.binary_path,
-            ]
+        cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb)
 
         stdout_fh = open(stdout_log, "a", encoding="utf-8")
         stderr_fh = open(stderr_log, "a", encoding="utf-8")
@@ -1549,30 +1628,98 @@ class IDAMCPServer:
 
         return {"error": True, "reason": "timeout"}
 
+    def _attempt_session_recovery(self, session, diag, server_port):
+        opts = session.analysis_options or {}
+        if opts.get("recover") is False:
+            return make_error(
+                MCPError.IDA_CRASHED,
+                "IDA failed with 'library init failed' and recovery is disabled.",
+                details={"log": diag, "recovery_attempted": False},
+            )
+        log_rpc("Detected 'library init failed err 2' - attempting recovery...")
+        self._cleanup_runtime(session.session_id)
+        time.sleep(1)
+
+        backup_path = None
+        if opts.get("backup_on_recover", True):
+            backup_path = self._backup_corrupt_idb(session.idb_path)
+        self._nuclear_reset(session.idb_path, aggressive=True)
+
+        if not session.binary_path or not os.path.exists(session.binary_path):
+            return make_error(
+                MCPError.FILE_NOT_FOUND,
+                "Recovery requires the original binary path (missing or invalid).",
+                details={
+                    "binary_path": session.binary_path,
+                    "backup": backup_path,
+                    "log": diag,
+                },
+            )
+
+        session.analysis_applied = False
+        self.session_mgr._save_metadata(session)
+
+        result = self._launch_and_wait(session, server_port)
+        if "error" in result:
+            return make_error(
+                MCPError.IDA_CRASHED,
+                "IDA failed to recover the session after cleanup.",
+                details={"log": diag, "backup": backup_path, "recovery_attempted": True},
+            )
+
+        runtime = self.session_runtimes.get(session.session_id)
+        if runtime:
+            apply_res = self._apply_session_options(session, runtime)
+            if apply_res.get("error"):
+                return apply_res
+            result["current_options"] = apply_res.get("current_options")
+
+        if backup_path:
+            result["backup"] = backup_path
+        return result
+
     def _apply_session_options(self, session, runtime):
         opts = session.analysis_options or {}
         if not opts:
             return {"ok": True}
+        if session.analysis_applied and opts.get("apply_once", True):
+            return {"ok": True, "skipped": True}
 
         port = runtime.get("port")
         if not port:
             return make_error(MCPError.IDA_CRASHED, "Missing runtime port")
 
         actions = []
+        options_payload = {}
+        if isinstance(opts.get("options"), dict):
+            options_payload.update(opts.get("options") or {})
+        for key in ("baseaddr", "start_ea", "min_ea", "max_ea"):
+            if key in opts and opts[key] is not None:
+                options_payload[key] = opts[key]
+        if options_payload:
+            actions.append({"action": "set_options", "options": options_payload})
+
         if any(k in opts for k in ("processor", "bitness", "endian", "flags")):
-            action_args = {
-                "action": "set_architecture",
-            }
+            action_args = {"action": "set_architecture"}
             for k in ("processor", "bitness", "endian", "flags"):
                 if k in opts and opts[k] is not None:
                     action_args[k] = opts[k]
             actions.append(action_args)
 
-        if "value" in opts and opts.get("value") is not None:
-            loader_args = {"action": "set_loader_options", "value": opts["value"]}
+        loader_value = opts.get("value")
+        if loader_value is None and "loader_options" in opts:
+            loader_value = opts.get("loader_options")
+        if loader_value is not None:
+            loader_args = {"action": "set_loader_options", "value": loader_value}
             if opts.get("loader"):
                 loader_args["loader"] = opts["loader"]
             actions.append(loader_args)
+
+        extra_actions = opts.get("analysis_actions")
+        if isinstance(extra_actions, list):
+            for action_args in extra_actions:
+                if isinstance(action_args, dict) and action_args.get("action"):
+                    actions.append(action_args)
 
         reanalyze = opts.get("reanalyze")
 
@@ -1582,11 +1729,17 @@ class IDAMCPServer:
                 return res
 
         if actions and (reanalyze is None or reanalyze):
-            res = self._send_rpc_raw({"tool": "analysis", "args": {"action": "reanalyze"}}, port)
+            reanalyze_args = {"action": "reanalyze"}
+            if opts.get("start") is not None:
+                reanalyze_args["start"] = opts.get("start")
+            if opts.get("end") is not None:
+                reanalyze_args["end"] = opts.get("end")
+            res = self._send_rpc_raw({"tool": "analysis", "args": reanalyze_args}, port)
             if res.get("error"):
                 return res
 
-        session.analysis_options = {}
+        if opts.get("apply_once", True):
+            session.analysis_applied = True
         self.session_mgr._save_metadata(session)
         return {"ok": True}
 
@@ -1677,42 +1830,111 @@ class IDAMCPServer:
         if tool_name == "session":
             action = args.get("action")
             if action == "create":
-                path = args.get("binary_path")
-                if not path:
-                    return make_error(MCPError.INVALID_ARGS, "binary_path is required")
-                # Resolve relative paths
-                if not os.path.isabs(path):
-                    path = os.path.abspath(path)
-                if not os.path.exists(path):
+                binary_path = args.get("binary_path")
+                idb_path = args.get("idb_path") or args.get("use_existing")
+                force_new = bool(args.get("force_new"))
+
+                analysis_options = {}
+                if isinstance(args.get("analysis_options"), dict):
+                    analysis_options.update(args.get("analysis_options") or {})
+                for key in (
+                    "processor",
+                    "flags",
+                    "loader",
+                    "value",
+                    "loader_options",
+                    "bitness",
+                    "endian",
+                    "reanalyze",
+                    "options",
+                    "start",
+                    "end",
+                    "analysis_actions",
+                    "apply_once",
+                    "recover",
+                    "backup_on_recover",
+                    "aggressive_cleanup",
+                    "baseaddr",
+                    "start_ea",
+                    "min_ea",
+                    "max_ea",
+                ):
+                    if key in args:
+                        analysis_options[key] = args.get(key)
+
+                ida_args = None
+                if "ida_args" in args:
+                    try:
+                        ida_args = self._normalize_ida_args(args.get("ida_args"))
+                    except ValueError as e:
+                        return make_error(MCPError.INVALID_ARGS, str(e))
+
+                if binary_path:
+                    if not os.path.isabs(binary_path):
+                        binary_path = os.path.abspath(binary_path)
+                    if not os.path.exists(binary_path):
+                        if not idb_path or not os.path.exists(idb_path):
+                            return make_error(
+                                MCPError.FILE_NOT_FOUND,
+                                f"Binary not found: {binary_path}",
+                                details={
+                                    "binary_path": binary_path,
+                                    "hint": "Provide an absolute path to an existing binary file or an existing idb_path.",
+                                },
+                            )
+
+                if idb_path:
+                    if not os.path.isabs(idb_path):
+                        idb_path = os.path.abspath(idb_path)
+                    if os.path.exists(idb_path) and not idb_path.lower().endswith((".i64", ".idb")):
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            "idb_path must point to a .i64 or .idb file",
+                            details={"idb_path": idb_path},
+                        )
+
+                if not binary_path and not idb_path:
                     return make_error(
-                        MCPError.FILE_NOT_FOUND,
-                        f"Binary not found: {path}",
-                        details={"binary_path": path, "hint": "Provide an absolute path to an existing binary file"},
+                        MCPError.INVALID_ARGS,
+                        "binary_path or idb_path is required",
+                        details={"hint": "Provide a binary path for new analysis or an existing IDB to recover."},
                     )
-                use_existing = args.get("use_existing")
-                # Check if a session for this binary already exists
-                existing = self.session_mgr.find_session_by_path(path)
-                if existing and not use_existing:
-                    # Reuse existing session instead of creating a duplicate
+
+                existing = None
+                if binary_path:
+                    existing = self.session_mgr.find_session_by_path(binary_path)
+                if not existing and idb_path:
+                    existing = self.session_mgr.find_session_by_path(idb_path)
+                if (
+                    existing
+                    and not force_new
+                    and (not idb_path or os.path.normpath(existing.idb_path) == os.path.normpath(idb_path))
+                ):
                     self.current_session = existing
                     existing.update_access()
+                    if analysis_options:
+                        existing.analysis_options.update(analysis_options)
+                        existing.analysis_applied = False
+                    if ida_args is not None:
+                        existing.ida_args = ida_args
                     self.session_mgr._save_metadata(existing)
                     return {
                         "ok": True,
                         "session": existing.to_dict(),
-                        "note": "Reusing existing session for this binary. Use use_existing=<idb_path> to force a new session.",
+                        "note": "Reusing existing session. Use force_new=true to create a new session.",
                     }
-                analysis_options = {}
-                for key in ("processor", "flags", "loader", "value", "bitness", "endian", "reanalyze"):
-                    if key in args:
-                        analysis_options[key] = args.get(key)
+
                 if not analysis_options:
                     analysis_options = None
                 self.current_session = self.session_mgr.create_session(
-                    path, use_existing=use_existing, analysis_options=analysis_options
+                    binary_path or "",
+                    use_existing=idb_path,
+                    analysis_options=analysis_options,
+                    ida_args=ida_args,
                 )
                 return {"ok": True, "session": self.current_session.to_dict()}
             if action == "discover":
+                self.session_mgr._load_orphaned_idbs()
                 q = args.get("query", "")
                 sessions = [s.to_dict() for s in self.session_mgr.discover_sessions(query=q)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
