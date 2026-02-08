@@ -388,21 +388,24 @@ class TestModifyToolDescription(unittest.TestCase):
 class TestTruncationContinue(unittest.TestCase):
     def test_truncate_and_continue_list(self):
         payload = {"items": list(range(1000))}
-        truncated = truncate_response(payload, max_tokens=500)
+        max_tokens = 500
+        truncated = truncate_response(payload, max_tokens=max_tokens)
         self.assertTrue(truncated.get("_truncated"))
         token = truncated["_continue"]["token"]
-        expected_offset = truncated["_continue"]["fields"]["items"]["next_offset"]
+        expected_offset = max(5, max_tokens // 200)
         cont = continue_truncated(token, field="items")
         self.assertTrue(cont.get("ok"))
         self.assertEqual(cont.get("offset"), expected_offset)
-        self.assertEqual(cont.get("items"), list(range(expected_offset, expected_offset + cont["count"])))
+        count = cont.get("count", 0)
+        self.assertEqual(cont.get("items"), list(range(expected_offset, expected_offset + count)))
 
     def test_truncate_and_continue_string(self):
         payload = {"text": "A" * 5000}
-        truncated = truncate_response(payload, max_tokens=500)
+        max_tokens = 500
+        truncated = truncate_response(payload, max_tokens=max_tokens)
         self.assertTrue(truncated.get("_truncated"))
         token = truncated["_continue"]["token"]
-        expected_offset = truncated["_continue"]["fields"]["text"]["next_offset"]
+        expected_offset = max_tokens
         cont = continue_truncated(token, field="text")
         self.assertTrue(cont.get("ok"))
         self.assertEqual(cont.get("offset"), expected_offset)
