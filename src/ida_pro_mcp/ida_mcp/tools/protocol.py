@@ -211,10 +211,14 @@ def _strip_api_suffix(name):
 
 
 def _match_query(text, query):
-    """Check if text matches query filter (case-insensitive substring)."""
+    """Check if text matches query filter (regex/substring auto-detected)."""
     if not query:
         return True
-    return query.lower() in text.lower()
+    import re
+    try:
+        return bool(re.search(query, text, re.IGNORECASE))
+    except re.error:
+        return query.lower() in text.lower()
 
 
 @tool
@@ -226,7 +230,7 @@ def protocol(
                       "Protocol analysis action"],
     addr: Annotated[Optional[str], "Address or function to analyze"] = None,
     limit: Annotated[int, "Max results"] = 50,
-    query: Annotated[Optional[str], "Filter query"] = None,
+    query: Annotated[Optional[str], "Filter query (regex/glob/substring auto-detected)"] = None,
 ) -> dict:
     """
     Analyze network protocol structures, parsing code, and communication patterns.

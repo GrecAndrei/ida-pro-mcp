@@ -30,7 +30,6 @@ from .structs import structs
 from .emulate import emulate
 from .export import export
 from .history import history
-from .strings_xref import strings_xref
 from .entropy import entropy
 from .imports_deep import imports_deep
 from .comments_ai import comments_ai
@@ -95,7 +94,6 @@ __all__ = [
     "emulate",
     "export",
     "history",
-    "strings_xref",
     "entropy",
     "imports_deep",
     "comments_ai",

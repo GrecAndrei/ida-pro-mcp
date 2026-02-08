@@ -128,17 +128,10 @@ def _iter_target_functions(addr):
 
 
 def _make_finding(ea, vuln_type, desc, pattern=""):
-    """Build a standardised finding dict."""
+    """Build a compact one-line finding string."""
     cwe_id, severity, cwe_desc = _CWE_MAP.get(vuln_type, ("CWE-0", "low", vuln_type))
-    return {
-        "addr": hex_ea(ea),
-        "function": _get_func_name_safe(ea),
-        "cwe": cwe_id,
-        "severity": severity,
-        "type": vuln_type,
-        "description": desc,
-        "pattern": pattern,
-    }
+    func_name = _get_func_name_safe(ea)
+    return f"{hex_ea(ea)}  [{severity}] {cwe_id} {func_name}: {desc}"
 
 
 def _get_decompiled_context(ea):
@@ -181,8 +174,6 @@ def _scan_buffer_overflow(addr, limit, include_context):
                 f"Call to {dangerous}() without bounds checking",
                 dangerous,
             )
-            if include_context:
-                f["context"] = _get_decompiled_context(call_ea)
             findings.append(f)
             if len(findings) >= limit:
                 return findings
@@ -216,8 +207,6 @@ def _scan_format_string(addr, limit, include_context):
                     f"Call to {dangerous}() with potentially non-constant format string",
                     dangerous,
                 )
-                if include_context:
-                    f["context"] = _get_decompiled_context(call_ea)
                 findings.append(f)
                 if len(findings) >= limit:
                     return findings
@@ -251,8 +240,6 @@ def _scan_integer_overflow(addr, limit, include_context):
                         f"Unchecked arithmetic ({mnem}) before {alloc}() at {hex_ea(call_ea)}",
                         f"{mnem} -> {alloc}",
                     )
-                    if include_context:
-                        f["context"] = _get_decompiled_context(curr)
                     findings.append(f)
                     if len(findings) >= limit:
                         return findings
@@ -295,8 +282,6 @@ def _scan_use_after_free(addr, limit, include_context):
                         f"Potential use after {free_func}() at {hex_ea(free_ea)}",
                         f"{free_func} -> {disasm.strip()}",
                     )
-                    if include_context:
-                        f["context"] = _get_decompiled_context(curr)
                     findings.append(f)
                     if len(findings) >= limit:
                         return findings
@@ -320,8 +305,6 @@ def _scan_command_injection(addr, limit, include_context):
                 f"Call to {dangerous}() - verify input is not user-controlled",
                 dangerous,
             )
-            if include_context:
-                f["context"] = _get_decompiled_context(call_ea)
             findings.append(f)
             if len(findings) >= limit:
                 return findings
@@ -359,8 +342,6 @@ def _scan_race_condition(addr, limit, include_context):
                                 f"TOCTOU: {check}() at {hex_ea(check_ea)} then {name}() at {hex_ea(item)}",
                                 f"{check} -> {name}",
                             )
-                            if include_context:
-                                f["context"] = _get_decompiled_context(check_ea)
                             findings.append(f)
                             if len(findings) >= limit:
                                 return findings
@@ -378,8 +359,6 @@ def _scan_race_condition(addr, limit, include_context):
                 f"Insecure temp file creation via {risky}()",
                 risky,
             )
-            if include_context:
-                f["context"] = _get_decompiled_context(call_ea)
             findings.append(f)
             if len(findings) >= limit:
                 return findings
@@ -420,8 +399,6 @@ def _scan_null_deref(addr, limit, include_context):
                     f"Return value of {alloc}() used without NULL check",
                     alloc,
                 )
-                if include_context:
-                    f["context"] = _get_decompiled_context(call_ea)
                 findings.append(f)
                 if len(findings) >= limit:
                     return findings
@@ -460,8 +437,6 @@ def _scan_info_leak(addr, limit, include_context):
                                 f"Possible sensitive data logged via {log_func}(): \"{s[:60]}\"",
                                 f"{log_func} with '{s[:40]}'",
                             )
-                            if include_context:
-                                f["context"] = _get_decompiled_context(call_ea)
                             findings.append(f)
                             if len(findings) >= limit:
                                 return findings
@@ -501,8 +476,6 @@ def _scan_auth_bypass(addr, limit, include_context):
                                 f"Hardcoded auth check via {cmp_func}() against \"{s[:60]}\"",
                                 f"{cmp_func} vs '{s[:40]}'",
                             )
-                            if include_context:
-                                f["context"] = _get_decompiled_context(call_ea)
                             findings.append(f)
                             if len(findings) >= limit:
                                 return findings
@@ -549,14 +522,6 @@ def _scan_hardcoded_creds(addr, limit, include_context):
                                 f"String contains potential credential keyword '{kw}': \"{s[:80]}\"",
                                 s[:60],
                             )
-                            if include_context:
-                                # Show xrefs to this string
-                                xref_list = []
-                                for xref in idautils.XrefsTo(ea, 0):
-                                    xref_list.append(f"  ref from {hex_ea(xref.frm)} {_get_func_name_safe(xref.frm)}")
-                                    if len(xref_list) >= 3:
-                                        break
-                                f["context"] = "\n".join(xref_list)
                             findings.append(f)
                             break
             ea = idc.next_head(ea)
@@ -630,24 +595,11 @@ def vuln_scan(
             scan_addr = hex_ea(func.start_ea) if func else hex_ea(ea)
             for scan_type, scanner in _SCANNERS.items():
                 hits = scanner(scan_addr, 10, include_context)
-                for h in hits:
-                    classifications.append(h)
+                classifications.extend(hits)
 
             if not classifications:
-                return {
-                    "ok": True,
-                    "addr": hex_ea(ea),
-                    "function": _get_func_name_safe(ea),
-                    "classifications": [],
-                    "summary": "No known vulnerability patterns detected at this address.",
-                }
-            return {
-                "ok": True,
-                "addr": hex_ea(ea),
-                "function": _get_func_name_safe(ea),
-                "classifications": classifications,
-                "count": len(classifications),
-            }
+                return {"ok": True, "classifications": "No known vulnerability patterns detected.", "count": 0}
+            return {"ok": True, "classifications": "\n".join(classifications), "count": len(classifications)}
 
         if action == "scan_all":
             all_findings = []
@@ -657,27 +609,14 @@ def vuln_scan(
                 all_findings.extend(hits)
 
             if severity:
-                all_findings = [f for f in all_findings if f["severity"] == severity]
-
-            # Group by severity for LLM-friendly output
-            by_severity = {"critical": [], "high": [], "medium": [], "low": []}
-            for f in all_findings:
-                by_severity[f["severity"]].append(f)
-
-            summary_lines = []
-            for sev in ("critical", "high", "medium", "low"):
-                count = len(by_severity[sev])
-                if count:
-                    summary_lines.append(f"{sev}: {count}")
+                tag = f"[{severity}]"
+                all_findings = [f for f in all_findings if tag in f]
 
             return {
                 "ok": True,
                 "total": len(all_findings),
-                "summary": ", ".join(summary_lines) if summary_lines else "No findings",
-                "critical": by_severity["critical"][:limit],
-                "high": by_severity["high"][:limit],
-                "medium": by_severity["medium"][:limit],
-                "low": by_severity["low"][:limit],
+                "findings": "\n".join(all_findings[:limit]),
+                "truncated": len(all_findings) > limit,
             }
 
         # Single scanner action
@@ -688,15 +627,15 @@ def vuln_scan(
         findings = scanner(addr, limit, include_context)
 
         if severity:
-            findings = [f for f in findings if f["severity"] == severity]
+            tag = f"[{severity}]"
+            findings = [f for f in findings if tag in f]
 
         return {
             "ok": True,
             "action": action,
             "cwe": _CWE_MAP[action][0],
-            "findings": findings[:limit],
+            "findings": "\n".join(findings[:limit]),
             "count": len(findings),
-            "truncated": len(findings) >= limit,
         }
 
     except Exception as e:
