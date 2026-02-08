@@ -102,13 +102,20 @@ def _format_gadget(insns):
 
 
 def _matches_query(insns, query):
-    """Check if any instruction mnemonic matches the query pattern."""
+    """Check if any instruction matches the query pattern (regex/substring)."""
     if not query:
         return True
-    q = query.lower()
-    for _, mnem, disasm in insns:
-        if q in mnem or q in disasm.lower():
-            return True
+    import re
+    try:
+        pat = re.compile(query, re.IGNORECASE)
+        for _, mnem, disasm in insns:
+            if pat.search(mnem) or pat.search(disasm):
+                return True
+    except re.error:
+        q = query.lower()
+        for _, mnem, disasm in insns:
+            if q in mnem or q in disasm.lower():
+                return True
     return False
 
 
@@ -831,7 +838,7 @@ def gadgets(
     addr: Annotated[Optional[str], "Segment or address to search in"] = None,
     limit: Annotated[int, "Max gadgets to return"] = 50,
     max_insns: Annotated[int, "Max instructions per gadget"] = 5,
-    query: Annotated[Optional[str], "Filter gadgets by mnemonic pattern"] = None,
+    query: Annotated[Optional[str], "Filter gadgets by mnemonic pattern (regex supported)"] = None,
 ) -> dict:
     """
     LLM-optimized ROP/JOP/COP gadget and exploit primitive discovery.

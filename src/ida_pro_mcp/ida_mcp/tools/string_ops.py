@@ -120,7 +120,7 @@ def string_ops(
                       "String operations action"],
     addr: Annotated[Optional[str], "Function or address scope"] = None,
     limit: Annotated[int, "Max results"] = 50,
-    query: Annotated[Optional[str], "Filter pattern"] = None,
+    query: Annotated[Optional[str], "Filter pattern (regex/glob/substring auto-detected)"] = None,
 ) -> dict:
     """
     Deep string analysis for binary reverse engineering.
