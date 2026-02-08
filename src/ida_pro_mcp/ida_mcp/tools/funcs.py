@@ -55,6 +55,15 @@ def funcs(
         if action == "create":
             ea, err = validate_addr(addr)
             if err: return err
+            end_ea = None
+            if end:
+                end_ea, err = validate_addr(end)
+                if err: return err
+            if end_ea is not None and end_ea <= ea:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"end address {hex(end_ea)} must be greater than start address {hex(ea)}",
+                )
             existing = ida_funcs.get_func(ea)
             if existing and existing.start_ea == ea:
                 if name:
@@ -89,14 +98,8 @@ def funcs(
                             f"Address {hex(ea)} cannot be converted to code",
                             "The bytes at this address may not form valid instructions. Try data_ops(action='make_code', addr=...) first.",
                         )
-            end_ea = None
-            if end:
-                end_ea, err = validate_addr(end)
-                if err: return err
-                if end_ea <= ea:
-                    return make_error(MCPError.INVALID_ARGS, "end must be greater than start address")
-                if force:
-                    ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
+            if end_ea and force:
+                ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
             if ida_funcs.add_func(ea, end_ea or idaapi.BADADDR):
                 if name:
                     idc.set_name(ea, name, ida_name.SN_FORCE)
@@ -107,7 +110,7 @@ def funcs(
                 try:
                     import ida_auto
                     ida_auto.auto_wait()
-                except Exception:
+                except (ImportError, AttributeError):
                     pass
                 # Get the created function's actual boundaries
                 actual_end = hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None)
