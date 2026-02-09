@@ -12,9 +12,9 @@ except ImportError:
 
 def _get_arch():
     """Return normalized architecture: 'x86', 'x64', 'arm', 'arm64', or 'unknown'."""
-    info = idaapi.get_inf_structure()
-    proc = info.procname.lower()
-    is_64 = info.is_64bit()
+    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
+    proc = info.procname.lower() if info else ""
+    is_64 = info.is_64bit() if info else False
     if proc.startswith("arm") or proc.startswith("aarch"):
         return "arm64" if is_64 else "arm"
     if proc.startswith("metapc") or "x86" in proc or "80386" in proc:
@@ -530,8 +530,8 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
 def _detect_mitigations(addr, _limit, _max_insns, _query):
     """Detect exploit mitigations (ASLR, DEP/NX, CFI, CET, stack cookies)."""
     mitigations = {}
-    info = idaapi.get_inf_structure()
-    filetype = info.filetype
+    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
+    filetype = info.filetype if info else 0
 
     # PE mitigations
     if filetype == idaapi.f_PE:

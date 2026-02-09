@@ -93,7 +93,7 @@ def llm_helpers(
     - cheatsheet: Dynamic cheatsheet of relevant tool calls for this binary
     """
     try:
-        info = idaapi.get_inf_structure()
+        info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
 
         if action == "context_window":
             if not addr:
