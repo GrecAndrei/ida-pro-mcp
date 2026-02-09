@@ -226,6 +226,7 @@ def _analyze_function_ops(ea):
         elif mnem in ("mul", "imul"):
             counts["mul"] += 1
         cur = idc.next_head(cur, func.end_ea)
+        if cur == idaapi.BADADDR: break
     return counts
 
 

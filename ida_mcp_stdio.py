@@ -742,8 +742,8 @@ TOOL_ACTIONS = {
         "reanalyze",
     ],
     # Unified query/edit hubs (LLM-friendly entry points)
-    "query": ["data", "search", "idb", "code", "types"],
-    "edit": ["rename", "comment", "type", "patch", "create_func", "bulk"],
+    "query": ["data", "search", "imports_deep", "symbols", "patterns", "idb"],
+    "edit": ["modify", "funcs", "segments", "data_ops", "fixups", "colorize", "comments_ai", "bulk"],
     # Primary data access
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
     "code": [
