@@ -760,6 +760,7 @@ def annotation(
                                 "repeatable": bool(repeatable),
                             })
                     curr = idc.next_head(curr, fn.end_ea)
+                    if curr == idaapi.BADADDR: break
 
             return {"ok": True, "removed": "\n".join(str(x) for x in removed),
                     "count": len(removed), "dry_run": dry_run}
