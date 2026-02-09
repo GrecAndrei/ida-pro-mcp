@@ -64,7 +64,7 @@ def microcode(
                 curr = block.head
                 while curr:
                     # Use print1 instead of str() for better performance
-                    text = ida_lines.tag_remove(curr.d.print1())
+                    text = ida_lines.tag_remove(curr._print())
                     instr_lines.append(f"{hex(curr.ea)}  {text}")
                     curr = curr.next
                     if len(instr_lines) >= 500: break

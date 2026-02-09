@@ -330,8 +330,7 @@ def annotation(
             for block in fc:
                 if len(loops) >= limit:
                     break
-                for succ_idx in range(block.nsucc()):
-                    succ = block.succ(succ_idx)
+                for succ in block.succs():
                     # Back-edge: successor starts before or at block start
                     if succ.start_ea <= block.start_ea:
                         loop_head = succ.start_ea
@@ -375,8 +374,12 @@ def annotation(
                     if last_insn == idaapi.BADADDR:
                         last_insn = block.start_ea
                     disasm = ida_lines.tag_remove(idc.generate_disasm_line(last_insn, 0))
-                    true_target = block.succ(0).start_ea
-                    false_target = block.succ(1).start_ea
+                    succs = list(block.succs())
+                    if len(succs) >= 2:
+                        true_target = succs[0].start_ea
+                        false_target = succs[1].start_ea
+                    else:
+                        continue
                     cmt = (f"{prefix}branch: {disasm.strip()} "
                            f"-> T:{hex(true_target)} F:{hex(false_target)}")
                     branches.append({
