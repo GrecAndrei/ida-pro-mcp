@@ -643,7 +643,7 @@ def annotation(
                             "call_addr": hex(call_addr),
                             "check_addr": hex(check_ea),
                             "api": callee_name,
-                            "branch_insn": idc.generate_disasm_line(check_ea, 0).strip(),
+                            "branch_insn": ida_lines.tag_remove(idc.generate_disasm_line(check_ea, 0)).strip(),
                             "comment": cmt,
                         })
                         if not dry_run:
