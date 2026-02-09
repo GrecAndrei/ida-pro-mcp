@@ -374,7 +374,7 @@ def annotation(
                     last_insn = idc.prev_head(block.end_ea, block.start_ea)
                     if last_insn == idaapi.BADADDR:
                         last_insn = block.start_ea
-                    disasm = idc.generate_disasm_line(last_insn, 0)
+                    disasm = ida_lines.tag_remove(idc.generate_disasm_line(last_insn, 0))
                     true_target = block.succ(0).start_ea
                     false_target = block.succ(1).start_ea
                     cmt = (f"{prefix}branch: {disasm.strip()} "

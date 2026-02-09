@@ -118,7 +118,7 @@ def llm_helpers(
             # Disassembly (prioritize first)
             disasm_lines = []
             for item in idautils.FuncItems(ea):
-                line = f"{hex(item)}  {idc.generate_disasm_line(item, 0)}"
+                line = f"{hex(item)}  {ida_lines.tag_remove(idc.generate_disasm_line(item, 0))}"
                 disasm_lines.append(line)
 
             # Xrefs to this function
@@ -277,7 +277,7 @@ def llm_helpers(
                     offset = ea - func.start_ea
                     explanation.append(f"Inside function {func_name} at offset +{hex(offset)}")
 
-                disasm = idc.generate_disasm_line(ea, 0)
+                disasm = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))
                 explanation.append(f"Instruction: {disasm}")
             else:
                 # Data or unknown
@@ -293,7 +293,7 @@ def llm_helpers(
                         val = ida_bytes.get_dword(ea)
                         explanation.append(f"Value: {hex(val)}")
                 elif ida_bytes.is_code(flags):
-                    explanation.append(f"Code (not in a function): {idc.generate_disasm_line(ea, 0)}")
+                    explanation.append(f"Code (not in a function): {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}")
                 else:
                     explanation.append(f"Unknown/unexplored at {hex(ea)}")
 

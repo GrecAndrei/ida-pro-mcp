@@ -151,7 +151,7 @@ def cfg_analysis(
                     # Conditional branch - last instruction of block
                     last_insn = idc.prev_head(end)
                     if last_insn != idaapi.BADADDR:
-                        disasm = idc.generate_disasm_line(last_insn, 0)
+                        disasm = ida_lines.tag_remove(idc.generate_disasm_line(last_insn, 0))
                         mnem = idc.print_insn_mnem(last_insn)
                         results.append(
                             f"{hex(last_insn)}  {mnem}  true={hex(successors[0])}  false={hex(successors[1])}  {disasm}"
