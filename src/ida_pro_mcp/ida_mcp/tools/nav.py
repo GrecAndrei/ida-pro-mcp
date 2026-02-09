@@ -57,8 +57,9 @@ def nav(
                 while curr < seg.end_ea and len(findings) < 100:
                     insn = idc.print_insn_mnem(curr).lower()
                     if insn in targets:
-                        findings.append({"addr": hex(curr), "type": targets[insn], "disasm": idc.generate_disasm_line(curr, 0)})
+                        findings.append({"addr": hex(curr), "type": targets[insn], "disasm": ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))})
                     curr = idc.next_head(curr, seg.end_ea)
+                    if curr == idaapi.BADADDR: break
             return {"ok": True, "findings": findings}
 
         else:

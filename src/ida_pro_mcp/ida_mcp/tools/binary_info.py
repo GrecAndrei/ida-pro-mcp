@@ -37,9 +37,9 @@ def binary_info(
         import ida_entry
         from collections import Counter
 
-        info = idaapi.get_inf_structure()
-        file_type = info.filetype
-        proc_name = info.procname
+        info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
+        file_type = info.filetype if info else 0
+        proc_name = info.procname if info else ""
 
         # Determine binary format
         is_pe = file_type in (idaapi.f_PE, idaapi.f_COFF) if hasattr(idaapi, 'f_PE') else False
@@ -59,13 +59,16 @@ def binary_info(
                 if len(entries) >= limit:
                     break
 
-            min_ea = info.min_ea
-            max_ea = info.max_ea
+            min_ea = info.min_ea if info else 0
+            max_ea = info.max_ea if info else 0
 
+            bitness = 32
+            if info:
+                bitness = 16 if info.is_16bit() else (64 if info.is_64bit() else 32)
             lines = [
                 f"format: {fmt_name}",
                 f"processor: {proc_name}",
-                f"bitness: {16 if info.is_16bit() else 64 if info.is_64bit() else 32}",
+                f"bitness: {bitness}",
                 f"image_base: {hex(min_ea)}",
                 f"image_end: {hex(max_ea)}",
                 f"image_size: {hex_size(max_ea - min_ea)}",

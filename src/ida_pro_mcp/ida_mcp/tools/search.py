@@ -187,7 +187,7 @@ def search(
                             match_bytes = ida_bytes.get_bytes(ea, min(32, seg_end - ea))
                             if match_bytes:
                                 line += f"  {match_bytes.hex()}"
-                            line += f"  {idc.generate_disasm_line(ea, 0)}"
+                            line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}"
                         if maybe_add(line):
                             break
                         ea, _ = ida_bytes.bin_search(ea + 1, seg_end, pt, ida_bytes.BIN_SEARCH_FORWARD)
@@ -239,7 +239,7 @@ def search(
                             if op.type == ida_ua.o_imm and op.value == value:
                                 line = f"{hex(curr)}  {hex(value)}"
                                 if include_context:
-                                    line += f"  {idc.generate_disasm_line(curr, 0)}"
+                                    line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))}"
                                     func = idaapi.get_func(curr)
                                     if func:
                                         line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
@@ -373,7 +373,7 @@ def search(
                     if op_text and _matcher(op_text):
                         line = f"{hex(ea)}  {idc.print_insn_mnem(ea)}  {op_text}"
                         if include_context:
-                            line += f"  {idc.generate_disasm_line(ea, 0)}"
+                            line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}"
                         if maybe_add(line):
                             break
                     ea = idc.next_head(ea, seg_end)
@@ -444,7 +444,7 @@ def search(
                     fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
                     line = f"{hex(xref.frm)} -> {hex(xref.to)}  code  {fn_name}"
                     if include_context:
-                        line += f"  {idc.generate_disasm_line(xref.frm, 0)}"
+                        line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
                     if maybe_add(line):
                         break
             return _search_result(target=pattern)
@@ -550,7 +550,7 @@ def search(
                         arg_count = int(arg_count)
                         # Try to get prototype
                         tif = ida_typeinf.tinfo_t()
-                        if ida_typeinf.get_tinfo(tif, ea):
+                        if ida_nalt.get_tinfo(tif, ea):
                             func_data = ida_typeinf.func_type_data_t()
                             if tif.get_func_details(func_data):
                                 actual_args = func_data.size()
@@ -667,7 +667,7 @@ def search(
                         seen.add(caller_func.start_ea)
                         line = f"{hex(caller_func.start_ea)}  {ida_funcs.get_func_name(caller_func.start_ea)}  call@{hex(xref.frm)}"
                         if include_context:
-                            line += f"  {idc.generate_disasm_line(xref.frm, 0)}"
+                            line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
                         caller_lines.append(line)
             
             return {

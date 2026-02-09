@@ -12,9 +12,9 @@ except ImportError:
 
 def _get_arch():
     """Return normalized architecture: 'x86', 'x64', 'arm', 'arm64', or 'unknown'."""
-    info = idaapi.get_inf_structure()
-    proc = info.procname.lower()
-    is_64 = info.is_64bit()
+    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
+    proc = info.procname.lower() if info else ""
+    is_64 = info.is_64bit() if info else False
     if proc.startswith("arm") or proc.startswith("aarch"):
         return "arm64" if is_64 else "arm"
     if proc.startswith("metapc") or "x86" in proc or "80386" in proc:
@@ -37,14 +37,14 @@ def _get_exec_segments(addr):
         if err:
             return
         seg = idaapi.getseg(ea)
-        if seg and seg.perm & idaapi.SFL_CODE or seg.type == idaapi.SEG_CODE:
+        if seg and (seg.perm & idaapi.SEGPERM_EXEC or seg.type == idaapi.SEG_CODE):
             yield (seg.start_ea, seg.end_ea)
         return
     for seg_ea in idautils.Segments():
         seg = idaapi.getseg(seg_ea)
         if not seg:
             continue
-        if (seg.perm & idaapi.SFL_CODE) or seg.type == idaapi.SEG_CODE:
+        if (seg.perm & idaapi.SEGPERM_EXEC) or seg.type == idaapi.SEG_CODE:
             yield (seg.start_ea, seg.end_ea)
 
 
@@ -509,17 +509,17 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
             if not (seg.start_ea <= ea < seg.end_ea):
                 continue
         # Check for both write and execute permissions
-        has_write = bool(seg.perm & idaapi.SFL_WRITE) if hasattr(idaapi, 'SFL_WRITE') else False
-        has_exec = bool(seg.perm & idaapi.SFL_CODE) if hasattr(idaapi, 'SFL_CODE') else False
+        has_write = bool(seg.perm & idaapi.SEGPERM_WRITE)
+        has_exec = bool(seg.perm & idaapi.SEGPERM_EXEC)
         # Fallback: check segment type
         if seg.type == idaapi.SEG_CODE:
             has_exec = True
         if has_write and has_exec:
-            name = idaapi.get_segm_name(seg) or ""
+            name = ida_segment.get_segm_name(seg) or ""
             perms = "{}{}{}".format(
-                "R" if seg.perm & 4 else "-",
-                "W" if seg.perm & 2 else "-",
-                "X" if seg.perm & 1 else "-",
+                "R" if seg.perm & idaapi.SEGPERM_READ else "-",
+                "W" if seg.perm & idaapi.SEGPERM_WRITE else "-",
+                "X" if seg.perm & idaapi.SEGPERM_EXEC else "-",
             )
             regions.append(f"{hex_ea(seg.start_ea)}-{hex_ea(seg.end_ea)}  {name}  {perms}  size={hex_size(seg.end_ea - seg.start_ea)}")
     return regions
@@ -530,8 +530,8 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
 def _detect_mitigations(addr, _limit, _max_insns, _query):
     """Detect exploit mitigations (ASLR, DEP/NX, CFI, CET, stack cookies)."""
     mitigations = {}
-    info = idaapi.get_inf_structure()
-    filetype = info.filetype
+    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
+    filetype = info.filetype if info else 0
 
     # PE mitigations
     if filetype == idaapi.f_PE:
@@ -592,7 +592,7 @@ def _detect_mitigations(addr, _limit, _max_insns, _query):
         for seg_ea in idautils.Segments():
             seg = idaapi.getseg(seg_ea)
             if seg:
-                name = idaapi.get_segm_name(seg) or ""
+                name = ida_segment.get_segm_name(seg) or ""
                 if name == ".got.plt":
                     got_plt = seg
                 elif name == ".got":

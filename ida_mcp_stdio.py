@@ -657,12 +657,12 @@ TOOL_DESCRIPTIONS = {
     "query": "Unified read-only query hub. Actions: data, search, imports_deep, symbols, patterns, idb.",
     "edit": "Unified write/edit hub. Actions: modify, funcs, segments, data_ops, fixups, colorize, comments_ai, bulk.",
     # Primary data access
-    "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks.",
+    "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
     "code": "Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
     "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.",
-    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref, regex, func_by_sig. Supports case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
+    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled. Supports case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
-    "memory": "Direct database memory access. Actions: read, write.",
+    "memory": "Direct database memory access. Actions: read, write, hexdump.",
     # Modification tools
     "modify": "Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set_type, patch_asm (assembles instruction(s) and patches bytes, supports multi-line separated by semicolons).",
     "funcs": "Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force deletion of overlaps), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).",
@@ -742,10 +742,10 @@ TOOL_ACTIONS = {
         "reanalyze",
     ],
     # Unified query/edit hubs (LLM-friendly entry points)
-    "query": ["data", "search", "idb", "code", "types"],
-    "edit": ["rename", "comment", "type", "patch", "create_func", "bulk"],
+    "query": ["data", "search", "imports_deep", "symbols", "patterns", "idb"],
+    "edit": ["modify", "funcs", "segments", "data_ops", "fixups", "colorize", "comments_ai", "bulk"],
     # Primary data access
-    "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks"],
+    "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
     "code": [
         "decompile",
         "disasm",
@@ -789,6 +789,7 @@ TOOL_ACTIONS = {
         "api",
         "vulnerable",
         "constants",
+        "decompiled",
     ],
     "types": [
         "list",
@@ -802,7 +803,7 @@ TOOL_ACTIONS = {
         "read_struct",
         "import_header",
     ],
-    "memory": ["read", "write"],
+    "memory": ["read", "write", "hexdump"],
     # Modification tools
     "modify": ["rename", "comment", "set_type", "patch_asm"],
     "funcs": [

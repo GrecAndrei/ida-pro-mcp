@@ -372,6 +372,7 @@ def xref_analysis(
 
             nodes = {}
             edges = []
+            edge_set = set()
             visited = set()
 
             def traverse(func_ea, d):
@@ -381,7 +382,8 @@ def xref_analysis(
                 nodes[func_ea] = _func_label(func_ea)
                 for callee in _get_callees(func_ea):
                     edge = (func_ea, callee)
-                    if edge not in edges:
+                    if edge not in edge_set:
+                        edge_set.add(edge)
                         edges.append(edge)
                     if callee not in nodes:
                         nodes[callee] = _func_label(callee)

@@ -194,7 +194,11 @@ def bulk(
                     renamed = False
                     # Use ida_frame for member iteration
                     member_offset = 0
-                    while member_offset < frame.memqty:
+                    try:
+                        member_count = frame.memqty
+                    except AttributeError:
+                        member_count = 0
+                    while member_offset < member_count:
                         try:
                             member = ida_frame.get_member(frame, member_offset)
                             if member:
@@ -232,7 +236,7 @@ def bulk(
                     entry = {"addr": hex(ea), "name": name}
                     # Also export type if available
                     tif = ida_typeinf.tinfo_t()
-                    if ida_typeinf.get_tinfo(tif, ea):
+                    if ida_nalt.get_tinfo(tif, ea):
                         entry["type"] = str(tif)
                     annotations["names"].append(entry)
             
@@ -268,6 +272,8 @@ def bulk(
         
         elif action == "import_annotations":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
+            path, err = validate_path_safe(path)
+            if err: return err
             if not os.path.exists(path): return make_error(MCPError.FILE_NOT_FOUND, path)
             import json
             with open(path, 'r', encoding='utf-8') as f:

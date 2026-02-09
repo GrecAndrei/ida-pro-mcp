@@ -153,8 +153,7 @@ def compare(
             block_count = len(blocks)
             edge_count = 0
             for block in blocks:
-                for succ_idx in range(block.nsucc()):
-                    edge_count += 1
+                edge_count += len(list(block.succs()))
             complexity = edge_count - block_count + 2
             return block_count, edge_count, complexity
 
@@ -429,7 +428,7 @@ def compare(
             clones = []
             for h, funcs_list in hash_map.items():
                 if len(funcs_list) >= 2:
-                    funcs_str = ", ".join(funcs_list[:5])
+                    funcs_str = ", ".join(f["name"] for f in funcs_list[:5])
                     clones.append((len(funcs_list), f"hash={h}  count={len(funcs_list)}  {funcs_str}"))
                 if len(clones) >= limit:
                     break

@@ -143,7 +143,7 @@ def calc(
             if val_type == "ptr":
                 return read_ptr(ea, val_size)
             if val_type == "string":
-                s = idaapi.get_strlit_contents(ea, -1, 0)
+                s = idc.get_strlit_contents(ea, -1, 0)
                 if not s:
                     return None
                 if len(s) > 65536:

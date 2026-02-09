@@ -88,7 +88,7 @@ def memory(
                 value = ida_bytes.get_qword(ea) if is_64 else ida_bytes.get_wide_dword(ea)
             elif type == "string":
                 # Check string length limit
-                s = idaapi.get_strlit_contents(ea, -1, 0)
+                s = idc.get_strlit_contents(ea, -1, 0)
                 if s:
                     if len(s) > 65536:
                         s = s[:65536]

@@ -84,7 +84,7 @@ def strings_xref(
             encoding = "ascii"
             if str_type == idc.STRTYPE_C_16:
                 encoding = "utf-16"
-            elif str_type == idc.STRTYPE_C_32:
+            elif hasattr(idc, "STRTYPE_C_32") and str_type == idc.STRTYPE_C_32:
                 encoding = "utf-32"
             
             # Get xrefs to this string
