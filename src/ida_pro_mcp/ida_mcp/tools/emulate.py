@@ -57,7 +57,8 @@ def emulate(
                 disasm = idc.generate_disasm_line(curr, 0)
                 trace.append({"addr": hex(curr), "disasm": ida_lines.tag_remove(disasm) if disasm else ""})
 
-                if idaapi.is_ret_insn(insn):
+                is_ret_fn = getattr(idaapi, 'is_ret_insn', None) or getattr(__import__('ida_idp'), 'is_ret_insn', None)
+                if is_ret_fn and is_ret_fn(insn):
                     continue
 
                 next_heads = []

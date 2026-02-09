@@ -194,7 +194,11 @@ def bulk(
                     renamed = False
                     # Use ida_frame for member iteration
                     member_offset = 0
-                    while member_offset < frame.memqty:
+                    try:
+                        member_count = frame.memqty
+                    except AttributeError:
+                        member_count = 0
+                    while member_offset < member_count:
                         try:
                             member = ida_frame.get_member(frame, member_offset)
                             if member:
