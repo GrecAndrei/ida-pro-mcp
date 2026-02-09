@@ -37,9 +37,9 @@ def binary_info(
         import ida_entry
         from collections import Counter
 
-        info = idaapi.get_inf_structure()
-        file_type = info.filetype
-        proc_name = info.procname
+        info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
+        file_type = info.filetype if info else 0
+        proc_name = info.procname if info else ""
 
         # Determine binary format
         is_pe = file_type in (idaapi.f_PE, idaapi.f_COFF) if hasattr(idaapi, 'f_PE') else False
