@@ -41,9 +41,9 @@ try:
         _is_regex, smart_match, compile_smart_pattern, resolve_symbol,
     )
     from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error,
+        MCPError, make_error, handle_error, ERROR_HINTS,
         validate_addr, validate_range, check_debugger, validate_path_safe,
-        require_arg, require_one_of
+        require_arg, require_one_of, validate_action, validate_count
     )
 except (ImportError, ValueError):
     # Standalone IDA mode
@@ -61,9 +61,9 @@ except (ImportError, ValueError):
         _is_regex, smart_match, compile_smart_pattern, resolve_symbol,
     )
     from error_handling import (  # type: ignore[import-not-found]
-        MCPError, make_error, handle_error,
+        MCPError, make_error, handle_error, ERROR_HINTS,
         validate_addr, validate_range, check_debugger, validate_path_safe,
-        require_arg, require_one_of
+        require_arg, require_one_of, validate_action, validate_count
     )
 
 __all__ = [
@@ -84,7 +84,7 @@ __all__ = [
     "get_stack_frame_variables_internal", "get_type_by_name", "hex_ea", "hex_size",
     "_is_regex", "smart_match", "compile_smart_pattern", "resolve_symbol",
     # Error handling
-    "MCPError", "make_error", "handle_error",
+    "MCPError", "make_error", "handle_error", "ERROR_HINTS",
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
-    "require_arg", "require_one_of",
+    "require_arg", "require_one_of", "validate_action", "validate_count",
 ]

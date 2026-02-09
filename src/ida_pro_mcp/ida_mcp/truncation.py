@@ -116,7 +116,13 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
     pruned["_truncated"] = True
     truncated_fields: Dict[str, Dict[str, Any]] = {}
     
-    # 2. Target high-frequency list keys (functions, strings, matches, etc.)
+    # 2. Strip verbose metadata first (low-value fields for LLMs)
+    _LOW_VALUE_KEYS = {"traceback", "raw_bytes", "hexdump_full"}
+    for key in list(pruned.keys()):
+        if key in _LOW_VALUE_KEYS and isinstance(pruned[key], str) and len(pruned[key]) > 200:
+            pruned[key] = pruned[key][:200] + "... [stripped for context economy]"
+
+    # 3. Target high-frequency list keys (functions, strings, matches, etc.)
     # We look for lists that are likely the source of the bloat
     for key in list(pruned.keys()):
         value = pruned[key]
@@ -131,7 +137,7 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
             if original_len > keep_count:
                 pruned[key] = value[:keep_count]
                 pruned[f"{key}_total_count"] = original_len
-                pruned[f"{key}_note"] = f"Showing first {keep_count} of {original_len} items. Use 'offset' and 'count' parameters to read more."
+                pruned[f"{key}_note"] = f"Showing first {keep_count} of {original_len} items. Use truncation(action='continue', token='...', field='{key}') to read more, or use offset/count parameters on the original tool call."
                 truncated_fields[key] = {
                     "type": "list",
                     "total": original_len,
@@ -139,7 +145,7 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
                     "next_offset": keep_count,
                 }
 
-    # 3. Handle massive single strings (e.g. decompilation, logs)
+    # 4. Handle massive single strings (e.g. decompilation, logs)
     for key in list(pruned.keys()):
         value = pruned[key]
         if isinstance(value, str) and len(value) > max_tokens:
@@ -157,7 +163,7 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
         pruned["_continue"] = {
             "token": token,
             "fields": truncated_fields,
-            "hint": "Use truncation(action='continue', token=..., field=...) to read more.",
+            "hint": "Use truncation(action='continue', token='{token}', field='...') to read more. Or re-run with offset/count params.".format(token=token),
         }
 
     return pruned
