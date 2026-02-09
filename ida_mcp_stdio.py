@@ -1536,7 +1536,9 @@ TOOL_ARG_SCHEMAS = {
         "force_new": {"type": "boolean", "description": "Force creation of a new session even if one exists"},
         "analysis_options": {"type": "object", "description": "Advanced analysis options payload"},
         "ida_args": {"type": ["string", "array"], "items": {"type": "string"}},
-        "session_id": {"type": "string", "description": "Session ID for switch/close"},
+        "session_id": {"type": "string", "description": "Session ID for operations"},
+        "session_id1": {"type": "string", "description": "First session ID for comparison"},
+        "session_id2": {"type": "string", "description": "Second session ID for comparison"},
         "query": {
             "type": "string",
             "description": "Filter sessions by name/path (supports regex, glob, substring)",
@@ -1563,7 +1565,7 @@ TOOL_ARG_SCHEMAS = {
         "max_ea": {"type": ["string", "integer"]},
         "limit": {
             "type": "integer",
-            "description": "Max sessions to return (list action)",
+            "description": "Max sessions to return (list action) or max entries (audit_log, hot_sessions)",
         },
         "offset": {
             "type": "integer",
@@ -1572,11 +1574,35 @@ TOOL_ARG_SCHEMAS = {
         "tags": {
             "type": ["array", "string"],
             "items": {"type": "string"},
-            "description": "Tags for the session (create action). Comma-separated string or array.",
+            "description": "Tags for the session. Comma-separated string or array.",
+        },
+        "tag": {
+            "type": "string",
+            "description": "Tag to add or remove (tag/untag actions)",
         },
         "notes": {
             "type": "string",
-            "description": "Free-form notes for the session (create action).",
+            "description": "Free-form notes for the session.",
+        },
+        "priority": {
+            "type": "integer",
+            "description": "Priority level (1-5, default 3)",
+        },
+        "priority_min": {
+            "type": "integer",
+            "description": "Minimum priority for filtering",
+        },
+        "status": {
+            "type": "string",
+            "description": "Session status (created, active, archived, etc.)",
+        },
+        "days": {
+            "type": "integer",
+            "description": "Number of days for cleanup_stale action",
+        },
+        "backup_dir": {
+            "type": "string",
+            "description": "Directory for backup files",
         },
     },
     "truncation": {
