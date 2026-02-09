@@ -153,9 +153,9 @@ def _get_all_imports():
             imports.append(name)
         return True
 
-    nimps = idaapi.get_import_module_qty()
+    nimps = ida_nalt.get_import_module_qty()
     for i in range(nimps):
-        idaapi.enum_import_names(i, imp_cb)
+        ida_nalt.enum_import_names(i, imp_cb)
     return imports
 
 
@@ -420,7 +420,7 @@ def summarize(
 
             seg_name = ida_segment.get_segm_name(seg)
             seg_class = ida_segment.get_segm_class(seg)
-            is_code = bool(seg.perm & idaapi.SFL_CODE) if hasattr(idaapi, "SFL_CODE") else (seg_class == "CODE")
+            is_code = bool(seg.perm & idaapi.SEGPERM_EXEC) if hasattr(idaapi, "SEGPERM_EXEC") else (seg_class == "CODE")
 
             # Count functions in segment
             func_count = 0
@@ -447,9 +447,9 @@ def summarize(
                 cur = nxt
 
             perms = ""
-            sfl_r = getattr(ida_segment, "SFL_READ", 0)
-            sfl_w = getattr(ida_segment, "SFL_WRITE", 0)
-            sfl_x = getattr(ida_segment, "SFL_EXEC", 0)
+            sfl_r = getattr(ida_segment, "SEGPERM_READ", getattr(idaapi, "SEGPERM_READ", 0))
+            sfl_w = getattr(ida_segment, "SEGPERM_WRITE", getattr(idaapi, "SEGPERM_WRITE", 0))
+            sfl_x = getattr(ida_segment, "SEGPERM_EXEC", getattr(idaapi, "SEGPERM_EXEC", 0))
             if sfl_r and (seg.perm & sfl_r):
                 perms += "R"
             elif not sfl_r:

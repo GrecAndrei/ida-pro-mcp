@@ -33,7 +33,13 @@ def trace_analysis(
     try:
         def load_trace():
             if trace_data and isinstance(trace_data, list):
-                return set([int(str(a), 0) for a in trace_data])
+                result = set()
+                for a in trace_data:
+                    try:
+                        result.add(int(str(a), 0))
+                    except (ValueError, TypeError):
+                        pass
+                return result
             if path:
                 p, err = validate_path_safe(path)
                 if err: return set()

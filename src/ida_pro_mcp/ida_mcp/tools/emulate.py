@@ -51,13 +51,14 @@ def emulate(
                     continue
                 visited.add(curr)
                 insn = idaapi.insn_t()
-                if ida_bytes.decode_insn(insn, curr) <= 0:
+                if idaapi.decode_insn(insn, curr) <= 0:
                     continue
 
                 disasm = idc.generate_disasm_line(curr, 0)
                 trace.append({"addr": hex(curr), "disasm": ida_lines.tag_remove(disasm) if disasm else ""})
 
-                if idaapi.is_ret_insn(insn):
+                is_ret_fn = getattr(idaapi, 'is_ret_insn', None) or getattr(__import__('ida_idp'), 'is_ret_insn', None)
+                if is_ret_fn and is_ret_fn(insn):
                     continue
 
                 next_heads = []
@@ -163,7 +164,7 @@ def emulate(
 
             if expr:
                 try:
-                    val = idc.eval(expr)
+                    val = idc.eval_idc(expr)
                     return {"ok": True, "expr": expr, "value": val}
                 except Exception as e:
                     return make_error(MCPError.IDA_ERROR, f"Expression eval failed: {e}")
@@ -187,5 +188,5 @@ def emulate(
 
 
 # ============================================================================  
-# 28. EXPORT# 28. EXPORT - Export Database in Various Formats
+# 28. EXPORT - Export Database in Various Formats
 # ============================================================================

@@ -35,6 +35,8 @@ def _get_func_or_error(addr):
             return None, err
     else:
         ea = idc.get_screen_ea()
+        if ea == idaapi.BADADDR:
+            return None, make_error(MCPError.INVALID_ARGS, "addr required (no cursor position in headless mode)")
     func = idaapi.get_func(ea)
     if not func:
         return None, make_error(MCPError.INVALID_ARGS,
@@ -89,7 +91,7 @@ def _iter_frame_members(frame):
 
 def _get_arch_info():
     """Return architecture info dict for context."""
-    info = idaapi.get_inf_structure()
+    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
     is_64 = info.is_64bit() if hasattr(info, "is_64bit") else False
     is_32 = info.is_32bit() if hasattr(info, "is_32bit") else (not is_64)
     proc = info.procname if hasattr(info, "procname") else ""

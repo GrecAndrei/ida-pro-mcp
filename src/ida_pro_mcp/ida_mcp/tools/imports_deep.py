@@ -4,6 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import ida_ida
+
 
 # ============================================================================
 # 32. IMPORTS_DEEP - Deep Import Analysis
@@ -60,7 +62,7 @@ def imports_deep(
                     
                     ea = seg.start_ea
                     while ea < seg.end_ea:
-                        is_64 = ida_ida.inf_is_64bit()
+                        is_64 = ida_ida.inf_is_64bit() if hasattr(ida_ida, 'inf_is_64bit') else (idaapi.inf_is_64bit() if hasattr(idaapi, 'inf_is_64bit') else False)
                         target = idc.get_qword(ea) if is_64 else idc.get_wide_dword(ea)
                         name = idc.get_name(ea)
                         

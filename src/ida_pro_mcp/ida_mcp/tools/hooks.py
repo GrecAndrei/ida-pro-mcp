@@ -121,7 +121,7 @@ def hooks(
             # Fallback to stack frame if no type info
             if arg_count == 0:
                 frame = ida_frame.get_frame(func)
-                if frame: arg_count = min(8, ida_frame.get_frame_size(frame) // 8)
+                if frame: arg_count = min(8, ida_frame.get_frame_size(func) // 8)
             
             # Generate arg loggers
             arg_logs = "\n".join([f'        console.log("    arg{i}:", args[{i}]);' for i in range(min(8, arg_count))])
@@ -248,7 +248,7 @@ void Install{name}Hook() {{
                         "addr": hex(current),
                         "bytes_available": length,
                         "safe": length >= 5,
-                        "disasm": idc.generate_disasm_line(current, 0) or ""
+                        "disasm": ida_lines.tag_remove(idc.generate_disasm_line(current, 0) or "")
                     })
                 
                 current += length if length > 0 else 1

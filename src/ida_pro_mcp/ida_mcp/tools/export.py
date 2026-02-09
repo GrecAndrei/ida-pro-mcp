@@ -52,6 +52,11 @@ def export(
         import os
         import json as json_module
         
+        # Validate path if provided
+        if path:
+            path, err = validate_path_safe(path)
+            if err: return err
+
         if action == "listing":
             if not path:
                 path = idaapi.get_input_file_path() + ".lst"
