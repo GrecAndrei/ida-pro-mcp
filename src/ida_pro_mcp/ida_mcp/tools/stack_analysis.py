@@ -35,6 +35,8 @@ def _get_func_or_error(addr):
             return None, err
     else:
         ea = idc.get_screen_ea()
+        if ea == idaapi.BADADDR:
+            return None, make_error(MCPError.INVALID_ARGS, "addr required (no cursor position in headless mode)")
     func = idaapi.get_func(ea)
     if not func:
         return None, make_error(MCPError.INVALID_ARGS,

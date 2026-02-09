@@ -45,9 +45,13 @@ def fixups(
                 min_ea = ida_ida.inf_get_min_ea()
                 max_ea = ida_ida.inf_get_max_ea()
             else:
-                # Fallback
-                min_ea = idaapi.cvar.inf.min_ea
-                max_ea = idaapi.cvar.inf.max_ea
+                # Fallback for older IDA
+                try:
+                    min_ea = idaapi.cvar.inf.min_ea
+                    max_ea = idaapi.cvar.inf.max_ea
+                except AttributeError:
+                    min_ea = idc.get_inf_attr(idc.INF_MIN_EA)
+                    max_ea = idc.get_inf_attr(idc.INF_MAX_EA)
                 
             if start:
                 start_ea, err = validate_addr(start)
@@ -84,6 +88,7 @@ def fixups(
             fd = ida_fixup.fixup_data_t()
             if ida_fixup.get_fixup(fd, ea):
                 return {
+                    "ok": True,
                     "addr": addr,
                     "type": fd.get_type(),
                     "target": hex(fd.off) if fd.off != idaapi.BADADDR else None
