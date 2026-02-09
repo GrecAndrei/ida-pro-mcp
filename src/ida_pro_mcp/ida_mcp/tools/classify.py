@@ -398,8 +398,8 @@ def classify(
                     continue
                 fname = idc.get_func_name(ea)
                 flags = fn.flags
-                is_lib = bool(flags & idaapi.FUNC_LIB)
-                is_thunk = bool(flags & idaapi.FUNC_THUNK)
+                is_lib = bool(flags & ida_funcs.FUNC_LIB)
+                is_thunk = bool(flags & ida_funcs.FUNC_THUNK)
                 # Also check name patterns for compiler-generated code
                 is_compiler = fname.startswith("__") or \
                               fname.startswith("j_") or fname.startswith("nullsub_")
@@ -416,7 +416,7 @@ def classify(
                 if not fn:
                     continue
                 fname_chk = idc.get_func_name(ea)
-                if (fn.flags & (idaapi.FUNC_LIB | idaapi.FUNC_THUNK)) or \
+                if (fn.flags & (ida_funcs.FUNC_LIB | ida_funcs.FUNC_THUNK)) or \
                    fname_chk.startswith("__") or fname_chk.startswith("j_") or \
                    fname_chk.startswith("nullsub_"):
                     lib_count += 1
@@ -573,7 +573,7 @@ def classify(
                 if not fn:
                     continue
                 # Skip library/thunk functions
-                if fn.flags & (idaapi.FUNC_LIB | idaapi.FUNC_THUNK):
+                if fn.flags & (ida_funcs.FUNC_LIB | ida_funcs.FUNC_THUNK):
                     continue
                 count = _get_xrefs_to_count(ea)
                 if count == 0:
