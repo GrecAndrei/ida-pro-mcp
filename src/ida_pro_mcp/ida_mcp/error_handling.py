@@ -431,8 +431,8 @@ def validate_addr(addr: Union[str, int], require_code: bool = False, require_fun
                 return None, make_error(
                     MCPError.FUNCTION_NOT_FOUND,
                     f"No function found at {hex(ea)}",
-                    hint="Use funcs(action='create', addr='{addr}') to define a function here, "
-                         "or data(action='functions') to find existing functions.".format(addr=hex(ea)),
+                    hint=f"Use funcs(action='create', addr='{hex(ea)}') to define a function here, "
+                         f"or data(action='functions') to find existing functions.",
                 )
 
         return ea, None
@@ -561,15 +561,9 @@ def validate_action(action: str, valid_actions: list, tool_name: str = "") -> Op
     if action in valid_actions:
         return None
 
-    # Find close matches for typo correction
-    suggestions = []
-    if action:
-        action_lower = action.lower()
-        for va in valid_actions:
-            if va.startswith(action_lower) or action_lower.startswith(va):
-                suggestions.append(va)
-            elif action_lower in va or va in action_lower:
-                suggestions.append(va)
+    # Find close matches using difflib for better typo correction
+    import difflib
+    suggestions = difflib.get_close_matches(action or "", valid_actions, n=3, cutoff=0.4)
 
     msg = f"Unknown action '{action}'"
     if tool_name:
