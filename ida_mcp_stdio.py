@@ -198,12 +198,9 @@ def validate_path(path: str) -> Optional[str]:
     if ".." in Path(path).parts:
         return None
     resolved = os.path.normpath(os.path.abspath(path))
-    # Resolve symlinks and re-check for traversal
+    # Resolve symlinks (defense-in-depth: realpath should never produce '..')
     try:
-        real = os.path.realpath(resolved)
-        if ".." in Path(real).parts:
-            return None
-        return real
+        return os.path.realpath(resolved)
     except (OSError, ValueError):
         return resolved
 
@@ -305,7 +302,7 @@ class SessionManager:
         self.sessions: Dict[str, Session] = {}
         self.cache_dir = cache_dir
         self.session_dir = os.path.join(cache_dir, "sessions")
-        self._snapshots: Dict[str, List[dict]] = {}  # sid -> list of snapshot dicts
+        self._snapshots: Dict[str, List[dict]] = {}  # sid -> list (in-memory only, lost on restart)
         os.makedirs(self.session_dir, exist_ok=True)
         # Auto-load existing sessions on startup
         self._load_sessions()
@@ -446,30 +443,33 @@ class SessionManager:
                     result.append(copy.copy(s))
             return result
 
+    def _delete_session_unlocked(self, sid: str) -> bool:
+        """Delete a session without acquiring the lock (caller must hold _lock)."""
+        session = self.sessions.pop(sid, None)
+        self._snapshots.pop(sid, None)
+        deleted = False
+        base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
+        for f in glob.glob(base_pattern):
+            try:
+                os.remove(f)
+                deleted = True
+                log_rpc(f"Deleted session file: {f}")
+            except Exception as e:
+                log_rpc(f"Failed to delete {f}: {e}")
+        for log_name in (f"ida_mcp_{sid}.log", f"ida_stdout_{sid}.log", f"ida_stderr_{sid}.log"):
+            log_path = os.path.join(self.cache_dir, log_name)
+            if os.path.exists(log_path):
+                try:
+                    os.remove(log_path)
+                    deleted = True
+                    log_rpc(f"Deleted session log: {log_path}")
+                except Exception as e:
+                    log_rpc(f"Failed to delete {log_path}: {e}")
+        return bool(session) or deleted
+
     def delete_session(self, sid: str) -> bool:
         with self._lock:
-            session = self.sessions.pop(sid, None)
-            self._snapshots.pop(sid, None)
-            deleted = False
-            # Cleanup actual IDB and all associated SID files (bookmarks, logs, metadata, etc.)
-            base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
-            for f in glob.glob(base_pattern):
-                try:
-                    os.remove(f)
-                    deleted = True
-                    log_rpc(f"Deleted session file: {f}")
-                except Exception as e:
-                    log_rpc(f"Failed to delete {f}: {e}")
-            for log_name in (f"ida_mcp_{sid}.log", f"ida_stdout_{sid}.log", f"ida_stderr_{sid}.log"):
-                log_path = os.path.join(self.cache_dir, log_name)
-                if os.path.exists(log_path):
-                    try:
-                        os.remove(log_path)
-                        deleted = True
-                        log_rpc(f"Deleted session log: {log_path}")
-                    except Exception as e:
-                        log_rpc(f"Failed to delete {log_path}: {e}")
-            return bool(session) or deleted
+            return self._delete_session_unlocked(sid)
 
     # --- New feature methods ---
 
@@ -597,7 +597,7 @@ class SessionManager:
             cutoff = datetime.now() - timedelta(days=max_age_days)
             stale = [sid for sid, s in self.sessions.items() if s.last_accessed < cutoff]
             for sid in stale:
-                self.delete_session(sid)
+                self._delete_session_unlocked(sid)
             return stale
 
     def get_stats(self) -> dict:
@@ -622,17 +622,21 @@ class SessionManager:
                 "tags": tag_counts,
             }
 
+    def _tag_session_unlocked(self, sid: str, tag: str) -> Optional[Session]:
+        """Add a tag without acquiring the lock (caller must hold _lock)."""
+        session = self.sessions.get(sid)
+        if not session:
+            return None
+        if tag not in session.tags:
+            session.tags.append(tag)
+        session.update_access()
+        self._save_metadata(session)
+        return copy.copy(session)
+
     def tag_session(self, sid: str, tag: str) -> Optional[Session]:
         """Add a tag to a session."""
         with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return None
-            if tag not in session.tags:
-                session.tags.append(tag)
-            session.update_access()
-            self._save_metadata(session)
-            return copy.copy(session)
+            return self._tag_session_unlocked(sid, tag)
 
     def untag_session(self, sid: str, tag: str) -> Optional[Session]:
         """Remove a tag from a session."""
@@ -702,7 +706,7 @@ class SessionManager:
         with self._lock:
             results = {}
             for sid in sids:
-                results[sid] = self.delete_session(sid)
+                results[sid] = self._delete_session_unlocked(sid)
             return results
 
     def bulk_tag(self, sids: List[str], tag: str) -> dict:
@@ -710,7 +714,7 @@ class SessionManager:
         with self._lock:
             results = {}
             for sid in sids:
-                result = self.tag_session(sid, tag)
+                result = self._tag_session_unlocked(sid, tag)
                 results[sid] = result is not None
             return results
 
