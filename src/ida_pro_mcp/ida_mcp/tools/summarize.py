@@ -153,9 +153,9 @@ def _get_all_imports():
             imports.append(name)
         return True
 
-    nimps = idaapi.get_import_module_qty()
+    nimps = ida_nalt.get_import_module_qty()
     for i in range(nimps):
-        idaapi.enum_import_names(i, imp_cb)
+        ida_nalt.enum_import_names(i, imp_cb)
     return imports
 
 

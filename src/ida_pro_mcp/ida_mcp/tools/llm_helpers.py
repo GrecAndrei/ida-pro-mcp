@@ -40,13 +40,13 @@ def _get_imports_summary():
         if name:
             imports[name] = ea
         return True
-    nimps = idaapi.get_import_module_qty()
+    nimps = ida_nalt.get_import_module_qty()
     modules = []
     for i in range(nimps):
-        mod = idaapi.get_import_module_name(i)
+        mod = ida_nalt.get_import_module_name(i)
         if mod:
             modules.append(mod)
-        idaapi.enum_import_names(i, imp_cb)
+        ida_nalt.enum_import_names(i, imp_cb)
     return modules, imports
 
 
