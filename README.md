@@ -42,24 +42,24 @@ The installer will:
 
 The installer automatically configures the following MCP clients:
 
-- **Gemini CLI** - Google's CLI-based AI assistant
-- **Antigravity** - Gemini-based AI tool
-- **Claude Code** - Anthropic's command-line coding assistant
-- **Claude Desktop** - Anthropic's desktop application
-- **Codex** - OpenAI Codex CLI tool
-- **Copilot CLI** - GitHub Copilot command-line tool
-- **OpenCode** - Open source AI coding agent for terminal/IDE/desktop
-- **Cursor** - AI-powered code editor
-- **VS Code** - With GitHub Copilot extension
-- **Windsurf** - AI development environment
-- **Cline** - AI coding assistant extension
-- **Roo Code** - Code assistant extension
+- **Gemini CLI** - Google's CLI-based AI assistant.
+- **Antigravity** - Gemini-based AI tool.
+- **Claude Code** - Anthropic's command-line coding assistant.
+- **Claude Desktop** - Anthropic's desktop application.
+- **Codex** - OpenAI Codex CLI tool.
+- **Copilot CLI** - GitHub Copilot command-line tool.
+- **OpenCode** - Open source AI coding agent for terminal/IDE/desktop.
+- **Cursor** - AI-powered code editor.
+- **VS Code** - With GitHub Copilot extension.
+- **Windsurf** - AI development environment.
+- **Cline** - AI coding assistant extension.
+- **Roo Code** - Code assistant extension.
 
 Each client uses its native configuration format:
-- **Standard JSON**: Claude Desktop, Cursor, VS Code, Windsurf, Cline, Roo Code
-- **TOML**: Codex
-- **OpenCode Schema**: OpenCode uses `type: "local"` with `command` array format
-- **GitHub Copilot CLI**: Special format with `type: "local"` and `tools: ["*"]`
+- **Standard JSON**: Claude Desktop, Cursor, VS Code, Windsurf, Cline, Roo Code.
+- **TOML**: Codex.
+- **OpenCode Schema**: OpenCode uses `type: "local"` with `command` array format.
+- **GitHub Copilot CLI**: Special format with `type: "local"` and `tools: ["*"]`.
 
 ## Tool Registry
 
@@ -70,10 +70,10 @@ The server exposes over 60 tools organized by domain:
 **Important**: Once you create or switch to a session, the `idb` parameter becomes optional for all subsequent tool calls. The system automatically uses the active session's IDB path.
 
 **Workflow:**
-1. Create a session: `session(action="create", binary_path="path/to/binary.exe")`
-2. Use any tool without `idb` parameter: `data(action="functions")`
-3. Switch sessions if needed: `session(action="switch", session_id="ABCD1234")`
-4. Continue using tools: `code(action="decompile", addr="0x401000")`
+1. Create a session: `session(action="create", binary_path="path/to/binary.exe")`.
+2. Use any tool without `idb` parameter: `data(action="functions")`.
+3. Switch sessions if needed: `session(action="switch", session_id="ABCD1234")`.
+4. Continue using tools: `code(action="decompile", addr="0x401000")`.
 
 ### Core Tools
 

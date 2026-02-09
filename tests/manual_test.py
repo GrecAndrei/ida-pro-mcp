@@ -5,7 +5,7 @@ def manual_test():
     venv_py = r"C:\Users\Alexander\AppData\Local\ida-pro-mcp\.venv\Scripts\python.exe"
     target = r"C:\Users\Alexander\Downloads\ida-pro-mcp\test_target.exe"
     
-    print(f"Lauching Server: {server_py}")
+    print(f"Launching Server: {server_py}")
     proc = subprocess.Popen([venv_py, "-u", server_py], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     
     def read_line_with_timeout(timeout=30): # 30s timeout

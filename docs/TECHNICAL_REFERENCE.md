@@ -57,33 +57,33 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
 
 ### 1. Core & Metadata
 *   **`session`**: Management of LLM workflows.
-    *   Actions: `discover`, `create`, `list`, `switch`, `close`, `status`
-    *   Args: `binary_path`, `use_existing`, `session_id`
+    *   Actions: `discover`, `create`, `list`, `switch`, `close`, `status`.
+    *   Args: `binary_path`, `use_existing`, `session_id`.
 *   **`bookmarks`**: Enhanced session-correlated bookmarking.
-    *   Actions: `add`, `list`, `delete`, `update`, `clear`, `find`, `export`
-    *   Args: `addr`, `id`, `name`, `notes`, `category`, `priority`, `tags`, `query`
+    *   Actions: `add`, `list`, `delete`, `update`, `clear`, `find`, `export`.
+    *   Args: `addr`, `id`, `name`, `notes`, `category`, `priority`, `tags`, `query`.
 *   **`analysis`**: Loader/processor settings and reanalysis controls.
-    *   Actions: `get_options`, `set_options`, `set_processor`, `set_loader_options`, `set_architecture`, `reanalyze`
-    *   Args: `options`, `processor`, `flags`, `loader`, `value`, `bitness`, `endian`, `start`, `end`
+    *   Actions: `get_options`, `set_options`, `set_processor`, `set_loader_options`, `set_architecture`, `reanalyze`.
+    *   Args: `options`, `processor`, `flags`, `loader`, `value`, `bitness`, `endian`, `start`, `end`.
 *   **`batch`**: Multi-tool call batching on the host side.
-    *   Args: `calls`, `continue_on_error`
+    *   Args: `calls`, `continue_on_error`.
 *   **`idb`**: Database-level information.
-    *   Actions: `meta`, `summary`, `segments`, `entrypoints`, `bookmarks`
+    *   Actions: `meta`, `summary`, `segments`, `entrypoints`, `bookmarks`.
 *   **`query`**: Consolidated read-only dispatcher.
-    *   Actions: `data`, `search`, `strings_xref`, `imports_deep`, `symbols`, `patterns`, `idb`
-    *   Args: `subaction`, `args`
+    *   Actions: `data`, `search`, `strings_xref`, `imports_deep`, `symbols`, `patterns`, `idb`.
+    *   Args: `subaction`, `args`.
 *   **`edit`**: Consolidated write dispatcher.
-    *   Actions: `modify`, `funcs`, `segments`, `data_ops`, `fixups`, `colorize`, `comments_ai`, `bulk`
-    *   Args: `subaction`, `args`
+    *   Actions: `modify`, `funcs`, `segments`, `data_ops`, `fixups`, `colorize`, `comments_ai`, `bulk`.
+    *   Args: `subaction`, `args`.
 *   **`calc`**: r2-style address and number utilities.
-    *   Actions: `eval`, `offset`, `convert`, `resolve`, `deref`, `chain`, `align`
-    *   Args: `expr`, `addr`, `target`, `value`, `type`, `size`, `offsets`
+    *   Actions: `eval`, `offset`, `convert`, `resolve`, `deref`, `chain`, `align`.
+    *   Args: `expr`, `addr`, `target`, `value`, `type`, `size`, `offsets`.
 *   **`yara_hunt`**: Surgical signature matching.
-    *   Actions: `scan`, `compile`, `list_rules`
-    *   Args: `rules` (str/path), `addr` (optional), `size` (int)
+    *   Actions: `scan`, `compile`, `list_rules`.
+    *   Args: `rules` (str/path), `addr` (optional), `size` (int).
 *   **`wiki`**: On-demand documentation server.
-    *   Actions: `list_topics`, `read`, `search`, `sections`, `index`
-    *   Args: `topic` (str), `section` (optional)
+    *   Actions: `list_topics`, `read`, `search`, `sections`, `index`.
+    *   Args: `topic` (str), `section` (optional).
 
 ### 2. Middleware & Context Optimization
 
@@ -92,64 +92,64 @@ Below is the complete list of tools available in the Modular SDK. All tools (exc
 
 ### 3. Code Analysis
 *   **`code`**: The primary analysis engine.
-    *   Actions: `decompile`, `disasm`, `xrefs_to`, `xrefs_from`, `xrefs_to_field`, `callees`, `callers`, `blocks`, `analyze`, `callgraph`, `export`, `find_paths`, `strings_in_func`
-    *   Args: `addrs` (list/str), `max_depth` (int), `max_items` (int), `field_name` (str), `target` (str)
+    *   Actions: `decompile`, `disasm`, `xrefs_to`, `xrefs_from`, `xrefs_to_field`, `callees`, `callers`, `blocks`, `analyze`, `callgraph`, `export`, `find_paths`, `strings_in_func`.
+    *   Args: `addrs` (list/str), `max_depth` (int), `max_items` (int), `field_name` (str), `target` (str).
 *   **`microcode`**: Access to Hex-Rays IR.
-    *   Actions: `get`, `blocks`, `instructions`
-    *   Args: `addr` (str), `maturity` (0-7)
+    *   Actions: `get`, `blocks`, `instructions`.
+    *   Args: `addr` (str), `maturity` (0-7).
 *   **`ctree`**: Decompiler AST traversal.
-    *   Actions: `get`, `traverse`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`, `get_logic_flow`
-    *   Args: `addr` (str), `depth` (int), `query` (str)
+    *   Actions: `get`, `traverse`, `find_calls`, `find_vars`, `find_strings`, `find_conditions`, `get_logic_flow`.
+    *   Args: `addr` (str), `depth` (int), `query` (str).
 *   **`graph`**: Exporting CFGs and callgraphs.
-    *   Actions: `callgraph`, `cfg`
-    *   Args: `addr` (str), `format` ("json"|"dot")
+    *   Actions: `callgraph`, `cfg`.
+    *   Args: `addr` (str), `format` ("json"|"dot").
 
 ### 3. Data & Types
 *   **`data`**: Bulk enumeration of binary objects.
-*   Actions: `functions`, `globals`, `strings`, `imports`, `exports`, `lookup`, `bulk_query`
-*   Args: `query` (glob), `offset` (int), `count` (int), `items` (list)
+*   Actions: `functions`, `globals`, `strings`, `imports`, `exports`, `lookup`, `bulk_query`.
+*   Args: `query` (glob), `offset` (int), `count` (int), `items` (list).
 *   **`types`**: Type library management.
-*   Actions: `list`, `get`, `set_prototype`, `parse_decl`, `declare`, `apply`, `search_structs`, `infer`, `read_struct`, `import_header`
-    *   Args: `name` (str), `decl` (C code), `addr` (str)
+*   Actions: `list`, `get`, `set_prototype`, `parse_decl`, `declare`, `apply`, `search_structs`, `infer`, `read_struct`, `import_header`.
+    *   Args: `name` (str), `decl` (C code), `addr` (str).
 *   **`structs`**: Structure recovery logic.
-*   Actions: `recover`, `analyze_usage`, `list`, `create`, `add_member`, `apply`, `reconstruct_vtable`
-    *   Args: `addr` (str), `decl` (C code), `name` (str)
+*   Actions: `recover`, `analyze_usage`, `list`, `create`, `add_member`, `apply`, `reconstruct_vtable`.
+    *   Args: `addr` (str), `decl` (C code), `name` (str).
 
 ### 4. Annotation & Modification
 *   **`modify`**: Single-point annotations.
-    *   Actions: `rename`, `comment`, `set_type`, `patch_asm`
-    *   Args: `addr` (str), `value` (str)
+    *   Actions: `rename`, `comment`, `set_type`, `patch_asm`.
+    *   Args: `addr` (str), `value` (str).
 *   **`bulk`**: High-performance batch operations.
-    *   Actions: `rename`, `comment`, `set_type`, `import_json`, `export_json`
-    *   Args: `items` (list of {addr, value}), `path` (str)
+    *   Actions: `rename`, `comment`, `set_type`, `import_json`, `export_json`.
+    *   Args: `items` (list of {addr, value}), `path` (str).
 *   **`comments_ai`**: Structured, AI-friendly commenting.
-    *   Actions: `get_context`, `set_structured`, `bulk_set`, `export_md`, `import_md`, `summary`
-    *   Args: `addr` (str), `text` (str), `items` (json)
+    *   Actions: `get_context`, `set_structured`, `bulk_set`, `export_md`, `import_md`, `summary`.
+    *   Args: `addr` (str), `text` (str), `items` (json).
 
 ### 5. Advanced Reverse Engineering
 *   **`taint`**: Static data flow analysis.
-*   Actions: `find_arg_usage`, `trace_return`, `find_sinks`, `data_flow`, `backward_trace`, `slice`
-    *   Args: `addr` (str), `arg_num` (int), `depth` (int), `max_hits` (int)
+*   Actions: `find_arg_usage`, `trace_return`, `find_sinks`, `data_flow`, `backward_trace`, `slice`.
+    *   Args: `addr` (str), `arg_num` (int), `depth` (int), `max_hits` (int).
 *   **`emulate`**: Code emulation and trace.
-*   Actions: `static_trace`, `appcall`, `decrypt_strings`, `eval_expr`
-    *   Args: `addr` (str), `max_steps` (int), `args` (list), `follow_calls` (bool), `max_depth` (int), `include_blocks` (bool), `expr` (str)
+*   Actions: `static_trace`, `appcall`, `decrypt_strings`, `eval_expr`.
+    *   Args: `addr` (str), `max_steps` (int), `args` (list), `follow_calls` (bool), `max_depth` (int), `include_blocks` (bool), `expr` (str).
 *   **`entropy`**: Packed/Encrypted region detection.
-    *   Actions: `section`, `region`, `packed_detect`, `crypto_detect`, `compare`, `window`, `summary`
-    *   Args: `addr` (str), `size` (int), `threshold` (float), `end_addr` (str), `window` (int), `step` (int), `limit` (int)
+    *   Actions: `section`, `region`, `packed_detect`, `crypto_detect`, `compare`, `window`, `summary`.
+    *   Args: `addr` (str), `size` (int), `threshold` (float), `end_addr` (str), `window` (int), `step` (int), `limit` (int).
 *   **`strings_xref`**: Context-aware string analysis.
-    *   Actions: `analyze`, `xref_chain`, `detect_encoded`, `find_format`, `clusters`
-    *   Args: `addr` (str), `depth` (int)
+    *   Actions: `analyze`, `xref_chain`, `detect_encoded`, `find_format`, `clusters`.
+    *   Args: `addr` (str), `depth` (int).
 
 ### 6. Debugging & Dynamic Analysis
 *   **`debug`**: Live process control.
-    *   Actions: `start`, `stop`, `continue`, `step_into`, `step_over`, `run_to`, `breakpoints`, `add_bp`, `del_bp`, `enable_bp`, `regs`, `callstack`, `read_mem`, `write_mem`
-    *   Args: `addr` (str), `size` (int), `data` (hex), `enabled` (bool), `tid` (int)
+    *   Actions: `start`, `stop`, `continue`, `step_into`, `step_over`, `run_to`, `breakpoints`, `add_bp`, `del_bp`, `enable_bp`, `regs`, `callstack`, `read_mem`, `write_mem`.
+    *   Args: `addr` (str), `size` (int), `data` (hex), `enabled` (bool), `tid` (int).
 *   **`coverage`**: Code coverage management.
-    *   Actions: `import_drcov`, `import_lighthouse`, `highlight`, `report`, `uncovered`
-    *   Args: `path` (str), `addr` (str), `color` (str)
+    *   Actions: `import_drcov`, `import_lighthouse`, `highlight`, `report`, `uncovered`.
+    *   Args: `path` (str), `addr` (str), `color` (str).
 *   **`trace_analysis`**: Post-mortem execution trace.
-    *   Actions: `import_trace`, `analyze_coverage`, `find_loops`, `extract_api_calls`, `basic_blocks_hit`
-    *   Args: `path` (str), `trace_data` (list)
+    *   Actions: `import_trace`, `analyze_coverage`, `find_loops`, `extract_api_calls`, `basic_blocks_hit`.
+    *   Args: `path` (str), `trace_data` (list).
 
 ---
 

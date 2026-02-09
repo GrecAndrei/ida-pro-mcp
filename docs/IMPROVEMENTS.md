@@ -17,20 +17,20 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ### Advantages of MCP Tools
 
-1. **Structured Output**: Tools return JSON with consistent schemas - LLMs don't need to parse text output
-2. **Error Handling**: Built-in error codes and recovery suggestions
-3. **Session Management**: Automatic IDB/binary association without manual path management  
-4. **Batch Operations**: Single tool call for operations that would require multiple API calls
-5. **Safe Defaults**: Tools prevent common mistakes (e.g., infinite loops in graph traversal)
-6. **Context-Optimized**: Results are filtered and paginated to fit in context windows
-7. **No Import Management**: Don't need to know which `ida_*` module contains which function
+1. **Structured Output**: Tools return JSON with consistent schemas - LLMs don't need to parse text output.
+2. **Error Handling**: Built-in error codes and recovery suggestions.
+3. **Session Management**: Automatic IDB/binary association without manual path management.
+4. **Batch Operations**: Single tool call for operations that would require multiple API calls.
+5. **Safe Defaults**: Tools prevent common mistakes (e.g., infinite loops in graph traversal).
+6. **Context-Optimized**: Results are filtered and paginated to fit in context windows.
+7. **No Import Management**: Don't need to know which `ida_*` module contains which function.
 
 ### When to Use Raw IDAPython (via `misc` tool)
 
-1. **Highly Custom Logic**: When you need control flow that doesn't fit existing tools
-2. **Chained Operations**: When you need to pass results between operations without round-trips
-3. **Experimental APIs**: When using IDA features not exposed by tools
-4. **Performance-Critical**: When the overhead of JSON serialization matters
+1. **Highly Custom Logic**: When you need control flow that doesn't fit existing tools.
+2. **Chained Operations**: When you need to pass results between operations without round-trips.
+3. **Experimental APIs**: When using IDA features not exposed by tools.
+4. **Performance-Critical**: When the overhead of JSON serialization matters.
 
 ### Tool Selection Guide
 
@@ -47,16 +47,16 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ## Table of Contents
 
-1. [Critical Bugs & Issues](#1-critical-bugs--issues)
-2. [Documentation Issues](#2-documentation-issues)
-3. [Tool Description Improvements for LLM](#3-tool-description-improvements-for-llm)
-4. [Code Quality Issues](#4-code-quality-issues)
-5. [LLM Usability Improvements](#5-llm-usability-improvements)
-6. [Context Window Optimization](#6-context-window-optimization)
-7. [Error Handling Improvements](#7-error-handling-improvements)
-8. [Security Considerations](#8-security-considerations)
-9. [Missing Features](#9-missing-features)
-10. [Architectural Improvements](#10-architectural-improvements)
+1. [Critical Bugs & Issues](#1-critical-bugs--issues).
+2. [Documentation Issues](#2-documentation-issues).
+3. [Tool Description Improvements for LLM](#3-tool-description-improvements-for-llm).
+4. [Code Quality Issues](#4-code-quality-issues).
+5. [LLM Usability Improvements](#5-llm-usability-improvements).
+6. [Context Window Optimization](#6-context-window-optimization).
+7. [Error Handling Improvements](#7-error-handling-improvements).
+8. [Security Considerations](#8-security-considerations).
+9. [Missing Features](#9-missing-features).
+10. [Architectural Improvements](#10-architectural-improvements).
 
 ---
 
@@ -201,10 +201,10 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 125. **~~Package Resolution in IDA~~** *(Fixed)*: Headless IDA has non-standard package resolution for dynamic scripts. Tools now use a robust dual-mode import block to ensure infrastructure availability.
 
 49. **~~Magic Numbers~~** *(Fixed)*: Added constants at the top of `ida_mcp_stdio.py`:
-    - `LOCK_TIMEOUT_DEFAULT`, `LOCK_TIMEOUT_EXTENDED`
-    - `LOCK_STALE_THRESHOLD`, `IDA_EXECUTION_TIMEOUT`
-    - `LOG_TAIL_LINES`, `ERROR_STDERR_LIMIT`
-    - `TEMP_FILE_MAX_AGE`, `ERROR_RETRY_AFTER`
+    - `LOCK_TIMEOUT_DEFAULT`, `LOCK_TIMEOUT_EXTENDED`.
+    - `LOCK_STALE_THRESHOLD`, `IDA_EXECUTION_TIMEOUT`.
+    - `LOG_TAIL_LINES`, `ERROR_STDERR_LIMIT`.
+    - `TEMP_FILE_MAX_AGE`, `ERROR_RETRY_AFTER`.
 
 50. **~~No Constants File~~** *(Fixed)*: All magic numbers now defined as constants at module level.
 
@@ -228,7 +228,7 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 56. **~~Create "Quick Analysis" Workflow~~** *(Fixed)*: README now has "Common Analysis Workflows" section with 3 example pipelines, and `agent` tool shows the fastest path.
 
-57. **Add Token-Aware Truncation**: Large responses should indicate they're truncated and how to get more. *(Partial: pagination exists but no truncation indicator)*
+57. **Add Token-Aware Truncation**: Large responses should indicate they're truncated and how to get more. *(Partial: pagination exists but no truncation indicator)*.
 
 58. **Provide Summary Statistics First**: Before dumping all functions, give counts and notable items.
 
@@ -322,23 +322,23 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 90. **~~Path Traversal~~** *(Fixed)*: Added `validate_path()` function that normalizes paths and checks for directory traversal patterns.
 
-91. **Code Injection in `misc` Python Tool**: The `python` action executes arbitrary code - needs sandboxing or removal. *(By design - documented risk)*
+91. **Code Injection in `misc` Python Tool**: The `python` action executes arbitrary code - needs sandboxing or removal. *(By design - documented risk)*.
 
 92. **~~Shell Injection~~** *(Fixed)*: Removed `shell=True` from subprocess calls; using list-based command execution.
 
 93. **~~Integer Overflow~~** *(Fixed)*: Added `validate_address()` function that checks for 64-bit overflow in address parameters.
 
-94. **Denial of Service**: No limits on pattern search complexity. *(Mitigated by IDA_EXECUTION_TIMEOUT constant)*
+94. **Denial of Service**: No limits on pattern search complexity. *(Mitigated by IDA_EXECUTION_TIMEOUT constant)*.
 
 ### 8.2 Data Protection
 
-95. **Lock File Contains PID**: Could leak process information. *(Accepted risk - needed for stale lock detection)*
+95. **Lock File Contains PID**: Could leak process information. *(Accepted risk - needed for stale lock detection)*.
 
-96. **Temp Files Contain Code**: Script files written to disk contain potentially sensitive analysis. *(Mitigated by cleanup)*
+96. **Temp Files Contain Code**: Script files written to disk contain potentially sensitive analysis. *(Mitigated by cleanup)*.
 
 97. **~~No Cleanup on Exit~~** *(Fixed)*: Added `_cleanup_on_exit()` method that removes temp files on server shutdown.
 
-98. **World-Readable Cache**: Cache directory may have insecure permissions. *(Platform-dependent - documented)*
+98. **World-Readable Cache**: Cache directory may have insecure permissions. *(Platform-dependent - documented)*.
 
 ---
 
@@ -414,41 +414,41 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 ### Immediate Fixes (Critical) - ✅ ALL COMPLETED
 
-1. ~~Fix hardcoded Windows paths (#6, #7)~~ ✅
-2. ~~Fix `msvcrt` import for cross-platform (#8)~~ ✅
-3. ~~Remove `shell=True` from subprocess (#10)~~ ✅
-4. ~~Fix README inconsistencies (#1-5)~~ ✅
+1. ~~Fix hardcoded Windows paths (#6, #7)~~ ✅.
+2. ~~Fix `msvcrt` import for cross-platform (#8)~~ ✅.
+3. ~~Remove `shell=True` from subprocess (#10)~~ ✅.
+4. ~~Fix README inconsistencies (#1-5)~~ ✅.
 
 ### Short-term Improvements (High Value) - MOSTLY COMPLETED
 
-5. ~~Add action enums to tool schemas (#31)~~ ✅
-6. ~~Document error codes in README (#20)~~ ✅
-7. ~~Add "when to use" guidance to tool descriptions (#26)~~ ✅
-8. Implement consistent response formats (#36-39) - *Documented but needs api_consolidated.py refactor*
+5. ~~Add action enums to tool schemas (#31)~~ ✅.
+6. ~~Document error codes in README (#20)~~ ✅.
+7. ~~Add "when to use" guidance to tool descriptions (#26)~~ ✅.
+8. Implement consistent response formats (#36-39) - *Documented but needs api_consolidated.py refactor*.
 
 ### Medium-term Enhancements (LLM UX) - PARTIALLY COMPLETED
 
-9. Add `detail_level` parameter (#65) - *Requires api_consolidated.py changes*
-10. Implement smart truncation (#70) - *Requires api_consolidated.py changes*
-11. Add fix suggestions to errors (#80) - *Requires api_consolidated.py changes*
-12. ~~Create workflow documentation (#27)~~ ✅
+9. Add `detail_level` parameter (#65) - *Requires api_consolidated.py changes*.
+10. Implement smart truncation (#70) - *Requires api_consolidated.py changes*.
+11. Add fix suggestions to errors (#80) - *Requires api_consolidated.py changes*.
+12. ~~Create workflow documentation (#27)~~ ✅.
 
 ### Long-term Architecture - DOCUMENTED FOR FUTURE
 
-13. Implement process pooling (#109)
-14. Add result caching (#110)
-15. Create plugin architecture (#119)
-16. Add conversation context tracking (#104)
+13. Implement process pooling (#109).
+14. Add result caching (#110).
+15. Create plugin architecture (#119).
+16. Add conversation context tracking (#104).
 
 ---
 
 ## Summary of Fixed Issues
 
 **Fixed in this PR (55+ items):**
-- #1-13, 15-28, 30-31, 33, 37, 41-42, 45, 49-53, 55-56, 90-93, 97
+- #1-13, 15-28, 30-31, 33, 37, 41-42, 45, 49-53, 55-56, 90-93, 97.
 
 **Documented but not code-fixed (architecture/refactoring needed):**
-- #36, 38-40, 43-44, 46-48, 54, 57-79, 80-89, 99-123
+- #36, 38-40, 43-44, 46-48, 54, 57-79, 80-89, 99-123.
 
 ---
 
@@ -456,11 +456,11 @@ Before diving into improvements, it's worth understanding why these MCP tools ex
 
 The IDA Pro MCP standalone server provides a solid foundation for LLM-assisted reverse engineering, but has significant room for improvement in:
 
-1. **Documentation accuracy** - ~~Multiple inconsistencies between README and code~~ ✅ Fixed
-2. **Cross-platform support** - ~~Hardcoded Windows paths and imports~~ ✅ Fixed
-3. **LLM ergonomics** - ~~Tool descriptions need more context and examples~~ ✅ Fixed
-4. **Error handling** - ~~Need actionable, recoverable error responses~~ ✅ Improved (more work possible)
-5. **Context efficiency** - Large responses need smarter handling (documented for future)
+1. **Documentation accuracy** - ~~Multiple inconsistencies between README and code~~ ✅ Fixed.
+2. **Cross-platform support** - ~~Hardcoded Windows paths and imports~~ ✅ Fixed.
+3. **LLM ergonomics** - ~~Tool descriptions need more context and examples~~ ✅ Fixed.
+4. **Error handling** - ~~Need actionable, recoverable error responses~~ ✅ Improved (more work possible).
+5. **Context efficiency** - Large responses need smarter handling (documented for future).
 
 Addressing the critical bugs first, then focusing on LLM usability improvements, would significantly enhance the value of this tool for AI-assisted reverse engineering workflows.
 ---

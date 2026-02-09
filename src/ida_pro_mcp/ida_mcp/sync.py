@@ -76,7 +76,7 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
     # NOTE: This is not actually a queue, there is one item in it at most
     res_container = queue.Queue()
 
-    def runned():
+    def run_sync():
         if not call_stack.empty():
             last_func_name = call_stack.get()
             error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"   
@@ -90,7 +90,7 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         finally:
             call_stack.get()
 
-    ida_kernwin.execute_sync(runned, safety_mode)
+    ida_kernwin.execute_sync(run_sync, safety_mode)
 
     # TIMEOUT PROTECTION: Don't wait forever for the result
     try:

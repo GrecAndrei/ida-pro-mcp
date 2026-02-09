@@ -5,9 +5,9 @@ This guide explains how IDA Pro MCP Server integrates with [OpenCode](https://op
 ## What is OpenCode?
 
 OpenCode is an open source AI coding agent available as:
-- Terminal-based interface (TUI)
-- Desktop application
-- IDE extension
+- Terminal-based interface (TUI).
+- Desktop application.
+- IDE extension.
 
 It supports 75+ LLM providers through Models.dev and features multi-session support, LSP integration, and extensive customization through plugins, agents, and commands.
 
@@ -20,9 +20,9 @@ python install.py
 ```
 
 The installer will:
-1. Create the OpenCode configuration directory at `~/.config/opencode/`
-2. Add the IDA Pro MCP server to `opencode.json`
-3. Configure the server with proper environment variables (IDADIR)
+1. Create the OpenCode configuration directory at `~/.config/opencode/`.
+2. Add the IDA Pro MCP server to `opencode.json`.
+3. Configure the server with proper environment variables (IDADIR).
 
 ## Configuration
 
@@ -50,10 +50,10 @@ OpenCode uses a different MCP schema than other clients. The installer creates a
 
 ### Key Differences from Other MCP Clients
 
-- **Format**: OpenCode uses a `command` array (not separate `command` and `args`)
-- **Type**: Must specify `"type": "local"` for local MCP servers
-- **Schema**: Follows OpenCode's native MCP schema, not Claude Desktop's format
-- **JSONC Support**: OpenCode supports JSON with comments (JSONC)
+- **Format**: OpenCode uses a `command` array (not separate `command` and `args`).
+- **Type**: Must specify `"type": "local"` for local MCP servers.
+- **Schema**: Follows OpenCode's native MCP schema, not Claude Desktop's format.
+- **JSONC Support**: OpenCode supports JSON with comments (JSONC).
 
 ## Using IDA Pro MCP with OpenCode
 
@@ -118,10 +118,10 @@ opencode mcp list
 
 If the server doesn't appear:
 
-1. Check the config file exists at `~/.config/opencode/opencode.json`
-2. Verify the `command` paths are correct
-3. Ensure Python path points to the virtual environment
-4. Check IDADIR environment variable is set correctly
+1. Check the config file exists at `~/.config/opencode/opencode.json`.
+2. Verify the `command` paths are correct.
+3. Ensure Python path points to the virtual environment.
+4. Check IDADIR environment variable is set correctly.
 
 ### Permission Issues
 
@@ -152,26 +152,26 @@ OpenCode supports comments in JSON files. The installer strips comments before p
 
 If you need to manually configure OpenCode:
 
-1. Create or edit `~/.config/opencode/opencode.json`
-2. Add the MCP server under the `mcp` key
-3. Use the schema shown above
-4. Restart OpenCode
+1. Create or edit `~/.config/opencode/opencode.json`.
+2. Add the MCP server under the `mcp` key.
+3. Use the schema shown above.
+4. Restart OpenCode.
 
 ## Platform-Specific Notes
 
 ### Windows
-- Config location: `%USERPROFILE%\.config\opencode\opencode.json`
-- Use Windows-style paths with double backslashes or forward slashes
-- Python executable: `.venv\Scripts\python.exe`
+- Config location: `%USERPROFILE%\.config\opencode\opencode.json`.
+- Use Windows-style paths with double backslashes or forward slashes.
+- Python executable: `.venv\Scripts\python.exe`.
 
 ### Linux/macOS
-- Config location: `~/.config/opencode/opencode.json`
-- Python executable: `.venv/bin/python`
-- May need to set executable permissions
+- Config location: `~/.config/opencode/opencode.json`.
+- Python executable: `.venv/bin/python`.
+- May need to set executable permissions.
 
 ## References
 
-- [OpenCode Documentation](https://opencode.ai/docs)
-- [OpenCode MCP Servers Guide](https://opencode.ai/docs/mcp-servers)
-- [OpenCode Config Schema](https://opencode.ai/config.json)
-- [IDA Pro MCP README](../README.md)
+- [OpenCode Documentation](https://opencode.ai/docs).
+- [OpenCode MCP Servers Guide](https://opencode.ai/docs/mcp-servers).
+- [OpenCode Config Schema](https://opencode.ai/config.json).
+- [IDA Pro MCP README](../README.md).

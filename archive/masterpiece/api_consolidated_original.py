@@ -6705,7 +6705,7 @@ def nav(
                 try:
                     import ida_netnode
                     node = ida_netnode.netnode("$ mcp_bookmarks", 0, True)
-                    # Iterate sparce array
+                    # Iterate sparse array
                     idx = node.alt1st()
                     while idx != ida_netnode.BADNODE and len(bookmarks) < 100:
                         ea = node.altval(idx)
