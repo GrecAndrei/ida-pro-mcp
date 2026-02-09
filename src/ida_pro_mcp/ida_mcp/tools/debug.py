@@ -121,7 +121,7 @@ def debug(
                         if check_condition(condition):
                             return {"ok": True, "reason": "condition_met", "addr": hex(curr_ea), "steps": steps}
                     except Exception as e:
-                        return make_error(MCPError.EXECUTION_ERROR, f"Condition error: {e}")
+                        return make_error(MCPError.IDA_ERROR, f"Condition error: {e}")
             
             return {"ok": True, "reason": "step_limit_reached", "addr": hex(ida_dbg.get_ip_val()), "steps": steps}
         

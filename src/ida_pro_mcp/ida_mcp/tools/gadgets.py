@@ -515,7 +515,7 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
         if seg.type == idaapi.SEG_CODE:
             has_exec = True
         if has_write and has_exec:
-            name = idaapi.get_segm_name(seg) or ""
+            name = ida_segment.get_segm_name(seg) or ""
             perms = "{}{}{}".format(
                 "R" if seg.perm & idaapi.SEGPERM_READ else "-",
                 "W" if seg.perm & idaapi.SEGPERM_WRITE else "-",
@@ -592,7 +592,7 @@ def _detect_mitigations(addr, _limit, _max_insns, _query):
         for seg_ea in idautils.Segments():
             seg = idaapi.getseg(seg_ea)
             if seg:
-                name = idaapi.get_segm_name(seg) or ""
+                name = ida_segment.get_segm_name(seg) or ""
                 if name == ".got.plt":
                     got_plt = seg
                 elif name == ".got":

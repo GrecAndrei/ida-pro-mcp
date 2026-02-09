@@ -59,6 +59,7 @@ def nav(
                     if insn in targets:
                         findings.append({"addr": hex(curr), "type": targets[insn], "disasm": idc.generate_disasm_line(curr, 0)})
                     curr = idc.next_head(curr, seg.end_ea)
+                    if curr == idaapi.BADADDR: break
             return {"ok": True, "findings": findings}
 
         else:

@@ -4,6 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import ida_loader
+
 
 # ============================================================================
 # 29. HISTORY - Database Version Control and Undo Management
