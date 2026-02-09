@@ -75,6 +75,7 @@ def llm_helpers(
     addr: Annotated[Optional[str], "Address for context"] = None,
     query: Annotated[Optional[str], "Question or topic"] = None,
     max_tokens: Annotated[int, "Target token budget"] = 2000,
+    limit: Annotated[int, "Max results to return"] = 10,
     history: Annotated[Optional[str], "Comma-separated previously analyzed addresses"] = None,
 ) -> dict:
     """
@@ -234,9 +235,12 @@ def llm_helpers(
                     if len(top_strings) >= 20:
                         break
 
-            file_type_name = "PE" if info.filetype in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1)) else \
-                             "ELF" if info.filetype == getattr(idaapi, 'f_ELF', -1) else \
-                             "Mach-O" if info.filetype == getattr(idaapi, 'f_MACHO', -1) else "other"
+            if info:
+                file_type_name = "PE" if info.filetype in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1)) else \
+                                 "ELF" if info.filetype == getattr(idaapi, 'f_ELF', -1) else \
+                                 "Mach-O" if info.filetype == getattr(idaapi, 'f_MACHO', -1) else "other"
+            else:
+                file_type_name = "unknown"
 
             image_size = (info.max_ea - info.min_ea) if info else 0
             seg_count = sum(1 for _ in idautils.Segments())
