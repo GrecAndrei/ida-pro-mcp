@@ -41,7 +41,7 @@ def log_rpc(msg):
     try:
         with open(BRIDGE_LOG, "a", encoding="utf-8") as f:
             f.write(f"[{datetime.now().isoformat()}] {msg}\n")
-    except:
+    except Exception:
         pass
 
 
@@ -146,12 +146,45 @@ class MCPError:
     IDA_CRASHED = "IDA_CRASHED"
     SESSION_REQUIRED = "SESSION_REQUIRED"
     INVALID_ARGS = "INVALID_ARGS"
+    ACTION_NOT_FOUND = "ACTION_NOT_FOUND"
+    SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
+    BATCH_EMPTY = "BATCH_EMPTY"
+    BATCH_TOO_LARGE = "BATCH_TOO_LARGE"
+    BOOKMARK_NOT_FOUND = "BOOKMARK_NOT_FOUND"
+    TRUNCATION_TOKEN_EXPIRED = "TRUNCATION_TOKEN_EXPIRED"
+    TRUNCATION_TOKEN_INVALID = "TRUNCATION_TOKEN_INVALID"
+    TRUNCATION_FIELD_MISSING = "TRUNCATION_FIELD_MISSING"
+    RPC_CONNECTION_ERROR = "RPC_CONNECTION_ERROR"
+
+
+# Default hints for host-side error codes so every error guides the LLM
+_HOST_ERROR_HINTS = {
+    MCPError.FILE_NOT_FOUND: "The file does not exist. Verify the path is correct.",
+    MCPError.FILE_LOCKED: "The IDB or file is locked. Close other IDA instances first.",
+    MCPError.IDA_TIMEOUT: "IDA took too long to start. Increase IDA_MCP_STARTUP_TIMEOUT or check IDA installation.",
+    MCPError.IDA_CRASHED: "IDA exited unexpectedly. Check the log for details.",
+    MCPError.SESSION_REQUIRED: "No active session. Create one with session(action='create', binary_path='...').",
+    MCPError.INVALID_ARGS: "Invalid arguments. Check the tool description for valid parameters.",
+    MCPError.ACTION_NOT_FOUND: "Unknown action. Check the tool description for valid actions.",
+    MCPError.SESSION_NOT_FOUND: "Session not found. Use session(action='list') to see available sessions.",
+    MCPError.BATCH_EMPTY: "The batch call list is empty. Provide at least one call.",
+    MCPError.BATCH_TOO_LARGE: "Too many batch calls. Limit to 50 calls per batch.",
+    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Use bookmarks(action='list') to see bookmarks.",
+    MCPError.TRUNCATION_TOKEN_EXPIRED: "Continuation token expired. Re-run the original query.",
+    MCPError.TRUNCATION_TOKEN_INVALID: "Invalid continuation token. Check the token value.",
+    MCPError.TRUNCATION_FIELD_MISSING: "Requested field not in truncated response.",
+    MCPError.RPC_CONNECTION_ERROR: "Cannot connect to IDA. The process may have crashed.",
+}
 
 
 def make_error(
-    code: str, message: str, recoverable: bool = False, details: dict = None
+    code: str, message: str, recoverable: bool = False, details: dict = None,
+    hint: str = None,
 ) -> dict:
     res = {"error": True, "code": code, "message": message, "recoverable": recoverable}
+    resolved_hint = hint or _HOST_ERROR_HINTS.get(code)
+    if resolved_hint:
+        res["hint"] = resolved_hint
     if details:
         res["details"] = details
     return res
@@ -179,6 +212,9 @@ class Session:
         ida_args: Optional[List[str]] = None,
         created_at: Optional[datetime] = None,
         last_accessed: Optional[datetime] = None,
+        tags: Optional[List[str]] = None,
+        notes: str = "",
+        auto_name: str = "",
     ):
         self.session_id = session_id
         self.idb_path = idb_path
@@ -188,6 +224,21 @@ class Session:
         self.ida_args = ida_args or []
         self.created_at = created_at or datetime.now()
         self.last_accessed = last_accessed or datetime.now()
+        self.tags = tags or []
+        self.notes = notes
+        self.auto_name = auto_name or self._derive_auto_name()
+
+    def _derive_auto_name(self) -> str:
+        """Derive a human-friendly name from the binary path."""
+        if self.binary_path:
+            return os.path.basename(self.binary_path)
+        if self.idb_path:
+            base = os.path.basename(self.idb_path)
+            # Strip SID prefix if present
+            if base.startswith("SID_") and "_" in base[4:]:
+                base = base.split("_", 2)[-1]
+            return os.path.splitext(base)[0]
+        return f"session_{self.session_id}"
 
     def update_access(self):
         """Update last accessed timestamp"""
@@ -205,6 +256,9 @@ class Session:
             "idb_exists": bool(self.idb_path and os.path.exists(self.idb_path)),
             "created_at": self.created_at.isoformat(),
             "last_accessed": self.last_accessed.isoformat(),
+            "tags": self.tags,
+            "notes": self.notes,
+            "auto_name": self.auto_name,
         }
 
     @classmethod
@@ -227,6 +281,9 @@ class Session:
             data.get("ida_args", []) or [],
             created,
             accessed,
+            data.get("tags", []) or [],
+            data.get("notes", ""),
+            data.get("auto_name", ""),
         )
 
 
@@ -302,6 +359,8 @@ class SessionManager:
         analysis_options: Optional[dict] = None,
         idb_path: Optional[str] = None,
         ida_args: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        notes: str = "",
     ) -> Session:
         sid = "".join(uuid.uuid4().hex[:8].upper())
         # Use SID-specific name to avoid collisions and track metadata easily
@@ -319,6 +378,8 @@ class SessionManager:
             analysis_options=analysis_options,
             analysis_applied=False,
             ida_args=ida_args or [],
+            tags=tags or [],
+            notes=notes,
         )
         self.sessions[sid] = session
         # Persist metadata immediately
@@ -346,15 +407,16 @@ class SessionManager:
     def discover_sessions(self, query: str = "") -> List[Session]:
         """Return all active sessions, optionally filtered by query.
 
-        The *query* is matched against session_id, binary_path and idb_path
-        using automatic regex / glob / substring detection.
+        The *query* is matched against session_id, binary_path, idb_path,
+        auto_name, tags, and notes using automatic regex / glob / substring detection.
         """
         if not query:
             return list(self.sessions.values())
         matcher = compile_smart_pattern(query, case_sensitive=False)
         result = []
         for s in self.sessions.values():
-            searchable = f"{s.session_id} {s.binary_path} {s.idb_path}"
+            tags_str = " ".join(s.tags) if s.tags else ""
+            searchable = f"{s.session_id} {s.binary_path} {s.idb_path} {s.auto_name} {tags_str} {s.notes}"
             if matcher(searchable):
                 result.append(s)
         return result
@@ -396,7 +458,7 @@ class BookmarkManager:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return []
         return []
 
@@ -485,7 +547,7 @@ class BookmarkManager:
         if len(bookmarks) < original_len:
             self.save(sid, bookmarks)
             return {"ok": True, "deleted": original_len - len(bookmarks)}
-        return make_error(MCPError.FILE_NOT_FOUND, "Bookmark not found")
+        return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
     def update(self, sid: str, data: dict) -> dict:
         bid = data.get("id")
@@ -503,7 +565,7 @@ class BookmarkManager:
                         bookmarks[i][key] = val
                 self.save(sid, bookmarks)
                 return {"ok": True, "bookmark": bookmarks[i]}
-        return make_error(MCPError.FILE_NOT_FOUND, "Bookmark not found")
+        return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
     def clear(self, sid: str) -> dict:
         self.save(sid, [])
@@ -584,6 +646,7 @@ TOOLS = [
     "trace_analysis",
     # Project and file management
     "project",
+    "plugins",
     # Advanced analysis
     "agent",
     "microcode",
@@ -647,15 +710,15 @@ TOOLS = [
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
     # Analysis configuration
     "analysis": "Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze.",
     # Unified query/edit hubs
-    "query": "Unified read-only query hub. Actions: data, search, imports_deep, symbols, patterns, idb.",
-    "edit": "Unified write/edit hub. Actions: modify, funcs, segments, data_ops, fixups, colorize, comments_ai, bulk.",
+    "query": "Unified read-only query hub. Actions: data, search, idb, code, types, imports_deep, symbols, patterns.",
+    "edit": "Unified write/edit hub. Quick actions: rename, comment, type, patch, create_func, bulk.",
     # Primary data access
     "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
     "code": "Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
@@ -679,6 +742,7 @@ TOOL_DESCRIPTIONS = {
     "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.",
     # Project and file management
     "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, read, write, sessions, batch.",
+    "plugins": "IDA plugin management. Actions: list (enumerate loaded plugins), run (execute plugin by name with optional arg).",
     # Advanced analysis
     "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions.",
@@ -732,6 +796,7 @@ TOOL_ACTIONS = {
     "session": ["discover", "create", "get", "list", "switch", "close", "status", "rebuild"],
     "truncation": ["continue"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
+    "batch": ["run"],
     # Analysis configuration
     "analysis": [
         "get_options",
@@ -742,8 +807,8 @@ TOOL_ACTIONS = {
         "reanalyze",
     ],
     # Unified query/edit hubs (LLM-friendly entry points)
-    "query": ["data", "search", "imports_deep", "symbols", "patterns", "idb"],
-    "edit": ["modify", "funcs", "segments", "data_ops", "fixups", "colorize", "comments_ai", "bulk"],
+    "query": ["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns"],
+    "edit": ["rename", "comment", "type", "patch", "create_func", "bulk"],
     # Primary data access
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
     "code": [
@@ -882,6 +947,7 @@ TOOL_ACTIONS = {
         "sessions",
         "batch",
     ],
+    "plugins": ["list", "run"],
     # Advanced analysis (LLM-friendly)
     "agent": [
         "analyze_function",
@@ -1097,6 +1163,15 @@ TOOL_ARG_SCHEMAS = {
         "offset": {
             "type": "integer",
             "description": "Skip first N sessions (list action)",
+        },
+        "tags": {
+            "type": ["array", "string"],
+            "items": {"type": "string"},
+            "description": "Tags for the session (create action). Comma-separated string or array.",
+        },
+        "notes": {
+            "type": "string",
+            "description": "Free-form notes for the session (create action).",
         },
     },
     "truncation": {
@@ -1377,7 +1452,7 @@ class IDAMCPServer:
             try:
                 with open(out_log, "r", encoding="utf-8", errors="ignore") as f:
                     return "".join(f.readlines()[-20:])
-            except:
+            except Exception:
                 pass
         return "No log available."
 
@@ -1600,7 +1675,7 @@ class IDAMCPServer:
                         "idb_path": session.idb_path,
                         "current_options": apply_res.get("current_options"),
                     }
-            except:
+            except Exception:
                 pass
             time.sleep(0.5)
 
@@ -1672,7 +1747,7 @@ class IDAMCPServer:
                     }
                     self.session_runtimes[session.session_id] = runtime
                     return {"ok": True, "idb_path": session.idb_path}
-            except:
+            except Exception:
                 pass
             time.sleep(0.5)
 
@@ -1803,18 +1878,18 @@ class IDAMCPServer:
         if proc:
             try:
                 self._send_rpc_raw({"type": "shutdown"}, port, timeout=1)
-            except:
+            except Exception:
                 pass
             if proc.poll() is None:
                 proc.terminate()
                 try:
                     proc.wait(timeout=2)
-                except:
+                except Exception:
                     proc.kill()
         for fh in runtime.get("log_handles", []):
             try:
                 fh.close()
-            except:
+            except Exception:
                 pass
 
     def _cleanup_all_runtimes(self):
@@ -1981,11 +2056,19 @@ class IDAMCPServer:
 
                 if not analysis_options:
                     analysis_options = None
+
+                tags = args.get("tags", [])
+                if isinstance(tags, str):
+                    tags = [t.strip() for t in tags.split(",") if t.strip()]
+                notes = args.get("notes", "")
+
                 self.current_session = self.session_mgr.create_session(
                     binary_path or "",
                     use_existing=idb_path,
                     analysis_options=analysis_options,
                     ida_args=ida_args,
+                    tags=tags,
+                    notes=notes,
                 )
                 return {"ok": True, "session": self.current_session.to_dict()}
             if action == "discover":
@@ -1996,10 +2079,12 @@ class IDAMCPServer:
             if action == "get":
                 sid = args.get("session_id")
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                    return make_error(MCPError.INVALID_ARGS, "session_id required",
+                                     hint="Provide a session_id. Use session(action='list') to see available sessions.")
                 session = self.session_mgr.get_session(sid)
                 if not session:
-                    return make_error(MCPError.INVALID_ARGS, f"Session {sid} not found")
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found",
+                                     hint="Use session(action='list') to see available sessions.")
                 runtime = self.session_runtimes.get(sid)
                 is_running = bool(
                     runtime
@@ -2067,18 +2152,20 @@ class IDAMCPServer:
                         if found:
                             sid = found.session_id
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id or binary_path required")
+                    return make_error(MCPError.INVALID_ARGS, "session_id or binary_path required",
+                                     hint="Provide session_id or binary_path. Use session(action='list') to see sessions.")
                 session = self.session_mgr.get_session(sid)
                 if session:
                     self.current_session = session
                     return {"ok": True, "session": self.current_session.to_dict()}
-                return make_error(MCPError.INVALID_ARGS, f"Session {sid} not found")
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
             if action == "close":
                 sid = args.get("session_id") or (
                     self.current_session.session_id if self.current_session else None
                 )
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required (or have an active session)")
+                    return make_error(MCPError.INVALID_ARGS, "session_id required (or have an active session)",
+                                     hint="Provide session_id or create/switch to a session first.")
                 self._cleanup_runtime(sid)
                 closed = self.session_mgr.delete_session(sid)
                 if (
@@ -2105,10 +2192,11 @@ class IDAMCPServer:
                     self.current_session.session_id if self.current_session else None
                 )
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                    return make_error(MCPError.INVALID_ARGS, "session_id required",
+                                     hint="Provide session_id or create/switch to a session first.")
                 session = self.session_mgr.get_session(sid)
                 if not session:
-                    return make_error(MCPError.INVALID_ARGS, f"Session {sid} not found")
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
 
                 analysis_options = {}
                 for key in ("processor", "flags", "loader", "value", "bitness", "endian", "reanalyze"):
@@ -2137,7 +2225,8 @@ class IDAMCPServer:
                     "current_options": start_res.get("current_options"),
                 }
             return make_error(
-                MCPError.INVALID_ARGS, f"Unsupported session action: {action}"
+                MCPError.ACTION_NOT_FOUND, f"Unsupported session action: '{action}'",
+                hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
             )
 
         if tool_name == "truncation":
@@ -2145,7 +2234,8 @@ class IDAMCPServer:
             if action == "continue":
                 token = args.get("token")
                 if not token:
-                    return make_error(MCPError.INVALID_ARGS, "token required")
+                    return make_error(MCPError.INVALID_ARGS, "token required",
+                                     hint="Provide the 'token' from a previous truncated response's _continue field.")
                 result = continue_truncated(
                     token,
                     field=args.get("field"),
@@ -2154,12 +2244,13 @@ class IDAMCPServer:
                 )
                 if result.get("error"):
                     return make_error(
-                        MCPError.INVALID_ARGS,
+                        MCPError.TRUNCATION_TOKEN_INVALID,
                         result.get("message", "Invalid continuation request"),
                         details={k: v for k, v in result.items() if k != "error"},
                     )
                 return result
-            return make_error(MCPError.INVALID_ARGS, f"Unsupported truncation action: {action}")
+            return make_error(MCPError.ACTION_NOT_FOUND, f"Unsupported truncation action: '{action}'",
+                             hint="The only valid action is 'continue'.")
 
         if tool_name == "bookmarks":
             if not self.current_session:
@@ -2184,7 +2275,8 @@ class IDAMCPServer:
             if action == "export":
                 return self.bookmark_mgr.export(sid)
             return make_error(
-                MCPError.INVALID_ARGS, f"Unsupported bookmark action: {action}"
+                MCPError.ACTION_NOT_FOUND, f"Unsupported bookmark action: '{action}'",
+                hint=f"Valid bookmark actions: {', '.join(TOOL_ACTIONS['bookmarks'])}",
             )
 
         ip = args.pop(
@@ -2200,18 +2292,28 @@ class IDAMCPServer:
     def _handle_batch(self, args):
         calls = args.get("calls", [])
         if not isinstance(calls, list):
-            return make_error(MCPError.INVALID_ARGS, "calls must be a list")
+            return make_error(MCPError.INVALID_ARGS, "'calls' must be a list of {name, arguments} objects")
+        if not calls:
+            return make_error(MCPError.BATCH_EMPTY, "No calls provided in batch",
+                             hint="Provide at least one call: batch(calls=[{name: 'tool', arguments: {...}}])")
+        if len(calls) > 50:
+            return make_error(MCPError.BATCH_TOO_LARGE, f"Too many batch calls ({len(calls)}, max 50)",
+                             hint="Split into multiple batch requests of 50 or fewer calls.")
         continue_on_error = bool(args.get("continue_on_error", False))
         results = []
         for idx, call in enumerate(calls):
             name = call.get("name") if isinstance(call, dict) else None
             call_args = call.get("arguments", {}) if isinstance(call, dict) else {}
             if not name:
-                res = make_error(MCPError.INVALID_ARGS, "call name required")
+                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing 'name' field",
+                                hint="Each batch call must have a 'name' field specifying the tool.")
+            elif name not in TOOLS and name not in ("batch",):
+                res = make_error(MCPError.INVALID_ARGS, f"Unknown tool '{name}' in batch call at index {idx}",
+                                hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.")
             else:
                 res = self._execute_tool(name, call_args)
             results.append({"index": idx, "name": name, "result": res})
-            if "error" in res and not continue_on_error:
+            if res.get("error") and not continue_on_error:
                 break
         return {"ok": True, "results": results, "count": len(results)}
 
@@ -2280,7 +2382,7 @@ class IDAMCPServer:
                     output = (json.dumps(resp) + "\n").encode("utf-8")
                     rs.write(output)
                     rs.flush()
-            except:
+            except Exception:
                 continue
 
 

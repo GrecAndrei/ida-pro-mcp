@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def query(
-    action: Annotated[Literal["data", "search", "idb", "code", "types"],
-                      "Action: data|search|idb|code|types"],
+    action: Annotated[Literal["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns"],
+                      "Action: data|search|idb|code|types|imports_deep|symbols|patterns"],
     subaction: Annotated[Optional[str], "Sub-action to perform"] = None,
     args: Annotated[Optional[dict], "Arguments to pass to sub-tool"] = None,
     **kwargs
@@ -49,6 +49,18 @@ def query(
         subaction: list|get|search_structs
         args: {query, name, ...}
         Example: query(action="types", subaction="list", args={"count": 20})
+
+    imports_deep - Advanced import resolution
+        subaction: thunks|delay|forwarded|ordinal|api_sets|resolve
+        Example: query(action="imports_deep", subaction="thunks")
+
+    symbols - Symbol management queries
+        subaction: status|export
+        Example: query(action="symbols", subaction="status")
+
+    patterns - Pattern matching queries
+        subaction: list_sigs|matched
+        Example: query(action="patterns", subaction="list_sigs")
     """
     try:
         args = args or {}
@@ -77,9 +89,25 @@ def query(
             from .types import types as types_tool
             sub = subaction or "list"
             return types_tool(action=sub, **args)
+
+        elif action == "imports_deep":
+            from .imports_deep import imports_deep as imports_deep_tool
+            sub = subaction or "thunks"
+            return imports_deep_tool(action=sub, **args)
+
+        elif action == "symbols":
+            from .symbols import symbols as symbols_tool
+            sub = subaction or "status"
+            return symbols_tool(action=sub, **args)
+
+        elif action == "patterns":
+            from .patterns import patterns as patterns_tool
+            sub = subaction or "list_sigs"
+            return patterns_tool(action=sub, **args)
             
         else:
-            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+            return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown query action: {action}",
+                            hint="Valid actions: data, search, idb, code, types, imports_deep, symbols, patterns")
             
     except Exception as e:
         return handle_error(e)
