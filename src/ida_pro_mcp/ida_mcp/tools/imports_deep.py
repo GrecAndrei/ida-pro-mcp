@@ -4,6 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import ida_ida
+
 
 # ============================================================================
 # 32. IMPORTS_DEEP - Deep Import Analysis

@@ -109,6 +109,7 @@ def comments_ai(
                             "offset": hex(curr - func.start_ea)
                         })
                     curr = idc.next_head(curr, func.end_ea)
+                    if curr == idaapi.BADADDR: break
             result["nearby_comments"] = nearby
             
             return result
@@ -213,6 +214,7 @@ def comments_ai(
                                 func_comments.append(f"- `{hex(curr)}`: {cmt}")
                                 count += 1
                             curr = idc.next_head(curr, func.end_ea)
+                            if curr == idaapi.BADADDR: break
                     
                     if func_comments:
                         lines.append(f"## {func_name} (`{hex(func_ea)}`)\n\n")
@@ -274,6 +276,7 @@ def comments_ai(
                             if idc.get_cmt(curr, 0) or idc.get_cmt(curr, 1):
                                 inline_comments += 1
                             curr = idc.next_head(curr, func.end_ea)
+                            if curr == idaapi.BADADDR: break
             
             return {
                 "ok": True,
