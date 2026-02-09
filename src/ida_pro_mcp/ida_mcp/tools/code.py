@@ -168,6 +168,7 @@ def code(
                 while curr < func.end_ea and count < max_items:
                     lines.append(f"{hex_ea(curr)}  {idc.generate_disasm_line(curr, 0)}")
                     curr = idc.next_head(curr, func.end_ea)
+                    if curr == idaapi.BADADDR: break
                     count += 1
                 fname = ida_funcs.get_func_name(func.start_ea)
                 results.append({"ok": True, "addr": hex_ea(func.start_ea), "name": fname, "disasm": "\n".join(lines), "count": count})
