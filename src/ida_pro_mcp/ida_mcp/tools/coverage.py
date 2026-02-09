@@ -184,6 +184,8 @@ def coverage(
         if action == "import_drcov":
             if not path:
                 return make_error(MCPError.INVALID_ARGS, "path required")
+            path, err = validate_path_safe(path)
+            if err: return err
 
             result, error = parse_drcov(path)
             if error:
@@ -201,6 +203,8 @@ def coverage(
         elif action == "import_lighthouse":
             if not path:
                 return make_error(MCPError.INVALID_ARGS, "path required")
+            path, err = validate_path_safe(path)
+            if err: return err
 
             if not os.path.exists(path):
                 return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {path}")

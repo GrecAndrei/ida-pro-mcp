@@ -150,7 +150,7 @@ def code(
                     for _ in range(50):  # Show 50 lines anyway
                         line = idc.generate_disasm_line(curr, 0)
                         if line:
-                            lines.append(f"{hex_ea(curr)}  {line}")
+                            lines.append(f"{hex_ea(curr)}  {ida_lines.tag_remove(line)}")
                         next_ea = idc.next_head(curr, ea + 0x1000)
                         if next_ea == idaapi.BADADDR or next_ea <= curr:
                             break
@@ -166,8 +166,9 @@ def code(
                 curr = func.start_ea
                 count = 0
                 while curr < func.end_ea and count < max_items:
-                    lines.append(f"{hex_ea(curr)}  {idc.generate_disasm_line(curr, 0)}")
+                    lines.append(f"{hex_ea(curr)}  {ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))}")
                     curr = idc.next_head(curr, func.end_ea)
+                    if curr == idaapi.BADADDR: break
                     count += 1
                 fname = ida_funcs.get_func_name(func.start_ea)
                 results.append({"ok": True, "addr": hex_ea(func.start_ea), "name": fname, "disasm": "\n".join(lines), "count": count})
@@ -379,7 +380,8 @@ def code(
                     til = ida_typeinf.get_idati()
                     
                     # Search through all local types for matching fields
-                    for ordinal in range(1, ida_typeinf.get_ordinal_qty(til) + 1):
+                    qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
+                    for ordinal in range(1, qty_func(til) + 1):
                         tinfo = ida_typeinf.tinfo_t()
                         if tinfo.get_numbered_type(til, ordinal):
                             type_name = tinfo.get_type_name()

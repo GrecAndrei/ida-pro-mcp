@@ -330,8 +330,7 @@ def annotation(
             for block in fc:
                 if len(loops) >= limit:
                     break
-                for succ_idx in range(block.nsucc()):
-                    succ = block.succ(succ_idx)
+                for succ in block.succs():
                     # Back-edge: successor starts before or at block start
                     if succ.start_ea <= block.start_ea:
                         loop_head = succ.start_ea
@@ -374,9 +373,13 @@ def annotation(
                     last_insn = idc.prev_head(block.end_ea, block.start_ea)
                     if last_insn == idaapi.BADADDR:
                         last_insn = block.start_ea
-                    disasm = idc.GetDisasm(last_insn)
-                    true_target = block.succ(0).start_ea
-                    false_target = block.succ(1).start_ea
+                    disasm = ida_lines.tag_remove(idc.generate_disasm_line(last_insn, 0))
+                    succs = list(block.succs())
+                    if len(succs) >= 2:
+                        true_target = succs[0].start_ea
+                        false_target = succs[1].start_ea
+                    else:
+                        continue
                     cmt = (f"{prefix}branch: {disasm.strip()} "
                            f"-> T:{hex(true_target)} F:{hex(false_target)}")
                     branches.append({
@@ -640,7 +643,7 @@ def annotation(
                             "call_addr": hex(call_addr),
                             "check_addr": hex(check_ea),
                             "api": callee_name,
-                            "branch_insn": idc.GetDisasm(check_ea).strip(),
+                            "branch_insn": ida_lines.tag_remove(idc.generate_disasm_line(check_ea, 0)).strip(),
                             "comment": cmt,
                         })
                         if not dry_run:
@@ -760,6 +763,7 @@ def annotation(
                                 "repeatable": bool(repeatable),
                             })
                     curr = idc.next_head(curr, fn.end_ea)
+                    if curr == idaapi.BADADDR: break
 
             return {"ok": True, "removed": "\n".join(str(x) for x in removed),
                     "count": len(removed), "dry_run": dry_run}

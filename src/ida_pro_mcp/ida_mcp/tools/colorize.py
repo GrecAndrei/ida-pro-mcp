@@ -63,6 +63,7 @@ def colorize(
             while curr < func.end_ea:
                 idc.set_color(curr, idc.CIC_ITEM, bgr)
                 curr = idc.next_head(curr, func.end_ea)
+                if curr == idaapi.BADADDR: break
             return {"ok": True, "func": idc.get_func_name(func.start_ea), "color": color or "yellow"}
 
         elif action == "set_range":
@@ -77,6 +78,7 @@ def colorize(
             while curr < ee:
                 idc.set_color(curr, idc.CIC_ITEM, bgr)
                 curr = idc.next_head(curr, ee)
+                if curr == idaapi.BADADDR: break
             return {"ok": True, "start": hex(ea), "end": hex(ee)}
 
         elif action == "set_insn":
@@ -127,6 +129,7 @@ def colorize(
                 while curr < func.end_ea:
                     idc.set_color(curr, idc.CIC_ITEM, 0xFFFFFFFF)
                     curr = idc.next_head(curr, func.end_ea)
+                    if curr == idaapi.BADADDR: break
             else:
                 idc.set_color(ea, idc.CIC_ITEM, 0xFFFFFFFF)
             return {"ok": True, "cleared": hex(ea)}

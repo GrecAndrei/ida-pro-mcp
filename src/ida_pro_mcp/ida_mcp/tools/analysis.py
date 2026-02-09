@@ -3,6 +3,9 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import ida_loader
+import ida_ida
+
 
 # ============================================================================
 # ANALYSIS - Loader/processor options and reanalysis

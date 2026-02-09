@@ -40,13 +40,13 @@ def _get_imports_summary():
         if name:
             imports[name] = ea
         return True
-    nimps = idaapi.get_import_module_qty()
+    nimps = ida_nalt.get_import_module_qty()
     modules = []
     for i in range(nimps):
-        mod = idaapi.get_import_module_name(i)
+        mod = ida_nalt.get_import_module_name(i)
         if mod:
             modules.append(mod)
-        idaapi.enum_import_names(i, imp_cb)
+        ida_nalt.enum_import_names(i, imp_cb)
     return modules, imports
 
 
@@ -93,7 +93,7 @@ def llm_helpers(
     - cheatsheet: Dynamic cheatsheet of relevant tool calls for this binary
     """
     try:
-        info = idaapi.get_inf_structure()
+        info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
 
         if action == "context_window":
             if not addr:
@@ -118,7 +118,7 @@ def llm_helpers(
             # Disassembly (prioritize first)
             disasm_lines = []
             for item in idautils.FuncItems(ea):
-                line = f"{hex(item)}  {idc.generate_disasm_line(item, 0)}"
+                line = f"{hex(item)}  {ida_lines.tag_remove(idc.generate_disasm_line(item, 0))}"
                 disasm_lines.append(line)
 
             # Xrefs to this function
@@ -238,12 +238,16 @@ def llm_helpers(
                              "ELF" if info.filetype == getattr(idaapi, 'f_ELF', -1) else \
                              "Mach-O" if info.filetype == getattr(idaapi, 'f_MACHO', -1) else "other"
 
-            image_size = info.max_ea - info.min_ea
+            image_size = (info.max_ea - info.min_ea) if info else 0
             seg_count = sum(1 for _ in idautils.Segments())
 
+            proc_name = info.procname if info else ""
+            bits = (64 if info.is_64bit() else 32) if info else 0
+            min_ea = info.min_ea if info else 0
+            max_ea = info.max_ea if info else 0
             lines = [
-                f"Format: {file_type_name} | Arch: {info.procname} | Bits: {64 if info.is_64bit() else 32}",
-                f"Image: {hex(info.min_ea)}-{hex(info.max_ea)} ({hex_size(image_size)})",
+                f"Format: {file_type_name} | Arch: {proc_name} | Bits: {bits}",
+                f"Image: {hex(min_ea)}-{hex(max_ea)} ({hex_size(image_size)})",
                 f"Functions: {func_count} | Segments: {seg_count} | Imports: {len(imports)} | Modules: {len(modules)}",
             ]
             if cats:
@@ -277,7 +281,7 @@ def llm_helpers(
                     offset = ea - func.start_ea
                     explanation.append(f"Inside function {func_name} at offset +{hex(offset)}")
 
-                disasm = idc.generate_disasm_line(ea, 0)
+                disasm = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))
                 explanation.append(f"Instruction: {disasm}")
             else:
                 # Data or unknown
@@ -293,7 +297,7 @@ def llm_helpers(
                         val = ida_bytes.get_dword(ea)
                         explanation.append(f"Value: {hex(val)}")
                 elif ida_bytes.is_code(flags):
-                    explanation.append(f"Code (not in a function): {idc.generate_disasm_line(ea, 0)}")
+                    explanation.append(f"Code (not in a function): {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}")
                 else:
                     explanation.append(f"Unknown/unexplored at {hex(ea)}")
 
@@ -484,7 +488,7 @@ def llm_helpers(
 
             else:
                 # General overview
-                answer_parts.append(f"Binary: {info.procname} {'64-bit' if info.is_64bit() else '32-bit'}")
+                answer_parts.append(f"Binary: {info.procname if info else ''} {'64-bit' if (info and info.is_64bit()) else '32-bit'}")
                 answer_parts.append(f"Functions: {_count_functions()}")
                 modules, imports = _get_imports_summary()
                 answer_parts.append(f"Imports: {len(imports)} from {len(modules)} modules")
@@ -493,7 +497,7 @@ def llm_helpers(
             return {"ok": True, "answer": "\n".join(answer_parts)}
 
         elif action == "guided_analysis":
-            file_type = info.filetype
+            file_type = info.filetype if info else 0
             is_pe = file_type in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1))
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
 
@@ -532,12 +536,12 @@ def llm_helpers(
             return {"ok": True, "guided_steps": "\n".join(steps)}
 
         elif action == "cheatsheet":
-            file_type = info.filetype
+            file_type = info.filetype if info else 0
             is_pe = file_type in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1))
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
 
             cheat = ["=== Quick Reference for This Binary ==="]
-            cheat.append(f"Arch: {info.procname} | {'64-bit' if info.is_64bit() else '32-bit'}")
+            cheat.append(f"Arch: {info.procname if info else ''} | {'64-bit' if (info and info.is_64bit()) else '32-bit'}")
             cheat.append("")
             cheat.append("-- Overview --")
             cheat.append("binary_info(action='headers')        # PE/ELF headers")
