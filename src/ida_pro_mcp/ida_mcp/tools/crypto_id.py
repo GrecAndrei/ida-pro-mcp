@@ -168,7 +168,7 @@ def _get_context_at(ea, count=5):
     for _ in range(count):
         if cur == idaapi.BADADDR:
             break
-        lines.append(f"{hex(cur)}  {idc.generate_disasm_line(cur, 0)}")
+        lines.append(f"{hex(cur)}  {ida_lines.tag_remove(idc.generate_disasm_line(cur, 0))}")
         cur = idc.next_head(cur, cur + 0x1000)
     return lines
 
@@ -194,7 +194,7 @@ def _scan_for_xor_shift_loops(ea_start, ea_end, limit=50):
                             has_loop = True
                             break
                 if has_loop:
-                    disasm = idc.generate_disasm_line(ea, 0)
+                    disasm = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))
                     results.append(f"{hex(ea)}  {idc.get_func_name(func.start_ea)}  {mnem}  {disasm}  [loop]")
         ea = idc.next_head(ea, ea_end)
     return results

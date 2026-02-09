@@ -248,7 +248,7 @@ void Install{name}Hook() {{
                         "addr": hex(current),
                         "bytes_available": length,
                         "safe": length >= 5,
-                        "disasm": idc.generate_disasm_line(current, 0) or ""
+                        "disasm": ida_lines.tag_remove(idc.generate_disasm_line(current, 0) or "")
                     })
                 
                 current += length if length > 0 else 1
