@@ -56,7 +56,6 @@ def _compute_dominators(blocks, succs_map, preds_map, entry):
                 new_dom = new_dom | {n}
             if new_dom != dom[n]:
                 dom[n] = new_dom
-                changed = False or True
                 changed = True
     return dom
 
@@ -152,7 +151,7 @@ def cfg_analysis(
                     # Conditional branch - last instruction of block
                     last_insn = idc.prev_head(end)
                     if last_insn != idaapi.BADADDR:
-                        disasm = idc.GetDisasm(last_insn) if hasattr(idc, 'GetDisasm') else idc.generate_disasm_line(last_insn, 0)
+                        disasm = idc.generate_disasm_line(last_insn, 0)
                         mnem = idc.print_insn_mnem(last_insn)
                         results.append(
                             f"{hex(last_insn)}  {mnem}  true={hex(successors[0])}  false={hex(successors[1])}  {disasm}"
