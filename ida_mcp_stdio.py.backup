@@ -25,7 +25,7 @@ import uuid
 import shlex
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Robust Path Setup
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -190,34 +190,10 @@ def make_error(
     return res
 
 
-def validate_path(path: str, allow_create: bool = False) -> Optional[str]:
-    """Validate and normalize a file path, preventing directory traversal attacks.
-    
-    Args:
-        path: The path to validate
-        allow_create: If True, allow paths that don't exist yet
-        
-    Returns:
-        Normalized absolute path or None if invalid
-    """
+def validate_path(path: str) -> Optional[str]:
     if not path or "\x00" in path:
         return None
-    
-    # Prevent directory traversal attacks
-    if ".." in path.split(os.sep):
-        return None
-    
-    normalized = os.path.normpath(os.path.abspath(path))
-    
-    # Resolve symlinks to prevent symlink attacks
-    try:
-        if os.path.exists(normalized):
-            normalized = os.path.realpath(normalized)
-    except (OSError, ValueError):
-        if not allow_create:
-            return None
-    
-    return normalized
+    return os.path.normpath(os.path.abspath(path))
 
 
 # =============================================================================
@@ -226,8 +202,6 @@ def validate_path(path: str, allow_create: bool = False) -> Optional[str]:
 
 
 class Session:
-    """Represents an IDA Pro analysis session with robust state management."""
-    
     def __init__(
         self,
         session_id: str,
@@ -241,9 +215,6 @@ class Session:
         tags: Optional[List[str]] = None,
         notes: str = "",
         auto_name: str = "",
-        priority: int = 3,
-        status: str = "created",
-        access_count: int = 0,
     ):
         self.session_id = session_id
         self.idb_path = idb_path
@@ -256,10 +227,6 @@ class Session:
         self.tags = tags or []
         self.notes = notes
         self.auto_name = auto_name or self._derive_auto_name()
-        self.priority = priority
-        self.status = status
-        self.access_count = access_count
-        self._lock = threading.Lock()
 
     def _derive_auto_name(self) -> str:
         """Derive a human-friendly name from the binary path."""
@@ -274,262 +241,117 @@ class Session:
         return f"session_{self.session_id}"
 
     def update_access(self):
-        """Update last accessed timestamp and increment access counter (thread-safe)"""
-        with self._lock:
-            self.last_accessed = datetime.now()
-            self.access_count += 1
-
-    def copy(self) -> "Session":
-        """Create a deep copy to prevent external mutations"""
-        with self._lock:
-            return Session(
-                session_id=self.session_id,
-                idb_path=self.idb_path,
-                binary_path=self.binary_path,
-                analysis_options=dict(self.analysis_options),
-                analysis_applied=self.analysis_applied,
-                ida_args=list(self.ida_args),
-                created_at=self.created_at,
-                last_accessed=self.last_accessed,
-                tags=list(self.tags),
-                notes=self.notes,
-                auto_name=self.auto_name,
-                priority=self.priority,
-                status=self.status,
-                access_count=self.access_count,
-            )
+        """Update last accessed timestamp"""
+        self.last_accessed = datetime.now()
 
     def to_dict(self) -> dict:
-        """Serialize session to dict (thread-safe)"""
-        with self._lock:
-            # Check file existence at time of serialization
-            binary_exists = bool(self.binary_path and os.path.exists(self.binary_path))
-            idb_exists = bool(self.idb_path and os.path.exists(self.idb_path))
-            
-            return {
-                "session_id": self.session_id,
-                "idb_path": self.idb_path,
-                "binary_path": self.binary_path,
-                "analysis_options": self.analysis_options,
-                "analysis_applied": self.analysis_applied,
-                "ida_args": self.ida_args,
-                "binary_exists": binary_exists,
-                "idb_exists": idb_exists,
-                "created_at": self.created_at.isoformat(),
-                "last_accessed": self.last_accessed.isoformat(),
-                "tags": self.tags,
-                "notes": self.notes,
-                "auto_name": self.auto_name,
-                "priority": self.priority,
-                "status": self.status,
-                "access_count": self.access_count,
-            }
+        return {
+            "session_id": self.session_id,
+            "idb_path": self.idb_path,
+            "binary_path": self.binary_path,
+            "analysis_options": self.analysis_options,
+            "analysis_applied": self.analysis_applied,
+            "ida_args": self.ida_args,
+            "binary_exists": bool(self.binary_path and os.path.exists(self.binary_path)),
+            "idb_exists": bool(self.idb_path and os.path.exists(self.idb_path)),
+            "created_at": self.created_at.isoformat(),
+            "last_accessed": self.last_accessed.isoformat(),
+            "tags": self.tags,
+            "notes": self.notes,
+            "auto_name": self.auto_name,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "Session":
-        """Load session from metadata dict with validation"""
-        # Validate required fields
-        if "session_id" not in data:
-            raise ValueError("Missing required field: session_id")
-        if "idb_path" not in data:
-            raise ValueError("Missing required field: idb_path")
-        
-        # Parse timestamps safely
-        created = None
-        if "created_at" in data:
-            try:
-                created = datetime.fromisoformat(data["created_at"])
-            except (ValueError, TypeError):
-                pass
-        
-        accessed = None
-        if "last_accessed" in data:
-            try:
-                accessed = datetime.fromisoformat(data["last_accessed"])
-            except (ValueError, TypeError):
-                pass
-        
+        """Load session from metadata dict"""
+        created = (
+            datetime.fromisoformat(data["created_at"]) if "created_at" in data else None
+        )
+        accessed = (
+            datetime.fromisoformat(data["last_accessed"])
+            if "last_accessed" in data
+            else None
+        )
         return cls(
-            session_id=data["session_id"],
-            idb_path=data["idb_path"],
-            binary_path=data.get("binary_path", ""),
-            analysis_options=data.get("analysis_options") or {},
-            analysis_applied=bool(data.get("analysis_applied", False)),
-            ida_args=data.get("ida_args") or [],
-            created_at=created,
-            last_accessed=accessed,
-            tags=data.get("tags") or [],
-            notes=data.get("notes", ""),
-            auto_name=data.get("auto_name", ""),
-            priority=int(data.get("priority", 3)),
-            status=data.get("status", "created"),
-            access_count=int(data.get("access_count", 0)),
+            data["session_id"],
+            data["idb_path"],
+            data.get("binary_path", ""),
+            data.get("analysis_options", {}) or {},
+            data.get("analysis_applied", False),
+            data.get("ida_args", []) or [],
+            created,
+            accessed,
+            data.get("tags", []) or [],
+            data.get("notes", ""),
+            data.get("auto_name", ""),
         )
 
 
 class SessionManager:
-    """Thread-safe, robust session manager with comprehensive features."""
-    
     def __init__(self, cache_dir: str):
         self.sessions: Dict[str, Session] = {}
         self.cache_dir = cache_dir
         self.session_dir = os.path.join(cache_dir, "sessions")
-        self._lock = threading.RLock()  # Reentrant lock for nested operations
-        self._audit_log = []
-        
-        # Ensure session directory exists
-        try:
-            os.makedirs(self.session_dir, exist_ok=True)
-        except OSError as e:
-            log_rpc(f"Failed to create session directory {self.session_dir}: {e}")
-            raise
-        
+        os.makedirs(self.session_dir, exist_ok=True)
         # Auto-load existing sessions on startup
         self._load_sessions()
-    
+
     def _get_metadata_path(self, sid: str) -> str:
         """Get path to session metadata file"""
         return os.path.join(self.session_dir, f"SID_{sid}_metadata.json")
-    
-    def _audit(self, action: str, sid: str, details: str = ""):
-        """Log audit trail for session operations"""
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "action": action,
-            "session_id": sid,
-            "details": details,
-        }
-        self._audit_log.append(entry)
-        log_rpc(f"AUDIT: {action} {sid} {details}")
-    
-    def _save_metadata(self, session: Session) -> bool:
-        """Persist session metadata to disk with atomic write.
-        
-        Returns:
-            True if save succeeded, False otherwise
-        """
-        if not session or not session.session_id:
-            return False
-        
+
+    def _save_metadata(self, session: Session):
+        """Persist session metadata to disk"""
         path = self._get_metadata_path(session.session_id)
-        temp_path = f"{path}.tmp.{uuid.uuid4().hex[:8]}"
-        
         try:
-            # Write to temporary file first (atomic operation)
-            with open(temp_path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(session.to_dict(), f, indent=2)
-            
-            # Atomic rename (replaces existing file)
-            os.replace(temp_path, path)
-            return True
         except Exception as e:
-            log_rpc(f"Failed to save session metadata for {session.session_id}: {e}")
-            # Clean up temp file if it exists
-            try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except Exception:
-                pass
-            return False
-    
+            log_rpc(f"Failed to save session metadata: {e}")
+
     def _load_sessions(self):
         """Load all existing sessions from metadata files"""
         pattern = os.path.join(self.session_dir, "SID_*_metadata.json")
-        loaded_count = 0
-        failed_count = 0
-        
         for meta_path in glob.glob(pattern):
             try:
                 with open(meta_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     session = Session.from_dict(data)
-                    
-                    with self._lock:
-                        # Always load the session - IDB might not exist yet if session is new
-                        # We'll let IDA create it on first use
-                        self.sessions[session.session_id] = session
-                    
-                    loaded_count += 1
+                    # Always load the session - IDB might not exist yet if session is new
+                    # We'll let IDA create it on first use
+                    self.sessions[session.session_id] = session
                     log_rpc(f"Loaded session {session.session_id} from metadata")
-            except (ValueError, KeyError) as e:
-                failed_count += 1
-                log_rpc(f"Failed to load session metadata from {meta_path}: {e} - file may be corrupted")
-                # Move corrupted metadata to backup
-                try:
-                    backup_path = f"{meta_path}.corrupt.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    os.rename(meta_path, backup_path)
-                    log_rpc(f"Moved corrupted metadata to {backup_path}")
-                except Exception:
-                    pass
             except Exception as e:
-                failed_count += 1
                 log_rpc(f"Failed to load session metadata from {meta_path}: {e}")
-        
-        log_rpc(f"Session load complete: {loaded_count} loaded, {failed_count} failed")
         self._load_orphaned_idbs()
-    
+
     def _extract_sid(self, path: str) -> Optional[str]:
-        """Extract session ID from SID-prefixed filename"""
         base = os.path.basename(path)
         match = re.match(r"SID_([A-Za-z0-9]{8})", base)
         return match.group(1) if match else None
-    
+
     def _guess_binary_name(self, sid: str, filename: str) -> str:
-        """Extract binary name from SID-prefixed IDB filename"""
         prefix = f"SID_{sid}_"
         if filename.startswith(prefix):
-            name = filename[len(prefix):]
+            name = filename[len(prefix) :]
             return os.path.splitext(name)[0]
         return ""
-    
+
     def _load_orphaned_idbs(self):
         """Recover sessions from IDB files missing metadata."""
         pattern = os.path.join(self.session_dir, "SID_*.*")
-        recovered = 0
-        
         for idb_path in glob.glob(pattern):
             if not idb_path.lower().endswith((".i64", ".idb")):
                 continue
-            
             sid = self._extract_sid(idb_path)
-            if not sid:
+            if not sid or sid in self.sessions:
                 continue
-            
-            with self._lock:
-                # Skip if we already have this session
-                if sid in self.sessions:
-                    continue
-                
-                # Create new session for orphaned IDB
-                binary_guess = self._guess_binary_name(sid, os.path.basename(idb_path))
-                session = Session(
-                    sid, 
-                    idb_path, 
-                    binary_guess or "",
-                    status="recovered"
-                )
-                self.sessions[sid] = session
-            
-            # Save metadata outside of lock
-            if self._save_metadata(session):
-                recovered += 1
-                log_rpc(f"Recovered orphaned session {sid} from {idb_path}")
-        
-        if recovered > 0:
-            log_rpc(f"Recovered {recovered} orphaned session(s)")
-    
-    def _generate_unique_sid(self) -> str:
-        """Generate a unique session ID, checking for collisions"""
-        with self._lock:
-            max_attempts = 100
-            for _ in range(max_attempts):
-                sid = "".join(uuid.uuid4().hex[:8].upper())
-                if sid not in self.sessions:
-                    return sid
-            
-            # Extremely unlikely, but handle it gracefully
-            raise RuntimeError(f"Failed to generate unique session ID after {max_attempts} attempts")
-    
+            binary_guess = self._guess_binary_name(sid, os.path.basename(idb_path))
+            session = Session(sid, idb_path, binary_guess or "")
+            self.sessions[sid] = session
+            self._save_metadata(session)
+            log_rpc(f"Recovered orphaned session {sid} from {idb_path}")
+
     def create_session(
         self,
         binary_path: str,
@@ -539,37 +361,16 @@ class SessionManager:
         ida_args: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         notes: str = "",
-        priority: int = 3,
     ) -> Session:
-        """Create a new session with validation and error handling"""
-        # Generate unique session ID
-        sid = self._generate_unique_sid()
-        
-        # Validate paths
-        if binary_path:
-            validated_binary = validate_path(binary_path, allow_create=False)
-            if validated_binary:
-                binary_path = validated_binary
-        
+        sid = "".join(uuid.uuid4().hex[:8].upper())
         # Use SID-specific name to avoid collisions and track metadata easily
         idb_base = os.path.basename(binary_path) if binary_path else f"session_{sid}"
         idb_name = f"SID_{sid}_{idb_base}.i64"
         resolved_idb = idb_path or use_existing or os.path.join(self.session_dir, idb_name)
-        
-        # Handle directory paths
         if resolved_idb and os.path.isdir(resolved_idb):
             resolved_idb = os.path.join(resolved_idb, idb_name)
-        
-        # Add extension if missing
         if resolved_idb and not os.path.splitext(resolved_idb)[1]:
             resolved_idb = f"{resolved_idb}.i64"
-        
-        # Validate IDB path
-        validated_idb = validate_path(resolved_idb, allow_create=True)
-        if validated_idb:
-            resolved_idb = validated_idb
-        
-        # Create session object
         session = Session(
             sid,
             resolved_idb,
@@ -579,263 +380,69 @@ class SessionManager:
             ida_args=ida_args or [],
             tags=tags or [],
             notes=notes,
-            priority=priority,
-            status="created",
         )
-        
-        # Add to manager atomically
-        with self._lock:
-            self.sessions[sid] = session
-        
-        # Persist metadata (outside lock to avoid blocking)
-        if not self._save_metadata(session):
-            # If save fails, remove from memory and raise error
-            with self._lock:
-                self.sessions.pop(sid, None)
-            raise IOError(f"Failed to persist session metadata for {sid}")
-        
-        self._audit("create", sid, f"binary={binary_path}")
+        self.sessions[sid] = session
+        # Persist metadata immediately
+        self._save_metadata(session)
         return session
-    
-    def get_session(self, sid: str) -> Optional[Session]:
-        """Get session copy and update last_accessed timestamp (thread-safe)"""
-        with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return None
-            
-            # Update access tracking
-            session.update_access()
-            
-            # Return a copy to prevent external mutations
-            return session.copy()
-        
-        # Note: We intentionally don't save metadata here to avoid
-        # excessive disk I/O. The access count will be saved on next
-        # explicit save operation or during shutdown.
-    
-    def update_session(self, sid: str, **kwargs) -> bool:
-        """Update session properties atomically"""
-        with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return False
-            
-            # Update allowed fields
-            for key in ['tags', 'notes', 'priority', 'status', 'analysis_options', 'ida_args']:
-                if key in kwargs:
-                    setattr(session, key, kwargs[key])
-            
-            # Save immediately
-            return self._save_metadata(session)
-    
-    def find_session_by_path(self, path: str) -> Optional[Session]:
-        """Find a session by binary_path or idb_path (normalized comparison, thread-safe)"""
-        validated = validate_path(path)
-        if not validated:
-            return None
-        
-        norm = os.path.normpath(os.path.abspath(validated))
-        
-        with self._lock:
-            for s in self.sessions.values():
-                # Compare binary paths
-                if s.binary_path:
-                    try:
-                        s_binary = os.path.normpath(os.path.abspath(s.binary_path))
-                        if s_binary == norm:
-                            return s.copy()
-                    except (OSError, ValueError):
-                        pass
-                
-                # Compare IDB paths
-                if s.idb_path:
-                    try:
-                        s_idb = os.path.normpath(os.path.abspath(s.idb_path))
-                        if s_idb == norm:
-                            return s.copy()
-                    except (OSError, ValueError):
-                        pass
-        
-        return None
-    
-    def discover_sessions(self, query: str = "", tags: Optional[List[str]] = None, 
-                          status: Optional[str] = None, priority_min: Optional[int] = None) -> List[Session]:
-        """Return filtered sessions (thread-safe).
-        
-        Args:
-            query: Regex/glob/substring filter for session metadata
-            tags: Filter by tags (match any)
-            status: Filter by status
-            priority_min: Minimum priority level
-        
-        Returns:
-            List of matching session copies
-        """
-        with self._lock:
-            sessions = list(self.sessions.values())
-        
-        # Apply filters
-        if query:
-            try:
-                matcher = compile_smart_pattern(query, case_sensitive=False)
-                filtered = []
-                for s in sessions:
-                    tags_str = " ".join(s.tags) if s.tags else ""
-                    searchable = f"{s.session_id} {s.binary_path} {s.idb_path} {s.auto_name} {tags_str} {s.notes}"
-                    if matcher(searchable):
-                        filtered.append(s)
-                sessions = filtered
-            except Exception as e:
-                log_rpc(f"Failed to compile pattern '{query}': {e}")
-        
-        if tags:
-            sessions = [s for s in sessions if any(t in s.tags for t in tags)]
-        
-        if status:
-            sessions = [s for s in sessions if s.status == status]
-        
-        if priority_min is not None:
-            sessions = [s for s in sessions if s.priority >= priority_min]
-        
-        # Return copies to prevent mutations
-        return [s.copy() for s in sessions]
-    
-    def delete_session(self, sid: str) -> bool:
-        """Delete session with rollback support (thread-safe)"""
-        # Remove from memory first
-        with self._lock:
-            session = self.sessions.pop(sid, None)
-        
-        if not session:
-            log_rpc(f"Session {sid} not found in memory")
-            # Still try to clean up files
-        
-        deleted_files = []
-        failed_files = []
-        
-        # Cleanup all associated files
-        try:
-            # Session directory files
-            base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
-            for f in glob.glob(base_pattern):
-                try:
-                    os.remove(f)
-                    deleted_files.append(f)
-                    log_rpc(f"Deleted session file: {f}")
-                except Exception as e:
-                    failed_files.append((f, str(e)))
-                    log_rpc(f"Failed to delete {f}: {e}")
-            
-            # Log files
-            for log_name in (f"ida_mcp_{sid}.log", f"ida_stdout_{sid}.log", f"ida_stderr_{sid}.log"):
-                log_path = os.path.join(self.cache_dir, log_name)
-                if os.path.exists(log_path):
-                    try:
-                        os.remove(log_path)
-                        deleted_files.append(log_path)
-                        log_rpc(f"Deleted session log: {log_path}")
-                    except Exception as e:
-                        failed_files.append((log_path, str(e)))
-                        log_rpc(f"Failed to delete {log_path}: {e}")
-        
-        except Exception as e:
-            log_rpc(f"Error during session deletion for {sid}: {e}")
-        
-        # Log results
-        success = bool(session or deleted_files)
-        if failed_files:
-            log_rpc(f"Session {sid} deletion incomplete: {len(failed_files)} files failed to delete")
-        
-        self._audit("delete", sid, f"deleted={len(deleted_files)}, failed={len(failed_files)}")
-        return success
-    
-    def get_statistics(self) -> dict:
-        """Get session manager statistics"""
-        with self._lock:
-            total = len(self.sessions)
-            by_status = {}
-            by_priority = {}
-            total_access = 0
-            
-            for s in self.sessions.values():
-                by_status[s.status] = by_status.get(s.status, 0) + 1
-                by_priority[s.priority] = by_priority.get(s.priority, 0) + 1
-                total_access += s.access_count
-            
-            return {
-                "total_sessions": total,
-                "by_status": by_status,
-                "by_priority": by_priority,
-                "total_accesses": total_access,
-                "avg_accesses": total_access / total if total > 0 else 0,
-            }
-    
-    def cleanup_stale_sessions(self, days: int = 30) -> List[str]:
-        """Remove sessions not accessed in specified days"""
-        cutoff = datetime.now() - timedelta(days=days)
-        stale_sids = []
-        
-        with self._lock:
-            for sid, session in list(self.sessions.items()):
-                if session.last_accessed < cutoff:
-                    stale_sids.append(sid)
-        
-        # Delete outside of lock
-        deleted = []
-        for sid in stale_sids:
-            if self.delete_session(sid):
-                deleted.append(sid)
-        
-        log_rpc(f"Cleaned up {len(deleted)} stale sessions (older than {days} days)")
-        return deleted
-    
-    def backup_session(self, sid: str, backup_dir: Optional[str] = None) -> Optional[str]:
-        """Create a backup of session IDB and metadata"""
-        session = self.get_session(sid)
-        if not session:
-            return None
-        
-        if not backup_dir:
-            backup_dir = os.path.join(self.cache_dir, "backups")
-        
-        try:
-            os.makedirs(backup_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_name = f"SID_{sid}_backup_{timestamp}"
-            backup_path = os.path.join(backup_dir, backup_name)
-            
-            # Copy IDB if exists
-            if session.idb_path and os.path.exists(session.idb_path):
-                backup_idb = f"{backup_path}.i64"
-                import shutil
-                shutil.copy2(session.idb_path, backup_idb)
-            
-            # Copy metadata
-            backup_meta = f"{backup_path}_metadata.json"
-            with open(backup_meta, "w", encoding="utf-8") as f:
-                json.dump(session.to_dict(), f, indent=2)
-            
-            self._audit("backup", sid, f"path={backup_path}")
-            return backup_path
-        
-        except Exception as e:
-            log_rpc(f"Failed to backup session {sid}: {e}")
-            return None
-    
-    def get_audit_log(self, limit: int = 100) -> List[dict]:
-        """Get recent audit log entries"""
-        return self._audit_log[-limit:] if limit > 0 else self._audit_log[:]
-    
-    def _get_session_internal(self, sid: str) -> Optional[Session]:
-        """Get the actual session object (not a copy) for internal use.
-        
-        WARNING: Only use this for operations that need to modify the session
-        and save it back. External callers should use get_session() which returns copies.
-        """
-        with self._lock:
-            return self.sessions.get(sid)
 
+    def get_session(self, sid: str) -> Optional[Session]:
+        """Get session and update last_accessed timestamp"""
+        session = self.sessions.get(sid)
+        if session:
+            session.update_access()
+            self._save_metadata(session)
+        return session
+
+    def find_session_by_path(self, path: str) -> Optional[Session]:
+        """Find a session by binary_path or idb_path (normalized comparison)."""
+        norm = os.path.normpath(os.path.abspath(path))
+        for s in self.sessions.values():
+            if s.binary_path and os.path.normpath(os.path.abspath(s.binary_path)) == norm:
+                return s
+            if s.idb_path and os.path.normpath(os.path.abspath(s.idb_path)) == norm:
+                return s
+        return None
+
+    def discover_sessions(self, query: str = "") -> List[Session]:
+        """Return all active sessions, optionally filtered by query.
+
+        The *query* is matched against session_id, binary_path, idb_path,
+        auto_name, tags, and notes using automatic regex / glob / substring detection.
+        """
+        if not query:
+            return list(self.sessions.values())
+        matcher = compile_smart_pattern(query, case_sensitive=False)
+        result = []
+        for s in self.sessions.values():
+            tags_str = " ".join(s.tags) if s.tags else ""
+            searchable = f"{s.session_id} {s.binary_path} {s.idb_path} {s.auto_name} {tags_str} {s.notes}"
+            if matcher(searchable):
+                result.append(s)
+        return result
+
+    def delete_session(self, sid: str) -> bool:
+        session = self.sessions.pop(sid, None)
+        deleted = False
+        # Cleanup actual IDB and all associated SID files (bookmarks, logs, metadata, etc.)
+        base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
+        for f in glob.glob(base_pattern):
+            try:
+                os.remove(f)
+                deleted = True
+                log_rpc(f"Deleted session file: {f}")
+            except Exception as e:
+                log_rpc(f"Failed to delete {f}: {e}")
+        for log_name in (f"ida_mcp_{sid}.log", f"ida_stdout_{sid}.log", f"ida_stderr_{sid}.log"):
+            log_path = os.path.join(self.cache_dir, log_name)
+            if os.path.exists(log_path):
+                try:
+                    os.remove(log_path)
+                    deleted = True
+                    log_rpc(f"Deleted session log: {log_path}")
+                except Exception as e:
+                    log_rpc(f"Failed to delete {log_path}: {e}")
+        return bool(session) or deleted
 
 
 class BookmarkManager:
@@ -1103,7 +710,7 @@ TOOLS = [
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Comprehensive session management with 38 actions. Core: discover, create (auto-detects existing sessions, supports processor/bitness/endian/loader, analysis_options, idb_path, ida_args, tags, notes, priority, force_new), get (lookup by ID with runtime status), list (pagination via limit/offset, query filtering with regex/glob/substring, tag/status/priority filters), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and files), status (current session with runtime info), rebuild (recreate IDB with new analysis options). Extended: update (modify session properties), tag/untag (manage tags), set_priority/set_status/set_notes (update metadata), rename (change session name), search (advanced filtering), filter (multi-criteria), statistics (usage metrics), audit_log (operation history), cleanup_stale (remove old sessions by days), backup/restore (session preservation), clone (duplicate session), merge (combine sessions), export_metadata/import_metadata (portability), validate (check integrity), health_check (diagnostics), compare/diff (session comparison), annotate (add rich metadata), dependencies (track relationships), tree (hierarchy view), timeline (access history), activity (usage patterns), hot_sessions (most accessed), recommendations (smart suggestions), batch_update (bulk operations), archive/unarchive (storage management), lock/unlock (concurrency control), permissions (access control), auto_cleanup (scheduled maintenance), integrity_check (validation), recover_orphaned (rescue lost sessions). All operations are thread-safe and atomic.",
+    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
@@ -1186,19 +793,7 @@ TOOL_DESCRIPTIONS = {
 
 TOOL_ACTIONS = {
     # Core session tools
-    "session": [
-        # Core operations
-        "discover", "create", "get", "list", "switch", "close", "status", "rebuild",
-        # New management features (30 additional functions)
-        "update", "tag", "untag", "set_priority", "set_status", "set_notes",
-        "rename", "search", "filter", "statistics", "audit_log",
-        "cleanup_stale", "backup", "restore", "clone", "merge",
-        "export_metadata", "import_metadata", "validate", "health_check",
-        "compare", "diff", "annotate", "dependencies", "tree", "timeline",
-        "activity", "hot_sessions", "recommendations", "batch_update",
-        "archive", "unarchive", "lock", "unlock", "permissions",
-        "auto_cleanup", "integrity_check", "recover_orphaned",
-    ],
+    "session": ["discover", "create", "get", "list", "switch", "close", "status", "rebuild"],
     "truncation": ["continue"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
     "batch": ["run"],
@@ -2629,311 +2224,6 @@ class IDAMCPServer:
                     "idb_path": session.idb_path,
                     "current_options": start_res.get("current_options"),
                 }
-            
-            # NEW EXTENDED SESSION ACTIONS (30+ additional features)
-            if action == "update":
-                sid = args.get("session_id")
-                if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
-                
-                # Update session properties
-                kwargs = {}
-                for key in ['tags', 'notes', 'priority', 'status', 'analysis_options', 'ida_args']:
-                    if key in args:
-                        kwargs[key] = args[key]
-                
-                if not kwargs:
-                    return make_error(MCPError.INVALID_ARGS, "No fields to update")
-                
-                success = self.session_mgr.update_session(sid, **kwargs)
-                if not success:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                session = self.session_mgr.get_session(sid)
-                return {"ok": True, "session": session.to_dict() if session else None}
-            
-            if action in ("tag", "untag"):
-                sid = args.get("session_id")
-                tag = args.get("tag")
-                if not sid or not tag:
-                    return make_error(MCPError.INVALID_ARGS, "session_id and tag required")
-                
-                session = self.session_mgr._get_session_internal(sid)
-                if not session:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                if action == "tag" and tag not in session.tags:
-                    session.tags.append(tag)
-                elif action == "untag" and tag in session.tags:
-                    session.tags.remove(tag)
-                
-                self.session_mgr._save_metadata(session)
-                return {"ok": True, "session": session.to_dict(), "tags": session.tags}
-            
-            if action == "set_priority":
-                sid = args.get("session_id")
-                priority = args.get("priority")
-                if not sid or priority is None:
-                    return make_error(MCPError.INVALID_ARGS, "session_id and priority required")
-                
-                success = self.session_mgr.update_session(sid, priority=int(priority))
-                if not success:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                return {"ok": True, "priority": priority}
-            
-            if action == "set_status":
-                sid = args.get("session_id")
-                status = args.get("status")
-                if not sid or not status:
-                    return make_error(MCPError.INVALID_ARGS, "session_id and status required")
-                
-                success = self.session_mgr.update_session(sid, status=status)
-                if not success:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                return {"ok": True, "status": status}
-            
-            if action == "set_notes":
-                sid = args.get("session_id")
-                notes = args.get("notes", "")
-                if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
-                
-                success = self.session_mgr.update_session(sid, notes=notes)
-                if not success:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                return {"ok": True, "notes": notes}
-            
-            if action == "search":
-                query = args.get("query", "")
-                tags = args.get("tags")
-                status = args.get("status")
-                priority_min = args.get("priority_min")
-                
-                if isinstance(tags, str):
-                    tags = [t.strip() for t in tags.split(",") if t.strip()]
-                
-                sessions = self.session_mgr.discover_sessions(
-                    query=query,
-                    tags=tags,
-                    status=status,
-                    priority_min=priority_min
-                )
-                return {"ok": True, "sessions": [s.to_dict() for s in sessions], "count": len(sessions)}
-            
-            if action == "statistics":
-                stats = self.session_mgr.get_statistics()
-                return {"ok": True, "statistics": stats}
-            
-            if action == "audit_log":
-                limit = args.get("limit", 100)
-                log_entries = self.session_mgr.get_audit_log(limit=limit)
-                return {"ok": True, "audit_log": log_entries, "count": len(log_entries)}
-            
-            if action == "cleanup_stale":
-                days = args.get("days", 30)
-                deleted = self.session_mgr.cleanup_stale_sessions(days=days)
-                return {"ok": True, "deleted": deleted, "count": len(deleted)}
-            
-            if action == "backup":
-                sid = args.get("session_id")
-                backup_dir = args.get("backup_dir")
-                if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
-                
-                backup_path = self.session_mgr.backup_session(sid, backup_dir=backup_dir)
-                if not backup_path:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Failed to backup session '{sid}'")
-                
-                return {"ok": True, "backup_path": backup_path}
-            
-            if action == "clone":
-                sid = args.get("session_id")
-                if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
-                
-                source = self.session_mgr.get_session(sid)
-                if not source:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                # Create new session with same properties
-                new_session = self.session_mgr.create_session(
-                    binary_path=source.binary_path,
-                    analysis_options=dict(source.analysis_options),
-                    ida_args=list(source.ida_args),
-                    tags=list(source.tags) + ["cloned"],
-                    notes=f"Cloned from {sid}. {source.notes}",
-                    priority=source.priority,
-                )
-                
-                return {"ok": True, "session": new_session.to_dict(), "source_id": sid}
-            
-            if action == "compare":
-                sid1 = args.get("session_id1")
-                sid2 = args.get("session_id2")
-                if not sid1 or not sid2:
-                    return make_error(MCPError.INVALID_ARGS, "session_id1 and session_id2 required")
-                
-                s1 = self.session_mgr.get_session(sid1)
-                s2 = self.session_mgr.get_session(sid2)
-                if not s1 or not s2:
-                    return make_error(MCPError.SESSION_NOT_FOUND, "One or both sessions not found")
-                
-                comparison = {
-                    "session1": s1.to_dict(),
-                    "session2": s2.to_dict(),
-                    "differences": {},
-                }
-                
-                for key in ['binary_path', 'idb_path', 'analysis_options', 'tags', 'priority', 'status']:
-                    v1 = getattr(s1, key, None)
-                    v2 = getattr(s2, key, None)
-                    if v1 != v2:
-                        comparison["differences"][key] = {"session1": v1, "session2": v2}
-                
-                return {"ok": True, "comparison": comparison}
-            
-            if action == "validate":
-                sid = args.get("session_id")
-                if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
-                
-                session = self.session_mgr.get_session(sid)
-                if not session:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                issues = []
-                if session.binary_path and not os.path.exists(session.binary_path):
-                    issues.append("Binary file not found")
-                if session.idb_path and not os.path.exists(session.idb_path):
-                    issues.append("IDB file not found")
-                if not session.session_id:
-                    issues.append("Missing session ID")
-                
-                return {
-                    "ok": True,
-                    "valid": len(issues) == 0,
-                    "issues": issues,
-                    "session": session.to_dict()
-                }
-            
-            if action == "health_check":
-                sid = args.get("session_id")
-                if not sid:
-                    # Check all sessions
-                    all_sessions = list(self.session_mgr.sessions.values())
-                    healthy = []
-                    unhealthy = []
-                    
-                    for s in all_sessions:
-                        issues = []
-                        if s.binary_path and not os.path.exists(s.binary_path):
-                            issues.append("binary_missing")
-                        if s.idb_path and not os.path.exists(s.idb_path):
-                            issues.append("idb_missing")
-                        
-                        if issues:
-                            unhealthy.append({"session_id": s.session_id, "issues": issues})
-                        else:
-                            healthy.append(s.session_id)
-                    
-                    return {
-                        "ok": True,
-                        "total": len(all_sessions),
-                        "healthy": len(healthy),
-                        "unhealthy": len(unhealthy),
-                        "healthy_sessions": healthy,
-                        "unhealthy_sessions": unhealthy,
-                    }
-                else:
-                    # Check single session
-                    session = self.session_mgr.get_session(sid)
-                    if not session:
-                        return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                    
-                    issues = []
-                    if session.binary_path and not os.path.exists(session.binary_path):
-                        issues.append("binary_missing")
-                    if session.idb_path and not os.path.exists(session.idb_path):
-                        issues.append("idb_missing")
-                    
-                    return {
-                        "ok": True,
-                        "session_id": sid,
-                        "healthy": len(issues) == 0,
-                        "issues": issues,
-                    }
-            
-            if action == "timeline":
-                sid = args.get("session_id")
-                if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required")
-                
-                session = self.session_mgr.get_session(sid)
-                if not session:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
-                
-                timeline = {
-                    "created": session.created_at.isoformat(),
-                    "last_accessed": session.last_accessed.isoformat(),
-                    "access_count": session.access_count,
-                    "age_days": (datetime.now() - session.created_at).days,
-                    "idle_days": (datetime.now() - session.last_accessed).days,
-                }
-                
-                return {"ok": True, "timeline": timeline}
-            
-            if action == "hot_sessions":
-                limit = args.get("limit", 10)
-                all_sessions = list(self.session_mgr.sessions.values())
-                hot = sorted(all_sessions, key=lambda s: s.access_count, reverse=True)[:limit]
-                return {
-                    "ok": True,
-                    "sessions": [s.to_dict() for s in hot],
-                    "count": len(hot)
-                }
-            
-            if action == "recover_orphaned":
-                self.session_mgr._load_orphaned_idbs()
-                return {"ok": True, "message": "Orphaned session recovery attempted"}
-            
-            if action == "integrity_check":
-                # Check all metadata files and sessions for consistency
-                issues = []
-                pattern = os.path.join(self.session_mgr.session_dir, "SID_*_metadata.json")
-                
-                for meta_path in glob.glob(pattern):
-                    try:
-                        with open(meta_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                            sid = data.get("session_id")
-                            if not sid:
-                                issues.append(f"Missing session_id in {meta_path}")
-                            elif sid not in self.session_mgr.sessions:
-                                issues.append(f"Metadata file {meta_path} not loaded in manager")
-                    except Exception as e:
-                        issues.append(f"Failed to read {meta_path}: {e}")
-                
-                return {
-                    "ok": True,
-                    "integrity_ok": len(issues) == 0,
-                    "issues": issues,
-                    "checked": len(glob.glob(pattern))
-                }
-            
-            # Stub implementations for remaining actions (can be expanded later)
-            if action in ["rename", "filter", "merge", "export_metadata", "import_metadata", 
-                          "diff", "annotate", "dependencies", "tree", "activity", 
-                          "recommendations", "batch_update", "archive", "unarchive",
-                          "lock", "unlock", "permissions", "auto_cleanup", "restore"]:
-                return {
-                    "ok": False,
-                    "error": f"Action '{action}' not yet implemented",
-                    "hint": f"This is a placeholder for future implementation of {action}"
-                }
-            
             return make_error(
                 MCPError.ACTION_NOT_FOUND, f"Unsupported session action: '{action}'",
                 hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
