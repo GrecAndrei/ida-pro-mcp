@@ -379,7 +379,8 @@ def code(
                     til = ida_typeinf.get_idati()
                     
                     # Search through all local types for matching fields
-                    for ordinal in range(1, ida_typeinf.get_ordinal_qty(til) + 1):
+                    qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
+                    for ordinal in range(1, qty_func(til) + 1):
                         tinfo = ida_typeinf.tinfo_t()
                         if tinfo.get_numbered_type(til, ordinal):
                             type_name = tinfo.get_type_name()

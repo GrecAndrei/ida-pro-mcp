@@ -37,14 +37,14 @@ def _get_exec_segments(addr):
         if err:
             return
         seg = idaapi.getseg(ea)
-        if seg and seg.perm & idaapi.SFL_CODE or seg.type == idaapi.SEG_CODE:
+        if seg and (seg.perm & idaapi.SEGPERM_EXEC or seg.type == idaapi.SEG_CODE):
             yield (seg.start_ea, seg.end_ea)
         return
     for seg_ea in idautils.Segments():
         seg = idaapi.getseg(seg_ea)
         if not seg:
             continue
-        if (seg.perm & idaapi.SFL_CODE) or seg.type == idaapi.SEG_CODE:
+        if (seg.perm & idaapi.SEGPERM_EXEC) or seg.type == idaapi.SEG_CODE:
             yield (seg.start_ea, seg.end_ea)
 
 
@@ -509,17 +509,17 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
             if not (seg.start_ea <= ea < seg.end_ea):
                 continue
         # Check for both write and execute permissions
-        has_write = bool(seg.perm & idaapi.SFL_WRITE) if hasattr(idaapi, 'SFL_WRITE') else False
-        has_exec = bool(seg.perm & idaapi.SFL_CODE) if hasattr(idaapi, 'SFL_CODE') else False
+        has_write = bool(seg.perm & idaapi.SEGPERM_WRITE)
+        has_exec = bool(seg.perm & idaapi.SEGPERM_EXEC)
         # Fallback: check segment type
         if seg.type == idaapi.SEG_CODE:
             has_exec = True
         if has_write and has_exec:
             name = idaapi.get_segm_name(seg) or ""
             perms = "{}{}{}".format(
-                "R" if seg.perm & 4 else "-",
-                "W" if seg.perm & 2 else "-",
-                "X" if seg.perm & 1 else "-",
+                "R" if seg.perm & idaapi.SEGPERM_READ else "-",
+                "W" if seg.perm & idaapi.SEGPERM_WRITE else "-",
+                "X" if seg.perm & idaapi.SEGPERM_EXEC else "-",
             )
             regions.append(f"{hex_ea(seg.start_ea)}-{hex_ea(seg.end_ea)}  {name}  {perms}  size={hex_size(seg.end_ea - seg.start_ea)}")
     return regions

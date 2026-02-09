@@ -232,7 +232,7 @@ def bulk(
                     entry = {"addr": hex(ea), "name": name}
                     # Also export type if available
                     tif = ida_typeinf.tinfo_t()
-                    if ida_typeinf.get_tinfo(tif, ea):
+                    if ida_nalt.get_tinfo(tif, ea):
                         entry["type"] = str(tif)
                     annotations["names"].append(entry)
             

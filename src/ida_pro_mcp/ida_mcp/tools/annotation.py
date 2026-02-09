@@ -374,7 +374,7 @@ def annotation(
                     last_insn = idc.prev_head(block.end_ea, block.start_ea)
                     if last_insn == idaapi.BADADDR:
                         last_insn = block.start_ea
-                    disasm = idc.GetDisasm(last_insn)
+                    disasm = idc.generate_disasm_line(last_insn, 0)
                     true_target = block.succ(0).start_ea
                     false_target = block.succ(1).start_ea
                     cmt = (f"{prefix}branch: {disasm.strip()} "
@@ -640,7 +640,7 @@ def annotation(
                             "call_addr": hex(call_addr),
                             "check_addr": hex(check_ea),
                             "api": callee_name,
-                            "branch_insn": idc.GetDisasm(check_ea).strip(),
+                            "branch_insn": idc.generate_disasm_line(check_ea, 0).strip(),
                             "comment": cmt,
                         })
                         if not dry_run:

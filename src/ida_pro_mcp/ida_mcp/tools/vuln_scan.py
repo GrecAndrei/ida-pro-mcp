@@ -149,7 +149,7 @@ def _get_decompiled_context(ea):
         lines = text.splitlines()
         # Find the line closest to ea
         for i, ln in enumerate(lines):
-            if hex(ea).lstrip("0x") in ln or hex(ea) in ln:
+            if hex(ea).removeprefix("0x") in ln or hex(ea) in ln:
                 start = max(0, i - 1)
                 end = min(len(lines), i + 2)
                 return "\n".join(lines[start:end])
