@@ -89,7 +89,8 @@ def agent(
             
             def debug_log_agent(msg):
                 try:
-                    with open(os.path.join(os.environ.get("TEMP", "C:\\temp"), "ida_mcp_emergency.log"), "a") as f:
+                    import tempfile
+                    with open(os.path.join(tempfile.gettempdir(), "ida_mcp_emergency.log"), "a") as f:
                         f.write(f"[{time.ctime()}] AGENT: {msg}\n")
                 except Exception: pass
 

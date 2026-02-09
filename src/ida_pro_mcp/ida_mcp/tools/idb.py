@@ -122,7 +122,7 @@ def idb_meta():
         "binary_path": binary_path,
         "idb_path": idb_path,
         "processor": idc.get_inf_attr(idc.INF_PROCNAME),
-        "bitness": 64 if ida_ida.inf_is_64bit() else (32 if ida_ida.inf_is_32bit_exactly() else 16),
+        "bitness": 64 if (hasattr(ida_ida, 'inf_is_64bit') and ida_ida.inf_is_64bit()) else (32 if (hasattr(ida_ida, 'inf_is_32bit_exactly') and ida_ida.inf_is_32bit_exactly()) else 16),
         "file_type": file_type_names.get(file_type, f"type_{file_type}"),
         "file_type_id": file_type,
         "compiler": compiler_names.get(comp, f"compiler_{comp}"),
