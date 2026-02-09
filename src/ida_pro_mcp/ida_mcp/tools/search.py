@@ -550,7 +550,7 @@ def search(
                         arg_count = int(arg_count)
                         # Try to get prototype
                         tif = ida_typeinf.tinfo_t()
-                        if ida_typeinf.get_tinfo(tif, ea):
+                        if ida_nalt.get_tinfo(tif, ea):
                             func_data = ida_typeinf.func_type_data_t()
                             if tif.get_func_details(func_data):
                                 actual_args = func_data.size()

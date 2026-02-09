@@ -51,7 +51,7 @@ def emulate(
                     continue
                 visited.add(curr)
                 insn = idaapi.insn_t()
-                if ida_bytes.decode_insn(insn, curr) <= 0:
+                if idaapi.decode_insn(insn, curr) <= 0:
                     continue
 
                 disasm = idc.generate_disasm_line(curr, 0)
@@ -163,7 +163,7 @@ def emulate(
 
             if expr:
                 try:
-                    val = idc.eval(expr)
+                    val = idc.eval_idc(expr)
                     return {"ok": True, "expr": expr, "value": val}
                 except Exception as e:
                     return make_error(MCPError.IDA_ERROR, f"Expression eval failed: {e}")
