@@ -272,6 +272,8 @@ def bulk(
         
         elif action == "import_annotations":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
+            path, err = validate_path_safe(path)
+            if err: return err
             if not os.path.exists(path): return make_error(MCPError.FILE_NOT_FOUND, path)
             import json
             with open(path, 'r', encoding='utf-8') as f:
