@@ -40,6 +40,7 @@ def graph(
             if err: return err
             
             nodes, edges, visited = {}, [], set()
+            edge_set = set()
             def add_node(f_ea):
                 if f_ea not in nodes:
                     nodes[f_ea] = idc.get_func_name(f_ea) or f"sub_{f_ea:x}"
@@ -54,7 +55,9 @@ def graph(
                         if target and target.start_ea != f_ea:
                             add_node(target.start_ea)
                             edge = (f_ea, target.start_ea)
-                            if edge not in edges: edges.append(edge)
+                            if edge not in edge_set:
+                                edge_set.add(edge)
+                                edges.append(edge)
                             traverse(target.start_ea, d + 1)
             
             traverse(ea, 0)
@@ -88,6 +91,7 @@ def graph(
             if err: return err
 
             nodes, edges, visited = {}, [], set()
+            edge_set = set()
             name = idc.get_name(ea) or hex(ea)
             nodes[ea] = name
 
@@ -103,7 +107,9 @@ def graph(
                         src_name = idc.get_name(src_ea) or hex(src_ea)
                         if src_ea not in nodes: nodes[src_ea] = src_name
                         edge = (src_ea, target_ea)
-                        if edge not in edges: edges.append(edge)
+                        if edge not in edge_set:
+                            edge_set.add(edge)
+                            edges.append(edge)
                         traverse_xrefs(src_ea, d + 1)
                 # Traverse callees (xrefs FROM this address)
                 if direction in ("down", "both"):
@@ -118,7 +124,9 @@ def graph(
                                 dst_name = idc.get_name(dst_ea) or hex(dst_ea)
                                 if dst_ea not in nodes: nodes[dst_ea] = dst_name
                                 edge = (target_ea, dst_ea)
-                                if edge not in edges: edges.append(edge)
+                                if edge not in edge_set:
+                                    edge_set.add(edge)
+                                    edges.append(edge)
                                 traverse_xrefs(dst_ea, d + 1)
 
             traverse_xrefs(ea, 0)
