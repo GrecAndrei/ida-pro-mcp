@@ -163,7 +163,7 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
         pruned["_continue"] = {
             "token": token,
             "fields": truncated_fields,
-            "hint": "Use truncation(action='continue', token='{token}', field='...') to read more. Or re-run with offset/count params.".format(token=token),
+            "hint": f"Use truncation(action='continue', token='{token}', field='...') to read more. Or re-run with offset/count params.",
         }
 
     return pruned
