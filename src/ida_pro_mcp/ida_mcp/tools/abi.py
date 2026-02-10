@@ -202,7 +202,7 @@ def abi(
             if err:
                 return err
             ret_type = "unknown"
-            ret_reg = "eax"  # default for x86
+            ret_reg = get_return_register()  # arch-aware default
             tif = ida_typeinf.tinfo_t()
             if ida_nalt.get_tinfo(tif, fn.start_ea):
                 fdet = ida_typeinf.func_type_data_t()
@@ -339,7 +339,7 @@ def abi(
                 if not mnem:
                     continue
                 mnem_lower = mnem.lower()
-                if mnem_lower in ("jmp", "b"):  # x86: jmp, ARM: b
+                if mnem_lower in get_tail_call_mnemonics():  # arch-aware tail call detection
                     target_op = idc.print_operand(ea, 0)
                     fname = ida_funcs.get_func_name(fn.start_ea)
                     results.append(f"{hex(fn.start_ea)}  {fname}  tail_jmp={target_op}")
@@ -355,19 +355,8 @@ def abi(
                 return err
             insns = _disasm_range(fn.start_ea, fn.end_ea, max_insns=15)
             # Classify prologue pattern
-            pattern = "unknown"
-            if insns:
-                mnems = [i["mnem"].lower() for i in insns[:5]]
-                if "push" in mnems and "mov" in mnems:
-                    pattern = "standard_frame_setup"
-                elif "stp" in mnems:
-                    pattern = "aarch64_frame_setup"
-                elif "stmdb" in mnems or "stmfd" in mnems:
-                    pattern = "arm32_frame_setup"
-                elif "sub" in mnems[:3]:
-                    pattern = "stack_alloc"
-                elif "endbr64" in mnems or "endbr32" in mnems:
-                    pattern = "cet_enabled"
+            pattern = get_prologue_pattern(
+                [i["mnem"] for i in insns[:5]]) if insns else "unknown"
             return {
                 "ok": True,
                 "addr": hex(fn.start_ea),
@@ -405,23 +394,8 @@ def abi(
                         break
                 insns.append({"addr": hex(h), "mnem": mnem, "operands": ops})
             # Classify epilogue pattern
-            pattern = "unknown"
-            if insns:
-                mnems = [i["mnem"].lower() for i in insns[-5:]]
-                if "ret" in mnems or "retn" in mnems:
-                    if "pop" in mnems or "leave" in mnems:
-                        pattern = "standard_frame_teardown"
-                    else:
-                        pattern = "simple_ret"
-                elif "bx" in mnems:
-                    if "ldp" in mnems or "pop" in mnems:
-                        pattern = "arm_frame_teardown"
-                    else:
-                        pattern = "arm_simple_ret"
-                elif "jmp" in mnems or "b" in mnems:
-                    pattern = "tail_call"
-                elif "int" in mnems:
-                    pattern = "interrupt"
+            pattern = get_epilogue_pattern(
+                [i["mnem"] for i in insns]) if insns else "unknown"
             return {
                 "ok": True,
                 "addr": hex(fn.start_ea),
@@ -460,18 +434,24 @@ def abi(
                             last_ea = idc.prev_head(fn.end_ea, fn.start_ea)
                             if last_ea != idaapi.BADADDR:
                                 mnem = idc.print_insn_mnem(last_ea)
-                                if mnem and mnem.lower() in ("ret", "retn", "bx"):
-                                    op = idc.print_operand(last_ea, 0)
-                                    # stdcall with args should have ret N
-                                    if fdet.size() > 0 and (not op or op == ""):
-                                        results.append(f"{hex(fn.start_ea)}  {fname}  stdcall_no_stack_cleanup  cc={cc_name}")
+                                if mnem:
+                                    ml = mnem.lower()
+                                    disasm = (idc.print_operand(last_ea, 0) or "").lower()
+                                    if is_return_mnemonic(ml, disasm):
+                                        op = idc.print_operand(last_ea, 0)
+                                        # stdcall with args should have ret N
+                                        if fdet.size() > 0 and (not op or op == ""):
+                                            results.append(f"{hex(fn.start_ea)}  {fname}  stdcall_no_stack_cleanup  cc={cc_name}")
                 # Check 2: NORET flag but function has ret instruction
                 if fn.flags & ida_funcs.FUNC_NORET:
                     last_ea = idc.prev_head(fn.end_ea, fn.start_ea)
                     if last_ea != idaapi.BADADDR:
                         mnem = idc.print_insn_mnem(last_ea)
-                        if mnem and mnem.lower() in ("ret", "retn", "bx"):
-                            results.append(f"{hex(fn.start_ea)}  {fname}  noret_has_ret")
+                        if mnem:
+                            ml = mnem.lower()
+                            disasm = (idc.print_operand(last_ea, 0) or "").lower()
+                            if is_return_mnemonic(ml, disasm):
+                                results.append(f"{hex(fn.start_ea)}  {fname}  noret_has_ret")
                 if len(results) >= limit:
                     break
 
