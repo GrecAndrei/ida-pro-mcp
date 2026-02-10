@@ -432,7 +432,8 @@ def _find_stack_pivot(addr, limit, max_insns, query):
             elif ml in ("mov", "lea", "add", "sub", "addi", "addiu", "daddiu"):
                 disasm_nospace = disasm.replace(" ", "")
                 for sp in sp_regs:
-                    if disasm_nospace.startswith(f"{ml}{sp},") or f",{sp}," in disasm_nospace:
+                    # Check SP as the first (destination) operand only
+                    if disasm_nospace.startswith(f"{ml}{sp},"):
                         is_pivot = True
                         break
 

@@ -434,18 +434,24 @@ def abi(
                             last_ea = idc.prev_head(fn.end_ea, fn.start_ea)
                             if last_ea != idaapi.BADADDR:
                                 mnem = idc.print_insn_mnem(last_ea)
-                                if mnem and is_return_mnemonic(mnem.lower(), (idc.print_operand(last_ea, 0) or "").lower()):
-                                    op = idc.print_operand(last_ea, 0)
-                                    # stdcall with args should have ret N
-                                    if fdet.size() > 0 and (not op or op == ""):
-                                        results.append(f"{hex(fn.start_ea)}  {fname}  stdcall_no_stack_cleanup  cc={cc_name}")
+                                if mnem:
+                                    ml = mnem.lower()
+                                    disasm = (idc.print_operand(last_ea, 0) or "").lower()
+                                    if is_return_mnemonic(ml, disasm):
+                                        op = idc.print_operand(last_ea, 0)
+                                        # stdcall with args should have ret N
+                                        if fdet.size() > 0 and (not op or op == ""):
+                                            results.append(f"{hex(fn.start_ea)}  {fname}  stdcall_no_stack_cleanup  cc={cc_name}")
                 # Check 2: NORET flag but function has ret instruction
                 if fn.flags & ida_funcs.FUNC_NORET:
                     last_ea = idc.prev_head(fn.end_ea, fn.start_ea)
                     if last_ea != idaapi.BADADDR:
                         mnem = idc.print_insn_mnem(last_ea)
-                        if mnem and is_return_mnemonic(mnem.lower(), (idc.print_operand(last_ea, 0) or "").lower()):
-                            results.append(f"{hex(fn.start_ea)}  {fname}  noret_has_ret")
+                        if mnem:
+                            ml = mnem.lower()
+                            disasm = (idc.print_operand(last_ea, 0) or "").lower()
+                            if is_return_mnemonic(ml, disasm):
+                                results.append(f"{hex(fn.start_ea)}  {fname}  noret_has_ret")
                 if len(results) >= limit:
                     break
 
