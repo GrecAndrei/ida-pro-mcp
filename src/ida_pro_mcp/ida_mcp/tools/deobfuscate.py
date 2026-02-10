@@ -23,27 +23,17 @@ _KNOWN_HASH_CONSTANTS = {
     "fnv1a_32":      0x811C9DC5,  # FNV-1a 32-bit offset basis
 }
 
-# Stack-string mov mnemonics (x86 + ARM)
-_MOV_MNEMONICS = {"mov", "movabs", "strb", "movb"}
+# Stack-string mov mnemonics (multi-arch, see arch_utils.MOV_MNEMONICS)
+_MOV_MNEMONICS = MOV_MNEMONICS
 
-# Conditional jump mnemonics (x86 + ARM)
-_COND_JUMPS = {
-    # x86
-    "je", "jne", "jz", "jnz", "ja", "jae", "jb", "jbe",
-    "jg", "jge", "jl", "jle", "jo", "jno", "js", "jns",
-    "jp", "jpe", "jnp", "jpo", "jcxz", "jecxz", "jrcxz",
-    # ARM
-    "beq", "bne", "bcs", "bcc", "bmi", "bpl", "bvs", "bvc",
-    "bhi", "bls", "bge", "blt", "bgt", "ble",
-    "cbz", "cbnz", "tbz", "tbnz",
-}
+# Conditional jump mnemonics (multi-arch)
+_COND_JUMPS = CONDITIONAL_BRANCH_MNEMONICS
 
-# Unconditional terminators (x86 + ARM)
-_TERMINATORS = {"jmp", "ret", "retn", "int3", "hlt", "ud2",
-                "b", "bx", "br", "eret"}
+# Unconditional terminators (multi-arch)
+_TERMINATORS = TERMINATOR_MNEMONICS
 
-# Call mnemonics (x86 + ARM)
-_CALL_MNEMONICS = {"call", "bl", "blx", "blr"}
+# Call mnemonics (multi-arch)
+_CALL_MNEMONICS = CALL_MNEMONICS
 
 
 def _get_func_name_safe(ea):
@@ -99,14 +89,14 @@ def _detect_encoding_in_func(func_ea, limit):
         mnem_l = mnem.lower()
 
         # Count XOR instructions (excluding xor reg, reg for zeroing)
-        if mnem_l == "xor":
+        if mnem_l in XOR_MNEMONICS:
             op0 = idc.print_operand(ea, 0)
             op1 = idc.print_operand(ea, 1)
             if op0 != op1:
                 xor_count += 1
 
         # Look for base64 charset references
-        if mnem_l in ("lea", "mov"):
+        if mnem_l in MOV_MNEMONICS or mnem_l in ("lea", "adr", "adrp"):
             for xref in idautils.XrefsFrom(ea, 0):
                 contents = idc.get_strlit_contents(xref.to)
                 if contents:
