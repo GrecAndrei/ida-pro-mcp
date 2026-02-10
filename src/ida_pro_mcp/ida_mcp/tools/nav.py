@@ -49,7 +49,7 @@ def nav(
         elif action == "interesting":
             findings = []
             # Instruction-based triage
-            targets = {"syscall": "system_call", "int 3": "breakpoint", "rdtsc": "timing_check", "cpuid": "environment_check"}
+            targets = INTERESTING_INSTRUCTIONS
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
                 if not seg or not (seg.perm & idaapi.SEGPERM_EXEC): continue
