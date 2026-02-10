@@ -8,26 +8,11 @@ except ImportError:
 # GADGETS - ROP/JOP/COP Gadget & Exploit Primitive Discovery
 # ============================================================================
 
-# Architecture detection helpers
-
-def _get_arch():
-    """Return normalized architecture: 'x86', 'x64', 'arm', 'arm64', or 'unknown'."""
-    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
-    proc = info.procname.lower() if info else ""
-    is_64 = info.is_64bit() if info else False
-    if proc.startswith("arm") or proc.startswith("aarch"):
-        return "arm64" if is_64 else "arm"
-    if proc.startswith("metapc") or "x86" in proc or "80386" in proc:
-        return "x64" if is_64 else "x86"
-    return "unknown"
-
-
-def _is_x86_family(arch):
-    return arch in ("x86", "x64")
-
-
-def _is_arm_family(arch):
-    return arch in ("arm", "arm64")
+# Architecture detection uses shared arch_utils via _common.
+# Local aliases kept for backward compatibility with internal callers.
+_get_arch = get_arch
+_is_x86_family = is_x86_family
+_is_arm_family = is_arm_family
 
 
 def _get_exec_segments(addr):
@@ -81,8 +66,7 @@ def _decode_backward(end_ea, max_insns):
             break
         pm = pmnem.lower()
         # Stop if we hit a control flow instruction (not useful in gadget prefix)
-        if pm in ("ret", "retn", "call", "jmp", "int", "syscall", "sysenter",
-                   "hlt", "ud2"):
+        if pm in TERMINATOR_MNEMONICS or pm in CALL_MNEMONICS or pm in SYSCALL_MNEMONICS:
             break
         insns.insert(0, (prev, pm, _disasm_at(prev)))
         ea = prev
@@ -139,19 +123,7 @@ def _find_rop_gadgets(addr, limit, max_insns, query):
                     break
                 continue
             ml = mnem.lower()
-            is_ret = False
-            if _is_x86_family(arch):
-                is_ret = ml in ("ret", "retn")
-            elif _is_arm_family(arch):
-                # pop {pc} or bx lr
-                if ml == "pop":
-                    disasm = _disasm_at(ea).lower()
-                    if "pc" in disasm:
-                        is_ret = True
-                elif ml in ("bx",):
-                    disasm = _disasm_at(ea).lower()
-                    if "lr" in disasm:
-                        is_ret = True
+            is_ret = is_return_mnemonic(ml, _disasm_at(ea).lower(), arch)
 
             if is_ret:
                 insns = _decode_backward(ea, max_insns)
@@ -201,6 +173,19 @@ def _find_jop_gadgets(addr, limit, max_insns, query):
                     # Exclude bx lr (that's ROP)
                     if "lr" not in disasm:
                         is_jop = True
+            elif is_mips_family(arch):
+                if ml == "jr":
+                    disasm = _disasm_at(ea).lower()
+                    if "ra" not in disasm and "$31" not in disasm:
+                        is_jop = True
+            elif is_riscv_family(arch):
+                if ml == "jalr":
+                    disasm = _disasm_at(ea).lower()
+                    if "ra" not in disasm:
+                        is_jop = True
+            elif is_ppc_family(arch):
+                if ml in ("bctr",):
+                    is_jop = True
 
             if is_jop:
                 insns = _decode_backward(ea, max_insns)
@@ -248,6 +233,17 @@ def _find_cop_gadgets(addr, limit, max_insns, query):
                     disasm = _disasm_at(ea).lower()
                     if "lr" not in disasm:
                         is_cop = True
+            elif is_mips_family(arch):
+                if ml == "jalr":
+                    is_cop = True
+            elif is_riscv_family(arch):
+                if ml == "jalr":
+                    disasm = _disasm_at(ea).lower()
+                    if "ra" not in disasm:
+                        is_cop = True
+            elif is_ppc_family(arch):
+                if ml == "bctrl":
+                    is_cop = True
 
             if is_cop:
                 insns = _decode_backward(ea, max_insns)
@@ -294,7 +290,19 @@ def _find_syscall_gadgets(addr, limit, max_insns, query):
                     else:
                         is_syscall = True
             elif _is_arm_family(arch):
-                if ml in ("svc", "swi", "hvc"):
+                if ml in ("svc", "swi", "hvc", "smc"):
+                    is_syscall = True
+            elif is_mips_family(arch):
+                if ml == "syscall":
+                    is_syscall = True
+            elif is_ppc_family(arch):
+                if ml == "sc":
+                    is_syscall = True
+            elif is_riscv_family(arch):
+                if ml == "ecall":
+                    is_syscall = True
+            elif is_sparc_family(arch):
+                if ml == "ta":
                     is_syscall = True
 
             if is_syscall:
@@ -344,6 +352,15 @@ def _find_write_what_where(addr, limit, max_insns, query):
                 # str reg, [reg] or str reg, [reg, #off]
                 if ml in ("str", "strb", "strh", "strd"):
                     is_www = True
+            elif is_mips_family(arch):
+                if ml in ("sw", "sh", "sb", "sd"):
+                    is_www = True
+            elif is_ppc_family(arch):
+                if ml in ("stw", "sth", "stb", "std", "stwx", "stdx"):
+                    is_www = True
+            elif is_riscv_family(arch):
+                if ml in ("sw", "sh", "sb", "sd"):
+                    is_www = True
 
             if is_www:
                 # Look for a ret following this to make it a usable gadget
@@ -354,21 +371,10 @@ def _find_write_what_where(addr, limit, max_insns, query):
                     if look_ea == idaapi.BADADDR:
                         break
                     lm = (idc.print_insn_mnem(look_ea) or "").lower()
-                    if _is_x86_family(arch) and lm in ("ret", "retn"):
+                    if is_return_mnemonic(lm, _disasm_at(look_ea).lower(), arch):
                         found_ret = True
                         break
-                    elif _is_arm_family(arch):
-                        if lm == "pop":
-                            disasm = _disasm_at(look_ea).lower()
-                            if "pc" in disasm:
-                                found_ret = True
-                                break
-                        elif lm == "bx":
-                            disasm = _disasm_at(look_ea).lower()
-                            if "lr" in disasm:
-                                found_ret = True
-                                break
-                    if lm in ("jmp", "call", "int", "syscall", "b", "bl"):
+                    if lm in CALL_MNEMONICS or lm in UNCONDITIONAL_JUMP_MNEMONICS or lm in SYSCALL_MNEMONICS:
                         break
 
                 if found_ret:
@@ -402,7 +408,7 @@ def _find_stack_pivot(addr, limit, max_insns, query):
     arch = _get_arch()
     gadgets_found = []
     seen = set()
-    sp_regs = {"esp", "rsp"} if _is_x86_family(arch) else {"sp"}
+    sp_regs = get_stack_pointer_names(arch)
 
     for seg_start, seg_end in _get_exec_segments(addr):
         if len(gadgets_found) >= limit:
@@ -419,32 +425,16 @@ def _find_stack_pivot(addr, limit, max_insns, query):
             disasm = _disasm_at(ea).lower()
             is_pivot = False
 
-            if _is_x86_family(arch):
-                if ml == "xchg" and any(sp in disasm for sp in sp_regs):
-                    is_pivot = True
-                elif ml == "mov" and any(disasm.startswith(f"mov {sp},") or
-                                         disasm.startswith(f"mov {sp} ,")
-                                         for sp in sp_regs):
-                    is_pivot = True
-                elif ml == "lea" and any(disasm.startswith(f"lea {sp},") or
-                                         disasm.startswith(f"lea {sp} ,")
-                                         for sp in sp_regs):
-                    is_pivot = True
-                elif ml == "add" and any(disasm.startswith(f"add {sp},") or
-                                         disasm.startswith(f"add {sp} ,")
-                                         for sp in sp_regs):
-                    is_pivot = True
-                elif ml == "sub" and any(disasm.startswith(f"sub {sp},") or
-                                         disasm.startswith(f"sub {sp} ,")
-                                         for sp in sp_regs):
-                    is_pivot = True
-            elif _is_arm_family(arch):
-                if ml == "mov" and "sp," in disasm.replace(" ", ""):
-                    # mov sp, reg
-                    is_pivot = True
-                elif ml in ("add", "sub") and disasm.replace(" ", "").startswith(
-                        (ml + "sp,",)):
-                    is_pivot = True
+            # Generic: check if any SP register name appears as a destination
+            # in mov/xchg/add/sub/lea instructions
+            if ml in ("xchg",) and any(sp in disasm for sp in sp_regs):
+                is_pivot = True
+            elif ml in ("mov", "lea", "add", "sub", "addi", "addiu", "daddiu"):
+                disasm_nospace = disasm.replace(" ", "")
+                for sp in sp_regs:
+                    if disasm_nospace.startswith(f"{ml}{sp},") or f",{sp}," in disasm_nospace:
+                        is_pivot = True
+                        break
 
             if is_pivot:
                 # Find a ret within max_insns
@@ -455,17 +445,10 @@ def _find_stack_pivot(addr, limit, max_insns, query):
                     if look_ea == idaapi.BADADDR:
                         break
                     lm = (idc.print_insn_mnem(look_ea) or "").lower()
-                    if _is_x86_family(arch) and lm in ("ret", "retn"):
+                    if is_return_mnemonic(lm, _disasm_at(look_ea).lower(), arch):
                         found_ret = True
                         break
-                    elif _is_arm_family(arch):
-                        if lm == "pop" and "pc" in _disasm_at(look_ea).lower():
-                            found_ret = True
-                            break
-                        if lm == "bx" and "lr" in _disasm_at(look_ea).lower():
-                            found_ret = True
-                            break
-                    if lm in ("jmp", "call", "int", "syscall", "b", "bl"):
+                    if lm in CALL_MNEMONICS or lm in UNCONDITIONAL_JUMP_MNEMONICS or lm in SYSCALL_MNEMONICS:
                         break
 
                 if found_ret:
@@ -731,8 +714,36 @@ def _suggest_pivot_chains(addr, limit, max_insns, query):
             "ldr_ret": {"mnemonics": ["ldr"], "desc": "Load from memory"},
             "svc": {"mnemonics": ["svc", "swi"], "desc": "System call"},
         }
+    elif is_mips_family(arch):
+        searches = {
+            "lw_jr": {"mnemonics": ["lw"], "desc": "Load word (reg restore)"},
+            "move_jr": {"mnemonics": ["move"], "desc": "Register move"},
+            "add_jr": {"mnemonics": ["addu", "addiu"], "desc": "Arithmetic add"},
+            "sw_jr": {"mnemonics": ["sw"], "desc": "Store to memory"},
+            "syscall": {"mnemonics": ["syscall"], "desc": "System call"},
+        }
+    elif is_ppc_family(arch):
+        searches = {
+            "lwz_blr": {"mnemonics": ["lwz", "ld"], "desc": "Load word (reg restore)"},
+            "mr_blr": {"mnemonics": ["mr"], "desc": "Register move"},
+            "add_blr": {"mnemonics": ["add", "addi"], "desc": "Arithmetic add"},
+            "stw_blr": {"mnemonics": ["stw", "std"], "desc": "Store to memory"},
+            "sc": {"mnemonics": ["sc"], "desc": "System call"},
+        }
+    elif is_riscv_family(arch):
+        searches = {
+            "lw_ret": {"mnemonics": ["lw", "ld"], "desc": "Load word (reg restore)"},
+            "mv_ret": {"mnemonics": ["mv"], "desc": "Register move"},
+            "add_ret": {"mnemonics": ["add", "addi"], "desc": "Arithmetic add"},
+            "sw_ret": {"mnemonics": ["sw", "sd"], "desc": "Store to memory"},
+            "ecall": {"mnemonics": ["ecall"], "desc": "System call"},
+        }
     else:
-        return {}
+        # Generic fallback for unknown architectures
+        searches = {
+            "mov_ret": {"mnemonics": ["mov"], "desc": "Register move"},
+            "add_ret": {"mnemonics": ["add"], "desc": "Arithmetic add"},
+        }
 
     per_cat_limit = max(1, limit // len(searches))
 
@@ -760,20 +771,13 @@ def _suggest_pivot_chains(addr, limit, max_insns, query):
                         if look_ea == idaapi.BADADDR:
                             break
                         lm = (idc.print_insn_mnem(look_ea) or "").lower()
-                        if _is_x86_family(arch) and lm in ("ret", "retn"):
+                        if is_return_mnemonic(lm, _disasm_at(look_ea).lower(), arch):
                             found_ret = True
                             break
-                        elif _is_arm_family(arch):
-                            if lm == "pop" and "pc" in _disasm_at(look_ea).lower():
-                                found_ret = True
-                                break
-                            if lm == "bx" and "lr" in _disasm_at(look_ea).lower():
-                                found_ret = True
-                                break
-                        if lm in ("jmp", "call", "int", "b", "bl"):
+                        if lm in CALL_MNEMONICS or lm in UNCONDITIONAL_JUMP_MNEMONICS:
                             break
 
-                    if found_ret or ml in ("syscall", "sysenter", "int", "svc", "swi"):
+                    if found_ret or ml in SYSCALL_MNEMONICS:
                         end = look_ea if found_ret else ea
                         insns = []
                         cur = ea
@@ -835,10 +839,10 @@ def gadgets(
     LLM-optimized ROP/JOP/COP gadget and exploit primitive discovery.
 
     Actions:
-    - rop: Find ROP gadgets (instruction sequences ending in ret/pop pc/bx lr)
-    - jop: Find JOP gadgets (sequences ending in indirect jmp/bx reg)
-    - cop: Find COP gadgets (sequences ending in indirect call/blx reg)
-    - syscall: Find syscall/sysenter/svc gadgets
+    - rop: Find ROP gadgets (instruction sequences ending in ret/pop pc/bx lr/jr ra/blr/jalr)
+    - jop: Find JOP gadgets (sequences ending in indirect jmp/bx reg/jr reg/bctr/jalr)
+    - cop: Find COP gadgets (sequences ending in indirect call/blx reg/jalr/bctrl)
+    - syscall: Find syscall/sysenter/svc/ecall/sc gadgets
     - write_what_where: Find write-what-where primitives (mov [reg], reg / str reg, [reg])
     - stack_pivot: Find stack pivot gadgets (xchg rsp, mov rsp / mov sp, reg)
     - shellcode_space: Find writable+executable memory regions for shellcode
@@ -846,7 +850,7 @@ def gadgets(
     - seh_handlers: Find SEH handler chains (Windows x86)
     - pivot_chains: Suggest ROP chain building blocks for common operations
 
-    Architecture-aware: supports x86/x64 and ARM/AArch64.
+    Architecture-aware: supports x86/x64, ARM/AArch64, MIPS, PowerPC, RISC-V, SPARC, and more.
     Each gadget: {addr, insns, gadget}
     """
     try:
