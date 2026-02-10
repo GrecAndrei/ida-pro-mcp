@@ -313,25 +313,19 @@ def stack_analysis(
             if err:
                 return err
             spills = []
-            is_arm = _is_arm(arch)
+            # Build a set of callee-saved registers for the current arch
+            _arch_name = get_arch()
+            callee_saved = get_callee_saved_registers(_arch_name)
             for i, member, name, offset, size, type_str in _iter_frame_members(frame):
                 is_spill = False
                 n = name.lower()
-                # Saved register detection
+                # Saved register detection (common IDA naming patterns)
                 if n.startswith(" s") or n.startswith("__saved"):
                     is_spill = True
                 elif n in ("r", "s"):
                     is_spill = True
-                # x86: saved rbp, rdi, rsi, rbx, etc.
-                elif any(n == reg for reg in
-                         ("rbp", "rbx", "rdi", "rsi", "r12", "r13", "r14", "r15",
-                          "ebp", "ebx", "edi", "esi")):
-                    is_spill = True
-                # ARM: saved registers
-                elif is_arm and any(n == reg for reg in
-                                    ("r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11",
-                                     "lr", "fp", "x19", "x20", "x21", "x22", "x23",
-                                     "x24", "x25", "x26", "x27", "x28", "x29", "x30")):
+                # Architecture-aware: check against callee-saved register set
+                elif n in callee_saved:
                     is_spill = True
                 if is_spill:
                     spills.append({

@@ -9,22 +9,28 @@ except ImportError:
 # LLM_HELPERS - LLM-Specific Helper Actions for Optimized Interaction
 # ============================================================================
 
-# Common API categories for quick classification
+# Common API categories for quick classification (multi-platform)
 _API_CATEGORIES = {
     "network": {"socket", "connect", "bind", "listen", "accept", "send", "recv",
+                "sendto", "recvfrom", "sendmsg", "recvmsg",
                 "WSAStartup", "InternetOpen", "HttpOpenRequest", "WinHttpOpen",
-                "getaddrinfo", "gethostbyname", "URLDownloadToFile"},
+                "getaddrinfo", "gethostbyname", "URLDownloadToFile",
+                "curl_easy_perform", "SSL_read", "SSL_write"},
     "file_io": {"CreateFile", "ReadFile", "WriteFile", "DeleteFile", "fopen",
                 "fclose", "fread", "fwrite", "open", "close", "read", "write",
-                "FindFirstFile", "FindNextFile"},
+                "FindFirstFile", "FindNextFile",
+                "opendir", "readdir", "stat", "lstat", "unlink", "rename"},
     "crypto": {"CryptEncrypt", "CryptDecrypt", "CryptHashData", "BCryptEncrypt",
-               "AES_encrypt", "EVP_EncryptInit", "MD5Init", "SHA256_Init"},
+               "AES_encrypt", "EVP_EncryptInit", "MD5Init", "SHA256_Init",
+               "EVP_DigestInit", "EVP_CipherInit", "RAND_bytes"},
     "process": {"CreateProcess", "OpenProcess", "CreateThread", "CreateRemoteThread",
-                "ExitProcess", "TerminateProcess", "fork", "exec", "system"},
+                "ExitProcess", "TerminateProcess", "fork", "exec", "system",
+                "execve", "posix_spawn", "clone", "pthread_create",
+                "waitpid", "kill", "signal"},
     "registry": {"RegOpenKey", "RegSetValue", "RegQueryValue", "RegCreateKey",
                  "RegDeleteKey"},
     "memory": {"VirtualAlloc", "VirtualProtect", "HeapAlloc", "malloc", "mmap",
-               "memcpy", "memset"},
+               "memcpy", "memset", "mprotect", "brk", "munmap", "calloc", "realloc"},
 }
 
 
