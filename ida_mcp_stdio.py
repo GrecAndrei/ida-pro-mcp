@@ -23,9 +23,10 @@ import warnings
 import glob
 import uuid
 import shlex
+import copy
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Robust Path Setup
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -193,7 +194,15 @@ def make_error(
 def validate_path(path: str) -> Optional[str]:
     if not path or "\x00" in path:
         return None
-    return os.path.normpath(os.path.abspath(path))
+    # Reject paths containing '..' components before normalization
+    if ".." in Path(path).parts:
+        return None
+    resolved = os.path.normpath(os.path.abspath(path))
+    # Resolve symlinks (defense-in-depth: realpath should never produce '..')
+    try:
+        return os.path.realpath(resolved)
+    except (OSError, ValueError):
+        return resolved
 
 
 # =============================================================================
@@ -289,9 +298,11 @@ class Session:
 
 class SessionManager:
     def __init__(self, cache_dir: str):
+        self._lock = threading.RLock()
         self.sessions: Dict[str, Session] = {}
         self.cache_dir = cache_dir
         self.session_dir = os.path.join(cache_dir, "sessions")
+        self._snapshots: Dict[str, List[dict]] = {}  # sid -> list (in-memory only, lost on restart)
         os.makedirs(self.session_dir, exist_ok=True)
         # Auto-load existing sessions on startup
         self._load_sessions()
@@ -301,13 +312,19 @@ class SessionManager:
         return os.path.join(self.session_dir, f"SID_{sid}_metadata.json")
 
     def _save_metadata(self, session: Session):
-        """Persist session metadata to disk"""
+        """Persist session metadata to disk (atomic write)"""
         path = self._get_metadata_path(session.session_id)
+        tmp = path + ".tmp"
         try:
-            with open(path, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(session.to_dict(), f, indent=2)
+            os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save session metadata: {e}")
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     def _load_sessions(self):
         """Load all existing sessions from metadata files"""
@@ -362,47 +379,51 @@ class SessionManager:
         tags: Optional[List[str]] = None,
         notes: str = "",
     ) -> Session:
-        sid = "".join(uuid.uuid4().hex[:8].upper())
-        # Use SID-specific name to avoid collisions and track metadata easily
-        idb_base = os.path.basename(binary_path) if binary_path else f"session_{sid}"
-        idb_name = f"SID_{sid}_{idb_base}.i64"
-        resolved_idb = idb_path or use_existing or os.path.join(self.session_dir, idb_name)
-        if resolved_idb and os.path.isdir(resolved_idb):
-            resolved_idb = os.path.join(resolved_idb, idb_name)
-        if resolved_idb and not os.path.splitext(resolved_idb)[1]:
-            resolved_idb = f"{resolved_idb}.i64"
-        session = Session(
-            sid,
-            resolved_idb,
-            binary_path or "",
-            analysis_options=analysis_options,
-            analysis_applied=False,
-            ida_args=ida_args or [],
-            tags=tags or [],
-            notes=notes,
-        )
-        self.sessions[sid] = session
-        # Persist metadata immediately
-        self._save_metadata(session)
-        return session
+        with self._lock:
+            sid = "".join(uuid.uuid4().hex[:8].upper())
+            # Use SID-specific name to avoid collisions and track metadata easily
+            idb_base = os.path.basename(binary_path) if binary_path else f"session_{sid}"
+            idb_name = f"SID_{sid}_{idb_base}.i64"
+            resolved_idb = idb_path or use_existing or os.path.join(self.session_dir, idb_name)
+            if resolved_idb and os.path.isdir(resolved_idb):
+                resolved_idb = os.path.join(resolved_idb, idb_name)
+            if resolved_idb and not os.path.splitext(resolved_idb)[1]:
+                resolved_idb = f"{resolved_idb}.i64"
+            session = Session(
+                sid,
+                resolved_idb,
+                binary_path or "",
+                analysis_options=analysis_options,
+                analysis_applied=False,
+                ida_args=ida_args or [],
+                tags=tags or [],
+                notes=notes,
+            )
+            self.sessions[sid] = session
+            # Persist metadata immediately
+            self._save_metadata(session)
+            return session
 
     def get_session(self, sid: str) -> Optional[Session]:
         """Get session and update last_accessed timestamp"""
-        session = self.sessions.get(sid)
-        if session:
-            session.update_access()
-            self._save_metadata(session)
-        return session
+        with self._lock:
+            session = self.sessions.get(sid)
+            if session:
+                session.update_access()
+                self._save_metadata(session)
+                return copy.copy(session)
+            return None
 
     def find_session_by_path(self, path: str) -> Optional[Session]:
         """Find a session by binary_path or idb_path (normalized comparison)."""
-        norm = os.path.normpath(os.path.abspath(path))
-        for s in self.sessions.values():
-            if s.binary_path and os.path.normpath(os.path.abspath(s.binary_path)) == norm:
-                return s
-            if s.idb_path and os.path.normpath(os.path.abspath(s.idb_path)) == norm:
-                return s
-        return None
+        with self._lock:
+            norm = os.path.normpath(os.path.abspath(path))
+            for s in self.sessions.values():
+                if s.binary_path and os.path.normpath(os.path.abspath(s.binary_path)) == norm:
+                    return copy.copy(s)
+                if s.idb_path and os.path.normpath(os.path.abspath(s.idb_path)) == norm:
+                    return copy.copy(s)
+            return None
 
     def discover_sessions(self, query: str = "") -> List[Session]:
         """Return all active sessions, optionally filtered by query.
@@ -410,21 +431,23 @@ class SessionManager:
         The *query* is matched against session_id, binary_path, idb_path,
         auto_name, tags, and notes using automatic regex / glob / substring detection.
         """
-        if not query:
-            return list(self.sessions.values())
-        matcher = compile_smart_pattern(query, case_sensitive=False)
-        result = []
-        for s in self.sessions.values():
-            tags_str = " ".join(s.tags) if s.tags else ""
-            searchable = f"{s.session_id} {s.binary_path} {s.idb_path} {s.auto_name} {tags_str} {s.notes}"
-            if matcher(searchable):
-                result.append(s)
-        return result
+        with self._lock:
+            if not query:
+                return [copy.copy(s) for s in self.sessions.values()]
+            matcher = compile_smart_pattern(query, case_sensitive=False)
+            result = []
+            for s in self.sessions.values():
+                tags_str = " ".join(s.tags) if s.tags else ""
+                searchable = f"{s.session_id} {s.binary_path} {s.idb_path} {s.auto_name} {tags_str} {s.notes}"
+                if matcher(searchable):
+                    result.append(copy.copy(s))
+            return result
 
-    def delete_session(self, sid: str) -> bool:
+    def _delete_session_unlocked(self, sid: str) -> bool:
+        """Delete a session without acquiring the lock (caller must hold _lock)."""
         session = self.sessions.pop(sid, None)
+        self._snapshots.pop(sid, None)
         deleted = False
-        # Cleanup actual IDB and all associated SID files (bookmarks, logs, metadata, etc.)
         base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
         for f in glob.glob(base_pattern):
             try:
@@ -443,6 +466,363 @@ class SessionManager:
                 except Exception as e:
                     log_rpc(f"Failed to delete {log_path}: {e}")
         return bool(session) or deleted
+
+    def delete_session(self, sid: str) -> bool:
+        with self._lock:
+            return self._delete_session_unlocked(sid)
+
+    # --- New feature methods ---
+
+    def update_session(self, sid: str, **kwargs) -> Optional[Session]:
+        """Update session fields."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            for key, value in kwargs.items():
+                if hasattr(session, key) and key not in ("session_id", "created_at"):
+                    setattr(session, key, value)
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def rename_session(self, sid: str, new_name: str) -> Optional[Session]:
+        """Set a custom auto_name."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            session.auto_name = new_name
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def duplicate_session(self, sid: str) -> Optional[Session]:
+        """Clone a session with a new SID."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            new_sid = "".join(uuid.uuid4().hex[:8].upper())
+            new_session = Session(
+                new_sid,
+                session.idb_path,
+                session.binary_path,
+                analysis_options=dict(session.analysis_options),
+                analysis_applied=session.analysis_applied,
+                ida_args=list(session.ida_args),
+                tags=list(session.tags),
+                notes=session.notes,
+                auto_name=f"{session.auto_name} (copy)",
+            )
+            self.sessions[new_sid] = new_session
+            self._save_metadata(new_session)
+            return copy.copy(new_session)
+
+    def export_session(self, sid: str) -> Optional[dict]:
+        """Export session metadata as a portable dict."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            data = session.to_dict()
+            data["_exported_at"] = datetime.now().isoformat()
+            return data
+
+    def import_session(self, data: dict) -> Session:
+        """Import a session from exported dict."""
+        with self._lock:
+            # Generate a new SID to avoid collisions
+            new_sid = "".join(uuid.uuid4().hex[:8].upper())
+            data_copy = dict(data)
+            data_copy["session_id"] = new_sid
+            data_copy.pop("_exported_at", None)
+            session = Session.from_dict(data_copy)
+            self.sessions[new_sid] = session
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def archive_session(self, sid: str) -> Optional[Session]:
+        """Mark session as archived."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            if "archived" not in session.tags:
+                session.tags.append("archived")
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def unarchive_session(self, sid: str) -> Optional[Session]:
+        """Remove archived tag."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            session.tags = [t for t in session.tags if t != "archived"]
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def list_archived(self) -> List[Session]:
+        """List archived sessions."""
+        with self._lock:
+            return [copy.copy(s) for s in self.sessions.values() if "archived" in s.tags]
+
+    def list_active(self) -> List[Session]:
+        """List non-archived sessions."""
+        with self._lock:
+            return [copy.copy(s) for s in self.sessions.values() if "archived" not in s.tags]
+
+    def get_session_age(self, sid: str) -> Optional[timedelta]:
+        """Return timedelta since creation."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            return datetime.now() - session.created_at
+
+    def get_session_idle_time(self, sid: str) -> Optional[timedelta]:
+        """Return timedelta since last access."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            return datetime.now() - session.last_accessed
+
+    def cleanup_stale(self, max_age_days: int = 30) -> List[str]:
+        """Delete sessions older than max_age_days. Returns list of deleted SIDs."""
+        with self._lock:
+            cutoff = datetime.now() - timedelta(days=max_age_days)
+            stale = [sid for sid, s in self.sessions.items() if s.last_accessed < cutoff]
+            for sid in stale:
+                self._delete_session_unlocked(sid)
+            return stale
+
+    def get_stats(self) -> dict:
+        """Return statistics about sessions."""
+        with self._lock:
+            total = len(self.sessions)
+            if total == 0:
+                return {"total": 0, "active": 0, "archived": 0, "avg_age_days": 0, "tags": {}}
+            archived = sum(1 for s in self.sessions.values() if "archived" in s.tags)
+            now = datetime.now()
+            ages = [(now - s.created_at).total_seconds() for s in self.sessions.values()]
+            avg_age_days = (sum(ages) / len(ages)) / 86400 if ages else 0
+            tag_counts: Dict[str, int] = {}
+            for s in self.sessions.values():
+                for t in s.tags:
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+            return {
+                "total": total,
+                "active": total - archived,
+                "archived": archived,
+                "avg_age_days": round(avg_age_days, 2),
+                "tags": tag_counts,
+            }
+
+    def _tag_session_unlocked(self, sid: str, tag: str) -> Optional[Session]:
+        """Add a tag without acquiring the lock (caller must hold _lock)."""
+        session = self.sessions.get(sid)
+        if not session:
+            return None
+        if tag not in session.tags:
+            session.tags.append(tag)
+        session.update_access()
+        self._save_metadata(session)
+        return copy.copy(session)
+
+    def tag_session(self, sid: str, tag: str) -> Optional[Session]:
+        """Add a tag to a session."""
+        with self._lock:
+            return self._tag_session_unlocked(sid, tag)
+
+    def untag_session(self, sid: str, tag: str) -> Optional[Session]:
+        """Remove a tag from a session."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            session.tags = [t for t in session.tags if t != tag]
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def find_by_tag(self, tag: str) -> List[Session]:
+        """Find sessions by tag."""
+        with self._lock:
+            return [copy.copy(s) for s in self.sessions.values() if tag in s.tags]
+
+    def add_note(self, sid: str, note: str) -> Optional[Session]:
+        """Append to notes."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            if session.notes:
+                session.notes += "\n" + note
+            else:
+                session.notes = note
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def clear_notes(self, sid: str) -> Optional[Session]:
+        """Clear notes."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            session.notes = ""
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def set_binary_path(self, sid: str, path: str) -> Optional[Session]:
+        """Update binary path."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            session.binary_path = path
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def set_idb_path(self, sid: str, path: str) -> Optional[Session]:
+        """Update IDB path."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            session.idb_path = path
+            session.update_access()
+            self._save_metadata(session)
+            return copy.copy(session)
+
+    def bulk_delete(self, sids: List[str]) -> dict:
+        """Delete multiple sessions at once."""
+        with self._lock:
+            results = {}
+            for sid in sids:
+                results[sid] = self._delete_session_unlocked(sid)
+            return results
+
+    def bulk_tag(self, sids: List[str], tag: str) -> dict:
+        """Tag multiple sessions."""
+        with self._lock:
+            results = {}
+            for sid in sids:
+                result = self._tag_session_unlocked(sid, tag)
+                results[sid] = result is not None
+            return results
+
+    def search_notes(self, query: str) -> List[Session]:
+        """Search across all session notes."""
+        with self._lock:
+            matcher = compile_smart_pattern(query, case_sensitive=False)
+            return [copy.copy(s) for s in self.sessions.values() if s.notes and matcher(s.notes)]
+
+    def get_recent(self, n: int = 5) -> List[Session]:
+        """Get N most recently accessed sessions."""
+        with self._lock:
+            sorted_sessions = sorted(self.sessions.values(), key=lambda s: s.last_accessed, reverse=True)
+            return [copy.copy(s) for s in sorted_sessions[:n]]
+
+    def get_oldest(self, n: int = 5) -> List[Session]:
+        """Get N oldest sessions."""
+        with self._lock:
+            sorted_sessions = sorted(self.sessions.values(), key=lambda s: s.created_at)
+            return [copy.copy(s) for s in sorted_sessions[:n]]
+
+    def session_exists(self, sid: str) -> bool:
+        """Check if a session exists."""
+        with self._lock:
+            return sid in self.sessions
+
+    def count(self) -> int:
+        """Return total session count."""
+        with self._lock:
+            return len(self.sessions)
+
+    def merge_sessions(self, sid1: str, sid2: str) -> Optional[Session]:
+        """Merge metadata (tags, notes) from sid2 into sid1."""
+        with self._lock:
+            s1 = self.sessions.get(sid1)
+            s2 = self.sessions.get(sid2)
+            if not s1 or not s2:
+                return None
+            for tag in s2.tags:
+                if tag not in s1.tags:
+                    s1.tags.append(tag)
+            if s2.notes:
+                if s1.notes:
+                    s1.notes += "\n" + s2.notes
+                else:
+                    s1.notes = s2.notes
+            s1.update_access()
+            self._save_metadata(s1)
+            return copy.copy(s1)
+
+    def snapshot_session(self, sid: str) -> Optional[str]:
+        """Save a point-in-time snapshot of session metadata. Returns snapshot_id.
+        Note: Snapshots are stored in memory only and lost on process restart."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            snapshot_id = uuid.uuid4().hex[:8]
+            snapshot = session.to_dict()
+            snapshot["_snapshot_id"] = snapshot_id
+            snapshot["_snapshot_time"] = datetime.now().isoformat()
+            if sid not in self._snapshots:
+                self._snapshots[sid] = []
+            self._snapshots[sid].append(snapshot)
+            return snapshot_id
+
+    def restore_snapshot(self, sid: str, snapshot_id: str) -> Optional[Session]:
+        """Restore from a snapshot.
+        Note: Snapshots are stored in memory only and lost on process restart."""
+        with self._lock:
+            snapshots = self._snapshots.get(sid, [])
+            snap = None
+            for s in snapshots:
+                if s.get("_snapshot_id") == snapshot_id:
+                    snap = s
+                    break
+            if not snap:
+                return None
+            data = {k: v for k, v in snap.items() if not k.startswith("_snapshot")}
+            data["session_id"] = sid
+            restored = Session.from_dict(data)
+            self.sessions[sid] = restored
+            self._save_metadata(restored)
+            return copy.copy(restored)
+
+    def validate_session(self, sid: str) -> Optional[dict]:
+        """Validate session integrity (check paths, metadata)."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return None
+            issues = []
+            if session.binary_path and not os.path.exists(session.binary_path):
+                issues.append(f"Binary not found: {session.binary_path}")
+            if session.idb_path and not os.path.exists(session.idb_path):
+                issues.append(f"IDB not found: {session.idb_path}")
+            meta_path = self._get_metadata_path(sid)
+            if not os.path.exists(meta_path):
+                issues.append("Metadata file missing")
+            if not session.session_id:
+                issues.append("Empty session_id")
+            if session.created_at > datetime.now():
+                issues.append("created_at is in the future")
+            return {
+                "session_id": sid,
+                "valid": len(issues) == 0,
+                "issues": issues,
+            }
 
 
 class BookmarkManager:
@@ -710,7 +1090,7 @@ TOOLS = [
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls), update (modify session fields), rename (set custom name), duplicate (clone session), export_session/import_session (portable metadata), archive/unarchive (archive management), tag/untag/find_by_tag (tagging), add_note/clear_notes (notes), cleanup_stale (remove old sessions), stats (session statistics), validate (check integrity), bulk_delete/bulk_tag (batch operations), search_notes (search across notes), recent/oldest (sorted access), snapshot/restore_snapshot (point-in-time snapshots), merge (combine session metadata). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
@@ -793,7 +1173,12 @@ TOOL_DESCRIPTIONS = {
 
 TOOL_ACTIONS = {
     # Core session tools
-    "session": ["discover", "create", "get", "list", "switch", "close", "status", "rebuild"],
+    "session": ["discover", "create", "get", "list", "switch", "close", "status", "rebuild",
+                "update", "rename", "duplicate", "export_session", "import_session",
+                "archive", "unarchive", "tag", "untag", "find_by_tag", "add_note",
+                "clear_notes", "cleanup_stale", "stats", "validate",
+                "bulk_delete", "bulk_tag", "search_notes", "recent", "oldest",
+                "snapshot", "restore_snapshot", "merge"],
     "truncation": ["continue"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
     "batch": ["run"],
@@ -2224,6 +2609,185 @@ class IDAMCPServer:
                     "idb_path": session.idb_path,
                     "current_options": start_res.get("current_options"),
                 }
+            if action == "update":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                update_kwargs = {k: v for k, v in args.items() if k not in ("action", "session_id")}
+                result = self.session_mgr.update_session(sid, **update_kwargs)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "rename":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                new_name = args.get("name") or args.get("new_name")
+                if not new_name:
+                    return make_error(MCPError.INVALID_ARGS, "name required")
+                result = self.session_mgr.rename_session(sid, new_name)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "duplicate":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                result = self.session_mgr.duplicate_session(sid)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "export_session":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                result = self.session_mgr.export_session(sid)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "exported": result}
+            if action == "import_session":
+                data = args.get("data")
+                if not data or not isinstance(data, dict):
+                    return make_error(MCPError.INVALID_ARGS, "data dict required")
+                result = self.session_mgr.import_session(data)
+                return {"ok": True, "session": result.to_dict()}
+            if action == "archive":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                result = self.session_mgr.archive_session(sid)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "unarchive":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                result = self.session_mgr.unarchive_session(sid)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "tag":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                tag = args.get("tag")
+                if not tag:
+                    return make_error(MCPError.INVALID_ARGS, "tag required")
+                result = self.session_mgr.tag_session(sid, tag)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "untag":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                tag = args.get("tag")
+                if not tag:
+                    return make_error(MCPError.INVALID_ARGS, "tag required")
+                result = self.session_mgr.untag_session(sid, tag)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "find_by_tag":
+                tag = args.get("tag")
+                if not tag:
+                    return make_error(MCPError.INVALID_ARGS, "tag required")
+                sessions = [s.to_dict() for s in self.session_mgr.find_by_tag(tag)]
+                return {"ok": True, "sessions": sessions, "count": len(sessions)}
+            if action == "add_note":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                note = args.get("note", "")
+                if not note:
+                    return make_error(MCPError.INVALID_ARGS, "note required")
+                result = self.session_mgr.add_note(sid, note)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "clear_notes":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                result = self.session_mgr.clear_notes(sid)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "cleanup_stale":
+                max_age = args.get("max_age_days", 30)
+                deleted = self.session_mgr.cleanup_stale(max_age_days=int(max_age))
+                return {"ok": True, "deleted_sids": deleted, "count": len(deleted)}
+            if action == "stats":
+                return {"ok": True, "stats": self.session_mgr.get_stats()}
+            if action == "validate":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                result = self.session_mgr.validate_session(sid)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "validation": result}
+            if action == "bulk_delete":
+                sids = args.get("session_ids", [])
+                if not sids:
+                    return make_error(MCPError.INVALID_ARGS, "session_ids list required")
+                results = self.session_mgr.bulk_delete(sids)
+                # Clear current session if it was deleted
+                if self.current_session and self.current_session.session_id in sids:
+                    self.current_session = None
+                return {"ok": True, "results": results}
+            if action == "bulk_tag":
+                sids = args.get("session_ids", [])
+                tag = args.get("tag")
+                if not sids:
+                    return make_error(MCPError.INVALID_ARGS, "session_ids list required")
+                if not tag:
+                    return make_error(MCPError.INVALID_ARGS, "tag required")
+                results = self.session_mgr.bulk_tag(sids, tag)
+                return {"ok": True, "results": results}
+            if action == "search_notes":
+                query = args.get("query", "")
+                if not query:
+                    return make_error(MCPError.INVALID_ARGS, "query required")
+                sessions = [s.to_dict() for s in self.session_mgr.search_notes(query)]
+                return {"ok": True, "sessions": sessions, "count": len(sessions)}
+            if action == "recent":
+                n = int(args.get("n", 5))
+                sessions = [s.to_dict() for s in self.session_mgr.get_recent(n)]
+                return {"ok": True, "sessions": sessions, "count": len(sessions)}
+            if action == "oldest":
+                n = int(args.get("n", 5))
+                sessions = [s.to_dict() for s in self.session_mgr.get_oldest(n)]
+                return {"ok": True, "sessions": sessions, "count": len(sessions)}
+            if action == "snapshot":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                snapshot_id = self.session_mgr.snapshot_session(sid)
+                if snapshot_id is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return {"ok": True, "session_id": sid, "snapshot_id": snapshot_id}
+            if action == "restore_snapshot":
+                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                snapshot_id = args.get("snapshot_id")
+                if not snapshot_id:
+                    return make_error(MCPError.INVALID_ARGS, "snapshot_id required")
+                result = self.session_mgr.restore_snapshot(sid, snapshot_id)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Snapshot '{snapshot_id}' not found for session '{sid}'")
+                return {"ok": True, "session": result.to_dict()}
+            if action == "merge":
+                sid1 = args.get("session_id") or args.get("target_id")
+                sid2 = args.get("source_id")
+                if not sid1 or not sid2:
+                    return make_error(MCPError.INVALID_ARGS, "session_id (or target_id) and source_id required")
+                result = self.session_mgr.merge_sessions(sid1, sid2)
+                if result is None:
+                    return make_error(MCPError.SESSION_NOT_FOUND, "One or both sessions not found")
+                return {"ok": True, "session": result.to_dict()}
             return make_error(
                 MCPError.ACTION_NOT_FOUND, f"Unsupported session action: '{action}'",
                 hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
