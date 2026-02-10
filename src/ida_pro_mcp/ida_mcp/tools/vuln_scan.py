@@ -276,12 +276,13 @@ def _scan_use_after_free(addr, limit, include_context):
                 mnem = idc.print_insn_mnem(curr)
                 if not mnem:
                     continue
+                ml = mnem.lower()
                 # Skip if we hit another call to free or a return
-                if mnem.lower() in RETURN_MNEMONICS or mnem.lower() in UNCONDITIONAL_JUMP_MNEMONICS:
+                if ml in RETURN_MNEMONICS or ml in UNCONDITIONAL_JUMP_MNEMONICS:
                     break
                 # Look for dereference patterns after free
                 disasm = ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))
-                if "[" in disasm and mnem.lower() not in ("lea", "push"):
+                if "[" in disasm and ml not in ("lea", "push", "adr", "adrp"):
                     f = _make_finding(
                         curr, "use_after_free",
                         f"Potential use after {free_func}() at {hex_ea(free_ea)}",
@@ -391,12 +392,13 @@ def _scan_null_deref(addr, limit, include_context):
                 if curr == idaapi.BADADDR or curr >= func.end_ea:
                     break
                 mnem = idc.print_insn_mnem(curr)
-                if mnem and (mnem.lower() in COMPARISON_MNEMONICS or
-                            mnem.lower() in CONDITIONAL_BRANCH_MNEMONICS):
+                if not mnem:
+                    continue
+                ml = mnem.lower()
+                if ml in COMPARISON_MNEMONICS or ml in CONDITIONAL_BRANCH_MNEMONICS:
                     has_null_check = True
                     break
-                if mnem and (mnem.lower() in CALL_MNEMONICS or
-                             mnem.lower() in RETURN_MNEMONICS):
+                if ml in CALL_MNEMONICS or ml in RETURN_MNEMONICS:
                     break
             if not has_null_check:
                 f = _make_finding(
