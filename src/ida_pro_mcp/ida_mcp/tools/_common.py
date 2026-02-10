@@ -66,6 +66,32 @@ except (ImportError, ValueError):
         require_arg, require_one_of, validate_action, validate_count
     )
 
+# Multi-architecture helpers
+try:
+    from .arch_utils import (  # type: ignore[import-not-found]
+        get_arch, is_x86_family, is_arm_family, is_mips_family,
+        is_ppc_family, is_riscv_family, is_sparc_family,
+        is_return_mnemonic, is_call_mnemonic, is_syscall_mnemonic,
+        get_return_register, get_stack_pointer_names, get_callee_saved_registers,
+        get_prologue_pattern, get_epilogue_pattern, get_tail_call_mnemonics,
+        RETURN_MNEMONICS, UNCONDITIONAL_JUMP_MNEMONICS, CALL_MNEMONICS,
+        CONDITIONAL_BRANCH_MNEMONICS, TERMINATOR_MNEMONICS, SYSCALL_MNEMONICS,
+        MOV_MNEMONICS, COMPARISON_MNEMONICS, XOR_MNEMONICS,
+        ARITHMETIC_MNEMONICS, INTERESTING_INSTRUCTIONS,
+    )
+except ImportError:
+    from arch_utils import (  # type: ignore[import-not-found]
+        get_arch, is_x86_family, is_arm_family, is_mips_family,
+        is_ppc_family, is_riscv_family, is_sparc_family,
+        is_return_mnemonic, is_call_mnemonic, is_syscall_mnemonic,
+        get_return_register, get_stack_pointer_names, get_callee_saved_registers,
+        get_prologue_pattern, get_epilogue_pattern, get_tail_call_mnemonics,
+        RETURN_MNEMONICS, UNCONDITIONAL_JUMP_MNEMONICS, CALL_MNEMONICS,
+        CONDITIONAL_BRANCH_MNEMONICS, TERMINATOR_MNEMONICS, SYSCALL_MNEMONICS,
+        MOV_MNEMONICS, COMPARISON_MNEMONICS, XOR_MNEMONICS,
+        ARITHMETIC_MNEMONICS, INTERESTING_INSTRUCTIONS,
+    )
+
 __all__ = [
     # typing
     "Annotated", "Optional", "Literal", "Union", "Any",
@@ -87,4 +113,14 @@ __all__ = [
     "MCPError", "make_error", "handle_error", "ERROR_HINTS",
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
     "require_arg", "require_one_of", "validate_action", "validate_count",
+    # Multi-architecture helpers
+    "get_arch", "is_x86_family", "is_arm_family", "is_mips_family",
+    "is_ppc_family", "is_riscv_family", "is_sparc_family",
+    "is_return_mnemonic", "is_call_mnemonic", "is_syscall_mnemonic",
+    "get_return_register", "get_stack_pointer_names", "get_callee_saved_registers",
+    "get_prologue_pattern", "get_epilogue_pattern", "get_tail_call_mnemonics",
+    "RETURN_MNEMONICS", "UNCONDITIONAL_JUMP_MNEMONICS", "CALL_MNEMONICS",
+    "CONDITIONAL_BRANCH_MNEMONICS", "TERMINATOR_MNEMONICS", "SYSCALL_MNEMONICS",
+    "MOV_MNEMONICS", "COMPARISON_MNEMONICS", "XOR_MNEMONICS",
+    "ARITHMETIC_MNEMONICS", "INTERESTING_INSTRUCTIONS",
 ]

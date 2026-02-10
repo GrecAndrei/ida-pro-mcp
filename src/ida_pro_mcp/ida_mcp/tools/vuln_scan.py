@@ -15,28 +15,37 @@ _BUFFER_OVERFLOW_FUNCS = [
     "wcscpy", "wcscat", "lstrcpy", "lstrcpyA", "lstrcpyW",
     "lstrcat", "lstrcatA", "lstrcatW", "scanf", "sscanf", "fscanf",
     "vscanf", "vsprintf",
+    # POSIX / embedded
+    "bcopy", "bzero", "stpcpy", "stpncpy",
+    "read", "recv", "recvfrom",
 ]
 
 _FORMAT_STRING_FUNCS = [
     "printf", "fprintf", "sprintf", "snprintf", "vprintf", "vfprintf",
     "vsprintf", "vsnprintf", "syslog", "swprintf", "wprintf",
+    # Android / embedded
+    "__android_log_print", "NSLog",
 ]
 
 _COMMAND_INJECTION_FUNCS = [
     "system", "popen", "execl", "execle", "execlp", "execv", "execve",
-    "execvp", "ShellExecute", "ShellExecuteA", "ShellExecuteW",
+    "execvp", "execvpe", "posix_spawn", "posix_spawnp",
+    "ShellExecute", "ShellExecuteA", "ShellExecuteW",
     "WinExec", "CreateProcess", "CreateProcessA", "CreateProcessW",
     "_popen", "_wsystem",
+    "dlopen",
 ]
 
 _UAF_FREE_FUNCS = [
     "free", "HeapFree", "VirtualFree", "GlobalFree", "LocalFree",
     "CoTaskMemFree", "SysFreeString", "delete", "operator delete",
+    "munmap",
 ]
 
 _ALLOC_FUNCS = [
     "malloc", "calloc", "realloc", "HeapAlloc", "VirtualAlloc",
     "GlobalAlloc", "LocalAlloc", "new", "operator new",
+    "mmap", "memalign", "aligned_alloc", "pvalloc", "valloc",
 ]
 
 _RACE_CONDITION_FUNCS = [
@@ -232,9 +241,7 @@ def _scan_integer_overflow(addr, limit, include_context):
                 if curr == idaapi.BADADDR:
                     break
                 mnem = idc.print_insn_mnem(curr)
-                if mnem and mnem.lower() in ("add", "mul", "imul", "shl", "shr",
-                                              # ARM variants
-                                              "adds", "muls", "lsl", "lsr", "madd", "umull", "smull"):
+                if mnem and mnem.lower() in ARITHMETIC_MNEMONICS:
                     f = _make_finding(
                         curr, "integer_overflow",
                         f"Unchecked arithmetic ({mnem}) before {alloc}() at {hex_ea(call_ea)}",
@@ -269,14 +276,13 @@ def _scan_use_after_free(addr, limit, include_context):
                 mnem = idc.print_insn_mnem(curr)
                 if not mnem:
                     continue
+                ml = mnem.lower()
                 # Skip if we hit another call to free or a return
-                if mnem.lower() in ("ret", "retn", "jmp",
-                                    # ARM return variants
-                                    "bx", "b", "pop"):
+                if ml in RETURN_MNEMONICS or ml in UNCONDITIONAL_JUMP_MNEMONICS:
                     break
                 # Look for dereference patterns after free
                 disasm = ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))
-                if "[" in disasm and mnem.lower() not in ("lea", "push"):
+                if "[" in disasm and ml not in ("lea", "push", "adr", "adrp"):
                     f = _make_finding(
                         curr, "use_after_free",
                         f"Potential use after {free_func}() at {hex_ea(free_ea)}",
@@ -386,12 +392,13 @@ def _scan_null_deref(addr, limit, include_context):
                 if curr == idaapi.BADADDR or curr >= func.end_ea:
                     break
                 mnem = idc.print_insn_mnem(curr)
-                if mnem and mnem.lower() in ("test", "cmp", "je", "jz", "jne", "jnz",
-                                              # ARM variants
-                                              "cbz", "cbnz", "tst", "beq", "bne"):
+                if not mnem:
+                    continue
+                ml = mnem.lower()
+                if ml in COMPARISON_MNEMONICS or ml in CONDITIONAL_BRANCH_MNEMONICS:
                     has_null_check = True
                     break
-                if mnem and mnem.lower() in ("call", "ret", "retn"):
+                if ml in CALL_MNEMONICS or ml in RETURN_MNEMONICS:
                     break
             if not has_null_check:
                 f = _make_finding(

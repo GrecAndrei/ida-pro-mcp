@@ -63,7 +63,7 @@ def search(
     DETAILED ACTIONS (all return {matches: "line\\nline\\n...", count, total, truncated}):
     
     bytes - Search for byte patterns with wildcards
-        Params: pattern (e.g. "55 8B EC" or "E8 ?? ?? ?? ??"), start, end
+        Params: pattern (e.g. "55 8B EC" or "E8 ?? ?? ?? ??" for x86, "00 B0 A0 E3" for ARM), start, end
         
     string - Search string literals by content
         Params: pattern (substring), case_sensitive
@@ -81,7 +81,7 @@ def search(
         Params: pattern (substring), case_sensitive, include_context
         
     operand - Search operands for patterns
-        Params: pattern (e.g. "rsp", "qword ptr")
+        Params: pattern (e.g. "rsp", "sp", "r0", "qword ptr")
         
     comment - Search comments
         Params: pattern

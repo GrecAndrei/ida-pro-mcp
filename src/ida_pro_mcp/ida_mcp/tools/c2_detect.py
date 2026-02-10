@@ -37,6 +37,7 @@ _PERSISTENCE_STRINGS = [
 
 # --- Evasion / anti-analysis APIs ---
 _EVASION_APIS = [
+    # Windows
     "IsDebuggerPresent",
     "CheckRemoteDebuggerPresent",
     "NtQueryInformationProcess",
@@ -57,6 +58,14 @@ _EVASION_APIS = [
     "GetModuleHandle", "GetModuleHandleA", "GetModuleHandleW",
     "SleepEx", "Sleep",
     "WaitForSingleObject",
+    # Linux / POSIX / Android
+    "ptrace",
+    "getppid",
+    "prctl",
+    "clock_gettime",
+    "nanosleep", "usleep",
+    "sysinfo",
+    "uname",
 ]
 
 _EVASION_STRINGS = [
@@ -78,10 +87,19 @@ _EVASION_STRINGS = [
     "\\\\HARDWARE\\DESCRIPTION\\System",
     "HARDWARE\\DEVICEMAP\\Scsi",
     "SystemBiosVersion",
+    # Linux / Android anti-analysis
+    "/proc/self/status",
+    "/proc/self/maps",
+    "TracerPid",
+    "frida",
+    "xposed",
+    "substrate",
+    "ro.debuggable",
 ]
 
 # --- Process injection APIs ---
 _INJECTION_APIS = [
+    # Windows
     "VirtualAllocEx",
     "VirtualAlloc",
     "NtAllocateVirtualMemory",
@@ -104,6 +122,16 @@ _INJECTION_APIS = [
     "SetWindowsHookEx", "SetWindowsHookExA", "SetWindowsHookExW",
     "CreateFileMappingA", "CreateFileMappingW",
     "MapViewOfFile",
+    # Linux / POSIX
+    "mmap",
+    "mprotect",
+    "dlopen",
+    "dlsym",
+    "ptrace",
+    "process_vm_writev",
+    "memfd_create",
+    "clone",
+    "fork",
 ]
 
 # --- Exfiltration APIs ---
