@@ -83,20 +83,46 @@ def abi(
                     break
             return insns
 
+        def _cc_raw_from_tif(tif, fdet=None):
+            """
+            Extract calling-convention raw value across IDA SDK variants.
+            Some builds expose it via tinfo_t.get_cc(), others via func_type_data_t.cc.
+            """
+            try:
+                if hasattr(tif, "get_cc") and callable(getattr(tif, "get_cc")):
+                    val = tif.get_cc()
+                    if isinstance(val, int):
+                        return val & 0xF0
+            except Exception:
+                pass
+            if fdet is not None:
+                try:
+                    cc_attr = getattr(fdet, "cc", None)
+                    if isinstance(cc_attr, int):
+                        return cc_attr & 0xF0
+                    if callable(cc_attr):
+                        maybe = cc_attr()
+                        if isinstance(maybe, int):
+                            return maybe & 0xF0
+                except Exception:
+                    pass
+            return 0
+
         if action == "detect":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             fn, err = _get_func_ea(addr)
             if err:
                 return err
-            cc_val = idc.get_func_attr(fn.start_ea, idc.FUNCATTR_FLAGS)
             # The calling convention is stored via the type info
             cc_raw = 0
             tif = ida_typeinf.tinfo_t()
             if ida_nalt.get_tinfo(tif, fn.start_ea):
                 fdet = ida_typeinf.func_type_data_t()
                 if tif.get_func_details(fdet):
-                    cc_raw = fdet.cc & 0xF0
+                    cc_raw = _cc_raw_from_tif(tif, fdet)
+                else:
+                    cc_raw = _cc_raw_from_tif(tif, None)
             cc_name = CC_MAP.get(cc_raw, f"unknown(0x{cc_raw:02x})")
             fname = ida_funcs.get_func_name(fn.start_ea)
             proto = get_prototype(fn)
@@ -239,7 +265,7 @@ def abi(
                     if ida_nalt.get_tinfo(tif, ea):
                         fdet = ida_typeinf.func_type_data_t()
                         if tif.get_func_details(fdet):
-                            cc = fdet.cc & 0xF0
+                            cc = _cc_raw_from_tif(tif, fdet)
                             if cc == 0x30:  # CM_CC_ELLIPSIS
                                 fname = ida_funcs.get_func_name(ea)
                                 results.append(f"{hex(ea)}  {fname}")
@@ -264,7 +290,7 @@ def abi(
                 if ida_nalt.get_tinfo(tif, fn.start_ea):
                     fdet = ida_typeinf.func_type_data_t()
                     if tif.get_func_details(fdet):
-                        cc = fdet.cc & 0xF0
+                        cc = _cc_raw_from_tif(tif, fdet)
                         if cc == 0x30:
                             is_varargs = True
                 proto = idc.get_type(fn.start_ea) or get_prototype(fn)
@@ -425,7 +451,7 @@ def abi(
                 if ida_nalt.get_tinfo(tif, fn.start_ea):
                     fdet = ida_typeinf.func_type_data_t()
                     if tif.get_func_details(fdet):
-                        cc = fdet.cc & 0xF0
+                        cc = _cc_raw_from_tif(tif, fdet)
                         cc_name = CC_MAP.get(cc, f"0x{cc:02x}")
                         # Check for stdcall with non-zero purge mismatch
                         if cc == 0x40:  # stdcall

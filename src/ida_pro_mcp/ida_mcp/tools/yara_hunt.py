@@ -22,16 +22,26 @@ def yara_hunt(
     - list_rules: List pre-defined YARA rules in the 'rules/' directory.
     """
     try:
-        try:
-            import yara
-        except ImportError:
-            return make_error(MCPError.NOT_IMPLEMENTED, "yara-python not installed in IDA's environment", 
-                              "Install with: pip install yara-python")
-
         # Use script path to find rules, not os.getcwd() which may be wrong
         _script_dir = os.path.dirname(os.path.abspath(__file__))
         _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_script_dir))))
         rules_dir = os.path.join(_repo_root, "rules")
+
+        # list_rules should work even when yara-python is unavailable
+        if action == "list_rules":
+            if not os.path.exists(rules_dir):
+                os.makedirs(rules_dir, exist_ok=True)
+            files = [f for f in os.listdir(rules_dir) if f.endswith(".yar") or f.endswith(".yara")]
+            return {"ok": True, "rules": files, "dir": rules_dir}
+
+        try:
+            import yara
+        except ImportError:
+            return make_error(
+                MCPError.NOT_IMPLEMENTED,
+                "yara-python not installed in IDA's environment",
+                hint="Install with: pip install yara-python",
+            )
         
         if action == "scan":
             if not rules: return make_error(MCPError.INVALID_ARGS, "rules (text or path) required")
@@ -87,11 +97,6 @@ def yara_hunt(
                 return {"ok": True, "status": "Valid YARA rule"}
             except Exception as e:
                 return make_error(MCPError.INVALID_ARGS, f"YARA compilation failed: {e}")
-
-        elif action == "list_rules":
-            if not os.path.exists(rules_dir): os.makedirs(rules_dir, exist_ok=True)
-            files = [f for f in os.listdir(rules_dir) if f.endswith(".yar") or f.endswith(".yara")]
-            return {"ok": True, "rules": files, "dir": rules_dir}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

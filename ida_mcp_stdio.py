@@ -217,6 +217,9 @@ MAX_TAG_LEN = 64
 MAX_NOTE_LEN = 16_384
 MAX_NAME_LEN = 256
 MAX_WIKI_RESULTS = 200
+TOOL_ALIASES = {
+    "xfer_analysis": "xref_analysis",
+}
 
 
 def _normalize_session_id(value: Any) -> Optional[str]:
@@ -1165,6 +1168,8 @@ TOOLS = [
     "annotation",
     # Deep cross-reference analysis
     "xref_analysis",
+    # Backward-compatible alias used by some clients
+    "xfer_analysis",
     # String operations
     "string_ops",
     # CFG analysis
@@ -1252,6 +1257,7 @@ TOOL_DESCRIPTIONS = {
     "gadgets": "ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains.",
     "annotation": "Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.",
     "xref_analysis": "Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
+    "xfer_analysis": "Alias of xref_analysis (compatibility typo).",
     "string_ops": "Advanced string analysis. Query supports regex. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious.",
     "cfg_analysis": "Control flow graph metrics. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
     "binary_info": "Binary metadata analysis. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
@@ -1571,6 +1577,11 @@ TOOL_ACTIONS = {
         "propagate_names", "cleanup",
     ],
     "xref_analysis": [
+        "call_chain", "common_callers", "common_callees", "hub_functions",
+        "leaf_functions", "recursive", "dominator", "influence",
+        "dependency_graph", "dead_functions",
+    ],
+    "xfer_analysis": [
         "call_chain", "common_callers", "common_callees", "hub_functions",
         "leaf_functions", "recursive", "dominator", "influence",
         "dependency_graph", "dead_functions",
@@ -3170,6 +3181,7 @@ class IDAMCPServer:
         return result
 
     def _execute_tool(self, tool_name, args):
+        tool_name = TOOL_ALIASES.get(tool_name, tool_name)
         if tool_name not in TOOLS:
             return make_error(
                 MCPError.INVALID_ARGS,
