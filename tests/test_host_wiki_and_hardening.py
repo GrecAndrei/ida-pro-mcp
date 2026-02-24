@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import shutil
 import tempfile
@@ -120,6 +121,58 @@ class TestHostHardening(unittest.TestCase):
         self.assertTrue(res.get("ok"))
         self.assertTrue(res["results"][0]["result"].get("error"))
         self.assertEqual(res["results"][0]["result"].get("code"), MCPError.INVALID_ARGS)
+
+
+class TestResponseCompaction(unittest.TestCase):
+    def setUp(self):
+        self.server = IDAMCPServer()
+
+    def test_tools_call_uses_compact_mode_by_default(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "session", "arguments": {"action": "status"}},
+        }
+        resp = self.server.handle_request(req)
+        text = resp["result"]["content"][0]["text"]
+        payload = json.loads(text)
+        self.assertEqual(payload, {"total_sessions": 0})
+        self.assertNotIn("\n", text)
+
+    def test_tools_call_full_mode_preserves_verbose_shape(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "session",
+                "arguments": {"action": "status", "_response_mode": "full"},
+            },
+        }
+        resp = self.server.handle_request(req)
+        payload = json.loads(resp["result"]["content"][0]["text"])
+        self.assertIn("ok", payload)
+        self.assertIn("session", payload)
+        self.assertIn("total_sessions", payload)
+
+    def test_batch_compacts_envelope_in_default_mode(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "batch",
+                "arguments": {
+                    "calls": [{"name": "session", "arguments": {"action": "status"}}]
+                },
+            },
+        }
+        resp = self.server.handle_request(req)
+        payload = json.loads(resp["result"]["content"][0]["text"])
+        self.assertIn("results", payload)
+        self.assertEqual(payload["results"][0]["name"], "session")
+        self.assertEqual(payload["results"][0]["result"], {"total_sessions": 0})
 
 
 if __name__ == "__main__":

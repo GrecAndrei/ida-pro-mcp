@@ -220,6 +220,21 @@ MAX_WIKI_RESULTS = 200
 TOOL_ALIASES = {
     "xfer_analysis": "xref_analysis",
 }
+_COMPACT_DROP = object()
+_COMPACT_META_KEYS = {
+    "traceback",
+    "raw_bytes",
+    "hexdump_full",
+    "raw_request",
+    "raw_response",
+    "debug_log",
+}
+_COMPACT_DETAIL_LIST_KEYS = {
+    "available_tools",
+    "available_actions",
+    "available_args",
+    "required_args",
+}
 
 
 def _normalize_session_id(value: Any) -> Optional[str]:
@@ -247,6 +262,42 @@ def _bounded_int(
     if parsed > max_value:
         return max_value
     return parsed
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    s = str(value).strip().lower()
+    if s in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return _coerce_bool(os.environ.get(name), default=default)
+
+
+def _parse_str_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",")]
+        return [p for p in parts if p]
+    if isinstance(value, (list, tuple, set)):
+        out = []
+        for item in value:
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+    s = str(value).strip()
+    return [s] if s else []
 
 
 # =============================================================================
@@ -1869,6 +1920,53 @@ TOOL_ARG_SCHEMAS = {
     },
 }
 
+GLOBAL_RESPONSE_CONTROLS = {
+    "_response_mode": {
+        "type": "string",
+        "enum": ["compact", "full"],
+        "description": "Output mode. compact is default and reduces token usage.",
+    },
+    "_compact": {
+        "type": "boolean",
+        "description": "Shortcut for compact/full mode toggle.",
+    },
+    "_response_fields": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "Optional top-level field projection (comma-separated string or list).",
+    },
+    "_response_omit": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "Optional top-level field omission list.",
+    },
+    "_response_max_items": {
+        "type": "integer",
+        "description": "Max list items retained in compact mode.",
+    },
+    "_response_max_string": {
+        "type": "integer",
+        "description": "Max string length retained in compact mode.",
+    },
+    "_response_char_budget": {
+        "type": "integer",
+        "description": "Approximate max output chars before truncation middleware applies.",
+    },
+    "_response_table": {
+        "type": "boolean",
+        "description": "Convert repetitive list-of-object payloads into {columns,rows}.",
+    },
+    "_response_batch_compact": {
+        "type": "boolean",
+        "description": "Compact batch envelopes in compact mode.",
+    },
+    "_error_details": {
+        "type": "string",
+        "enum": ["none", "basic", "full"],
+        "description": "Controls verbosity of error details.",
+    },
+}
+
 
 def build_input_schema(tool_name: str) -> dict:
     props = {}
@@ -1877,6 +1975,8 @@ def build_input_schema(tool_name: str) -> dict:
         props.update(TOOL_ARG_SCHEMAS[tool_name])
     elif tool_name in TOOL_ACTIONS:
         props["action"] = {"type": "string", "enum": TOOL_ACTIONS[tool_name]}
+    for key, schema in GLOBAL_RESPONSE_CONTROLS.items():
+        props.setdefault(key, schema)
     # idb parameter is now completely optional - uses current_session automatically
     # Only include it in schema for documentation, never required
     if (
@@ -1899,6 +1999,40 @@ def build_input_schema(tool_name: str) -> dict:
 
 class IDAMCPServer:
     def __init__(self):
+        mode = str(os.environ.get("IDA_MCP_RESPONSE_MODE", "compact")).strip().lower()
+        if mode not in {"compact", "full"}:
+            mode = "compact"
+        detail_level = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
+        if detail_level not in {"none", "basic", "full"}:
+            detail_level = "basic"
+        self.default_response_mode = mode
+        self.default_error_detail_level = detail_level
+        self.default_batch_compact = _env_bool("IDA_MCP_BATCH_COMPACT", True)
+        self.default_table_mode = _env_bool("IDA_MCP_TABLE_COMPACT", False)
+        self.default_compact_max_items = _bounded_int(
+            os.environ.get("IDA_MCP_COMPACT_MAX_ITEMS", 80),
+            80,
+            min_value=1,
+            max_value=10_000,
+        )
+        self.default_compact_max_string = _bounded_int(
+            os.environ.get("IDA_MCP_COMPACT_MAX_STRING", 2400),
+            2400,
+            min_value=64,
+            max_value=500_000,
+        )
+        self.default_compact_char_budget = _bounded_int(
+            os.environ.get("IDA_MCP_COMPACT_CHAR_BUDGET", 45_000),
+            45_000,
+            min_value=500,
+            max_value=2_000_000,
+        )
+        self.default_truncate_tokens = _bounded_int(
+            os.environ.get("IDA_MCP_TRUNCATE_TOKENS", 2500),
+            2500,
+            min_value=500,
+            max_value=200_000,
+        )
         self.ida_dir = self._detect_ida_dir()
         self.idat_exe = self._find_idat()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2075,6 +2209,315 @@ class IDAMCPServer:
             cleaned.append(arg)
         return cleaned
 
+    @staticmethod
+    def _pop_first(mapping: dict, keys: List[str], default: Any = None) -> Any:
+        for key in keys:
+            if key in mapping:
+                return mapping.pop(key)
+        return default
+
+    def _extract_response_options(self, args: Any) -> tuple[dict, dict]:
+        if not isinstance(args, dict):
+            return {}, self._default_response_options()
+
+        exec_args = dict(args)
+        opts = self._default_response_options()
+
+        mode = self._pop_first(exec_args, ["_response_mode", "response_mode"], None)
+        compact_toggle = self._pop_first(exec_args, ["_compact", "compact"], None)
+        if compact_toggle is not None:
+            mode = "compact" if _coerce_bool(compact_toggle, True) else "full"
+        if isinstance(mode, str):
+            mode = mode.strip().lower()
+        if mode not in {"compact", "full"}:
+            mode = self.default_response_mode
+        opts["mode"] = mode
+        compact_mode = mode == "compact"
+
+        detail_level = self._pop_first(exec_args, ["_error_details"], None)
+        if detail_level is None:
+            detail_level = self.default_error_detail_level if compact_mode else "full"
+        if isinstance(detail_level, str):
+            detail_level = detail_level.strip().lower()
+        if detail_level not in {"none", "basic", "full"}:
+            detail_level = "basic" if compact_mode else "full"
+        opts["error_details"] = detail_level
+
+        opts["fields"] = _parse_str_list(self._pop_first(exec_args, ["_response_fields"], None))
+        opts["omit"] = _parse_str_list(self._pop_first(exec_args, ["_response_omit"], None))
+
+        max_items_raw = self._pop_first(exec_args, ["_response_max_items"], None)
+        max_string_raw = self._pop_first(exec_args, ["_response_max_string"], None)
+        char_budget_raw = self._pop_first(exec_args, ["_response_char_budget"], None)
+
+        opts["max_items"] = (
+            _bounded_int(
+                max_items_raw,
+                self.default_compact_max_items,
+                min_value=1,
+                max_value=10_000,
+            )
+            if compact_mode or max_items_raw is not None
+            else 10_000
+        )
+        opts["max_string"] = (
+            _bounded_int(
+                max_string_raw,
+                self.default_compact_max_string,
+                min_value=64,
+                max_value=500_000,
+            )
+            if compact_mode or max_string_raw is not None
+            else 500_000
+        )
+        opts["char_budget"] = (
+            _bounded_int(
+                char_budget_raw,
+                self.default_compact_char_budget,
+                min_value=500,
+                max_value=2_000_000,
+            )
+            if compact_mode or char_budget_raw is not None
+            else 0
+        )
+
+        opts["drop_empty"] = _coerce_bool(
+            self._pop_first(exec_args, ["_response_drop_empty"], None),
+            compact_mode,
+        )
+        opts["drop_false"] = _coerce_bool(
+            self._pop_first(exec_args, ["_response_drop_false"], None),
+            compact_mode,
+        )
+        opts["drop_ok"] = _coerce_bool(
+            self._pop_first(exec_args, ["_response_drop_ok"], None),
+            compact_mode,
+        )
+        opts["dedupe_counts"] = _coerce_bool(
+            self._pop_first(exec_args, ["_response_dedupe_counts"], None),
+            compact_mode,
+        )
+        opts["strip_meta"] = _coerce_bool(
+            self._pop_first(exec_args, ["_response_strip_meta"], None),
+            compact_mode,
+        )
+        opts["table_mode"] = _coerce_bool(
+            self._pop_first(exec_args, ["_response_table"], None),
+            self.default_table_mode if compact_mode else False,
+        )
+        opts["batch_compact"] = _coerce_bool(
+            self._pop_first(exec_args, ["_response_batch_compact"], None),
+            self.default_batch_compact if compact_mode else False,
+        )
+        return exec_args, opts
+
+    def _default_response_options(self) -> dict:
+        return {
+            "mode": self.default_response_mode,
+            "fields": [],
+            "omit": [],
+            "max_items": self.default_compact_max_items,
+            "max_string": self.default_compact_max_string,
+            "char_budget": self.default_compact_char_budget,
+            "drop_empty": True,
+            "drop_false": True,
+            "drop_ok": True,
+            "dedupe_counts": True,
+            "strip_meta": True,
+            "table_mode": self.default_table_mode,
+            "batch_compact": self.default_batch_compact,
+            "error_details": self.default_error_detail_level,
+        }
+
+    def _compact_error_details(self, details: Any, opts: dict) -> Any:
+        level = opts.get("error_details", "basic")
+        if level == "full":
+            return details
+        if level == "none":
+            return None
+        if not isinstance(details, dict):
+            return details
+        max_items = max(1, int(opts.get("max_items", 20)))
+        max_string = max(64, int(opts.get("max_string", 512)))
+        out = {}
+        for key, value in details.items():
+            if key in _COMPACT_META_KEYS:
+                continue
+            if isinstance(value, str):
+                if len(value) > max_string:
+                    out[key] = f"{value[:max_string]}...(+{len(value) - max_string} chars)"
+                else:
+                    out[key] = value
+                continue
+            if isinstance(value, list):
+                keep = value[:max_items]
+                out[key] = keep
+                if len(value) > len(keep):
+                    out[f"{key}_more"] = len(value) - len(keep)
+                continue
+            out[key] = value
+
+        for key in _COMPACT_DETAIL_LIST_KEYS:
+            value = out.get(key)
+            if isinstance(value, list) and len(value) > max_items:
+                out[key] = value[:max_items]
+                out[f"{key}_more"] = len(value) - max_items
+        return out or None
+
+    def _maybe_tableify(self, value: Any, opts: dict) -> Any:
+        if not opts.get("table_mode"):
+            return value
+        if not isinstance(value, list):
+            return value
+        if len(value) < 4:
+            return value
+        rows = [item for item in value if isinstance(item, dict)]
+        if len(rows) != len(value):
+            return value
+        common = None
+        for row in rows:
+            keys = tuple(row.keys())
+            if common is None:
+                common = keys
+            elif keys != common:
+                return value
+        if not common:
+            return value
+        if len(common) > 24:
+            return value
+        max_items = max(1, int(opts.get("max_items", len(rows))))
+        sliced = rows[:max_items]
+        table_rows = [[row.get(col) for col in common] for row in sliced]
+        table = {"columns": list(common), "rows": table_rows, "count": len(table_rows)}
+        if len(rows) > len(sliced):
+            table["total"] = len(rows)
+        return table
+
+    def _compact_value(self, value: Any, opts: dict) -> Any:
+        max_items = max(1, int(opts.get("max_items", 10_000)))
+        max_string = max(64, int(opts.get("max_string", 500_000)))
+
+        if isinstance(value, dict):
+            out = {}
+            for key, raw in value.items():
+                if opts.get("strip_meta") and key in _COMPACT_META_KEYS:
+                    continue
+                if key == "ok" and raw is True and opts.get("drop_ok"):
+                    continue
+                if key == "details":
+                    compact_details = self._compact_error_details(raw, opts)
+                    if compact_details is None and opts.get("drop_empty"):
+                        continue
+                    out[key] = compact_details
+                    continue
+                compacted = self._compact_value(raw, opts)
+                if compacted is _COMPACT_DROP:
+                    continue
+                out[key] = compacted
+
+            if opts.get("dedupe_counts"):
+                list_lengths = [len(v) for v in out.values() if isinstance(v, list)]
+                if "count" in out and isinstance(out["count"], int) and out["count"] in list_lengths:
+                    out.pop("count", None)
+                if out.get("offset") == 0:
+                    out.pop("offset", None)
+                if isinstance(out.get("count"), int) and out.get("total") == out.get("count"):
+                    out.pop("total", None)
+                if isinstance(out.get("count"), int) and out.get("limit") == out.get("count"):
+                    out.pop("limit", None)
+                if isinstance(out.get("items"), list) and out.get("next_offset") == len(out["items"]):
+                    out.pop("next_offset", None)
+                if isinstance(out.get("results"), list) and out.get("count") == len(out["results"]):
+                    out.pop("count", None)
+            if not out and opts.get("drop_empty"):
+                return _COMPACT_DROP
+            return out
+
+        if isinstance(value, list):
+            value = self._maybe_tableify(value, opts)
+            if isinstance(value, dict):
+                return self._compact_value(value, opts)
+            trimmed = value[:max_items]
+            out = []
+            for item in trimmed:
+                compacted = self._compact_value(item, opts)
+                if compacted is _COMPACT_DROP:
+                    continue
+                out.append(compacted)
+            if not out and opts.get("drop_empty"):
+                return _COMPACT_DROP
+            return out
+
+        if isinstance(value, str):
+            if len(value) > max_string:
+                return f"{value[:max_string]}...(+{len(value) - max_string} chars)"
+            if value == "" and opts.get("drop_empty"):
+                return _COMPACT_DROP
+            return value
+        if value is None and opts.get("drop_empty"):
+            return _COMPACT_DROP
+        if value is False and opts.get("drop_false"):
+            return _COMPACT_DROP
+        return value
+
+    def _project_top_level_fields(self, payload: Any, opts: dict) -> Any:
+        if not isinstance(payload, dict):
+            return payload
+        fields = set(opts.get("fields") or [])
+        omit = set(opts.get("omit") or [])
+        if fields:
+            always_keep = {"error", "code", "message", "hint", "_truncated", "_continue"}
+            keep = fields.union(always_keep)
+            projected = {k: v for k, v in payload.items() if k in keep}
+        else:
+            projected = dict(payload)
+        for key in omit:
+            projected.pop(key, None)
+        return projected
+
+    def _compact_batch_result(self, payload: Any, opts: dict) -> Any:
+        if not opts.get("batch_compact"):
+            return payload
+        if not isinstance(payload, dict):
+            return payload
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return payload
+        compact_results = []
+        for item in results:
+            if not isinstance(item, dict):
+                compact_results.append(item)
+                continue
+            entry = {
+                "name": item.get("name"),
+                "result": item.get("result"),
+            }
+            if isinstance(entry["result"], dict) and entry["result"].get("error"):
+                entry["error"] = True
+            compact_results.append(entry)
+        out = {"results": compact_results}
+        if payload.get("error"):
+            out["error"] = payload.get("error")
+        return out
+
+    def _prepare_response_payload(self, payload: Any, opts: dict) -> Any:
+        if opts.get("mode") == "full":
+            return payload
+        projected = self._project_top_level_fields(payload, opts)
+        compacted = self._compact_value(projected, opts)
+        if compacted is _COMPACT_DROP:
+            compacted = {}
+        compacted = self._compact_batch_result(compacted, opts)
+        budget = int(opts.get("char_budget", 0) or 0)
+        if budget > 0 and isinstance(compacted, dict):
+            compacted = truncate_response(compacted, max_tokens=budget)
+        return compacted
+
+    def _serialize_payload(self, payload: Any, opts: dict) -> str:
+        if opts.get("mode") == "full":
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
     def _build_ida_command(self, session, log_file, script_path, use_existing_idb: bool):
         cmd = [self.idat_exe, "-A"]
         cmd.extend(session.ida_args or [])
@@ -2151,7 +2594,7 @@ class IDAMCPServer:
         s.settimeout(timeout)
         try:
             s.connect(("127.0.0.1", port))
-            data = json.dumps(request).encode("utf-8")
+            data = json.dumps(request, separators=(",", ":")).encode("utf-8")
             s.sendall(len(data).to_bytes(4, "big") + data)
             s.settimeout(60)
             lb = b""
@@ -2524,7 +2967,7 @@ class IDAMCPServer:
             res = self._send_rpc_raw(
                 {"tool": tool_name, "args": kwargs}, runtime["port"]
             )
-            return truncate_response(res)
+            return truncate_response(res, max_tokens=self.default_truncate_tokens)
         except Exception as e:
             proc = runtime.get("process")
             exit_code = proc.poll() if proc else None
@@ -3798,7 +4241,7 @@ class IDAMCPServer:
                              hint=f"Split into multiple batch requests of {MAX_BATCH_CALLS} or fewer calls.")
 
         try:
-            payload_size = len(json.dumps(calls))
+            payload_size = len(json.dumps(calls, separators=(",", ":")))
         except Exception:
             payload_size = MAX_BATCH_PAYLOAD_BYTES + 1
         if payload_size > MAX_BATCH_PAYLOAD_BYTES:
@@ -3834,7 +4277,8 @@ class IDAMCPServer:
             elif not isinstance(call_args, dict):
                 res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-object 'arguments'")
             else:
-                res = self._execute_tool(name, call_args)
+                cleaned_args, _ = self._extract_response_options(call_args)
+                res = self._execute_tool(name, cleaned_args)
             results.append({"index": idx, "name": name, "result": res})
             if res.get("error") and not continue_on_error:
                 break
@@ -3866,16 +4310,26 @@ class IDAMCPServer:
             return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools}}
         if m == "tools/call":
             tn, args = p.get("name"), p.get("arguments", {})
-            if tn == "batch":
-                res = self._handle_batch(args)
+            if isinstance(args, dict):
+                call_args, response_opts = self._extract_response_options(args)
             else:
-                res = self._execute_tool(tn, args)
+                call_args = args
+                response_opts = self._default_response_options()
+            if tn == "batch":
+                if not isinstance(call_args, dict):
+                    res = make_error(MCPError.INVALID_ARGS, "arguments must be an object")
+                else:
+                    res = self._handle_batch(call_args)
+            else:
+                res = self._execute_tool(tn, call_args)
+            res = self._prepare_response_payload(res, response_opts)
+            is_error = bool(isinstance(res, dict) and res.get("error"))
             return {
                 "jsonrpc": "2.0",
                 "id": rid,
                 "result": {
-                    "content": [{"type": "text", "text": json.dumps(res, indent=2)}],
-                    "isError": "error" in res,
+                    "content": [{"type": "text", "text": self._serialize_payload(res, response_opts)}],
+                    "isError": is_error,
                 },
             }
         return {
@@ -3902,7 +4356,7 @@ class IDAMCPServer:
                 req = json.loads(line.decode("utf-8"))
                 resp = self.handle_request(req)
                 if resp:
-                    output = (json.dumps(resp) + "\n").encode("utf-8")
+                    output = (json.dumps(resp, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
                     rs.write(output)
                     rs.flush()
             except Exception:
