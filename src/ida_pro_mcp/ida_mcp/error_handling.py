@@ -478,7 +478,24 @@ def check_debugger(require_active: bool = True) -> Optional[Dict]:
     """
     try:
         import ida_dbg
-        is_active = ida_dbg.is_debugger_on()
+        is_active = bool(ida_dbg.is_debugger_on())
+        if not is_active:
+            get_state = getattr(ida_dbg, "get_process_state", None)
+            state = None
+            if callable(get_state):
+                try:
+                    state = get_state()
+                except Exception:
+                    state = None
+            if state is not None:
+                inactive = {
+                    getattr(ida_dbg, "DSTATE_NOTASK", None),
+                    getattr(ida_dbg, "DSTATE_END", None),
+                    getattr(ida_dbg, "DSTATE_PROC_EXIT", None),
+                }
+                inactive.discard(None)
+                if state not in inactive:
+                    is_active = True
 
         if require_active and not is_active:
             return make_error(
