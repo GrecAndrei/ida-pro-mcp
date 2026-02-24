@@ -1,97 +1,68 @@
 # DEBUG Tool Manual
 
-Control the IDA debugger and process state.
+## What It Does
+Debugger control: process state, breakpoints, registers, memory.
 
 ## Actions
-### Supported Actions
-- start
-- stop
-- continue
-- step_into
-- step_over
-- run_to
-- run_until
-- breakpoints
-- add_bp
-- del_bp
-- enable_bp
-- regs
-- set_reg
-- threads
-- modules
-- callstack
-- read_mem
-- write_mem
+- `start`: Start debugger/process.
+- `stop`: Stop debugger/process.
+- `continue`: Resume execution.
+- `step_into`: Single-step into.
+- `step_over`: Single-step over.
+- `run_to`: Run until an address breakpoint.
+- `run_until`: Run until condition/address trigger.
+- `breakpoints`: List breakpoints.
+- `add_bp`: Add breakpoint (optional condition).
+- `del_bp`: Delete breakpoint.
+- `enable_bp`: Enable/disable breakpoint.
+- `regs`: Read register state.
+- `set_reg`: Write a register value.
+- `threads`: List debugger threads.
+- `modules`: List loaded modules.
+- `callstack`: Get current call stack.
+- `read_mem`: Read process memory.
+- `write_mem`: Write process memory.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `addr` (default `None`): Target address or function start (hex string).
+- `condition` (default `None`): Breakpoint/run condition expression.
+- `reg` (default `None`): Register name for register operations.
+- `value` (default `None`): Generic value parameter (setting, conversion, register write).
+- `size` (default `16`): Byte size / read length / data width, action-dependent.
+- `data` (default `None`): Data payload for memory write operations.
+- `enabled` (default `True`): Enable (`true`) or disable (`false`) a breakpoint.
+- `tid` (default `None`): Debugger thread ID.
 
-### `stop`
-Stop the active debugger session.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "debug",
+  "args": {
+    "action": "add_bp",
+    "addr": "0x401000",
+    "condition": "eax==0",
+    "enabled": true
+  }
+}
+```
+```json
+{
+  "tool": "debug",
+  "args": {
+    "action": "read_mem",
+    "addr": "0x404000",
+    "size": 32
+  }
+}
+```
 
-### `continue`
-Continue debugger execution.
-
-### `step_over`
-Step over the next instruction.
-
-### `run_to`
-Run until the specified address.
-
-### `add_bp`
-Add a breakpoint.
-
-### `del_bp`
-Delete a breakpoint.
-
-### `enable_bp`
-Enable or disable a breakpoint.
-
-### `threads`
-List debugger threads.
-
-### `modules`
-List loaded debugger modules.
-
-### `callstack`
-Get the current call stack.
-
-### `read_mem`
-Read process memory via the debugger.
-
-### `write_mem`
-Write process memory via the debugger.
-
-### `start`
-Start the debugger for the current target.
-Launches the process. Ensure your debugger backend (WinDbg, Local Windows, GDB) is configured in the IDB first.
-
-### `regs`
-Read register values.
-Returns all general-purpose registers for the current thread.
-*   **Optional Args**: `tid` (Thread ID)
-
-### `set_reg`
-Set a register value.
-Modifies a register value.
-*   **Args**: `reg` (str), `value` (int/str)
-
-### `step_into` / `step_over`
-Step into the next instruction.
-Executes one instruction. The tool returns immediately; use `regs` to see the new state.
-
-### `breakpoints`
-List breakpoints.
-Lists all active software and hardware breakpoints.
-
-### `run_until`
-Run until a condition or address is hit.
-Autopilot debugging. Steps automatically until a condition is met.
-*   **Args**: `addr` (Target IP) or `condition` (Python expression like `cpu.rax == 5`).
-*   **Advantage**: Bypass network latency by running the stepping loop locally in IDA.
-
-## Best Practices
-1.  Always call `regs` after a step or `continue` to sync your internal state.
-2.  Use `modules` to find the base address of DLLs if you are debugging malware.
-3.  Check `threads` if the process seems hung; you might be in a background thread.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `IDA_ERROR`: `Failed to start debugger`
+- `DEBUGGER_NOT_RUNNING`: `Debugger not running`
+- `INVALID_ARGS`: `addr required`
+- `IDA_ERROR`: `Condition error: {e}`
+- `IDA_ERROR`: `Failed to add breakpoint`
+- `IDA_ERROR`: `Failed to delete breakpoint`
+- `IDA_ERROR`: `Failed to enable/disable breakpoint`
+- `IDA_ERROR`: `No debugger info`

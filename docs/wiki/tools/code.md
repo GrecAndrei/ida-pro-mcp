@@ -1,73 +1,62 @@
 # CODE Tool Manual
 
-High-level analysis of code, flow, and decompilation.
+## What It Does
+Perform code analysis, decompilation, and graph traversal.
 
 ## Actions
-### Supported Actions
-- decompile
-- disasm
-- xrefs_to
-- xrefs_from
-- xrefs_to_field
-- callees
-- callers
-- blocks
-- analyze
-- callgraph
-- export
-- find_paths
-- strings_in_func
+- `decompile`: Return Hex-Rays pseudocode for a function.
+- `disasm`: Return disassembly for a function/range.
+- `xrefs_to`: List references to a target address.
+- `xrefs_from`: List outgoing references from an address/function.
+- `xrefs_to_field`: Find references to a named structure field.
+- `callees`: List functions called by a function.
+- `callers`: List functions that call a function.
+- `blocks`: Return basic block information.
+- `analyze`: Return compact multi-signal function analysis.
+- `callgraph`: Build callgraph neighborhood with depth limits.
+- `export`: Export code-centric analysis data.
+- `find_paths`: Search paths between addresses/functions.
+- `strings_in_func`: List strings referenced by a function.
+- `diff_functions`: Diff two functions structurally/semantically.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `addrs` (default `None`): Comma-separated addresses or address list, action-dependent.
+- `addr` (default `None`): Target address or function start (hex string).
+- `max_items` (default `1000`): Maximum returned items.
+- `max_depth` (default `5`): Maximum graph/path depth.
+- `format` (default `'json'`): Output/input format (`json`, `plain`, `md`, etc. as supported).
+- `field_name` (default `None`): Structure field name for field-reference queries.
+- `target` (default `None`): Target address/symbol for resolve/xref/path actions.
 
-### `disasm`
-Return disassembly text for an address range.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "code",
+  "args": {
+    "action": "decompile",
+    "addr": "0x401000"
+  }
+}
+```
+```json
+{
+  "tool": "code",
+  "args": {
+    "action": "callgraph",
+    "addr": "0x401000",
+    "max_depth": 3,
+    "max_items": 200
+  }
+}
+```
 
-### `xrefs_to`
-List cross-references to the target address.
-
-### `xrefs_from`
-List cross-references originating from the target address.
-
-### `xrefs_to_field`
-Find references to a specific struct field.
-
-### `callers`
-List functions that call the target function.
-
-### `blocks`
-Return basic blocks for the target function.
-
-### `export`
-Export tool output in the requested format.
-
-### `find_paths`
-Find callgraph paths between two functions.
-
-### `strings_in_func`
-List string references used by a function.
-
-### `decompile`
-Return Hex-Rays pseudocode for a function.
-Returns Hex-Rays pseudocode. Handles failures gracefully.
-*   **Args**: `addrs` (str/list)
-
-### `analyze`
-Run a comprehensive function analysis bundle.
-The "Master Triage" action. Combines decompilation, xrefs, and strings into one response.
-*   **Best for**: First-look at a function.
-
-### `callgraph`
-Build a callgraph around the target function.
-Generates a recursive caller/callee tree.
-*   **Args**: `addrs`, `max_depth` (default 5).
-
-### `callees` / `callers`
-List functions called by the target function.
-One-level jump to find what a function calls or who calls it.
-
-## Edge Cases
-*   **Thunks**: If a function is a simple jump (thunk), `decompile` might return very little. Use `idb.meta` to check segment flags.
-*   **Non-standard stacks**: If decompilation fails due to "positive sp value", use `modify.comment` to mark the location for manual fixup.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `INVALID_ARGS`: `addrs or addr parameter required`
+- `FUNCTION_NOT_FOUND`: `No function at {hex_ea(ea)}`
+- `INVALID_ARGS`: `field_name required`
+- `IDA_ERROR`: `Error searching for field: {str(e)}`
+- `INVALID_ARGS`: `target required`
+- `FUNCTION_NOT_FOUND`: `No function at {hex(ea)}`
+- `INVALID_ARGS`: `diff_functions requires exactly 2 addresses`
+- `IDA_ERROR`: `Decompilation failed: {e}`

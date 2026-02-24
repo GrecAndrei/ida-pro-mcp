@@ -1,38 +1,31 @@
 # HOOKS Tool Manual
 
-API hook suggestions and script generation for dynamic analysis.
+## What It Does
+Generates hook targets and templates (Frida, Detours), ranks likely instrumentation points, and suggests inline hook insertion candidates.
 
 ## Actions
-### Supported Actions
-- suggest
-- generate_frida
-- generate_detours
-- find_targets
-- inline_hooks
+- `suggest`: Category-based hook candidate discovery.
+- `generate_frida`: Build Frida `Interceptor.attach` script for function.
+- `generate_detours`: Build Microsoft Detours C++ template.
+- `find_targets`: Rank named functions by category/importance heuristics.
+- `inline_hooks`: Find candidate instruction sites with enough bytes for trampolines.
 
+## Key Parameters
+- `action`: One of `suggest|generate_frida|generate_detours|find_targets|inline_hooks`.
+- `category`: For `suggest`; one of `network|file|crypto|registry|process`.
+- `addr` or `func_name`: Required for script generation; `addr` required for `inline_hooks`.
 
-### `suggest`
-Suggest hook points based on analysis.
-Scans for interesting API calls (Networking, Registry, File I/O) and suggests points to hook.
+## Examples
+```python
+hooks(action="suggest", category="network")
+hooks(action="generate_frida", func_name="send")
+hooks(action="generate_detours", addr="0x401000")
+hooks(action="find_targets")
+hooks(action="inline_hooks", addr="0x401000")
+```
 
-### `generate_frida`
-Generate a Frida hook script.
-Generates a boilerplate JavaScript script for Frida.
-
-### `generate_detours`
-Generate a Detours hook scaffold.
-Generates a C++ template for Microsoft Detours.
-
-### `find_targets`
-Find likely hook targets.
-Locates indirect calls and vtable entries that are prime candidates for interception.
-
-### `inline_hooks`
-Suggest inline hook locations.
-Identifies safe locations for instruction trampolines.
-
-## Best Practices
-Generate a Frida script for the `recv` or `ReadFile` functions to see the data flow in real-time while you reverse the logic in IDA.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Unknown category for `suggest`.
+- Missing `addr`/`func_name` for generation actions.
+- Function resolution failure (`FUNCTION_NOT_FOUND`).
+- Generated template may need manual signature correction before compile/use.

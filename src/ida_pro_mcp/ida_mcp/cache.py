@@ -24,7 +24,7 @@ class ToolResultCache:
             max_entries: Maximum number of cached results.
             ttl_seconds: Time-to-live for each cache entry in seconds.
         """
-        self._cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[float, int, Any]] = OrderedDict()
         self._max_entries = max_entries
         self._ttl = ttl_seconds
         self._lock = threading.Lock()

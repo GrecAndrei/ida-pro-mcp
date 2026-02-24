@@ -1,42 +1,39 @@
 # SEGMENTS Tool Manual
 
-Low-level segment and section management.
+## What It Does
+Creates, inspects, and edits segment layout/metadata, including permissions and rebasing operations.
 
 ## Actions
-### Supported Actions
-- list
-- add
-- delete
-- set_attr
-- set_perms
-- move
+- `list`: Enumerate segments with pagination.
+- `info`: Detailed segment metadata and item counts.
+- `add`: Create a segment.
+- `delete`: Remove a segment.
+- `set_attr`: Set segment attribute field.
+- `set_perms`: Set permissions by `rwx` string or integer.
+- `move`: Relocate a segment start.
 
+## Key Parameters
+- `action`: One of `list|add|delete|set_attr|set_perms|move|info`.
+- `start`: Segment address (source for `move`; lookup for `info`/`delete`/edits).
+- `end`: Segment end (`add`) or new start (`move`).
+- `name`: Segment name (`add` or `info` lookup).
+- `sclass`: Segment class for `add` (default `DATA`).
+- `attr`, `value`: Attribute key/value for `set_attr`.
+- `offset`, `count`: Pagination for `list`.
 
-### `delete`
-Remove the specified item.
+## Examples
+```python
+segments(action="list", offset=0, count=20)
+segments(action="info", name=".text")
+segments(action="add", start="0x700000", end="0x701000", name="blob", sclass="DATA")
+segments(action="set_perms", start="0x700000", value="rw")
+segments(action="move", start="0x700000", end="0x710000")
+segments(action="delete", start="0x710000")
+```
 
-### `list`
-List available items for this tool with optional paging where supported.
-Lists all segments in the binary with their base, size, and permissions. Supports `offset` and `count`.
-
-### `add` / `delete`
-Create a new item using the provided parameters.
-Creates or removes manual segments. Useful for mapping custom firmware blobs.
-
-### `set_attr`
-Update tool-specific attributes on the target object.
-Modifies segment attributes (name, permissions, addressing mode).
-
-### `set_perms`
-Set segment permissions.
-Sets segment permissions using a string like `rwx` or a numeric flag mask.
-
-### `move`
-Relocate a segment to a new address.
-Rebases a segment to a new address.
-
-## Strategy
-If you are analyzing shellcode, use `add` to map the raw bytes into a new segment at the correct offset.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing required fields for mutating actions.
+- Invalid address parsing.
+- Segment lookup failure (`SEGMENT_NOT_FOUND`).
+- Invalid attribute name in `set_attr`.
+- Segment move may fail with IDA-specific move error codes (room/loader/chunk/orphan).

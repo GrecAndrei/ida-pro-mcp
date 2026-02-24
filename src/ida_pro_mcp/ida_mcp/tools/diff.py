@@ -64,6 +64,8 @@ def diff(
                 ea1_s, ea1_e = parse_address(s1), parse_address(e1)
                 ea2_s, ea2_e = parse_address(s2), parse_address(e2)
             except Exception: return make_error(MCPError.INVALID_ARGS, "Invalid range format (start:end)")
+            if ea1_e <= ea1_s or ea2_e <= ea2_s:
+                return make_error(MCPError.INVALID_ARGS, "Range end must be greater than start")
             
             b1, b2 = ida_bytes.get_bytes(ea1_s, ea1_e - ea1_s), ida_bytes.get_bytes(ea2_s, ea2_e - ea2_s)
             if not b1 or not b2: return make_error(MCPError.IDA_ERROR, "Could not read bytes")
@@ -73,8 +75,10 @@ def diff(
                 if b1[i] != b2[i]:
                     changes.append(f"+{i}  {hex(b1[i])} -> {hex(b2[i])}")
                     if len(changes) >= 50: break
-            
-            return {"ok": True, "similarity": round(1.0 - (len(changes)/len(b1)), 3), "changes": "\n".join(changes)}
+            denom = len(b1)
+            if denom == 0:
+                return make_error(MCPError.INVALID_ARGS, "First range has zero length")
+            return {"ok": True, "similarity": round(1.0 - (len(changes)/denom), 3), "changes": "\n".join(changes)}
 
         elif action == "signatures":
             if not addr1: return make_error(MCPError.INVALID_ARGS, "addr1 (target function) required")

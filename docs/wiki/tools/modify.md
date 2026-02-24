@@ -1,34 +1,35 @@
 # MODIFY Tool Manual
 
-Database annotations and patching.
+## What It Does
+Applies direct database edits at a target address: rename symbols, add comments, apply types, and patch assembled instructions.
 
 ## Actions
-### Supported Actions
-- rename
-- comment
-- set_type
-- patch_asm
+- `rename`: Rename the item at `addr`.
+- `comment`: Add comment text at `addr` (`regular`, `repeatable`, `anterior`, `posterior`).
+- `set_type`: Parse and apply a C type declaration at `addr`.
+- `patch_asm`: Assemble and patch one or more instructions at `addr` (semicolon-separated allowed).
 
+## Key Parameters
+- `action`: One of `rename|comment|set_type|patch_asm`.
+- `addr`: Target address.
+- `value`: Main payload (new name/comment/type/instruction text).
+- `name`: Alias for `value` when `action=rename`.
+- `text`: Alias for `value` when `action=comment`.
+- `type_str`: Alias for `value` when `action=set_type`.
+- `asm`: Alias for `value` when `action=patch_asm`.
+- `comment_type`: `regular|repeatable|anterior|posterior` for comment writes.
 
-### `set_type`
-Apply a type to the specified address or symbol.
+## Examples
+```python
+modify(action="rename", addr="0x401000", value="init_config")
+modify(action="comment", addr="0x401023", text="auth gate", comment_type="repeatable")
+modify(action="set_type", addr="0x401080", type_str="int __cdecl parse(char *buf);")
+modify(action="patch_asm", addr="0x401120", asm="nop; nop; nop")
+```
 
-### `rename`
-Rename the specified symbol or address.
-Renames a function, label, or data item.
-*   **Best for**: Recording your analysis. "Always rename sub_XXXX as soon as you know what it does."
-
-### `comment`
-Create or update a comment at the specified address.
-Adds a comment. Supports regular, repeatable, anterior (above), and posterior (below).
-
-### `patch_asm`
-Assembles and patches instructions.
-*   **Args**: `addr`, `asm` (e.g. `mov eax, 1`).
-*   **Best for**: Bypassing checks or modifying logic.
-
-## Standard
-For batch renames or many comments, always use the `bulk` tool. it is significantly faster and uses less context.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing `value` (or missing alias for the selected action).
+- Invalid `addr`.
+- Invalid symbol name during `rename`.
+- Type parse/apply failure during `set_type`.
+- Assembly failure in `patch_asm` (partial patching may already be applied before failure).

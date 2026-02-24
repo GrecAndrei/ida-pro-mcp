@@ -31,6 +31,8 @@ def trace_analysis(
         Params: addr (optional - defaults to entry point)
     """
     try:
+        import bisect
+
         def load_trace():
             if trace_data and isinstance(trace_data, list):
                 result = set()
@@ -51,6 +53,10 @@ def trace_analysis(
                 return addrs
             return set()
 
+        def _has_hit(sorted_hits, start_ea: int, end_ea: int) -> bool:
+            idx = bisect.bisect_left(sorted_hits, start_ea)
+            return idx < len(sorted_hits) and sorted_hits[idx] < end_ea
+
         if action == "import_trace":
             if not path and not trace_data:
                 return make_error(MCPError.INVALID_ARGS, "path or trace_data required")
@@ -60,6 +66,7 @@ def trace_analysis(
         elif action == "analyze_coverage":
             trace_set = load_trace()
             if not trace_set: return make_error(MCPError.INVALID_ARGS, "No trace data")
+            trace_sorted = sorted(trace_set)
             
             total_blocks, hit_blocks = 0, 0
             for ea in idautils.Functions():
@@ -67,8 +74,7 @@ def trace_analysis(
                 if not func: continue
                 for block in idaapi.FlowChart(func):
                     total_blocks += 1
-                    # Efficient intersection check
-                    if any(a in trace_set for a in range(block.start_ea, block.end_ea)):
+                    if _has_hit(trace_sorted, block.start_ea, block.end_ea):
                         hit_blocks += 1
             
             return {"ok": True, "total": total_blocks, "hit": hit_blocks, "pct": round(hit_blocks/total_blocks*100, 2) if total_blocks else 0}
@@ -100,6 +106,7 @@ def trace_analysis(
         elif action == "basic_blocks_hit":
             trace_set = load_trace()
             if not trace_set: return make_error(MCPError.INVALID_ARGS, "No trace data loaded", "Run import_trace first")
+            trace_sorted = sorted(trace_set)
             
             # Entry point resolution compatible with IDA 7.x-9.x
             try:
@@ -114,7 +121,7 @@ def trace_analysis(
             
             blocks = []
             for block in idaapi.FlowChart(ida_funcs.get_func(ea)):
-                hit = any(a in trace_set for a in range(block.start_ea, block.end_ea))
+                hit = _has_hit(trace_sorted, block.start_ea, block.end_ea)
                 blocks.append({"start": hex(block.start_ea), "end": hex(block.end_ea), "hit": hit})
             return {"ok": True, "function": idc.get_func_name(ea), "blocks": blocks}
 

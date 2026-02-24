@@ -1,67 +1,41 @@
 # PROJECT Tool Manual
 
-Project-level I/O and batch operations.
+## What It Does
+Handles IDB/project lifecycle and filesystem operations exposed through the MCP tool layer.
 
 ## Actions
-### Supported Actions
-- save
-- close
-- open
-- load_binary
-- list_recent
-- get_cwd
-- set_cwd
-- list_dir
-- exists
-- read
-- write
-- sessions
-- batch
+- `save`: Save current database.
+- `close`: Close current database (headless-only support).
+- `open`: Open database/binary path (headless-only support path).
+- `load_binary`: Load additional binary data at an optional base address.
+- `list_recent`: Return recent files list.
+- `get_cwd`: Return current working directory.
+- `set_cwd`: Change working directory.
+- `list_dir`: List directory entries.
+- `exists`: Check path existence/type.
+- `read`: Read UTF-8 text file.
+- `write`: Write UTF-8 text file.
+- `sessions`: Deprecated; use `session` tool.
+- `batch`: Stubbed (host-level workflow required).
 
+## Key Parameters
+- `action`: One of `save|close|open|load_binary|list_recent|get_cwd|set_cwd|list_dir|exists|read|write|sessions|batch`.
+- `path`: File/directory path (required by path-based actions).
+- `base_addr`: Optional base address for `load_binary`.
+- `content`: File content for `write`; optional mode payload for `open`.
 
-### `close`
-Close the requested resource or database.
+## Examples
+```python
+project(action="save")
+project(action="open", path="/samples/dropper.exe")
+project(action="load_binary", path="/tmp/blob.bin", base_addr="0x500000")
+project(action="list_dir", path="/samples")
+project(action="read", path="/tmp/notes.txt")
+project(action="write", path="/tmp/notes.txt", content="triage complete")
+```
 
-### `load_binary`
-Load a binary into a new database.
-
-### `list_recent`
-List recent projects.
-
-### `get_cwd`
-Get server working directory.
-
-### `set_cwd`
-Set server working directory.
-
-### `list_dir`
-List directory contents.
-
-### `exists`
-Check if a path exists.
-
-### `read`
-Read data or content from the specified source.
-
-### `write`
-Write data or content to the specified destination.
-
-### `sessions`
-List known session databases.
-
-### `save`
-Save the current database.
-Saves the current database (.i64).
-
-### `open`
-Open the requested resource or database.
-Opens a new file or database. Terminating the current session.
-
-### `batch`
-Analyzes multiple files in sequence.
-
-## Best Practices
-Always `save` before calling `python` or other dangerous tools.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Path validation failure (`validate_path_safe`).
+- Missing required `path`/`content` values.
+- `open`/`close` may return `NOT_IMPLEMENTED` outside headless capabilities.
+- `sessions` and `batch` currently return `NOT_IMPLEMENTED` guidance.

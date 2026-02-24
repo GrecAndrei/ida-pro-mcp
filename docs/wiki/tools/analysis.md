@@ -1,39 +1,54 @@
 # ANALYSIS Tool Manual
 
-Processor/loader options and reanalysis control.
+## What It Does
+Control analysis options and reanalysis behavior.
 
 ## Actions
-### Supported Actions
-- get_options
-- set_options
-- set_processor
-- set_loader_options
-- set_architecture
-- reanalyze
+- `get_options`: Read current analysis and architecture settings.
+- `set_options`: Update analysis options using an options dictionary.
+- `set_processor`: Change processor type for the current database.
+- `set_loader_options`: Apply loader-specific options (version-dependent).
+- `set_architecture`: Adjust processor/bitness/endian settings.
+- `reanalyze`: Trigger auto-analysis on a range or whole image.
 
-### `get_options`
-Return key analysis and processor settings.
-Returns current processor and analysis info (procname, filetype, bitness).
+## Key Parameters
+- `action` (required): Operation selector.
+- `options` (default `None`): Dictionary of analysis options to set.
+- `processor` (default `None`): Processor/module name.
+- `flags` (default `None`): Processor flag string or value, action-dependent.
+- `loader` (default `None`): Loader name/options target.
+- `value` (default `None`): Generic value parameter (setting, conversion, register write).
+- `bitness` (default `None`): Target architecture bitness (`16`, `32`, or `64`) when supported.
+- `endian` (default `None`): Target endianness (`le`/`be`) when supported.
+- `start` (default `None`): Start address for range-based operations.
+- `end` (default `None`): End address for range-based operations.
 
-### `set_options`
-Set analysis info attributes such as base and bounds.
-Set basic info attributes such as `baseaddr`, `start_ea`, `min_ea`, `max_ea`.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "analysis",
+  "args": {
+    "action": "get_options"
+  }
+}
+```
+```json
+{
+  "tool": "analysis",
+  "args": {
+    "action": "set_architecture",
+    "bitness": 64,
+    "endian": "le"
+  }
+}
+```
 
-### `set_processor`
-Switch processor type for the current database.
-Switch processor type using `idaapi.set_processor_type`.
-
-### `set_loader_options`
-Apply loader-specific options (if supported).
-Apply loader-specific options (if supported by IDA version).
-
-### `set_architecture`
-Update processor, bitness, or endian settings.
-Supports `processor`, `bitness` (16/32/64), and `endian` (le|be).
-
-### `reanalyze`
-Re-run auto-analysis over a specified range.
-Re-run auto-analysis over a range (or entire image).
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `INVALID_ARGS`: `options dict required`
+- `INVALID_ARGS`: `processor required`
+- `INVALID_ARGS`: `value required`
+- `INVALID_ARGS`: `loader required (could not determine current loader)`
+- `NOT_IMPLEMENTED`: `set_loader_options not supported in this IDA version`
+- `INVALID_ARGS`: `processor, bitness, or endian required`
+- `INVALID_ARGS`: `bitness must be 16, 32, or 64`
+- `NOT_IMPLEMENTED`: `inf_set_app_bitness not supported in this IDA version`

@@ -1,27 +1,27 @@
 # MICROCODE Tool Manual
 
-Direct access to the Hex-Rays Microcode (mmat) intermediate representation.
+## What It Does
+Exposes Hex-Rays microcode (IR) summaries, block listings, and instruction listings for a function at requested maturity level.
 
 ## Actions
-### Supported Actions
-- get
-- blocks
-- instructions
+- `get`: Return microcode availability summary (`blocks_count`, maturity).
+- `blocks`: List micro-block ranges/types.
+- `instructions`: List micro-instructions (capped to 500 lines).
 
+## Key Parameters
+- `action`: One of `get|blocks|instructions`.
+- `addr`: Required function address.
+- `maturity`: Microcode optimization maturity level (`0-7`, default `3`).
 
-### `get`
-Retrieve a detailed view for the requested item or address.
-Returns a summary of micro-blocks for a function.
+## Examples
+```python
+microcode(action="get", addr="0x401000", maturity=3)
+microcode(action="blocks", addr="0x401000", maturity=4)
+microcode(action="instructions", addr="0x401000", maturity=5)
+```
 
-### `blocks`
-Return basic blocks for the target function.
-Returns detailed instructions for each micro-block.
-
-### `instructions`
-Returns the full microcode instruction stream.
-
-## Strategy
-Use microcode when the C pseudocode is too high-level and you need to see exactly how compiler optimizations (like constant folding or dead code elimination) are affecting the logic.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `addr` not a valid function.
+- Hex-Rays decompiler/microcode APIs unavailable.
+- Microcode generation failure at selected maturity.
+- Instruction output truncated at 500 items.

@@ -1,42 +1,35 @@
 # IMPORTS_DEEP Tool Manual
 
-Advanced import resolution, thunks, and API sets.
+## What It Does
+Performs deeper import/thunk inspection beyond basic import listing, including ordinal/API-set views and per-address import resolution.
 
 ## Actions
-### Supported Actions
-- thunks
-- delay
-- forwarded
-- ordinal
-- api_sets
-- resolve
+- `thunks`: Scan IAT-like areas for thunk target values.
+- `delay`: Heuristic delay-import section scan.
+- `forwarded`: Detect dotted-name style forwarded import hints.
+- `ordinal`: List ordinal imports (optionally filtered by DLL query).
+- `api_sets`: Map `api-ms-*` imports to heuristic backing DLL names.
+- `resolve`: Resolve one import address or list all resolved imports.
 
+## Key Parameters
+- `action`: One of `thunks|delay|forwarded|ordinal|api_sets|resolve`.
+- `query`: Optional filter (`thunks`, `ordinal`).
+- `addr`: Optional for `resolve`; if omitted, action returns batch list.
+- `offset`, `count`: Pagination controls (`count=0` means no cap).
 
-### `delay`
-Resolve delay-load imports.
+## Examples
+```python
+imports_deep(action="thunks", query="kernel32", offset=0, count=100)
+imports_deep(action="delay")
+imports_deep(action="forwarded")
+imports_deep(action="ordinal", query="ntdll")
+imports_deep(action="api_sets")
+imports_deep(action="resolve", addr="0x180020000")
+imports_deep(action="resolve", offset=0, count=200)
+```
 
-### `ordinal`
-Resolve ordinal imports.
-
-### `thunks`
-Resolve thunk imports.
-Resolves jump thunks to their final API destination.
-
-### `api_sets`
-Resolve API set mappings.
-Resolves Windows API Set redirections (e.g. `api-ms-win-core-file-l1-1-0.dll` -> `kernel32.dll`).
-
-### `forwarded`
-Resolve forwarded imports.
-Detects exported functions that are actually forwarded to another DLL.
-
-### `resolve`
-Resolve VA and file offset information for an address.
-Surgical resolution of an import at a specific address.
-*   **Args**: `addr` (optional). If omitted, returns a list of the first 100 imported functions in the database.
-
-## Strategy
-If a function call points to `__imp_XXXX`, use `resolve` to get the real name and prototype.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Invalid `addr` for single-item `resolve`.
+- Heuristic section-name logic may miss nonstandard layouts.
+- Forwarded/API-set outputs are best-effort, not loader-accurate emulation.
+- Unknown action returns invalid-args error.

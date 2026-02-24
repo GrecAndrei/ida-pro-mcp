@@ -1,43 +1,36 @@
 # LUMINA Tool Manual
 
-Cloud-based function recognition using Hex-Rays Lumina.
+## What It Does
+Interfaces with Hex-Rays Lumina integration to inspect availability, trigger pull/push/history UI actions, and query limited metadata for a function.
 
 ## Actions
-### Supported Actions
-- pull
-- push
-- status
-- history
-- search
+- `status`: Report Lumina action availability and module/init state hints.
+- `pull`: Pull metadata for one function (`addr`) or all functions.
+- `push`: Push one function (`addr`) or all (`push_all=True`).
+- `history`: Open Lumina history for a function.
+- `search`: Placeholder; currently returns not-implemented.
+- `get_metadata`: Best-effort metadata/name-origin inspection for function.
 
+## Key Parameters
+- `action`: One of `pull|push|status|history|search|get_metadata`.
+- `addr`: Function address for `pull` (single), `push` (single), `history`, `get_metadata`.
+- `query`: Required for `search` (currently unsupported).
+- `push_all`: Enables all-function push path.
 
-### `history`
-Show Lumina history.
-Requires UI action availability in IDA.
+## Examples
+```python
+lumina(action="status")
+lumina(action="pull", addr="0x401000")
+lumina(action="pull")
+lumina(action="push", addr="0x401000")
+lumina(action="push", push_all=True)
+lumina(action="history", addr="0x401000")
+lumina(action="get_metadata", addr="0x401000")
+```
 
-### `pull`
-Pull symbols from Lumina.
-Retrieves metadata (names, comments, prototypes) from the Lumina server.
-*   **Args**: `addr` (optional). If omitted, pulls for all functions.
-*   **Best for**: Automatically naming standard library functions in stripped binaries.
-
-### `push`
-Push symbols to Lumina.
-Contributes your analysis to the Lumina server.
-*   **Args**: `addr` (specific function) or `push_all=True`.
-*   **Note**: Requires the Lumina UI actions to be available in the current IDA build.
-
-### `status`
-Report current status and availability.
-Checks action availability and basic module status.
-
-### `search`
-Search for matching content and return matching topics.
-Searches the Lumina database by name or pattern.
-Currently returns a “not implemented” error because it requires interactive UI or a Lumina client integration.
-
-## Note on IDA 9.2
-This tool checks for `ida_lumina` when present and falls back to UI actions when available.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing required `addr` for function-specific actions.
+- Missing `addr`/`push_all=True` for `push`.
+- Lumina UI actions unavailable in current build/session.
+- `search` always returns `NOT_IMPLEMENTED`.
+- Metadata API differences across IDA versions.

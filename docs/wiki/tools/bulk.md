@@ -1,42 +1,53 @@
 # BULK Tool Manual
 
-Batch operations for high-efficiency modifications.
+## What It Does
+Bulk operations for efficient multi-target modifications.
 
 ## Actions
-### Supported Actions
-- rename
-- comment
-- apply_type
-- rename_stack
-- import_annotations
-- export_annotations
+- `rename`: Apply many renames in one operation.
+- `comment`: Apply many comments in one operation.
+- `apply_type`: Apply type information across multiple targets.
+- `rename_stack`: Rename stack variables in bulk.
+- `import_annotations`: Import saved annotations from a file.
+- `export_annotations`: Export annotations to a file.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `items` (default `None`): Structured list payload for bulk operations.
+- `path` (default `None`): Filesystem path for import/export input.
+- `continue_on_error` (default `True`): Continue processing remaining bulk items after failures.
 
-### `comment`
-Create or update a comment at the specified address.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "bulk",
+  "args": {
+    "action": "rename",
+    "items": [
+      {
+        "addr": "0x401000",
+        "name": "init_ctx"
+      },
+      {
+        "addr": "0x401040",
+        "name": "parse_cfg"
+      }
+    ]
+  }
+}
+```
+```json
+{
+  "tool": "bulk",
+  "args": {
+    "action": "import_annotations",
+    "path": "./annotations.json",
+    "continue_on_error": true
+  }
+}
+```
 
-### `apply_type`
-Apply types to multiple items.
-
-### `import_annotations`
-Import annotations in bulk.
-
-### `rename` / `comment`
-Rename the specified symbol or address.
-Perform many operations in one turn.
-*   **Args**: `items` (list of `{addr, value}` dicts).
-
-### `rename_stack`
-Rename stack variables in bulk.
-Renames multiple stack variables in a function. 
-*   **Args**: `items` (list of `{addr, old, new}` dicts).
-
-### `export_annotations`
-Export annotations in bulk.
-Saves all your work (names and comments) to a JSON file. Use this for backing up your analysis.
-
-## Best Practices
-Always use `bulk` when you have more than 3 things to change. It saves significant context window and execution time.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `INVALID_ARGS`: `items required`
+- `INVALID_ARGS`: `path required`
+- `INVALID_ARGS`: `Unknown action: {action}`
