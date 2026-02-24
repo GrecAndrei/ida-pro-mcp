@@ -51,10 +51,32 @@ def debug(
     try:
         import ida_dbg
         import ida_idd
+
+        def _wait_for_suspend(timeout_ms: int = 3000):
+            wait_fn = getattr(ida_dbg, "wait_for_next_event", None)
+            if not callable(wait_fn):
+                return None
+            mask = getattr(ida_dbg, "WFNE_SUSP", None)
+            if mask is None:
+                mask = getattr(ida_dbg, "WFNE_ANY", 0)
+            try:
+                return wait_fn(mask, timeout_ms)
+            except Exception:
+                return None
         
         if action == "start":
-            if ida_dbg.start_process(): return {"ok": True}
-            return make_error(MCPError.IDA_ERROR, "Failed to start debugger")
+            if not ida_dbg.start_process():
+                return make_error(MCPError.IDA_ERROR, "Failed to start debugger")
+            evt = _wait_for_suspend(5000)
+            active = bool(ida_dbg.is_debugger_on())
+            if not active:
+                return make_error(
+                    MCPError.DEBUGGER_NOT_RUNNING,
+                    "Debugger start did not reach active state",
+                    details={"event": evt},
+                    hint="Verify process launch settings and binary path in IDA debugger options.",
+                )
+            return {"ok": True, "debugger_on": active, "event": evt}
         
         elif action == "stop":
             if not ida_dbg.is_debugger_on(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
@@ -155,13 +177,23 @@ def debug(
             return make_error(MCPError.IDA_ERROR, "Failed to enable/disable breakpoint")
         
         elif action == "regs":
+            if not ida_dbg.is_debugger_on():
+                _wait_for_suspend(1200)
             err = check_debugger(require_active=True)
             if err: return err
             target_tid = tid if tid is not None else ida_dbg.get_current_thread()
             dbg = ida_idd.get_dbg()
             if not dbg: return make_error(MCPError.IDA_ERROR, "No debugger info")
             regvals = ida_dbg.get_reg_vals(target_tid)
-            if not regvals: return make_error(MCPError.IDA_ERROR, f"Failed to get registers for thread {target_tid}")
+            if not regvals:
+                _wait_for_suspend(1200)
+                regvals = ida_dbg.get_reg_vals(target_tid)
+            if not regvals:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Failed to get registers for thread {target_tid}",
+                    hint="Pause the debugger or break on an address before reading registers.",
+                )
             regs = {}
             for i, rv in enumerate(regvals):
                  if i < dbg.nregs:
