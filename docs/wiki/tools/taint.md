@@ -1,46 +1,39 @@
 # TAINT Tool Manual
 
-Static flow analysis and vulnerability triage.
+## What It Does
+Performs static, heuristic data-flow triage for arguments, return usage, dangerous sinks, and nearby instruction history.
 
 ## Actions
-### Supported Actions
-- find_arg_usage
-- trace_return
-- find_sinks
-- data_flow
-- backward_trace
-- slice
+- `find_arg_usage`: Uses decompiler locals/ctree to find uses of argument `arg_num` in a function.
+- `trace_return`: Finds call sites and immediate post-call instructions that consume a function return value.
+- `find_sinks`: Walks calls from a start address (BFS by `depth`) and flags dangerous API patterns.
+- `data_flow`: Summarizes prototype, args, callees, and sink hits for one function.
+- `backward_trace`: Linear instruction walk backward from an address.
+- `slice`: Heuristic decompiler-text slice from one argument to sink-like lines.
 
+## Key Parameters
+- `action`: One of `find_arg_usage|trace_return|find_sinks|data_flow|backward_trace|slice`.
+- `addr`: Required for every action.
+- `arg_num`: 0-based argument index for `find_arg_usage` and `slice`.
+- `depth`: Search depth for `find_sinks` and instruction budget multiplier for `backward_trace`.
+- `max_hits`: Caps returned lines/matches.
 
-### `trace_return`
-Trace how a function return value is used.
+## Examples
+```json
+{"name":"taint","arguments":{"action":"find_arg_usage","addr":"0x401000","arg_num":1,"max_hits":25}}
+```
 
-### `data_flow`
-Summarize input/output data flow for a function.
-Returns prototype, args (if decompiler is available), callees, and local sink hits.
+```json
+{"name":"taint","arguments":{"action":"find_sinks","addr":"0x401000","depth":4,"max_hits":50}}
+```
 
-### `find_sinks`
-Find dangerous sink calls reachable from an address.
-Recursively searches callers to find paths to dangerous APIs.
-*   **Args**: `addr`, `depth` (default 5), `max_hits`.
-*   **Best for**: "How does user input reach `system()`?"
+```json
+{"name":"taint","arguments":{"action":"slice","addr":"0x401000","arg_num":0}}
+```
 
-### `find_arg_usage`
-Analyze how a function argument is used.
-Identifies how a function argument is used in the decompiled code.
-*   **Output**: Usage sites + pseudocode line hits.
-
-### `backward_trace`
-Trace instructions backward from an address.
-A linear backward instruction trace.
-*   **Best for**: Quick checks of which instructions set a specific register.
-
-### `slice`
-Heuristic argument-to-sink slice from decompiler output.
-Heuristic argument-to-sink slice using decompiler output.
-
-## Note on Accuracy
-This tool performs **Static** analysis. For actual data flow during execution, use the `debug` tool.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing or invalid `addr`; non-function `addr` where function context is required.
+- `arg_num` out of range for function arguments.
+- Hex-Rays unavailable or decompilation fails (`find_arg_usage`, `slice`, parts of `data_flow`).
+- Unknown action returns invalid-args error.
+- Output is heuristic; sink matches are name-based and should be manually confirmed.

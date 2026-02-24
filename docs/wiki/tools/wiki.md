@@ -1,40 +1,40 @@
 # WIKI Tool Manual
 
-On-demand documentation and manual for the IDA Pro MCP system.
+## What It Does
+Provides built-in documentation search and reading for `docs/wiki`, with safe topic resolution, section extraction, and paginated reads.
 
 ## Actions
-### Supported Actions
-- list_topics
-- read
-- search
-- sections
-- index
+- `list_topics`: Returns categories -> page names.
+- `read`: Reads full topic or specific `section`; supports `offset`/`limit` chunking.
+- `search`: Full-text search across wiki pages (`query` or `topic` alias).
+- `sections`: Lists parsed markdown headers with line numbers for one topic.
+- `index`: Returns category map plus total page count.
 
+## Key Parameters
+- `action`: `list_topics|read|search|sections|index`.
+- `topic`: Topic name/path. Valid examples: `trace`, `tools/trace`, `workflows/ForensicProtocol`, `skills/TriageNewBinary`.
+- Topic lookup behavior: single-name topics are searched in `tools`, `workflows`, `skills`, `core`, then wiki root; `.md` suffix is optional.
+- `query`: Search term (used by `search`; falls back to `topic` when omitted).
+- `section`: Header text filter for `read`.
+- `offset`, `limit`: Line-based pagination for `read`.
+- `include_snippets`, `context_lines`: Controls snippet output in `search`.
 
-### `list_topics`
-List wiki topics grouped by category.
-Lists all available categories and specific tool manuals.
+## Examples
+```json
+{"name":"wiki","arguments":{"action":"list_topics"}}
+```
 
-### `read`
-Read data or content from the specified source.
-Reads the full manual for a specific tool or workflow.
-*   **Args**: `topic` (e.g. 'code', 'agent', 'strategy'), `section`, `offset`, `limit`.
+```json
+{"name":"wiki","arguments":{"action":"read","topic":"trace","section":"Failure Modes","offset":0,"limit":120}}
+```
 
-### `search`
-Search for matching content and return matching topics.
-Searches all manuals for a keyword.
-*   **Args**: `query` (or `topic`), `include_snippets`, `context_lines`.
+```json
+{"name":"wiki","arguments":{"action":"search","query":"truncation token","include_snippets":true,"context_lines":2}}
+```
 
-### `sections`
-List headers for a topic with line numbers.
-Lists headers for a topic with line numbers.
-
-### `index`
-Return a structured wiki index.
-Returns a structured index with categories and total page count.
-
-## Strategy
-**CRITICAL**: Use the `wiki` tool instead of asking the user for help. This tool provides deep context that is stripped from the standard tool descriptions to save your context window tokens.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `topic` required for `read` and `sections`.
+- Invalid topic paths (`..`, absolute paths, escapes) are rejected.
+- Missing topics return file-not-found errors.
+- Missing `query`/`topic` for `search` is rejected.
+- Unknown action returns invalid-args error.

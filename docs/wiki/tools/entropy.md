@@ -1,49 +1,38 @@
 # ENTROPY Tool Manual
 
-Detect packed, encrypted, or obfuscated code and data regions.
+## What It Does
+Computes entropy metrics across regions/segments and provides heuristics for packed data and crypto-related constants.
 
 ## Actions
-### Supported Actions
-- section
-- region
-- packed_detect
-- crypto_detect
-- compare
-- window
-- summary
+- `region`: Entropy + null ratio + byte histogram for one range.
+- `section`: Entropy and window stats per segment.
+- `packed_detect`: Sliding-window high-entropy hit scan.
+- `crypto_detect`: Constant pattern lookup (AES S-box, SHA-256 constants).
+- `compare`: Entropy delta between two same-sized regions.
+- `window`: Sliding-window entropy over explicit range.
+- `summary`: Average entropy and per-segment entropy list.
 
+## Key Parameters
+- `action`: One of `section|region|packed_detect|crypto_detect|compare|window|summary`.
+- `addr`: Start address for `region`, `compare`, `window`.
+- `end_addr`: Required for `compare` and `window`.
+- `size`: Region size for `region` and `compare` (default `4096`).
+- `threshold`: High-entropy threshold (default `7.0`).
+- `window`, `step`: Sliding scan settings.
+- `limit`: Caps findings/windows returned.
 
-### `compare`
-Compare entropy between regions.
-Use `addr`, `end_addr`, and `size` to compare two windows of equal length.
+## Examples
+```python
+entropy(action="region", addr="0x401000", size=8192)
+entropy(action="section", threshold=7.2)
+entropy(action="packed_detect", threshold=7.3, window=4096, step=512, limit=100)
+entropy(action="crypto_detect")
+entropy(action="compare", addr="0x401000", end_addr="0x501000", size=4096)
+entropy(action="window", addr="0x401000", end_addr="0x404000", window=1024, step=256)
+```
 
-### `section`
-Compute entropy for each section.
-Calculates entropy for every segment in the binary. High entropy (>7.0) usually indicates compressed or encrypted data.
-Includes sliding-window stats and high-entropy ratios.
-
-### `region`
-Compute entropy for a specific region.
-Calculates entropy for a specific address range.
-Returns a byte histogram and null-byte ratio.
-
-### `packed_detect`
-Detect packed regions using entropy heuristics.
-Heuristic scan for high-entropy windows across segments.
-
-### `crypto_detect`
-Detect crypto-like regions using entropy heuristics.
-Scans for cryptographic constants (S-boxes, magic numbers) for AES, SHA, etc.
-
-### `window`
-Sliding-window scan for a specific range.
-Use with `addr`, `end_addr`, `window`, and `step` to zoom into suspicious ranges.
-
-### `summary`
-Summarize overall entropy across segments.
-
-## Strategy
-Always run `section` on a fresh binary. If `.text` has high entropy, the file is packed. Stop and find the OEP (Original Entry Point).
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing or invalid range arguments (`addr`, `end_addr`).
+- Invalid address/range validation failures.
+- Empty/unreadable data yields low-value outputs or IDA errors.
+- Unknown `action` returns invalid-args error.

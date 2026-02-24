@@ -51,6 +51,14 @@ def export(
     try:
         import os
         import json as json_module
+
+        def _escape_idc_string(value: str) -> str:
+            return (
+                value.replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\r", "\\r")
+                .replace("\n", "\\n")
+            )
         
         # Validate path if provided
         if path:
@@ -158,7 +166,8 @@ def export(
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
                     name = idc.get_func_name(func_ea)
                     if name and not name.startswith("sub_"):
-                        commands.append(f'  MakeName({hex(func_ea)}, "{name}");')
+                        name_escaped = _escape_idc_string(name)
+                        commands.append(f'  MakeName({hex(func_ea)}, "{name_escaped}");')
             
             # Export comments (sample)
             comment_count = 0
@@ -166,7 +175,7 @@ def export(
                 for head in idautils.Heads(seg_ea, idc.get_segm_end(seg_ea)):
                     cmt = idc.get_cmt(head, 0)
                     if cmt:
-                        cmt_escaped = cmt.replace('"', '\\"').replace('\n', '\\n')
+                        cmt_escaped = _escape_idc_string(cmt)
                         commands.append(f'  MakeComm({hex(head)}, "{cmt_escaped}");')
                         comment_count += 1
                         if comment_count >= 1000:

@@ -187,7 +187,29 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
     special_json_structures = {
         "VS Code": ("mcp", "servers"),
         "Visual Studio 2022": (None, "servers"),  # servers at top level
+        "Opencode": ("mcp", None),  # OpenCode schema uses top-level "mcp" object
     }
+
+    def client_server_config(client_name: str):
+        base = generate_mcp_config(stdio=stdio)
+        if not stdio:
+            return base
+        if client_name == "Copilot CLI":
+            return {
+                "type": "local",
+                "command": base["command"],
+                "args": base["args"],
+                "env": base.get("env", {}),
+                "tools": ["*"],
+            }
+        if client_name == "Opencode":
+            return {
+                "type": "local",
+                "command": [base["command"], *base["args"]],
+                "enabled": True,
+                "environment": base.get("env", {}),
+            }
+        return base
 
     if sys.platform == "win32":
         configs = {
@@ -462,11 +484,22 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
         }
     elif sys.platform == "linux":
+        home = os.path.expanduser("~")
+        xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+        codex_dir = os.path.join(home, ".codex")
+        xdg_codex_dir = os.path.join(xdg_config, "codex")
+        if not os.path.exists(codex_dir) and os.path.exists(xdg_codex_dir):
+            codex_dir = xdg_codex_dir
+        copilot_dir = (
+            os.path.join(xdg_config, "copilot")
+            if "XDG_CONFIG_HOME" in os.environ
+            else os.path.join(home, ".copilot")
+        )
+
         configs = {
             "Cline": (
                 os.path.join(
-                    os.path.expanduser("~"),
-                    ".config",
+                    xdg_config,
                     "Code",
                     "User",
                     "globalStorage",
@@ -477,8 +510,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
             "Roo Code": (
                 os.path.join(
-                    os.path.expanduser("~"),
-                    ".config",
+                    xdg_config,
                     "Code",
                     "User",
                     "globalStorage",
@@ -489,8 +521,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
             "Kilo Code": (
                 os.path.join(
-                    os.path.expanduser("~"),
-                    ".config",
+                    xdg_config,
                     "Code",
                     "User",
                     "globalStorage",
@@ -500,45 +531,41 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 "mcp_settings.json",
             ),
             # Claude not supported on Linux
-            "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
+            "Cursor": (os.path.join(home, ".cursor"), "mcp.json"),
             "Windsurf": (
-                os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"),
+                os.path.join(home, ".codeium", "windsurf"),
                 "mcp_config.json",
             ),
-            "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
+            "Claude Code": (os.path.join(home), ".claude.json"),
             "LM Studio": (
-                os.path.join(os.path.expanduser("~"), ".lmstudio"),
+                os.path.join(home, ".lmstudio"),
                 "mcp.json",
             ),
-            "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Codex": (codex_dir, "config.toml"),
             "Antigravity IDE": (
-                os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
+                os.path.join(home, ".gemini", "antigravity"),
                 "mcp_config.json",
             ),
             "Zed": (
-                os.path.join(os.path.expanduser("~"), ".config", "zed"),
+                os.path.join(xdg_config, "zed"),
                 "settings.json",
             ),
             "Gemini CLI": (
-                os.path.join(os.path.expanduser("~"), ".gemini"),
+                os.path.join(home, ".gemini"),
                 "settings.json",
             ),
             "Qwen Coder": (
-                os.path.join(os.path.expanduser("~"), ".qwen"),
+                os.path.join(home, ".qwen"),
                 "settings.json",
             ),
-            "Copilot CLI": (
-                os.path.join(os.path.expanduser("~"), ".copilot"),
-                "mcp-config.json",
-            ),
+            "Copilot CLI": (copilot_dir, "mcp-config.json"),
             "Crush": (
-                os.path.join(os.path.expanduser("~")),
+                os.path.join(home),
                 "crush.json",
             ),
             "Augment Code": (
                 os.path.join(
-                    os.path.expanduser("~"),
-                    ".config",
+                    xdg_config,
                     "Code",
                     "User",
                 ),
@@ -546,37 +573,35 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
             "Qodo Gen": (
                 os.path.join(
-                    os.path.expanduser("~"),
-                    ".config",
+                    xdg_config,
                     "Code",
                     "User",
                 ),
                 "settings.json",
             ),
             "Warp": (
-                os.path.join(os.path.expanduser("~"), ".warp"),
+                os.path.join(home, ".warp"),
                 "mcp_config.json",
             ),
             "Amazon Q": (
-                os.path.join(os.path.expanduser("~"), ".aws", "amazonq"),
+                os.path.join(home, ".aws", "amazonq"),
                 "mcp_config.json",
             ),
             "Opencode": (
-                os.path.join(os.path.expanduser("~"), ".opencode"),
-                "mcp_config.json",
+                os.path.join(xdg_config, "opencode"),
+                "opencode.json",
             ),
             "Kiro": (
-                os.path.join(os.path.expanduser("~"), ".kiro"),
+                os.path.join(home, ".kiro"),
                 "mcp_config.json",
             ),
             "Trae": (
-                os.path.join(os.path.expanduser("~"), ".trae"),
+                os.path.join(home, ".trae"),
                 "mcp_config.json",
             ),
             "VS Code": (
                 os.path.join(
-                    os.path.expanduser("~"),
-                    ".config",
+                    xdg_config,
                     "Code",
                     "User",
                 ),
@@ -588,15 +613,31 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
         return
 
     installed = 0
+    priority_clients = {
+        "Gemini CLI",
+        "Claude Code",
+        "Codex",
+        "Copilot CLI",
+        "Opencode",
+        "Antigravity IDE",
+    }
     for name, (config_dir, config_file) in configs.items():
         config_path = os.path.join(config_dir, config_file)
         is_toml = config_file.endswith(".toml")
 
         if not os.path.exists(config_dir):
-            action = "uninstall" if uninstall else "installation"
-            if not quiet:
-                print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
-            continue
+            if uninstall:
+                action = "uninstall"
+                if not quiet:
+                    print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
+                continue
+            if name in priority_clients:
+                os.makedirs(config_dir, exist_ok=True)
+            else:
+                action = "installation"
+                if not quiet:
+                    print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
+                continue
 
         # Read existing config
         if not os.path.exists(config_path):
@@ -616,8 +657,9 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                             config = tomllib.loads(data.decode("utf-8"))
                         except tomllib.TOMLDecodeError:
                             if not quiet:
+                                action = "uninstall" if uninstall else "installation"
                                 print(
-                                    f"Skipping {name} uninstall\n  Config: {config_path} (invalid TOML)"
+                                    f"Skipping {name} {action}\n  Config: {config_path} (invalid TOML)"
                                 )
                             continue
                 else:
@@ -629,8 +671,9 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                             config = json.loads(data)
                         except json.decoder.JSONDecodeError:
                             if not quiet:
+                                action = "uninstall" if uninstall else "installation"
                                 print(
-                                    f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)"
+                                    f"Skipping {name} {action}\n  Config: {config_path} (invalid JSON)"
                                 )
                             continue
 
@@ -648,6 +691,11 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                     if nested_key not in config:
                         config[nested_key] = {}
                     mcp_servers = config[nested_key]
+                elif nested_key is None:
+                    # top-level object container (e.g., OpenCode uses mcp.<name>)
+                    if top_key not in config:
+                        config[top_key] = {}
+                    mcp_servers = config[top_key]
                 else:
                     # nested structure (e.g., VS Code uses mcp.servers)
                     if top_key not in config:
@@ -676,7 +724,9 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 continue
             del mcp_servers[mcp.name]
         else:
-            mcp_servers[mcp.name] = generate_mcp_config(stdio=stdio)
+            mcp_servers[mcp.name] = client_server_config(name)
+            if name == "Opencode" and "$schema" not in config:
+                config["$schema"] = "https://opencode.ai/config.json"
 
         # Atomic write: temp file + rename
         suffix = ".toml" if is_toml else ".json"
@@ -715,7 +765,8 @@ def install_ida_plugin(
     if sys.platform == "win32":
         ida_folder = os.path.join(os.environ["APPDATA"], "Hex-Rays", "IDA Pro")
     else:
-        ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
+        ida_user_dir = os.environ.get("IDAUSR") or os.environ.get("IDA_USER_DIR")
+        ida_folder = os.path.expanduser(ida_user_dir) if ida_user_dir else os.path.join(os.path.expanduser("~"), ".idapro")
     if not allow_ida_free:
         free_licenses = glob.glob(os.path.join(ida_folder, "idafree_*.hexlic"))
         if len(free_licenses) > 0:

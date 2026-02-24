@@ -1,49 +1,50 @@
 # COLORIZE Tool Manual
 
-Visual highlighting and region coloring in the IDA UI.
+## What It Does
+Apply visual coloring to the database.
 
 ## Actions
-### Supported Actions
-- set_func
-- set_range
-- set_insn
-- get
-- clear
-- palette
-- highlight_pattern
+- `set_func`: Apply a color to a function.
+- `set_range`: Apply a color to an address range.
+- `set_insn`: Apply a color to one instruction.
+- `get`: Read color state at an address.
+- `clear`: Clear color at an address/range/function.
+- `palette`: Return known color names/palette mapping.
+- `highlight_pattern`: Color all matches for a byte/text pattern.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `addr` (default `None`): Target address or function start (hex string).
+- `end_addr` (default `None`): Range end address for color operations.
+- `color` (default `None`): Color name/value used by coloring or highlighting actions.
+- `pattern` (default `None`): Byte/text pattern for `highlight_pattern`.
 
-### `set_insn`
-Colorize a single instruction.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "colorize",
+  "args": {
+    "action": "set_range",
+    "addr": "0x401000",
+    "end_addr": "0x401080",
+    "color": "orange"
+  }
+}
+```
+```json
+{
+  "tool": "colorize",
+  "args": {
+    "action": "highlight_pattern",
+    "pattern": "55 8B EC",
+    "color": "cyan"
+  }
+}
+```
 
-### `get`
-Retrieve a detailed view for the requested item or address.
-
-### `palette`
-List available color palette entries.
-
-### `set_func`
-Colorize a function.
-Colors an entire function.
-*   **Args**: `addr`, `color` (green|yellow|red|blue|etc.).
-
-### `set_range`
-Colorize a range of addresses.
-Colors a specific address range.
-
-### `clear`
-Clear colorization for a target.
-Removes all custom coloring from the database.
-
-### `highlight_pattern`
-Highlight addresses matching a pattern.
-Searches for a byte pattern and colors all matches.
-
-## Strategy
-Color code your progress:
-*   **Green**: Fully analyzed.
-*   **Yellow**: Partially understood.
-*   **Red**: Complex/Dangerous/Vulnerable.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `INVALID_ARGS`: `addr required`
+- `INVALID_ARGS`: `addr and end_addr required`
+- `INVALID_ARGS`: `pattern required`
+- `INVALID_ARGS`: `Invalid pattern`
+- `INVALID_ARGS`: `Unknown action: {action}`

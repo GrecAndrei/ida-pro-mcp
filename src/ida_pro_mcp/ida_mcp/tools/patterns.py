@@ -41,6 +41,8 @@ def patterns(
             if err: return err
             
             func = ida_funcs.get_func(ea)
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
             # Read function bytes
             func_size = min(length, func.end_ea - func.start_ea)
             func_bytes = ida_bytes.get_bytes(func.start_ea, func_size)

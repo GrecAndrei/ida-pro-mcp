@@ -192,7 +192,31 @@ def search(
                             break
                         ea, _ = ida_bytes.bin_search(ea + 1, seg_end, pt, ida_bytes.BIN_SEARCH_FORWARD)
                 else:
-                    pass
+                    # Fallback for older IDA builds lacking compiled_binpat_vec_t.
+                    if not hasattr(ida_search, "find_binary"):
+                        return make_error(
+                            MCPError.NOT_IMPLEMENTED,
+                            "Byte search is not supported by this IDA build",
+                        )
+
+                    try:
+                        flags = getattr(ida_search, "SEARCH_DOWN", 0)
+                        ea = ida_search.find_binary(seg_start, seg_end, pattern, 16, flags)
+                        while ea != idaapi.BADADDR:
+                            line = hex(ea)
+                            if include_context:
+                                match_bytes = ida_bytes.get_bytes(ea, min(32, seg_end - ea))
+                                if match_bytes:
+                                    line += f"  {match_bytes.hex()}"
+                                line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}"
+                            if maybe_add(line):
+                                break
+                            ea = ida_search.find_binary(ea + 1, seg_end, pattern, 16, flags)
+                    except Exception as e:
+                        return make_error(
+                            MCPError.NOT_IMPLEMENTED,
+                            f"Byte search fallback failed: {e}",
+                        )
                         
                 if range_end is not None and seg.end_ea >= range_end:
                     break
@@ -994,11 +1018,11 @@ def search(
 
         elif action == "decompiled":
             # Search through decompiled pseudocode of all functions
-            if not pat:
+            if not pattern:
                 return make_error(MCPError.INVALID_ARGS, "pattern required for decompiled search")
             import re
             try:
-                search_re = re.compile(pat, 0 if case_sensitive else re.IGNORECASE)
+                search_re = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
             except re.error as e:
                 return make_error(MCPError.INVALID_ARGS, f"Invalid regex: {e}")
 
@@ -1027,7 +1051,7 @@ def search(
             return {
                 "ok": True,
                 "action": "decompiled",
-                "pattern": pat,
+                "pattern": pattern,
                 "matches": "\n".join(matches),
                 "count": len(matches),
             }

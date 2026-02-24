@@ -1,42 +1,34 @@
 # EXPORT Tool Manual
 
-Export the IDA database or its metadata into various formats.
+## What It Does
+Exports analysis data into text/HTML/IDC/JSON/header formats and can trigger BinExport plugin output.
 
 ## Actions
-### Supported Actions
-- listing
-- html
-- idc
-- json
-- binexport
-- headers
+- `listing`: Assembly listing export for a function/range/segment subset.
+- `html`: Simple report with sampled functions and strings.
+- `idc`: IDC script containing renames/comments.
+- `json`: Structured metadata export (functions, strings, imports, exports).
+- `binexport`: Trigger BinExport plugin action.
+- `headers`: Export sampled type/struct info from local type library.
 
+## Key Parameters
+- `action`: One of `listing|html|idc|json|binexport|headers`.
+- `path`: Output path (safe-path validated); defaults per action if omitted.
+- `addr`: Optional for `listing`; supports `start:end` or address.
+- `include_decompile`: Accepted parameter (currently not used by action logic).
 
-### `idc`
-Export or evaluate IDC.
+## Examples
+```python
+export(action="listing", path="/tmp/sample.lst", addr="0x401000:0x402000")
+export(action="html", path="/tmp/report.html")
+export(action="idc", path="/tmp/reapply.idc")
+export(action="json", path="/tmp/analysis.json")
+export(action="binexport", path="/tmp/sample.BinExport")
+export(action="headers", path="/tmp/types.h")
+```
 
-### `listing`
-Export a text listing.
-Generates a complete assembly listing (.lst).
-
-### `html`
-Export an HTML listing.
-Generates an interactive HTML report of the analysis.
-
-### `json`
-Export JSON data.
-Exports all names, xrefs, and function metadata as a JSON file.
-
-### `binexport`
-Export BinExport data if available.
-Generates a Google BinExport (.BinExport) file for use with BinDiff.
-
-### `headers`
-Export C header prototypes.
-Exports all defined structures and enums as C header files (.h).
-
-## Best Practices
-Use `json` to save your progress in a format that can be parsed by other automation tools or external AIs.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Invalid or disallowed output path.
+- Missing segments or unreadable address ranges for listing.
+- BinExport plugin missing/failing.
+- File write errors or API/version differences in type export.

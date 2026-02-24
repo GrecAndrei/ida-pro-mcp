@@ -1,32 +1,35 @@
 # YARA_HUNT Tool Manual
 
-Surgical pattern matching using YARA.
+## What It Does
+Compiles and runs YARA signatures against either a specific memory range or all segments.
 
 ## Actions
-### Supported Actions
-- scan
-- compile
-- list_rules
+- `scan`: Compile rules and scan range or full binary segments.
+- `compile`: Validate YARA rule source text.
+- `list_rules`: List `.yar`/`.yara` files under repo `rules/`.
 
+## Key Parameters
+- `action`: `scan|compile|list_rules`.
+- `rules`: Required for `scan`/`compile`; either inline rule text or path to rule file.
+- `addr`: Optional scan start address for `scan`.
+- `size`: Range size for address-scoped `scan` (defaults to `0x1000` when `addr` is set).
 
-### `compile`
-Compile YARA rules.
+## Examples
+```json
+{"name":"yara_hunt","arguments":{"action":"compile","rules":"rule Test { strings: $a = \"MZ\" condition: $a }"}}
+```
 
-### `scan`
-Scan memory with YARA rules.
-Scans the binary or a specific range using YARA rules.
-*   **Args**: `rules` (raw rule text or file path), `addr` (optional), `size` (optional).
-*   **Returns**: All string matches with their addresses.
+```json
+{"name":"yara_hunt","arguments":{"action":"scan","rules":"/tmp/rules/suspicious.yar","addr":"0x401000","size":8192}}
+```
 
-### `list_rules`
-List available YARA rules.
-Lists pre-defined YARA rules in the `rules/` directory.
+```json
+{"name":"yara_hunt","arguments":{"action":"list_rules"}}
+```
 
-## Strategy
-YARA is much more powerful than simple hex searching because it supports regex, case-insensitivity, and logical combinations. Use it for finding complex crypto constants or malware markers.
-
-## Dependency Note
-Requires `yara-python`. If missing, the tool will return a helpful installation error.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `yara-python` missing in IDA environment returns not-implemented error.
+- Rule compile errors return invalid-args with YARA parser message.
+- Unsafe/invalid rule file paths are rejected.
+- Invalid scan address/range can fail with address-invalid error.
+- Full-binary mode caps returned matches to first 100 entries.

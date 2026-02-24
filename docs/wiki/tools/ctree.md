@@ -1,51 +1,46 @@
 # CTREE Tool Manual
 
-Access the Hex-Rays Abstract Syntax Tree (AST) for deep logic analysis.
+## What It Does
+Hex-Rays AST (CTree) analysis utilities.
 
 ## Actions
-### Supported Actions
-- get
-- traverse
-- find_calls
-- find_vars
-- find_strings
-- find_conditions
-- get_logic_flow
+- `get`: Return the decompiler CTree for a function.
+- `traverse`: Traverse CTree nodes with bounded depth.
+- `find_calls`: Find call expressions in CTree.
+- `find_vars`: Find variable usage in CTree.
+- `find_strings`: Find string usage in CTree.
+- `find_conditions`: Find conditional expressions in CTree.
+- `get_logic_flow`: Summarize high-level logic/control flow from CTree.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `addr` (required): Target address or function start (hex string).
+- `query` (default `None`): Search query string or query payload.
+- `depth` (default `10`): Traversal/path depth bound.
 
-### `traverse`
-Traverse the ctree AST for a function.
-*   **Args**: `addr`, `depth` (default 10), optional `query` filter.
-*   **Output**: Depth-tagged nodes for fast structural scans.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "ctree",
+  "args": {
+    "action": "get",
+    "addr": "0x401000"
+  }
+}
+```
+```json
+{
+  "tool": "ctree",
+  "args": {
+    "action": "find_calls",
+    "addr": "0x401000",
+    "query": "CreateFile",
+    "depth": 12
+  }
+}
+```
 
-### `find_strings`
-Find string literals in the decompiled AST.
-*   **Output**: Direct string literals plus object references that resolve to string data.
-
-### `get_logic_flow`
-Summarize the logic flow from the decompiled AST.
-
-### `get`
-Retrieve a detailed view for the requested item or address.
-Dumps all AST nodes for a function.
-*   **Context**: Includes the C-like text for each expression node.
-
-### `find_calls`
-Find call expressions in the decompiled AST.
-Surgically extracts all function calls from the pseudocode, including arguments.
-*   **Strategy**: Use this to find where a specific API (like `memcpy`) is used without reading 1000 lines of code.
-*   **Args**: `query` filters call text/callee/args.
-
-### `find_conditions`
-Extracts `if`, `while`, and `for` logic.
-*   **Strategy**: Best for finding decision points or "magic constant" checks.
-
-### `find_vars`
-Find variable usage in the decompiled AST.
-Lists all local variables and their types, plus usage sites.
-
-## Advanced Usage
-When you need to know *exactly* how a variable is transformed, use `get` and look for the `ea` corresponding to the assignment.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `IDA_ERROR`: `Decompiler required for CTree`
+- `IDA_ERROR`: `Decompilation failed`
+- `INVALID_ARGS`: `Unknown action: {action}`

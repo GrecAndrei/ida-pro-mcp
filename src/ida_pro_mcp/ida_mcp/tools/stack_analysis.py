@@ -529,12 +529,12 @@ def stack_analysis(
                     if op0_type in (idc.o_displ, idc.o_phrase):
                         op0_val = idc.get_operand_value(ea, 0)
                         if op0_val is not None:
-                            written_offsets.add(op0_val & 0xFFFFFFFF)
+                            written_offsets.add(op0_val)
                 ea = idc.next_head(ea)
             # Find locals with no detected write
             uninitialized = []
             for var in local_vars:
-                off = var["offset"] & 0xFFFFFFFF
+                off = var["offset"]
                 if off not in written_offsets:
                     uninitialized.append({
                         "name": var["name"],

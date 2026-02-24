@@ -1,41 +1,58 @@
 # COMMENTS_AI Tool Manual
 
-Structured, AI-optimized comment management.
+## What It Does
+AI-optimized comment management with structured formats and bulk operations.
 
 ## Actions
-### Supported Actions
-- get_context
-- set_structured
-- bulk_set
-- export_md
-- import_md
-- summary
+- `get_context`: Collect nearby code/comments context for an address.
+- `set_structured`: Set a structured comment payload at an address.
+- `bulk_set`: Apply structured comments in bulk.
+- `export_md`: Export comments to markdown.
+- `import_md`: Import comments from markdown.
+- `summary`: Generate a compact comment summary view.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `addr` (default `None`): Target address or function start (hex string).
+- `text` (default `None`): Comment text payload for comment-writing actions.
+- `items` (default `None`): Structured list payload for bulk operations.
+- `path` (default `None`): Filesystem path for import/export input.
+- `format` (default `'plain'`): Output/input format (`json`, `plain`, `md`, etc. as supported).
 
-### `import_md`
-Import structured annotations from Markdown.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "comments_ai",
+  "args": {
+    "action": "get_context",
+    "addr": "0x401000"
+  }
+}
+```
+```json
+{
+  "tool": "comments_ai",
+  "args": {
+    "action": "bulk_set",
+    "items": [
+      {
+        "addr": "0x401000",
+        "text": "Initializes session state"
+      },
+      {
+        "addr": "0x401050",
+        "text": "Validates token"
+      }
+    ]
+  }
+}
+```
 
-### `summary`
-Return a high-level diff summary.
-
-### `get_context`
-Get structured annotation context for an address.
-Retrieves all comments (regular, repeatable, anterior, posterior) in a range around `addr`.
-
-### `set_structured`
-Set a structured annotation at an address.
-Sets a formatted, machine-readable comment.
-
-### `bulk_set`
-Set multiple structured annotations.
-Applies multiple comments at once from a JSON list.
-
-### `export_md` / `import_md`
-Export structured annotations to Markdown.
-Exports your annotations to a Markdown report, or imports comments from an existing report.
-
-## Strategy
-Use `set_structured` to store metadata about vulnerabilities or algorithms that you want to persist across sessions and be easily parsed later.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `INVALID_ARGS`: `addr required`
+- `INVALID_ARGS`: `addr and text required`
+- `INVALID_ARGS`: `items required (JSON list)`
+- `INVALID_ARGS`: `Invalid JSON: {e}`
+- `INVALID_ARGS`: `items must be a JSON array`
+- `INVALID_ARGS`: `path required`
+- `INVALID_ARGS`: `Unknown action: {action}`
