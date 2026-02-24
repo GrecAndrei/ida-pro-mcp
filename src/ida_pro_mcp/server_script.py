@@ -39,6 +39,46 @@ TOOL_ALIASES = {
     # Compatibility typo used by some wrappers.
     "xfer_analysis": "xref_analysis",
 }
+_ERROR_DETAIL_LEVEL = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
+if _ERROR_DETAIL_LEVEL not in {"none", "basic", "full"}:
+    _ERROR_DETAIL_LEVEL = "basic"
+
+
+def _trim_text(text, max_len=300):
+    if not isinstance(text, str):
+        return text
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len]}...(+{len(text) - max_len} chars)"
+
+
+def _compact_detail_value(value, max_items=16):
+    if isinstance(value, list):
+        kept = value[:max_items]
+        return kept, len(value) - len(kept)
+    if isinstance(value, str):
+        return _trim_text(value), 0
+    return value, 0
+
+
+def _compact_error_details(details):
+    if not details:
+        return None
+    if _ERROR_DETAIL_LEVEL == "full":
+        return details
+    if _ERROR_DETAIL_LEVEL == "none":
+        return None
+    if not isinstance(details, dict):
+        return _trim_text(str(details))
+    out = {}
+    for key, value in details.items():
+        if key in {"traceback", "raw_bytes", "hexdump_full", "raw_request", "raw_response"}:
+            continue
+        compacted, remaining = _compact_detail_value(value)
+        out[key] = compacted
+        if remaining > 0:
+            out[f"{key}_more"] = remaining
+    return out or None
 
 
 def _canonical_tool_name(name):
@@ -125,7 +165,9 @@ def _build_error(tool_name, message, code="INVALID_ARGS", details=None, hint=Non
     if hint:
         res["hint"] = hint
     if details:
-        res["details"] = details
+        compacted = _compact_error_details(details)
+        if compacted:
+            res["details"] = compacted
     return res
 
 def run_server():
@@ -180,12 +222,14 @@ def run_server():
                             TOOLS[canonical_tool] = loaded_tool
 
                     if canonical_tool not in TOOLS:
+                        available_tools = sorted(TOOLS.keys())
                         res = _build_error(
                             tool_name,
                             f"Tool not found: {tool_name}",
                             code="TOOL_NOT_FOUND",
                             details={
-                                "available_tools": sorted(TOOLS.keys()),
+                                "available_tools": available_tools[:20],
+                                "available_tools_more": max(0, len(available_tools) - 20),
                                 "canonical_tool": canonical_tool,
                                 "load_error": load_err if 'load_err' in locals() else None,
                             },
@@ -263,7 +307,7 @@ def run_server():
 
                     res = _build_error(tool_name, msg, details=details, hint=hint)
                 
-                resp_json = json.dumps(res).encode('utf-8')
+                resp_json = json.dumps(res, separators=(",", ":")).encode('utf-8')
                 conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
             
             conn.close()
