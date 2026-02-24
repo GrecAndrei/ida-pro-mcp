@@ -1,206 +1,416 @@
-# IDA Pro MCP Server
+# IDA Pro MCP
 
-A high-performance Model Context Protocol (MCP) server providing structured integration between AI agents and IDA Pro 9.2+.
+LLM-first reverse engineering for IDA Pro.
 
-## Overview
+`ida-pro-mcp` exposes IDA analysis, decompilation, debugging, triage, and annotation as MCP tools so coding agents can operate on binaries with structured calls instead of fragile text scraping.
 
-The IDA Pro MCP Server enables AI assistants to interact programmatically with IDA's analysis engine. It provides a comprehensive suite of over 60 tools for binary analysis, decompilation, debugging, vulnerability hunting, and database annotation — all exposed via a standardized JSON-RPC interface with compact, LLM-optimized output.
+## Table Of Contents
 
-## Key Features
+- [What This Project Is](#what-this-project-is)
+- [Why LLM Agents Use It](#why-llm-agents-use-it)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Documentation Map](#documentation-map)
+- [Quick Start](#quick-start)
+- [How LLMs Should Use It](#how-llms-should-use-it)
+- [Architecture Graphs](#architecture-graphs)
+- [Tool Surface](#tool-surface)
+- [Technical Deep Dive](#technical-deep-dive)
+- [Linux Support Details](#linux-support-details)
+- [Response And Context Controls](#response-and-context-controls)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
 
-- **Modern IDA 9.2 Integration**: Fully optimized for the IDA 9.2 API, including support for the latest type system and headless execution mode.
-- **Multi-Session Parallelism**: Each session runs in its own headless IDA process for safe concurrent analysis.
-- **Persistent Forensic Bookmarks**: Custom JSON-backed bookmarking system that supports rich technical notes and AI-driven annotations.
-- **Comprehensive SDK**: Full access to Hex-Rays pseudocode, CTree ASTs, cross-references, and topological analysis (CFG/Callgraphs).
-- **LLM-Optimized Output**: All tools return compact, newline-delimited text instead of verbose JSON — minimizing context token usage.
-- **Smart Pattern Matching**: All query/filter parameters auto-detect regex, glob, or plain substring patterns.
-- **ARM + x86 Support**: All analysis tools work across x86/x64 and ARM/AArch64 architectures.
-- **Automated Process Recovery**: Intelligent detection and cleanup of stale IDA instances and locked virtual environments.
-- **Flexible Transport**: Support for both STDIO and HTTP-based MCP transport protocols.
+## What This Project Is
+
+`ida-pro-mcp` is a session-oriented MCP server built for IDA Pro 9.2+.
+
+It provides:
+
+- A host MCP server (`ida_mcp_stdio.py`) that LLM clients talk to
+- A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`)
+- 60+ analysis tools under `src/ida_pro_mcp/ida_mcp/tools/`
+- Persistent session/bookmark metadata in `ida_mcp_cache/`
+- Built-in wiki docs accessible through the `wiki` tool
+
+The design goal is simple: make LLM binary analysis stable, scriptable, and token-efficient.
+
+## Why LLM Agents Use It
+
+Without MCP, an LLM has to infer analysis state from screenshots, logs, and pasted snippets.
+With `ida-pro-mcp`, an LLM can:
+
+- Open and reuse long-lived analysis sessions
+- Query exact symbols, xrefs, decompilation, CFG, imports, strings, types
+- Perform edits (rename/comment/patch/type changes) reproducibly
+- Batch operations to reduce round trips
+- Receive compact-by-default responses to preserve context window
 
 ## Requirements
 
-- **IDA Pro**: Version 9.2 or later.
-- **Python**: Version 3.11 or later.
-- **uv**: Recommended for high-performance dependency management and sub-second startup.
+- IDA Pro `9.2+`
+- Python `3.11+`
+- `uv` recommended (installer supports fallback without `uv`)
 
-## Installation
+## Install
 
-The project includes a professional installer that handles self-relocation to a stable system path (`%LOCALAPPDATA%` on Windows) and configures various MCP clients automatically.
+### One-command installer (recommended)
 
 ```bash
 python install.py
 ```
 
-The installer will:
-1. Detect and migrate the server to a permanent location.
-2. Synchronize core code while preserving user data and analysis cache.
-3. Register the server with supported MCP clients (see below).
-4. Link the modular SDK components to your IDA Pro installation.
+Installer behavior:
 
-### Supported MCP Clients
+1. Relocates/updates to a stable install directory.
+2. Creates `.venv` and installs dependencies.
+3. Auto-detects IDA install path (`IDADIR`/`IDA_MCP_IDAT` fallback logic included).
+4. Configures supported MCP clients.
+5. Sets wiki path automatically when available.
 
-The installer automatically configures the following MCP clients:
+Default install directory:
 
-- **Gemini CLI** - Google's CLI-based AI assistant
-- **Antigravity** - Gemini-based AI tool
-- **Claude Code** - Anthropic's command-line coding assistant
-- **Claude Desktop** - Anthropic's desktop application
-- **Codex** - OpenAI Codex CLI tool
-- **Copilot CLI** - GitHub Copilot command-line tool
-- **OpenCode** - Open source AI coding agent for terminal/IDE/desktop
-- **Cursor** - AI-powered code editor
-- **VS Code** - With GitHub Copilot extension
-- **Windsurf** - AI development environment
-- **Cline** - AI coding assistant extension
-- **Roo Code** - Code assistant extension
+- Windows: `%LOCALAPPDATA%/ida-pro-mcp`
+- Linux/macOS: `~/.local/share/ida-pro-mcp`
 
-Each client uses its native configuration format:
-- **Standard JSON**: Claude Desktop, Cursor, VS Code, Windsurf, Cline, Roo Code
-- **TOML**: Codex
-- **OpenCode Schema**: OpenCode uses `type: "local"` with `command` array format
-- **GitHub Copilot CLI**: Special format with `type: "local"` and `tools: ["*"]`
+### Supported MCP clients auto-configured by installer
 
-## Tool Registry
+- Gemini CLI
+- Antigravity
+- Claude Code
+- Codex
+- Copilot CLI
+- OpenCode
+- Claude Desktop
+- Cursor
+- VS Code (Copilot MCP config)
+- Windsurf
+- Cline
+- Roo Code
 
-The server exposes over 60 tools organized by domain:
+### Manual run (for development)
 
-### Session Management
+```bash
+python -u ida_mcp_stdio.py
+```
 
-**Important**: Once you create or switch to a session, the `idb` parameter becomes optional for all subsequent tool calls. The system automatically uses the active session's IDB path.
+## Documentation Map
 
-**Workflow:**
-1. Create a session: `session(action="create", binary_path="path/to/binary.exe")`
-2. Use any tool without `idb` parameter: `data(action="functions")`
-3. Switch sessions if needed: `session(action="switch", session_id="ABCD1234")`
-4. Continue using tools: `code(action="decompile", addr="0x401000")`
+Primary documentation now lives under `docs/`:
 
-### Core Tools
+- `docs/README.md`: entry point for docs organization.
+- `docs/wiki/`: wiki content used by the `wiki` MCP tool.
+- `docs/TECHNICAL_REFERENCE.md`: low-level technical details.
+- `docs/TOOLS_REFERENCE.md`: tool-focused reference.
 
-| Tool | Description |
-| :--- | :--- |
-| `session` | Session management (discover, create, list, switch, close, status). **WARNING**: 'close' permanently deletes the session and IDB. |
-| `bookmarks` | Session-correlated forensic bookmarking with rich metadata. |
-| `batch` | Execute multiple tool calls in a single request. |
-| `analysis` | Loader/processor settings and reanalysis controls. |
-| `query` | Consolidated read-only entry point (data/search/symbols/patterns). |
-| `edit` | Consolidated write/edit entry point (modify/funcs/segments/bulk). |
+Legacy/superseded notes were moved to `docs/legacy/` to keep repo root clean.
 
-### Data Access & Search
+## Quick Start
 
-| Tool | Description |
-| :--- | :--- |
-| `idb` | Database metadata, segment mapping, and entrypoints. |
-| `code` | Decompilation (Hex-Rays), disassembly, and cross-reference analysis. |
-| `data` | Function listing, global variables, strings, imports, and exports. Query supports regex. |
-| `search` | Pattern/reference search (bytes, string, immediate, name, regex, vulnerable, constants). |
-| `types` | Type Library (TIL) management and structure reconstruction. |
-| `memory` | Direct database memory read/write operations. |
+### 1) Start server
 
-### Modification & Annotation
+Use installer-managed client config, or run manually:
 
-| Tool | Description |
-| :--- | :--- |
-| `modify` | Rename, comment, set type, and patch assembly. |
-| `funcs` | Function boundary management and metadata. |
-| `segments` | Segment management (list, add, delete, permissions). |
-| `bulk` | Bulk rename/comment/type operations for efficiency. |
-| `annotation` | Intelligent auto-commenting: label loops, mark dangerous APIs, propagate names. Supports dry_run. |
-| `comments_ai` | Structured AI-friendly annotation management (get_context, set_structured, export/import markdown). |
-| `colorize` | Visual highlighting of code regions. |
-| `data_ops` | Data type conversion (make_data, make_array, make_string). |
-| `fixups` | Relocation/fixup management. |
+```bash
+python -u ida_mcp_stdio.py
+```
 
-### Security & Vulnerability Analysis
+### 2) Create a session
 
-| Tool | Description |
-| :--- | :--- |
-| `vuln_scan` | Automated vulnerability scanner with CWE classification (buffer overflow, format string, UAF, command injection, etc.). |
-| `taint` | Static data flow and vulnerability analysis (find_sinks, backward_trace, slice). |
-| `gadgets` | ROP/JOP/COP gadget discovery, stack pivots, mitigations detection. x86/x64 + ARM/AArch64. |
-| `c2_detect` | C2/malware behavior detection (persistence, evasion, injection, IOC extraction). |
+From your MCP client:
 
-### Deobfuscation & Crypto
+```json
+{
+  "name": "session",
+  "arguments": {
+    "action": "create",
+    "binary_path": "/path/to/binary"
+  }
+}
+```
 
-| Tool | Description |
-| :--- | :--- |
-| `deobfuscate` | XOR scan, stack strings, opaque predicates, control flow flattening, API hashing, anti-disasm. |
-| `crypto_id` | Cryptographic algorithm identification (AES, SHA, CRC, Base64 tables, custom crypto). |
-| `entropy` | Entropy analysis and packing detection. |
+### 3) Call tools without repeating `idb`
 
-### Advanced Analysis
+Once a session is active, most tools automatically use current session context.
 
-| Tool | Description |
-| :--- | :--- |
-| `agent` | High-level analysis orchestrator (analyze_function, context_pack, rename_suggestions). |
-| `summarize` | LLM-friendly binary/function summarization (complexity, call hierarchy, security posture). |
-| `classify` | Function purpose classification (crypto, network, file_io, wrappers, callbacks, hot_functions). |
-| `compare` | Function comparison and similarity analysis (diff, clone detection, batch similarity). |
-| `xref_analysis` | Deep cross-reference analysis (call chains, hub functions, dominators, dead functions). |
-| `cfg_analysis` | Control flow graph analysis (complexity, loops, dominators, back edges, flatten detection). |
-| `stack_analysis` | Deep stack frame analysis (buffers, canary detection, spills, uninitialized vars). |
-| `abi` | ABI/calling convention analysis (detect, stack/reg args, tail calls, prologue/epilogue). |
+```json
+{
+  "name": "data",
+  "arguments": {
+    "action": "functions",
+    "count": 50
+  }
+}
+```
 
-### String & Data Analysis
+### 4) Use batch for multi-step flows
 
-| Tool | Description |
-| :--- | :--- |
-| `string_ops` | Advanced string operations (URLs, IPs, emails, paths, registry keys, suspicious strings). Query supports regex. |
-| `binary_info` | Binary metadata and format analysis (headers, sections, relocations, resources, compiler). |
-| `protocol` | Network protocol structure analysis (detect, parsers, handlers, endpoints, packet struct). |
+```json
+{
+  "name": "batch",
+  "arguments": {
+    "calls": [
+      {"name": "idb", "arguments": {"action": "meta"}},
+      {"name": "data", "arguments": {"action": "imports"}},
+      {"name": "search", "arguments": {"action": "strings", "pattern": "http"}}
+    ]
+  }
+}
+```
 
-### Debugging & Tracing
+## How LLMs Should Use It
 
-| Tool | Description |
-| :--- | :--- |
-| `debug` | Debugger control, breakpoints, registers, and memory. |
-| `trace` | Execution tracing operations. |
-| `coverage` | Code coverage import and analysis (DrCov, Lighthouse). |
-| `trace_analysis` | Post-mortem execution trace processing. |
+Recommended operating pattern for agents:
 
-### Structural Analysis
+1. `session(action="create"|"switch")`
+2. `idb(action="meta")` for initial grounding
+3. `data/code/search` for discovery
+4. `summarize/agent/classify` for high-level synthesis
+5. `modify/edit/bulk` for controlled updates
+6. `bookmarks/wiki` for durable notes and in-tool docs
 
-| Tool | Description |
-| :--- | :--- |
-| `structs` | Structure recovery and vtable reconstruction. |
-| `imports_deep` | Advanced import resolution (thunks, delay, forwarded). |
-| `patterns` | Signature and pattern matching. |
-| `symbols` | PDB/DWARF symbol management. |
-| `microcode` | Hex-Rays Microcode (IR) access. |
-| `graph` | CFG and callgraph visualization (JSON, DOT, Mermaid). |
-| `ctree` | Hex-Rays AST (CTree) analysis. |
-| `emulate` | Static tracing and emulation utilities. |
+Practical agent rules:
 
-### Export & Utilities
+- Prefer compact results, then zoom in with filters.
+- Use `batch` when the next calls are deterministic.
+- Paginate large result sets with tool-level `offset`/`count`.
+- Use `truncation(action="continue")` only when needed.
+- Save milestones via bookmarks and session notes.
 
-| Tool | Description |
-| :--- | :--- |
-| `export` | Database export (listing, HTML, IDC, JSON, BinExport). |
-| `history` | Undo/redo and database snapshots. |
-| `diff` | Binary differential analysis. |
-| `lumina` | Lumina server interaction. |
-| `hooks` | Hook suggestion and Frida script generation. |
-| `misc` | Utilities (Python exec, IDC, signature loading, file I/O). |
-| `calc` | Mathematical and address resolution utilities. |
-| `nav` | Navigation and triage (goto, cursor, interesting). |
-| `project` | Project I/O and file system operations. |
-| `wiki` | Built-in documentation system. |
-| `yara_hunt` | YARA pattern matching. |
+## Architecture Graphs
 
-### LLM Helpers
+### High-level architecture
 
-| Tool | Description |
-| :--- | :--- |
-| `llm_helpers` | LLM-specific helpers (context_window, function_digest, binary_digest, suggest_next, cheatsheet). |
+```mermaid
+flowchart LR
+    A[LLM MCP Client\nCodex/Claude/Cursor/etc] -->|JSON-RPC over stdio| B[Host Server\nida_mcp_stdio.py]
+    B -->|Session + Runtime Management| C[(ida_mcp_cache)]
+    B -->|TCP localhost RPC| D[IDA Runtime Bridge\nserver_script.py]
+    D --> E[Tool Modules\nida_mcp.tools.*]
+    E --> F[IDA SDK + Hex-Rays APIs]
+    B --> G[Wiki Index + Docs\ndocs/wiki]
+```
 
-## Development and Testing
+### Tool call sequence
 
-A dedicated test client is provided for manual verification of tool functionality:
+```mermaid
+sequenceDiagram
+    participant L as LLM Client
+    participant H as Host MCP Server
+    participant I as IDA Runtime Bridge
+    participant T as Tool Function
+
+    L->>H: tools/call(name, arguments)
+    H->>H: extract response options\nresolve session
+    H->>I: socket RPC {tool,args}
+    I->>T: dispatch tool(action,...)
+    T-->>I: result/error
+    I-->>H: JSON response
+    H->>H: truncation + compact pipeline
+    H-->>L: MCP content[text=json]
+```
+
+### Session lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: session create
+    Created --> Active: first tool call starts IDA runtime
+    Active --> Active: analysis calls
+    Active --> Switched: session switch
+    Switched --> Active
+    Active --> Archived: session archive
+    Archived --> Active: session unarchive
+    Active --> Closed: session close
+    Closed --> [*]
+```
+
+## Tool Surface
+
+Tool families include:
+
+- Core/session: `session`, `batch`, `bookmarks`, `wiki`, `truncation`
+- Data access: `idb`, `data`, `code`, `search`, `types`, `memory`
+- Editing: `modify`, `funcs`, `segments`, `bulk`, `edit`, `annotation`, `comments_ai`
+- Analysis: `cfg_analysis`, `xref_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `compare`, `summarize`, `agent`
+- Security RE: `vuln_scan`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `c2_detect`, `yara_hunt`
+- Debug/trace: `debug`, `trace`, `trace_analysis`, `coverage`
+- Structural: `ctree`, `microcode`, `graph`, `structs`, `imports_deep`, `symbols`, `patterns`
+- Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `llm_helpers`, `binary_info`, `string_ops`
+
+For detailed per-tool docs, use the `wiki` tool or browse `docs/wiki/tools/`.
+
+## Technical Deep Dive
+
+### 1) Process model and transport
+
+There are two layers:
+
+- Host layer (`ida_mcp_stdio.py`): MCP JSON-RPC over stdio
+- IDA runtime layer (`server_script.py`): local TCP socket RPC into IDA process
+
+Why split it this way:
+
+- Host stays responsive and can manage sessions/process recovery.
+- Runtime runs inside IDA context and calls IDA SDK safely.
+- Crashes or hangs are isolated per runtime process/session.
+
+### 2) Session manager internals
+
+Session metadata is persisted under:
+
+- `ida_mcp_cache/sessions/SID_<ID>_metadata.json`
+- `ida_mcp_cache/sessions/SID_<ID>_bookmarks.json`
+
+Key properties tracked:
+
+- `session_id`, `binary_path`, `idb_path`
+- analysis options and whether they were applied
+- tags, notes, access timestamps
+- runtime state (resolved at query time)
+
+The host can auto-recover sessions from orphaned `SID_*.i64/.idb` files even if metadata was missing.
+
+### 3) Runtime startup and recovery
+
+For each active session, host:
+
+1. Finds/starts `idat` binary.
+2. Starts bridge script in headless mode.
+3. Waits for ping readiness on dynamic local port.
+4. Applies requested analysis/loader/arch options.
+5. Monitors process health and performs restart/recovery when needed.
+
+Recovery logic handles known bad states (for example corrupt/stale IDB artifacts) and can rebuild from binary when possible.
+
+### 4) Dispatch pipeline
+
+At call time:
+
+1. Tool name canonicalization (including aliases).
+2. Session routing (`idb` implicit from active session when omitted).
+3. Runtime RPC call.
+4. Tool execution in IDA runtime.
+5. Host truncation and response compaction.
+6. Final MCP response serialization.
+
+### 5) Context-optimized response pipeline
+
+As of current implementation, compact mode is default.
+
+Host now performs global compaction before sending content:
+
+- Drops low-value boilerplate (for example redundant `ok: true`)
+- Deduplicates pagination counters when implied
+- Trims large metadata/error fields
+- Supports top-level field projection and omission
+- Supports compact batch envelope mode
+- Supports optional list-of-object table compaction
+- Uses minified JSON serialization by default
+
+Full verbose shape is still available via explicit `response_mode=full`.
+
+### 6) Wiki subsystem
+
+The `wiki` tool indexes markdown content from `docs/wiki` (or `IDA_MCP_WIKI_DIR`) and supports:
+
+- topic listing
+- fuzzy/strict search
+- section-aware reads
+- snippet extraction
+- related topic discovery
+- fallback generation for tool docs when static docs are absent
+
+This gives agents in-band documentation without leaving MCP context.
+
+## Linux Support Details
+
+Linux is a first-class path in installer and runtime logic.
+
+### IDA detection order
+
+1. `IDADIR` / `IDA_DIR`
+2. `IDA_MCP_IDAT`
+3. common install globs (`/opt`, `/usr/local`, user home patterns)
+4. `PATH` lookup (`idat64`, `idat`, `ida64`, `ida`)
+
+### Linux client config locations handled
+
+- Codex: `~/.codex/config.toml`
+- Cursor: `~/.cursor/mcp.json`
+- VS Code MCP (Copilot storage path under XDG)
+- Claude Desktop under XDG config
+- Cline/Roo under XDG config
+- OpenCode and Copilot CLI config paths under XDG-aware logic
+
+Installer can repair and overwrite broken/stale entries for legacy names and stale command paths.
+
+## Response And Context Controls
+
+Per-call response controls supported by host:
+
+- `_response_mode`: `compact` or `full`
+- `_compact`: boolean shorthand
+- `_response_fields`: include only selected top-level fields
+- `_response_omit`: remove selected top-level fields
+- `_response_max_items`: cap list items
+- `_response_max_string`: cap string size
+- `_response_char_budget`: trigger truncation middleware budget
+- `_response_table`: optional table compaction for repeated object rows
+- `_response_batch_compact`: compact `batch` envelopes
+- `_error_details`: `none|basic|full`
+
+Environment defaults:
+
+- `IDA_MCP_RESPONSE_MODE`
+- `IDA_MCP_ERROR_DETAIL_LEVEL`
+- `IDA_MCP_BATCH_COMPACT`
+- `IDA_MCP_TABLE_COMPACT`
+- `IDA_MCP_COMPACT_MAX_ITEMS`
+- `IDA_MCP_COMPACT_MAX_STRING`
+- `IDA_MCP_COMPACT_CHAR_BUDGET`
+- `IDA_MCP_TRUNCATE_TOKENS`
+
+## Troubleshooting
+
+### "Tool not found"
+
+- Run `tools/list` to confirm advertised surface.
+- Check for alias/canonical naming mismatch.
+- Verify runtime tool module exists under `src/ida_pro_mcp/ida_mcp/tools/`.
+
+### "Debugger not running" during dynamic flows
+
+- Ensure target is actually started/suspended in the same active session.
+- Retry after `debug(action="start")` returns and session runtime is active.
+
+### Permission/path errors on exports
+
+- Pass explicit writable `path` in `export` calls.
+- Verify session cache directory is writable.
+
+### Installer appears to do nothing
+
+- Re-run installer from project root.
+- Check resulting install directory and generated client config files.
+- Confirm client points to relocated `.venv` python and `ida_mcp_stdio.py`.
+
+## Development
+
+Run targeted tests:
+
+```bash
+python -m unittest tests.test_host_wiki_and_hardening
+python -m unittest tests.test_linux_support
+python -m unittest tests.test_session_features
+```
+
+Manual client probing:
 
 ```bash
 python tests/test_mcp_client.py --tool idb --args "action=meta"
 ```
 
-## Architecture
+## License
 
-The system utilizes a session-based bridge architecture. The MCP server (`ida_mcp_stdio.py`) manages local process lifecycles and communicates with a background IDA instance via a high-speed socket bridge (`server_script.py`). This ensures that the AI context remains responsive even during heavy analysis tasks.
+MIT (see `LICENSE`).
