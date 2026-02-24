@@ -1,52 +1,38 @@
 # STRUCTS Tool Manual
 
-Automatic structure recovery and management.
+## What It Does
+Supports structure recovery and lifecycle tasks: infer usage, list/create/update structs, apply struct types to addresses, and reconstruct vtable-like layouts.
 
 ## Actions
-### Supported Actions
-- recover
-- analyze_usage
-- list
-- create
-- add_member
-- apply
-- reconstruct_vtable
+- `recover`: Heuristic struct-candidate extraction from one function.
+- `analyze_usage`: Show xref-based usage from an address.
+- `list`: List struct/union types with optional filter/pagination.
+- `create`: Parse C declaration and create type.
+- `add_member`: Append a member to an existing struct.
+- `apply`: Apply named struct type at an address.
+- `reconstruct_vtable`: Build a vtable struct from pointer table data.
 
+## Key Parameters
+- `action`: One of `recover|analyze_usage|list|create|add_member|apply|reconstruct_vtable`.
+- `addr`: Required for `recover`, `analyze_usage`, `apply`, `reconstruct_vtable`.
+- `name`: Struct name (required for `add_member` and `apply`; optional class/vtable name for `reconstruct_vtable`).
+- `decl`: Required C declaration for `create`.
+- `member_name`, `member_type`, `member_offset`: Member fields for `add_member`.
+- `query`, `offset`, `count`: Listing filters/pagination.
 
-### `analyze_usage`
-Analyze struct usage across functions.
+## Examples
+```python
+structs(action="list", query="net", count=50)
+structs(action="create", decl="struct Header { int magic; short ver; };")
+structs(action="add_member", name="Header", member_name="flags", member_type="int", member_offset=8)
+structs(action="apply", addr="0x404000", name="Header")
+structs(action="recover", addr="0x401250")
+structs(action="reconstruct_vtable", addr="0x500000", name="ClientVTable")
+```
 
-### `list`
-List available items for this tool with optional paging where supported.
-
-### `apply`
-Apply a struct or symbols at an address.
-
-### `recover`
-Recover struct definitions from usage.
-Heuristic analysis of a function to find potential structures. 
-*   **Best for**: Functions that take an `a1` pointer and access `a1 + 0x10`, `a1 + 0x18`, etc.
-
-### `add_member`
-Add a member to a struct.
-Adds a field to an existing struct. 
-*   **Args**: `name` (struct name), `member_name`, `offset`, `member_type`.
-*   **Pro Tip**: Use this to incrementally build a struct as you reverse engineer it.
-
-### `create`
-Create a new entity using the provided parameters.
-Creates a new struct from a full C declaration string.
-
-### `reconstruct_vtable`
-Reconstruct a vtable for a class.
-Heuristic reconstruction of C++ VTables.
-*   **Args**: `addr` (Address of the VTable).
-*   **Logic**: Scans for a contiguous block of function pointers and creates a corresponding VTable struct.
-
-## Strategy
-1.  Run `recover` on a function.
-2.  Create the struct with `create`.
-3.  Apply it to the function argument with `types.apply`.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing required fields by action.
+- Type parse failure (`create`, `add_member`).
+- Named struct not found (`add_member`, `apply`).
+- `recover` depends on successful Hex-Rays decompilation.
+- `reconstruct_vtable` fails if pointer table does not resolve to plausible code pointers.

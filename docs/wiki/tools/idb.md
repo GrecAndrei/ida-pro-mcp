@@ -1,41 +1,32 @@
 # IDB Tool Manual
 
-Low-level database metadata and entry point discovery.
+## What It Does
+Provides database-level metadata, summary statistics, segment details, entry points, bookmarks, and a combined overview payload.
 
 ## Actions
-### Supported Actions
-- meta
-- summary
-- segments
-- entrypoints
-- bookmarks
+- `meta`: Binary and IDB metadata (paths, architecture, hashes, bounds).
+- `summary`: Counts and coverage metrics (functions, imports, comments, code coverage).
+- `overview`: Combined `meta + summary + top segments + entrypoints` snapshot.
+- `segments`: Detailed segment records with pagination.
+- `entrypoints`: Entry point/export listing with basic classification.
+- `bookmarks`: IDA bookmark list.
 
-### `meta`
-Return database metadata.
-Returns global info about the database.
-*   **Returns**: Module name, architecture, base address, file MD5/SHA256.
+## Key Parameters
+- `action`: One of `meta|summary|segments|entrypoints|bookmarks|overview`.
+- `offset`, `count`: Pagination controls for `segments` (`count=0` returns all from offset).
 
-### `summary`
-Return database summary.
-Returns count of functions, segments, and analysis status.
-*   **Returns**: Functions count, segments count, analysis_ok status.
+## Examples
+```python
+idb(action="meta")
+idb(action="summary")
+idb(action="overview")
+idb(action="segments", offset=0, count=50)
+idb(action="entrypoints")
+idb(action="bookmarks")
+```
 
-### `entrypoints`
-List entrypoints.
-Lists all program entry points (exported symbols and main).
-
-### `segments`
-Return segment metadata.
-Lists all segments with their permissions (R/W/X) and ranges.
-
-### `bookmarks`
-Return IDA bookmarks.
-Lists all bookmarks set in the database.
-
-## Strategy
-Use `meta` as your first call in every new session to understand the target environment (e.g. "Is this x64 or ARM?"). Use `summary` for a quick overview of the analysis state.
-
-**Note**: The `cursor` action is now available in the `nav` tool, not in `idb`.
----
-Doc status: Updated actions to match actual implementation.
-Last reviewed: 2026-01-11
+## Failure Modes
+- Unknown action.
+- IDA version/API differences can alter available metadata fields.
+- Very large databases can make summary calculations slower.
+- Bookmark APIs may be absent and return empty list.

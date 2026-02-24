@@ -178,11 +178,9 @@ def imports_deep(
                     
                     def collect_cb(ea, name, ordinal):
                         resolve_lines.append(f"{hex(ea)}  {mod_name}  {name or f'ordinal_{ordinal}'}")
-                        return len(resolve_lines) < (offset + count if count != 0 else 1000000)
+                        return True
                         
                     ida_nalt.enum_import_names(i, collect_cb)
-                    if len(resolve_lines) >= 100:
-                        break
                 page = resolve_lines[offset:offset + count] if count != 0 else resolve_lines[offset:]
                 return {"ok": True, "resolved": "\n".join(page), "total": len(resolve_lines), "offset": offset, "count": len(page)}
 

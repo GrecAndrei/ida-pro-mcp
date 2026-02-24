@@ -24,6 +24,7 @@ import glob
 import uuid
 import shlex
 import copy
+import shutil
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -205,6 +206,44 @@ def validate_path(path: str) -> Optional[str]:
         return resolved
 
 
+SESSION_ID_RE = re.compile(r"^[A-Z0-9]{8}$")
+MAX_BATCH_CALLS = 50
+MAX_BATCH_PAYLOAD_BYTES = 512 * 1024
+MAX_LIST_LIMIT = 200
+MAX_LIST_OFFSET = 100_000
+MAX_TAGS_PER_SESSION = 64
+MAX_TAG_LEN = 64
+MAX_NOTE_LEN = 16_384
+MAX_NAME_LEN = 256
+
+
+def _normalize_session_id(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    sid = value.strip().upper()
+    if not SESSION_ID_RE.fullmatch(sid):
+        return None
+    return sid
+
+
+def _bounded_int(
+    value: Any,
+    default: int,
+    *,
+    min_value: int,
+    max_value: int,
+) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    if parsed < min_value:
+        return min_value
+    if parsed > max_value:
+        return max_value
+    return parsed
+
+
 # =============================================================================
 # SESSION MANAGEMENT
 # =============================================================================
@@ -307,6 +346,34 @@ class SessionManager:
         # Auto-load existing sessions on startup
         self._load_sessions()
 
+    def _sanitize_tags(self, tags: Optional[List[Any]]) -> List[str]:
+        if not tags:
+            return []
+        cleaned: List[str] = []
+        for tag in tags:
+            if tag is None:
+                continue
+            t = str(tag).strip()
+            if not t:
+                continue
+            if len(t) > MAX_TAG_LEN:
+                t = t[:MAX_TAG_LEN]
+            if t not in cleaned:
+                cleaned.append(t)
+            if len(cleaned) >= MAX_TAGS_PER_SESSION:
+                break
+        return cleaned
+
+    def _sanitize_note(self, note: str) -> str:
+        if not note:
+            return ""
+        return str(note)[:MAX_NOTE_LEN]
+
+    def _sanitize_name(self, name: str) -> str:
+        if not name:
+            return ""
+        return str(name).strip()[:MAX_NAME_LEN]
+
     def _get_metadata_path(self, sid: str) -> str:
         """Get path to session metadata file"""
         return os.path.join(self.session_dir, f"SID_{sid}_metadata.json")
@@ -334,6 +401,9 @@ class SessionManager:
                 with open(meta_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     session = Session.from_dict(data)
+                    if not _normalize_session_id(session.session_id):
+                        log_rpc(f"Skipping metadata with invalid session_id: {meta_path}")
+                        continue
                     # Always load the session - IDB might not exist yet if session is new
                     # We'll let IDA create it on first use
                     self.sessions[session.session_id] = session
@@ -396,8 +466,8 @@ class SessionManager:
                 analysis_options=analysis_options,
                 analysis_applied=False,
                 ida_args=ida_args or [],
-                tags=tags or [],
-                notes=notes,
+                tags=self._sanitize_tags(tags),
+                notes=self._sanitize_note(notes),
             )
             self.sessions[sid] = session
             # Persist metadata immediately
@@ -481,6 +551,12 @@ class SessionManager:
                 return None
             for key, value in kwargs.items():
                 if hasattr(session, key) and key not in ("session_id", "created_at"):
+                    if key == "tags":
+                        value = self._sanitize_tags(value if isinstance(value, list) else [value])
+                    elif key == "notes":
+                        value = self._sanitize_note(value)
+                    elif key == "auto_name":
+                        value = self._sanitize_name(value)
                     setattr(session, key, value)
             session.update_access()
             self._save_metadata(session)
@@ -492,7 +568,7 @@ class SessionManager:
             session = self.sessions.get(sid)
             if not session:
                 return None
-            session.auto_name = new_name
+            session.auto_name = self._sanitize_name(new_name)
             session.update_access()
             self._save_metadata(session)
             return copy.copy(session)
@@ -636,7 +712,10 @@ class SessionManager:
     def tag_session(self, sid: str, tag: str) -> Optional[Session]:
         """Add a tag to a session."""
         with self._lock:
-            return self._tag_session_unlocked(sid, tag)
+            cleaned = self._sanitize_tags([tag])
+            if not cleaned:
+                return None
+            return self._tag_session_unlocked(sid, cleaned[0])
 
     def untag_session(self, sid: str, tag: str) -> Optional[Session]:
         """Remove a tag from a session."""
@@ -660,10 +739,12 @@ class SessionManager:
             session = self.sessions.get(sid)
             if not session:
                 return None
+            note = self._sanitize_note(note)
             if session.notes:
-                session.notes += "\n" + note
+                combined = f"{session.notes}\n{note}"
             else:
-                session.notes = note
+                combined = note
+            session.notes = self._sanitize_note(combined)
             session.update_access()
             self._save_metadata(session)
             return copy.copy(session)
@@ -712,9 +793,13 @@ class SessionManager:
     def bulk_tag(self, sids: List[str], tag: str) -> dict:
         """Tag multiple sessions."""
         with self._lock:
+            cleaned = self._sanitize_tags([tag])
+            if not cleaned:
+                return {sid: False for sid in sids}
+            safe_tag = cleaned[0]
             results = {}
             for sid in sids:
-                result = self._tag_session_unlocked(sid, tag)
+                result = self._tag_session_unlocked(sid, safe_tag)
                 results[sid] = result is not None
             return results
 
@@ -1806,29 +1891,116 @@ class IDAMCPServer:
         self.current_session = None
         self.session_runtimes = {}
 
+    def _ida_binary_names(self) -> List[str]:
+        if sys.platform == "win32":
+            return ["idat64.exe", "idat.exe", "ida64.exe", "ida.exe"]
+        return ["idat64", "idat", "ida64", "ida"]
+
+    def _is_executable_file(self, path: str) -> bool:
+        if not path:
+            return False
+        if not os.path.isfile(path):
+            return False
+        if os.name == "nt":
+            return True
+        return os.access(path, os.X_OK)
+
     def _detect_ida_dir(self):
-        env_dir = os.environ.get("IDADIR") or os.environ.get("IDA_DIR")
-        if env_dir and os.path.exists(env_dir):
-            return env_dir
-        cands = [
-            r"C:\Program Files\IDA Professional 9.2",
-            r"C:\Program Files\IDA Pro 9.2",
-        ]
+        for env_name in ("IDADIR", "IDA_DIR"):
+            env_dir = os.environ.get(env_name)
+            if not env_dir:
+                continue
+            env_dir = os.path.realpath(os.path.expanduser(env_dir))
+            if os.path.isdir(env_dir):
+                return env_dir
+            if self._is_executable_file(env_dir):
+                return os.path.dirname(env_dir)
+
+        env_idat = os.environ.get("IDA_MCP_IDAT")
+        if env_idat:
+            env_idat = os.path.realpath(os.path.expanduser(env_idat))
+            if self._is_executable_file(env_idat):
+                return os.path.dirname(env_idat)
+
+        cands: List[str] = []
+        if sys.platform == "win32":
+            cands.extend(
+                [
+                    r"C:\Program Files\IDA Professional 9.2",
+                    r"C:\Program Files\IDA Pro 9.2",
+                    r"C:\Program Files\IDA Professional 9.1",
+                    r"C:\Program Files\IDA Pro 9.1",
+                    r"C:\Program Files\IDA Professional 9.0",
+                    r"C:\Program Files\IDA Pro 9.0",
+                    r"C:\Program Files\IDA Professional",
+                    r"C:\Program Files\IDA Pro",
+                ]
+            )
+        elif sys.platform == "linux":
+            home = str(Path.home())
+            patterns = [
+                "/opt/ida*",
+                "/opt/IDA*",
+                "/opt/idapro*",
+                "/opt/IDAPro*",
+                "/usr/local/ida*",
+                "/usr/local/IDA*",
+                "/usr/local/idapro*",
+                "/usr/local/IDAPro*",
+                os.path.join(home, "ida*"),
+                os.path.join(home, "IDA*"),
+                os.path.join(home, "idapro*"),
+                os.path.join(home, "IDAPro*"),
+            ]
+            for pattern in patterns:
+                cands.extend(glob.glob(pattern))
+        else:
+            # macOS and other Unix-like platforms
+            cands.extend(
+                [
+                    "/Applications/IDA Professional 9.2.app/Contents/MacOS",
+                    "/Applications/IDA Pro 9.2.app/Contents/MacOS",
+                    "/Applications/IDA Professional.app/Contents/MacOS",
+                    "/Applications/IDA Pro.app/Contents/MacOS",
+                ]
+            )
+
+        binary_names = self._ida_binary_names()
         for c in cands:
-            if os.path.exists(c):
-                return c
+            c = os.path.realpath(os.path.expanduser(c))
+            if not os.path.isdir(c):
+                continue
+            for name in binary_names:
+                if self._is_executable_file(os.path.join(c, name)):
+                    return c
+
+        for name in binary_names:
+            resolved = shutil.which(name)
+            if resolved:
+                return os.path.dirname(os.path.realpath(resolved))
         return ""
 
     def _find_idat(self):
         env_idat = os.environ.get("IDA_MCP_IDAT")
-        if env_idat and os.path.exists(env_idat):
-            return env_idat
+        if env_idat:
+            env_idat = os.path.realpath(os.path.expanduser(env_idat))
+            if self._is_executable_file(env_idat):
+                return env_idat
+
+        if not self.ida_dir:
+            self.ida_dir = self._detect_ida_dir()
+
+        for name in self._ida_binary_names():
+            if self.ida_dir:
+                p = os.path.join(self.ida_dir, name)
+                if self._is_executable_file(p):
+                    return p
+            resolved = shutil.which(name)
+            if resolved and self._is_executable_file(resolved):
+                return os.path.realpath(resolved)
+
         if not self.ida_dir:
             return ""
-        for name in ["idat64.exe", "idat.exe", "ida64.exe", "ida.exe"]:
-            p = os.path.join(self.ida_dir, name)
-            if os.path.exists(p):
-                return p
         return ""
 
     def _get_ida_diagnostics(self, stdout_log=None):
@@ -1979,10 +2151,11 @@ class IDAMCPServer:
         self._nuclear_reset(session.idb_path, aggressive=bool(opts.get("aggressive_cleanup")))
 
         # Validate IDA installation
-        if not self.idat_exe or not os.path.exists(self.idat_exe):
+        if not self.idat_exe or not self._is_executable_file(self.idat_exe):
             return make_error(
                 MCPError.FILE_NOT_FOUND,
-                f"IDA executable not found. Checked: {self.ida_dir}",
+                "IDA executable not found. Set IDADIR or IDA_MCP_IDAT, or ensure idat64/idat is in PATH.",
+                details={"ida_dir": self.ida_dir, "idat_exe": self.idat_exe},
             )
 
         # DYNAMIC PORT ASSIGNMENT
@@ -1999,7 +2172,9 @@ class IDAMCPServer:
 
         # Environment for IDA
         env = os.environ.copy()
-        env["IDADIR"] = self.ida_dir
+        ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
+        if ida_runtime_dir:
+            env["IDADIR"] = ida_runtime_dir
         env["IDA_MCP_PORT"] = str(server_port)
         env["IDA_MCP_BYPASS_SYNC"] = "1"
         env["IDA_MCP_SESSION_ID"] = session.session_id
@@ -2081,7 +2256,9 @@ class IDAMCPServer:
     def _launch_and_wait(self, session, server_port):
         script_path = os.path.join(SCRIPT_DIR, "src", "ida_pro_mcp", "server_script.py")
         env = os.environ.copy()
-        env["IDADIR"] = self.ida_dir
+        ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
+        if ida_runtime_dir:
+            env["IDADIR"] = ida_runtime_dir
         env["IDA_MCP_PORT"] = str(server_port)
         env["IDA_MCP_BYPASS_SYNC"] = "1"
         env["IDA_MCP_SESSION_ID"] = session.session_id
@@ -2336,10 +2513,333 @@ class IDAMCPServer:
                 )
             return make_error(MCPError.IDA_CRASHED, str(e))
 
+    def _resolve_wiki_root(self) -> str:
+        env_path = os.environ.get("IDA_MCP_WIKI_DIR")
+        candidates: List[str] = []
+        if env_path:
+            candidates.append(os.path.realpath(os.path.expanduser(env_path)))
+
+        script_dir = os.path.realpath(SCRIPT_DIR)
+        cwd = os.path.realpath(os.getcwd())
+        home = os.path.realpath(str(Path.home()))
+
+        candidates.extend(
+            [
+                os.path.join(script_dir, "docs", "wiki"),
+                os.path.join(script_dir, "src", "ida_pro_mcp", "docs", "wiki"),
+                os.path.join(os.path.dirname(script_dir), "docs", "wiki"),
+                os.path.join(cwd, "docs", "wiki"),
+                os.path.join(home, ".ida-pro-mcp", "wiki"),
+                os.path.join(home, ".local", "share", "ida-pro-mcp", "wiki"),
+            ]
+        )
+
+        seen = set()
+        for cand in candidates:
+            cand = os.path.realpath(cand)
+            if cand in seen:
+                continue
+            seen.add(cand)
+            if os.path.isdir(cand):
+                return cand
+        return ""
+
+    def _wiki_parse_headers(self, lines: List[str]) -> List[dict]:
+        headers = []
+        for idx, line in enumerate(lines, 1):
+            strip = line.strip()
+            if strip.startswith("#"):
+                level = strip.count("#")
+                text = strip.lstrip("#").strip()
+                headers.append({"level": level, "text": text, "line": idx})
+        return headers
+
+    def _wiki_generated_tool_doc(self, tool_name: str) -> Optional[str]:
+        if tool_name not in TOOLS:
+            return None
+        action_list = TOOL_ACTIONS.get(tool_name, [])
+        action_text = ", ".join(action_list) if action_list else "See tool source"
+        schema = TOOL_ARG_SCHEMAS.get(tool_name, {})
+        key_params = [p for p in schema.keys() if p not in ("action",)]
+        key_params = key_params[:12]
+        lines = [
+            f"# {tool_name.upper()} Tool Manual",
+            "",
+            "## What It Does",
+            TOOL_DESCRIPTIONS.get(tool_name, "No description available."),
+            "",
+            "## Actions",
+            f"- {action_text}",
+            "",
+            "## Key Parameters",
+        ]
+        if key_params:
+            for p in key_params:
+                lines.append(f"- `{p}`")
+        else:
+            lines.append("- None")
+        lines.extend(
+            [
+                "",
+                "## Examples",
+                "```json",
+                json.dumps({"action": action_list[0] if action_list else "help"}, indent=2),
+                "```",
+                "",
+                "## Failure Modes",
+                "- Invalid arguments.",
+                "- Unsupported action name.",
+            ]
+        )
+        return "\n".join(lines) + "\n"
+
+    def _wiki_topic_candidates(self, wiki_root: str, topic_name: str) -> tuple[List[str], Optional[dict]]:
+        normalized = str(topic_name or "").strip().replace("\\", "/")
+        if not normalized:
+            return [], make_error(MCPError.INVALID_ARGS, "topic required")
+        if os.path.isabs(normalized):
+            return [], make_error(MCPError.INVALID_ARGS, "Absolute topic paths are not allowed")
+        if normalized.startswith("/"):
+            normalized = normalized.lstrip("/")
+        if normalized.endswith(".md"):
+            normalized = normalized[:-3]
+        parts = [p for p in normalized.split("/") if p]
+        if not parts or any(p in (".", "..") for p in parts):
+            return [], make_error(MCPError.INVALID_ARGS, "Invalid wiki topic path")
+        if len(parts) > 1:
+            return [os.path.join(wiki_root, *parts) + ".md"], None
+        base = parts[0]
+        return [
+            os.path.join(wiki_root, sub, f"{base}.md")
+            for sub in ("tools", "workflows", "skills", "core", "")
+        ], None
+
+    def _wiki_resolve_topic(self, wiki_root: str, topic_name: str) -> tuple[Optional[str], Optional[dict]]:
+        candidates, err = self._wiki_topic_candidates(wiki_root, topic_name)
+        if err:
+            return None, err
+        root_real = os.path.realpath(wiki_root)
+        for cand in candidates:
+            cand_real = os.path.realpath(cand)
+            try:
+                inside = os.path.commonpath([root_real, cand_real]) == root_real
+            except ValueError:
+                inside = False
+            if not inside:
+                return None, make_error(MCPError.INVALID_ARGS, "Topic path escapes wiki root")
+            if os.path.isfile(cand_real):
+                return cand_real, None
+        return None, None
+
+    def _wiki_collect_topics(self, wiki_root: str) -> dict:
+        topics: Dict[str, List[str]] = {}
+        for root, _, files in os.walk(wiki_root):
+            rel = os.path.relpath(root, wiki_root)
+            category = "root" if rel == "." else rel.replace(os.sep, "/")
+            pages = sorted([f[:-3] for f in files if f.endswith(".md")])
+            if pages:
+                topics[category] = pages
+        return topics
+
+    def _handle_wiki(self, args: dict) -> dict:
+        action = args.get("action")
+        if action not in TOOL_ACTIONS["wiki"]:
+            return make_error(
+                MCPError.ACTION_NOT_FOUND,
+                f"Unsupported wiki action: '{action}'",
+                hint=f"Valid wiki actions: {', '.join(TOOL_ACTIONS['wiki'])}",
+            )
+
+        wiki_root = self._resolve_wiki_root()
+        topics: Dict[str, List[str]] = self._wiki_collect_topics(wiki_root) if wiki_root else {}
+
+        q_limit = _bounded_int(args.get("limit", 0), 0, min_value=0, max_value=2000)
+        q_offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=200000)
+        context_lines = _bounded_int(args.get("context_lines", 2), 2, min_value=0, max_value=10)
+        include_snippets = bool(args.get("include_snippets", False))
+
+        if action == "list_topics":
+            if topics:
+                return {"ok": True, "categories": topics}
+            return {
+                "ok": True,
+                "categories": {"tools": sorted(TOOLS)},
+                "note": "Wiki markdown files not found; serving generated tool docs.",
+            }
+
+        if action == "index":
+            if topics:
+                total_pages = sum(len(v) for v in topics.values())
+                return {"ok": True, "categories": topics, "total_pages": total_pages}
+            return {"ok": True, "categories": {"tools": sorted(TOOLS)}, "total_pages": len(TOOLS)}
+
+        if action == "search":
+            query = (args.get("query") or args.get("topic") or "").strip()
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required")
+            q_lower = query.lower()
+            matches = []
+
+            if topics and wiki_root:
+                for root, _, files in os.walk(wiki_root):
+                    for filename in files:
+                        if not filename.endswith(".md"):
+                            continue
+                        full_path = os.path.join(root, filename)
+                        rel_name = (
+                            os.path.relpath(full_path, wiki_root)
+                            .replace(os.sep, "/")
+                            .replace(".md", "")
+                        )
+                        try:
+                            with open(full_path, "r", encoding="utf-8") as f:
+                                text = f.read()
+                        except OSError:
+                            continue
+                        if q_lower not in rel_name.lower() and q_lower not in text.lower():
+                            continue
+                        entry = {"topic": rel_name}
+                        if include_snippets:
+                            text_lines = text.splitlines()
+                            snippets = []
+                            for i, line in enumerate(text_lines):
+                                if q_lower in line.lower():
+                                    start = max(0, i - context_lines)
+                                    end = min(len(text_lines), i + context_lines + 1)
+                                    snippets.append(
+                                        {
+                                            "line": i + 1,
+                                            "snippet": "\n".join(text_lines[start:end]),
+                                        }
+                                    )
+                                    if len(snippets) >= 5:
+                                        break
+                            entry["matches"] = snippets
+                        matches.append(entry)
+            else:
+                for tool_name in TOOLS:
+                    text = self._wiki_generated_tool_doc(tool_name) or ""
+                    if q_lower in tool_name.lower() or q_lower in text.lower():
+                        matches.append({"topic": f"tools/{tool_name}"})
+
+            return {"ok": True, "query": query, "matches": matches}
+
+        topic = args.get("topic")
+        if not topic:
+            return make_error(MCPError.INVALID_ARGS, "topic required")
+
+        content = None
+        topic_name = str(topic).strip()
+        path = None
+
+        if wiki_root:
+            path, err = self._wiki_resolve_topic(wiki_root, topic_name)
+            if err:
+                return err
+            if path:
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except OSError as e:
+                    return make_error(MCPError.FILE_NOT_FOUND, f"Failed reading wiki topic: {e}")
+
+        if content is None:
+            # Fallback docs for installed environments where markdown files are missing.
+            normalized = topic_name.replace("\\", "/").strip().lower()
+            if normalized.startswith("tools/"):
+                normalized = normalized.split("/", 1)[1]
+            if normalized.endswith(".md"):
+                normalized = normalized[:-3]
+            fallback = self._wiki_generated_tool_doc(normalized)
+            if fallback is None:
+                return make_error(
+                    MCPError.FILE_NOT_FOUND,
+                    f"Wiki topic '{topic_name}' not found",
+                    details={"wiki_root": wiki_root or None},
+                    hint="Set IDA_MCP_WIKI_DIR to a docs/wiki directory or query tools/<tool_name>.",
+                )
+            content = fallback
+
+        lines = content.splitlines(keepends=True)
+        headers = self._wiki_parse_headers(lines)
+
+        if action == "sections":
+            return {"ok": True, "topic": topic_name, "headers": headers}
+
+        # read
+        section = args.get("section")
+        content_lines = lines
+        if section:
+            section_lower = str(section).strip().lower()
+            section_lines = []
+            found = False
+            header_level = 0
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    text = stripped.lstrip("#").strip().lower()
+                    if section_lower in text:
+                        found = True
+                        header_level = stripped.count("#")
+                        section_lines.append(line)
+                        continue
+                    if found and stripped.count("#") <= header_level:
+                        break
+                if found:
+                    section_lines.append(line)
+            if not found:
+                return make_error(MCPError.INVALID_ARGS, f"Section '{section}' not found")
+            content_lines = section_lines
+
+        total_lines = len(content_lines)
+        start = min(q_offset, total_lines)
+        end = total_lines if q_limit <= 0 else min(total_lines, start + q_limit)
+        slice_lines = content_lines[start:end]
+        result = {
+            "ok": True,
+            "topic": topic_name,
+            "line_range": f"{start + 1}-{start + len(slice_lines)}",
+            "total_lines_in_topic": len(lines),
+            "headers": [h["text"] for h in headers[:80]],
+            "content": "".join(slice_lines),
+        }
+        if section:
+            result["section_filter"] = section
+        if q_limit > 0 and end < total_lines:
+            result["_truncated"] = True
+            result["next_offset"] = end
+            result["lines_remaining"] = total_lines - end
+        return result
+
     def _execute_tool(self, tool_name, args):
-        args = dict(args or {})
+        if tool_name not in TOOLS:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Unknown tool '{tool_name}'",
+                hint="Call tools/list to see available tools.",
+            )
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
+        args = dict(args)
+
+        if tool_name == "wiki":
+            return self._handle_wiki(args)
+
         if tool_name == "session":
             action = args.get("action")
+            def _sid_arg(key: str = "session_id", allow_current: bool = True) -> tuple[Optional[str], Optional[dict]]:
+                raw_sid = args.get(key)
+                if raw_sid is None and allow_current and self.current_session:
+                    raw_sid = self.current_session.session_id
+                if raw_sid is None:
+                    return None, None
+                sid = _normalize_session_id(raw_sid)
+                if not sid:
+                    return None, make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
+                return sid, None
+
             if action == "create":
                 binary_path = args.get("binary_path")
                 idb_path = args.get("idb_path") or args.get("use_existing")
@@ -2445,7 +2945,8 @@ class IDAMCPServer:
                 tags = args.get("tags", [])
                 if isinstance(tags, str):
                     tags = [t.strip() for t in tags.split(",") if t.strip()]
-                notes = args.get("notes", "")
+                tags = tags[:MAX_TAGS_PER_SESSION]
+                notes = str(args.get("notes", ""))[:MAX_NOTE_LEN]
 
                 self.current_session = self.session_mgr.create_session(
                     binary_path or "",
@@ -2466,6 +2967,9 @@ class IDAMCPServer:
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required",
                                      hint="Provide a session_id. Use session(action='list') to see available sessions.")
+                sid = _normalize_session_id(sid)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
                 session = self.session_mgr.get_session(sid)
                 if not session:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found",
@@ -2497,8 +3001,8 @@ class IDAMCPServer:
                 all_sessions.sort(key=lambda s: s.last_accessed, reverse=True)
 
                 # Pagination
-                limit = args.get("limit", 50)  # Default to 50
-                offset = args.get("offset", 0)
+                limit = _bounded_int(args.get("limit", 50), 50, min_value=0, max_value=MAX_LIST_LIMIT)
+                offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=MAX_LIST_OFFSET)
 
                 total = len(all_sessions)
                 paginated = (
@@ -2539,15 +3043,18 @@ class IDAMCPServer:
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id or binary_path required",
                                      hint="Provide session_id or binary_path. Use session(action='list') to see sessions.")
+                sid = _normalize_session_id(sid)
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
                 session = self.session_mgr.get_session(sid)
                 if session:
                     self.current_session = session
                     return {"ok": True, "session": self.current_session.to_dict()}
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
             if action == "close":
-                sid = args.get("session_id") or (
-                    self.current_session.session_id if self.current_session else None
-                )
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required (or have an active session)",
                                      hint="Provide session_id or create/switch to a session first.")
@@ -2573,9 +3080,9 @@ class IDAMCPServer:
                     result = None
                 return {"ok": True, "session": result, "total_sessions": len(self.session_mgr.sessions)}
             if action == "rebuild":
-                sid = args.get("session_id") or (
-                    self.current_session.session_id if self.current_session else None
-                )
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required",
                                      hint="Provide session_id or create/switch to a session first.")
@@ -2610,27 +3117,40 @@ class IDAMCPServer:
                     "current_options": start_res.get("current_options"),
                 }
             if action == "update":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 update_kwargs = {k: v for k, v in args.items() if k not in ("action", "session_id")}
+                if "tags" in update_kwargs and isinstance(update_kwargs["tags"], str):
+                    update_kwargs["tags"] = [t.strip() for t in update_kwargs["tags"].split(",") if t.strip()]
+                if "notes" in update_kwargs:
+                    update_kwargs["notes"] = str(update_kwargs.get("notes", ""))[:MAX_NOTE_LEN]
+                if "auto_name" in update_kwargs:
+                    update_kwargs["auto_name"] = str(update_kwargs.get("auto_name", "")).strip()[:MAX_NAME_LEN]
                 result = self.session_mgr.update_session(sid, **update_kwargs)
                 if result is None:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "rename":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 new_name = args.get("name") or args.get("new_name")
                 if not new_name:
                     return make_error(MCPError.INVALID_ARGS, "name required")
+                new_name = str(new_name).strip()[:MAX_NAME_LEN]
                 result = self.session_mgr.rename_session(sid, new_name)
                 if result is None:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "duplicate":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.duplicate_session(sid)
@@ -2638,7 +3158,9 @@ class IDAMCPServer:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "export_session":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.export_session(sid)
@@ -2652,7 +3174,9 @@ class IDAMCPServer:
                 result = self.session_mgr.import_session(data)
                 return {"ok": True, "session": result.to_dict()}
             if action == "archive":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.archive_session(sid)
@@ -2660,7 +3184,9 @@ class IDAMCPServer:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "unarchive":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.unarchive_session(sid)
@@ -2668,10 +3194,15 @@ class IDAMCPServer:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "tag":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 tag = args.get("tag")
+                if not tag:
+                    return make_error(MCPError.INVALID_ARGS, "tag required")
+                tag = str(tag).strip()[:MAX_TAG_LEN]
                 if not tag:
                     return make_error(MCPError.INVALID_ARGS, "tag required")
                 result = self.session_mgr.tag_session(sid, tag)
@@ -2679,7 +3210,9 @@ class IDAMCPServer:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "untag":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 tag = args.get("tag")
@@ -2696,18 +3229,23 @@ class IDAMCPServer:
                 sessions = [s.to_dict() for s in self.session_mgr.find_by_tag(tag)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "add_note":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 note = args.get("note", "")
                 if not note:
                     return make_error(MCPError.INVALID_ARGS, "note required")
+                note = str(note)[:MAX_NOTE_LEN]
                 result = self.session_mgr.add_note(sid, note)
                 if result is None:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "clear_notes":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.clear_notes(sid)
@@ -2715,13 +3253,15 @@ class IDAMCPServer:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session": result.to_dict()}
             if action == "cleanup_stale":
-                max_age = args.get("max_age_days", 30)
-                deleted = self.session_mgr.cleanup_stale(max_age_days=int(max_age))
+                max_age = _bounded_int(args.get("max_age_days", 30), 30, min_value=1, max_value=3650)
+                deleted = self.session_mgr.cleanup_stale(max_age_days=max_age)
                 return {"ok": True, "deleted_sids": deleted, "count": len(deleted)}
             if action == "stats":
                 return {"ok": True, "stats": self.session_mgr.get_stats()}
             if action == "validate":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.validate_session(sid)
@@ -2732,9 +3272,17 @@ class IDAMCPServer:
                 sids = args.get("session_ids", [])
                 if not sids:
                     return make_error(MCPError.INVALID_ARGS, "session_ids list required")
-                results = self.session_mgr.bulk_delete(sids)
+                if not isinstance(sids, list):
+                    return make_error(MCPError.INVALID_ARGS, "session_ids must be a list")
+                cleaned_sids = []
+                for raw_sid in sids[:MAX_BATCH_CALLS]:
+                    sid = _normalize_session_id(raw_sid)
+                    if not sid:
+                        return make_error(MCPError.INVALID_ARGS, f"Invalid session_id in list: {raw_sid}")
+                    cleaned_sids.append(sid)
+                results = self.session_mgr.bulk_delete(cleaned_sids)
                 # Clear current session if it was deleted
-                if self.current_session and self.current_session.session_id in sids:
+                if self.current_session and self.current_session.session_id in cleaned_sids:
                     self.current_session = None
                 return {"ok": True, "results": results}
             if action == "bulk_tag":
@@ -2744,7 +3292,18 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_ids list required")
                 if not tag:
                     return make_error(MCPError.INVALID_ARGS, "tag required")
-                results = self.session_mgr.bulk_tag(sids, tag)
+                if not isinstance(sids, list):
+                    return make_error(MCPError.INVALID_ARGS, "session_ids must be a list")
+                cleaned_sids = []
+                for raw_sid in sids[:MAX_BATCH_CALLS]:
+                    sid = _normalize_session_id(raw_sid)
+                    if not sid:
+                        return make_error(MCPError.INVALID_ARGS, f"Invalid session_id in list: {raw_sid}")
+                    cleaned_sids.append(sid)
+                tag = str(tag).strip()[:MAX_TAG_LEN]
+                if not tag:
+                    return make_error(MCPError.INVALID_ARGS, "tag required")
+                results = self.session_mgr.bulk_tag(cleaned_sids, tag)
                 return {"ok": True, "results": results}
             if action == "search_notes":
                 query = args.get("query", "")
@@ -2753,15 +3312,17 @@ class IDAMCPServer:
                 sessions = [s.to_dict() for s in self.session_mgr.search_notes(query)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "recent":
-                n = int(args.get("n", 5))
+                n = _bounded_int(args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT)
                 sessions = [s.to_dict() for s in self.session_mgr.get_recent(n)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "oldest":
-                n = int(args.get("n", 5))
+                n = _bounded_int(args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT)
                 sessions = [s.to_dict() for s in self.session_mgr.get_oldest(n)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "snapshot":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 snapshot_id = self.session_mgr.snapshot_session(sid)
@@ -2769,7 +3330,9 @@ class IDAMCPServer:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
                 return {"ok": True, "session_id": sid, "snapshot_id": snapshot_id}
             if action == "restore_snapshot":
-                sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 snapshot_id = args.get("snapshot_id")
@@ -2780,8 +3343,8 @@ class IDAMCPServer:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Snapshot '{snapshot_id}' not found for session '{sid}'")
                 return {"ok": True, "session": result.to_dict()}
             if action == "merge":
-                sid1 = args.get("session_id") or args.get("target_id")
-                sid2 = args.get("source_id")
+                sid1 = _normalize_session_id(args.get("session_id") or args.get("target_id"))
+                sid2 = _normalize_session_id(args.get("source_id"))
                 if not sid1 or not sid2:
                     return make_error(MCPError.INVALID_ARGS, "session_id (or target_id) and source_id required")
                 result = self.session_mgr.merge_sessions(sid1, sid2)
@@ -2860,20 +3423,46 @@ class IDAMCPServer:
         if not calls:
             return make_error(MCPError.BATCH_EMPTY, "No calls provided in batch",
                              hint="Provide at least one call: batch(calls=[{name: 'tool', arguments: {...}}])")
-        if len(calls) > 50:
-            return make_error(MCPError.BATCH_TOO_LARGE, f"Too many batch calls ({len(calls)}, max 50)",
-                             hint="Split into multiple batch requests of 50 or fewer calls.")
+        if len(calls) > MAX_BATCH_CALLS:
+            return make_error(MCPError.BATCH_TOO_LARGE, f"Too many batch calls ({len(calls)}, max {MAX_BATCH_CALLS})",
+                             hint=f"Split into multiple batch requests of {MAX_BATCH_CALLS} or fewer calls.")
+
+        try:
+            payload_size = len(json.dumps(calls))
+        except Exception:
+            payload_size = MAX_BATCH_PAYLOAD_BYTES + 1
+        if payload_size > MAX_BATCH_PAYLOAD_BYTES:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Batch payload too large ({payload_size} bytes, max {MAX_BATCH_PAYLOAD_BYTES})",
+            )
+
         continue_on_error = bool(args.get("continue_on_error", False))
         results = []
         for idx, call in enumerate(calls):
-            name = call.get("name") if isinstance(call, dict) else None
-            call_args = call.get("arguments", {}) if isinstance(call, dict) else {}
+            if not isinstance(call, dict):
+                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} must be an object")
+                name = None
+                call_args = {}
+            else:
+                name = call.get("name")
+                call_args = call.get("arguments", {})
+
             if not name:
                 res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing 'name' field",
                                 hint="Each batch call must have a 'name' field specifying the tool.")
-            elif name not in TOOLS and name not in ("batch",):
+            elif not isinstance(name, str):
+                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-string 'name'")
+            elif name == "batch":
+                res = make_error(MCPError.INVALID_ARGS, "Nested batch calls are not allowed")
+            elif name not in TOOLS:
                 res = make_error(MCPError.INVALID_ARGS, f"Unknown tool '{name}' in batch call at index {idx}",
                                 hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.")
+            elif call_args is None:
+                call_args = {}
+                res = self._execute_tool(name, call_args)
+            elif not isinstance(call_args, dict):
+                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-object 'arguments'")
             else:
                 res = self._execute_tool(name, call_args)
             results.append({"index": idx, "name": name, "result": res})

@@ -1,39 +1,31 @@
 # STRINGS_XREF Tool Manual
 
-Advanced string analysis with cross-reference chains.
+## What It Does
+Analyzes strings and their cross-reference behavior, including caller-chain tracing, encoded-string heuristics, format-string detection, and per-function string clustering.
 
 ## Actions
-### Supported Actions
-- analyze
-- xref_chain
-- detect_encoded
-- find_format
-- clusters
+- `analyze`: Analyze one string (`addr`) or global top-referenced string summary.
+- `xref_chain`: Trace reference chain upward by depth from a string.
+- `detect_encoded`: Find strings with high-entropy/encoded-like traits.
+- `find_format`: Find printf-style format strings and argument counts.
+- `clusters`: Group strings by referencing functions.
 
+## Key Parameters
+- `action`: One of `analyze|xref_chain|detect_encoded|find_format|clusters`.
+- `addr`: String/function address for scoped actions.
+- `query`: Optional text filter used by `find_format`.
+- `depth`: Recursion depth for `xref_chain` (default `3`).
 
-### `clusters`
-Cluster related strings.
+## Examples
+```python
+strings_xref(action="analyze", addr="0x406000")
+strings_xref(action="analyze")
+strings_xref(action="xref_chain", addr="0x406000", depth=4)
+strings_xref(action="find_format", query="error")
+strings_xref(action="clusters")
+```
 
-### `analyze`
-Run a comprehensive function analysis bundle.
-Deep analysis of a string at `addr`. Shows its encoding and raw bytes.
-*   **Args**: `addr` (optional). If omitted, returns a global summary of the most referenced strings.
-
-### `xref_chain`
-Follow string xrefs across callsites.
-Traces where a string is used through multiple levels of callers.
-*   **Args**: `addr` (optional), `depth`. If `addr` is omitted, suggests top-referenced strings as starting points.
-
-### `detect_encoded`
-Detect encoded strings.
-Scans for strings that look like they might be Base64, XORed, or otherwise obfuscated.
-
-### `find_format`
-Find format strings and usage.
-Locates format strings (e.g. `%s %d`) and identifies their arguments.
-
-## Strategy
-When reversing malware, use `detect_encoded` to find the decryption routines.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `analyze` returns address error when target is not a defined string.
+- Invalid `addr` handling errors in address-parsing paths.
+- `xref_chain` output can be sparse when references are indirect or not recovered.

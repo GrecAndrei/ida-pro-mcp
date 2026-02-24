@@ -1,30 +1,25 @@
 # NAV Tool Manual
 
-Database navigation and discovery of "interesting" locations.
+## What It Does
+Provides lightweight navigation and triage helpers for address context, cursor state, and interesting instruction hotspots.
 
 ## Actions
-### Supported Actions
-- goto
-- cursor
-- interesting
+- `goto`: Return context for a specific address.
+- `cursor`: Return current screen cursor address (if available).
+- `interesting`: Scan executable segments for predefined interesting mnemonics.
 
+## Key Parameters
+- `action`: One of `goto|cursor|interesting`.
+- `addr`: Required by `goto`; ignored by other actions.
 
-### `cursor`
-Return current cursor position.
+## Examples
+```python
+nav(action="goto", addr="0x401000")
+nav(action="cursor")
+nav(action="interesting")
+```
 
-### `goto`
-Navigate to an address.
-Moves the "virtual cursor" to a specific address and returns the surrounding context.
-
-### `interesting`
-Return interesting locations.
-Heuristic scan for common reverse-engineering targets:
-*   Standard library functions (`strcpy`, `malloc`).
-*   Known anti-analysis patterns.
-*   Encryption/Decryption loops.
-
-## Best Practices
-Use `interesting` as your second call (after `idb.meta`) to identify your initial points of interest.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing `addr` for `goto`.
+- Invalid `addr` for `goto`.
+- `cursor` may return a warning with `addr=None` in headless mode.

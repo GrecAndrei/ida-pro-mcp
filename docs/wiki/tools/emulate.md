@@ -1,35 +1,34 @@
 # EMULATE Tool Manual
 
-Code emulation and static execution tracing.
+## What It Does
+Offers static tracing and light execution helpers: control-flow walk, debugger `Appcall`, decryption-call heuristics, and expression/value evaluation.
 
 ## Actions
-### Supported Actions
-- static_trace
-- appcall
-- decrypt_strings
-- eval_expr
+- `static_trace`: BFS-style static walk from an address with optional call following.
+- `appcall`: Invoke function via debugger Appcall API.
+- `decrypt_strings`: Heuristically find string arguments near calls to a target routine.
+- `eval_expr`: Evaluate IDC expression or read typed values at an address.
 
+## Key Parameters
+- `action`: One of `static_trace|appcall|decrypt_strings|eval_expr`.
+- `addr`: Required for `static_trace` and `decrypt_strings`; optional fallback target for `appcall`; optional for `eval_expr`.
+- `func_name`: Preferred named target for `appcall`.
+- `args`: Positional argument list for `appcall`.
+- `max_steps`, `follow_calls`, `max_depth`, `include_blocks`: `static_trace` behavior controls.
+- `expr`: Required for expression mode in `eval_expr` when `addr` is not provided.
 
-### `decrypt_strings`
-Attempt to decode or decrypt strings.
+## Examples
+```python
+emulate(action="static_trace", addr="0x401000", max_steps=300, follow_calls=True, max_depth=2)
+emulate(action="appcall", func_name="decrypt_buffer", args=[0x500000, 64])
+emulate(action="decrypt_strings", addr="0x402000")
+emulate(action="eval_expr", expr="get_wide_dword(0x401000)")
+emulate(action="eval_expr", addr="0x401000")
+```
 
-### `static_trace`
-Emulate a static trace from an address.
-Perform a static walk through a function to see reachable paths without a debugger.
-*   **Args**: `follow_calls`, `max_depth`, `include_blocks` to expand depth and include CFG metadata.
-
-### `appcall`
-Execute an appcall in IDA with arguments.
-Calls a function inside the target process with specific arguments. **Requires an active debugger session.**
-*   **Args**: `func_name` or `addr`, `args` (list).
-
-### `eval_expr`
-Evaluate an expression in the emulator context.
-Evaluates a C-style expression in the current context or a direct address.
-*   **Args**: `expr` or `addr`.
-
-## Best Practices
-Use `appcall` to verify your understanding of an algorithm. "I think this decrypts data? Let me call it with a known encrypted buffer and check the return."
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing `addr`/`func_name`/`expr` where required.
+- `appcall` unavailable in current IDA build.
+- Debugger not running for `appcall`.
+- Function lookup failure for `appcall` target.
+- Evaluation/decode errors surfaced as IDA error payloads.

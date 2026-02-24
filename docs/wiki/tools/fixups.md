@@ -1,33 +1,32 @@
 # FIXUPS Tool Manual
 
-Management of binary relocations and fixups.
+## What It Does
+Lists and manipulates relocation/fixup entries stored in the IDA database.
 
 ## Actions
-### Supported Actions
-- list
-- get
-- add
-- delete
+- `list`: Enumerate fixups in a range (or whole database).
+- `get`: Read fixup details at one address.
+- `add`: Create/set fixup at address with optional target.
+- `delete`: Remove fixup at address.
 
+## Key Parameters
+- `action`: One of `list|get|add|delete`.
+- `addr`: Required for `get`, `add`, `delete`.
+- `target`: Optional target address for `add`.
+- `fixup_type`: Integer fixup type for `add`.
+- `start`, `end`: Optional listing bounds.
+- `offset`, `count`: Pagination controls (`count=0` means unlimited scan).
 
-### `list`
-List available items for this tool with optional paging where supported.
-Lists all relocations in the current binary.
+## Examples
+```python
+fixups(action="list", start="0x400000", end="0x500000", offset=0, count=200)
+fixups(action="get", addr="0x401234")
+fixups(action="add", addr="0x401234", target="0x500000", fixup_type=0)
+fixups(action="delete", addr="0x401234")
+```
 
-### `get`
-Retrieve a detailed view for the requested item or address.
-Retrieves detailed fixup info for a specific address.
-
-### `add`
-Create a new item using the provided parameters.
-Manually adds a fixup (useful for custom loaders or manually mapped DLLs).
-
-### `delete`
-Remove the specified item.
-Removes an existing fixup.
-
-## Strategy
-Check `list` when logic seems to reference absolute addresses that don't make sense; they might be relocation targets.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing required `addr`.
+- Invalid range/address parsing.
+- No fixup at requested address for `get`.
+- IDA API-level failures when setting/deleting entries.

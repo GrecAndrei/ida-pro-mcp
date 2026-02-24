@@ -169,7 +169,9 @@ def llm_helpers(
             current_size = sum(len(p) for p in parts)
             remaining = budget - current_size - 50
             disasm_text = "\n".join(disasm_lines)
-            if len(disasm_text) > remaining:
+            if remaining <= 0:
+                disasm_text = "... (truncated)"
+            elif len(disasm_text) > remaining:
                 disasm_text = disasm_text[:remaining] + "\n... (truncated)"
             parts.append(f"Disassembly:\n{disasm_text}")
 

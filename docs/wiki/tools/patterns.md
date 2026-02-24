@@ -1,40 +1,37 @@
 # PATTERNS Tool Manual
 
-Generate and match function signatures (FLIRT-like patterns).
+## What It Does
+Generates and matches FLIRT-like byte signatures, enumerates available `.sig` files, and reports likely signature-matched functions.
 
 ## Actions
-### Supported Actions
-- generate
-- match
-- list_sigs
-- apply_sig
-- create_sig
+- `generate`: Build a wildcarded pattern from a function.
+- `match`: Match a hex pattern across functions.
+- `list_sigs`: Enumerate available signature files.
+- `apply_sig`: Queue a named signature for application.
+- `create_sig`: Create compact signature metadata from a function.
+- `matched`: List likely library/signature-identified functions.
 
+## Key Parameters
+- `action`: One of `generate|match|list_sigs|apply_sig|create_sig|matched`.
+- `addr`: Required for `generate` and `create_sig`.
+- `pattern`: Required for `match` (hex bytes with `??` wildcards).
+- `name`: Signature name (required for `apply_sig`; optional for `create_sig`).
+- `length`: Max bytes for generated pattern (default `32`).
+- `offset`: Pagination offset for list-style actions.
+- `count`: Max returned results (`0` means unbounded in supported actions).
 
-### `create_sig`
-Create and save a signature.
+## Examples
+```python
+patterns(action="generate", addr="0x401000", length=64)
+patterns(action="match", pattern="55 8B EC ?? ??", count=25)
+patterns(action="list_sigs", offset=0, count=50)
+patterns(action="apply_sig", name="vc32rtf")
+patterns(action="create_sig", addr="0x401000", name="parse_header_sig")
+patterns(action="matched", offset=0, count=100)
+```
 
-### `generate`
-Generate a signature from bytes.
-Creates a hex pattern from a function, automatically wildcarding relocations and variable offsets.
-*   **Args**: `addr`, `length` (default 32).
-*   **Best for**: Creating signatures to find the same logic in other binaries.
-
-### `match`
-Match a signature against the database.
-Searches the entire binary for functions matching a hex pattern (supports `??` wildcards).
-*   **Args**: `pattern` (e.g. `55 89 E5 ?? 83 EC`).
-
-### `list_sigs`
-List available signatures.
-Lists available `.sig` files in your IDA signature directory.
-
-### `apply_sig`
-Apply a signature to the database.
-Plans to apply a FLIRT signature file. Analysis happens in the background.
-
-## Strategy
-Use `generate` on a known function (e.g. from a symbolic build), then use `match` on a stripped version of the same binary.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing required `addr`, `pattern`, or `name` per action.
+- Invalid hex in `match` pattern.
+- Address not inside a function for function-bound actions.
+- Signature application only queued; final naming depends on auto-analysis.

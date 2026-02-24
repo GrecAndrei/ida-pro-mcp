@@ -10,6 +10,8 @@ import json
 import shutil
 import argparse
 import subprocess
+import glob
+import re
 from pathlib import Path
 
 # ============================================================================
@@ -86,6 +88,84 @@ def dim(msg):
 def get_script_dir():
     return Path(__file__).parent.absolute()
 
+def _ida_binary_names():
+    if sys.platform == "win32":
+        return ["idat64.exe", "idat.exe", "ida64.exe", "ida.exe"]
+    return ["idat64", "idat", "ida64", "ida"]
+
+def detect_ida_install_dir():
+    """Best-effort auto-detection of IDA install directory."""
+    for env_name in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT"):
+        value = os.environ.get(env_name)
+        if not value:
+            continue
+        p = Path(value).expanduser().resolve()
+        if p.is_dir():
+            return p
+        if p.is_file():
+            return p.parent
+
+    cands = []
+    if sys.platform == "win32":
+        cands.extend(
+            [
+                Path(r"C:\Program Files\IDA Professional 9.2"),
+                Path(r"C:\Program Files\IDA Pro 9.2"),
+                Path(r"C:\Program Files\IDA Professional"),
+                Path(r"C:\Program Files\IDA Pro"),
+            ]
+        )
+    elif sys.platform == "linux":
+        home = Path.home()
+        patterns = [
+            "/opt/ida*",
+            "/opt/IDA*",
+            "/opt/idapro*",
+            "/opt/IDAPro*",
+            "/usr/local/ida*",
+            "/usr/local/IDA*",
+            "/usr/local/idapro*",
+            "/usr/local/IDAPro*",
+            str(home / "ida*"),
+            str(home / "IDA*"),
+            str(home / "idapro*"),
+            str(home / "IDAPro*"),
+        ]
+        for pattern in patterns:
+            for p in glob.glob(os.path.expanduser(pattern)):
+                cands.append(Path(p))
+    else:
+        cands.extend(
+            [
+                Path("/Applications/IDA Professional 9.2.app/Contents/MacOS"),
+                Path("/Applications/IDA Pro 9.2.app/Contents/MacOS"),
+                Path("/Applications/IDA Professional.app/Contents/MacOS"),
+                Path("/Applications/IDA Pro.app/Contents/MacOS"),
+            ]
+        )
+
+    bins = _ida_binary_names()
+    for cand in cands:
+        if not cand.exists() or not cand.is_dir():
+            continue
+        for name in bins:
+            exe = cand / name
+            if exe.exists() and (sys.platform == "win32" or os.access(exe, os.X_OK)):
+                return cand
+
+    for name in bins:
+        resolved = shutil.which(name)
+        if resolved:
+            return Path(resolved).resolve().parent
+    return None
+
+def get_ida_user_dir():
+    """Locate IDA user directory used for plugins/config."""
+    env_dir = os.environ.get("IDAUSR") or os.environ.get("IDA_USER_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser()
+    return Path.home() / ".idapro"
+
 def _ps_quote(s: str) -> str:
     return s.replace("'", "''")
 
@@ -122,7 +202,7 @@ def get_ida_plugin_dir():
     if sys.platform == "win32":
         ida_folder = Path(os.environ.get("APPDATA", "")) / "Hex-Rays" / "IDA Pro"
     else:
-        ida_folder = Path.home() / ".idapro"
+        ida_folder = get_ida_user_dir()
     return ida_folder / "plugins"
 
 def relocate_self(dest_dir: Path):
@@ -140,7 +220,7 @@ def relocate_self(dest_dir: Path):
         dest_dir.mkdir(parents=True, exist_ok=True)
         
         # 1. CORE CODE (Always replace to ensure upgrade)
-        core_items = ["src", "ida_mcp_stdio.py", "pyproject.toml"]
+        core_items = ["src", "docs", "ida_mcp_stdio.py", "pyproject.toml"]
         for item in core_items:
             s = src_dir / item
             d = dest_dir / item
@@ -186,13 +266,23 @@ def get_mcp_server_config(install_path: Path):
     
     server_script = install_path / "ida_mcp_stdio.py"
     
+    detected_idadir = os.environ.get("IDADIR") or os.environ.get("IDA_DIR")
+    if not detected_idadir:
+        auto_ida = detect_ida_install_dir()
+        if auto_ida:
+            detected_idadir = str(auto_ida)
+
+    env = {}
+    if detected_idadir:
+        env["IDADIR"] = detected_idadir
+    wiki_dir = install_path / "docs" / "wiki"
+    if wiki_dir.exists():
+        env["IDA_MCP_WIKI_DIR"] = str(wiki_dir)
+
     return {
         "command": str(python_exe),
         "args": ["-u", str(server_script)],
-        "env": {
-            "IDADIR": os.environ.get("IDADIR", "")
-        },
-        "description": "IDA Pro Forensic Intelligence Engine"
+        "env": env,
     }
 
 def setup_virtualenv(install_path: Path):
@@ -229,17 +319,33 @@ def get_mcp_config_paths():
     """Get all known MCP client config file paths"""
     home = Path.home()
     appdata = Path(os.environ.get('APPDATA', home / 'AppData' / 'Roaming'))
-    localappdata = Path(os.environ.get('LOCALAPPDATA', home / 'AppData' / 'Local'))
-    
+    xdg_config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+
+    def pick_path(candidates):
+        """Prefer an existing candidate, otherwise use the first as default."""
+        for c in candidates:
+            if c and c.exists():
+                return c
+        return candidates[0]
+
+    opencode_override = os.environ.get("OPENCODE_CONFIG")
+    opencode_override_path = Path(opencode_override).expanduser() if opencode_override else None
+
+    copilot_path = (
+        xdg_config / "copilot" / "mcp-config.json"
+        if "XDG_CONFIG_HOME" in os.environ
+        else home / ".copilot" / "mcp-config.json"
+    )
+    opencode_path = opencode_override_path or (xdg_config / "opencode" / "opencode.json")
+
     configs = {
         # --- Priority Clients ---
-        "Gemini CLI": home / ".gemini" / "settings.json",
-        "Antigravity": home / ".gemini" / "antigravity" / "mcp_config.json",
-        "Claude Code": home / ".claude.json",
-        "Codex": home / ".codex" / "config.toml", # TOML!
-        "Copilot CLI": home / ".copilot" / "mcp-config.json",
-        "OpenCode": home / ".config" / "opencode" / "opencode.json", # JSONC format
-        
+        "Gemini CLI": pick_path([home / ".gemini" / "settings.json"]),
+        "Antigravity": pick_path([home / ".gemini" / "antigravity" / "mcp_config.json"]),
+        "Claude Code": pick_path([home / ".claude.json"]),
+        "Codex": pick_path([home / ".codex" / "config.toml"]),  # TOML (official path)
+        "Copilot CLI": pick_path([copilot_path]),
+        "OpenCode": pick_path([opencode_path]),  # JSON/JSONC format
         # --- Other Clients ---
         "Claude Desktop": appdata / "Claude" / "claude_desktop_config.json",
         "Cursor": appdata / "Cursor" / "User" / "globalStorage" / "cursor.mcp" / "config.json",
@@ -248,25 +354,122 @@ def get_mcp_config_paths():
         "Cline": appdata / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",
         "Roo Code": appdata / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",
     }
-    
-    # Linux/Mac adjustments
-    if os.name != 'nt':
-        xdg_config = Path(os.environ.get('XDG_CONFIG_HOME', home / '.config'))
-        if "Claude Desktop" in configs:
-            configs["Claude Desktop"] = xdg_config / "Claude" / "claude_desktop_config.json"
 
-        # VS Code on Linux usually ~/.config/Code/...
+    # Linux/macOS adjustments for GUI/editor clients
+    if os.name != 'nt':
+        configs["Claude Desktop"] = xdg_config / "Claude" / "claude_desktop_config.json"
         configs["VS Code"] = xdg_config / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json"
+        # Linux/macOS Cursor commonly uses ~/.cursor/mcp.json
+        configs["Cursor"] = home / ".cursor" / "mcp.json"
+        # Linux/macOS Cline/Roo locations under XDG config
+        configs["Cline"] = xdg_config / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json"
+        configs["Roo Code"] = xdg_config / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json"
 
     return configs
+
+
+LEGACY_SERVER_NAMES = (
+    "ida-pro-mcp",
+    "github.com/mrexodia/ida-pro-mcp",
+    "ida_mcp",
+    "ida-pro-mcp-server",
+)
+
+
+def _looks_like_ida_mcp_entry(entry) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    tokens = []
+    cmd = entry.get("command")
+    args = entry.get("args")
+    if isinstance(cmd, str):
+        tokens.append(cmd)
+    elif isinstance(cmd, list):
+        tokens.extend(str(x) for x in cmd)
+    if isinstance(args, str):
+        tokens.append(args)
+    elif isinstance(args, list):
+        tokens.extend(str(x) for x in args)
+    text = " ".join(tokens).lower()
+    return ("ida_mcp_stdio.py" in text) or ("ida-pro-mcp" in text)
+
+
+def _prune_legacy_entries(container: dict, server_name: str):
+    if not isinstance(container, dict):
+        return
+    to_remove = []
+    for key, value in container.items():
+        if key == server_name:
+            continue
+        if key in LEGACY_SERVER_NAMES or _looks_like_ida_mcp_entry(value):
+            to_remove.append(key)
+    for key in to_remove:
+        container.pop(key, None)
+
+
+def _toml_key(key: str) -> str:
+    if re.match(r"^[A-Za-z0-9_-]+$", key):
+        return key
+    escaped = key.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _toml_literal(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        escaped = (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
+        return f'"{escaped}"'
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_literal(v) for v in value) + "]"
+    raise TypeError(f"Unsupported TOML value type: {type(value)}")
+
+
+def _toml_dump_simple(data: dict) -> str:
+    lines = []
+
+    def emit_table(table: dict, path: list[str]):
+        scalar_items = []
+        table_items = []
+        for k, v in table.items():
+            if isinstance(v, dict):
+                table_items.append((k, v))
+            else:
+                scalar_items.append((k, v))
+        if path:
+            if lines:
+                lines.append("")
+            header = ".".join(_toml_key(p) for p in path)
+            lines.append(f"[{header}]")
+        for k, v in scalar_items:
+            lines.append(f"{_toml_key(k)} = {_toml_literal(v)}")
+        for k, sub in table_items:
+            emit_table(sub, path + [k])
+
+    emit_table(data, [])
+    return "\n".join(lines) + "\n"
 
 def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", client_name: str = "", install_path: Path = None) -> bool:
     """Add/Update server in a JSON config file."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
+
+        source_path = config_path
+        if client_name == "Copilot CLI" and not config_path.exists() and os.name != "nt":
+            legacy = Path.home() / ".copilot" / "mcp-config.json"
+            if legacy.exists() and legacy != config_path:
+                source_path = legacy
+
+        if source_path.exists():
+            with open(source_path, 'r', encoding='utf-8') as f:
                 try:
                     config = json.load(f)
                 except json.JSONDecodeError:
@@ -295,11 +498,13 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", clie
                 "env": server_config["env"],
                 "tools": ["*"]  # Required by Copilot CLI, "*" means all tools
             }
+            _prune_legacy_entries(config["mcpServers"], server_name)
             config["mcpServers"][server_name] = copilot_config
         else:
             # Standard clients use "mcpServers" without type field
             if "mcpServers" not in config:
                 config["mcpServers"] = {}
+            _prune_legacy_entries(config["mcpServers"], server_name)
             config["mcpServers"][server_name] = server_config
         
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -313,11 +518,14 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", clie
 def update_toml_config(config_path: Path, server_name: str = "ida-pro-mcp", install_path: Path = None) -> bool:
     """Add/Update server in a TOML config file (for Codex)."""
     try:
-        import tomli_w
         try:
             import tomllib
         except ImportError:
             import tomli as tomllib # Fallback for older python if installed
+        try:
+            import tomli_w
+        except ImportError:
+            tomli_w = None
 
         config_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -333,15 +541,18 @@ def update_toml_config(config_path: Path, server_name: str = "ida-pro-mcp", inst
         if "mcp_servers" not in config:
             config["mcp_servers"] = {}
 
+        _prune_legacy_entries(config["mcp_servers"], server_name)
         config["mcp_servers"][server_name] = get_mcp_server_config(install_path)
-        
-        with open(config_path, "wb") as f:
-            tomli_w.dump(config, f)
+
+        if tomli_w is not None:
+            with open(config_path, "wb") as f:
+                tomli_w.dump(config, f)
+        else:
+            # Fallback serializer so Codex repair still works without tomli-w.
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write(_toml_dump_simple(config))
 
         return True
-    except ImportError:
-        warning(f"tomli-w not found. Skipping TOML config for {config_path}")
-        return False
     except Exception as e:
         # dim(f"Failed to update {config_path}: {e}")
         return False
@@ -351,8 +562,19 @@ def update_opencode_config(config_path: Path, server_name: str = "ida-pro-mcp", 
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
+        source_path = config_path
+        if not config_path.exists():
+            # Legacy paths from earlier installer versions.
+            for legacy in (
+                Path.home() / ".opencode" / "mcp_config.json",
+                Path.home() / ".opencode" / "opencode.json",
+            ):
+                if legacy.exists():
+                    source_path = legacy
+                    break
+
+        if source_path.exists():
+            with open(source_path, 'r', encoding='utf-8') as f:
                 content = f.read()
                 # Strip comments for parsing (JSONC support)
                 import re
@@ -368,8 +590,11 @@ def update_opencode_config(config_path: Path, server_name: str = "ida-pro-mcp", 
             config = {}
         
         # OpenCode schema: "mcp": { "server-name": { "type": "local", "command": [...], "enabled": true } }
+        if "$schema" not in config:
+            config["$schema"] = "https://opencode.ai/config.json"
         if "mcp" not in config:
             config["mcp"] = {}
+        _prune_legacy_entries(config["mcp"], server_name)
         
         server_config = get_mcp_server_config(install_path)
         
@@ -439,6 +664,13 @@ def do_install():
     else:
         warning("uv not found (falling back to python)")
 
+    detected_ida = detect_ida_install_dir()
+    if detected_ida:
+        os.environ.setdefault("IDADIR", str(detected_ida))
+        success(f"Detected IDA install: {detected_ida}")
+    else:
+        warning("IDA install path not auto-detected (set IDADIR if needed)")
+
     # Step 3: Install package & Venv
     step(3, total_steps, "Installing IDA Pro MCP environment...")
     dim("This may take a moment...")
@@ -461,7 +693,7 @@ def do_install():
         else:
             return update_json_config(path, client_name=client, install_path=install_path)
 
-    priority_clients = ["Gemini CLI", "Antigravity", "Claude Code", "Claude Desktop", "Copilot CLI", "OpenCode"]
+    priority_clients = ["Gemini CLI", "Antigravity", "Claude Code", "Codex", "Claude Desktop", "Copilot CLI", "OpenCode"]
 
     for client, config_path in configs.items():
         if config_path.exists() or config_path.parent.exists() or client in priority_clients:
@@ -473,47 +705,44 @@ def do_install():
     step(5, total_steps, "Installing IDA Pro plugin...")
     ida_plugin_dir = get_ida_plugin_dir()
     plugin_installed = False
-    
-    if ida_plugin_dir.parent.exists():  # Check if IDA config folder exists
-        try:
-            ida_plugin_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Source files
-            src_loader = install_path / "src" / "ida_pro_mcp" / "ida_mcp.py"
-            src_pkg = install_path / "src" / "ida_pro_mcp" / "ida_mcp"
-            
-            # Destination
-            dst_loader = ida_plugin_dir / "ida_mcp.py"
-            dst_pkg = ida_plugin_dir / "ida_mcp"
-            
-            # Install loader
-            if src_loader.exists():
-                if dst_loader.exists() or dst_loader.is_symlink():
-                    dst_loader.unlink()
-                try:
-                    os.symlink(src_loader, dst_loader)
-                except OSError:
-                    shutil.copy2(src_loader, dst_loader)
-                success(f"Plugin loader: {dst_loader}")
-            
-            # Install package
-            if src_pkg.exists():
-                if dst_pkg.exists():
-                    if dst_pkg.is_symlink():
-                        dst_pkg.unlink()
-                    else:
-                        shutil.rmtree(dst_pkg)
-                try:
-                    os.symlink(src_pkg, dst_pkg, target_is_directory=True)
-                except OSError:
-                    shutil.copytree(src_pkg, dst_pkg)
-                success(f"Plugin package: {dst_pkg}")
-            
-            plugin_installed = True
-        except Exception as e:
-            warning(f"Plugin install failed: {e}")
-    else:
-        warning("IDA Pro config folder not found. Install IDA Pro first, then re-run installer.")
+
+    try:
+        ida_plugin_dir.mkdir(parents=True, exist_ok=True)
+
+        # Source files
+        src_loader = install_path / "src" / "ida_pro_mcp" / "ida_mcp.py"
+        src_pkg = install_path / "src" / "ida_pro_mcp" / "ida_mcp"
+
+        # Destination
+        dst_loader = ida_plugin_dir / "ida_mcp.py"
+        dst_pkg = ida_plugin_dir / "ida_mcp"
+
+        # Install loader
+        if src_loader.exists():
+            if dst_loader.exists() or dst_loader.is_symlink():
+                dst_loader.unlink()
+            try:
+                os.symlink(src_loader, dst_loader)
+            except OSError:
+                shutil.copy2(src_loader, dst_loader)
+            success(f"Plugin loader: {dst_loader}")
+
+        # Install package
+        if src_pkg.exists():
+            if dst_pkg.exists():
+                if dst_pkg.is_symlink():
+                    dst_pkg.unlink()
+                else:
+                    shutil.rmtree(dst_pkg)
+            try:
+                os.symlink(src_pkg, dst_pkg, target_is_directory=True)
+            except OSError:
+                shutil.copytree(src_pkg, dst_pkg)
+            success(f"Plugin package: {dst_pkg}")
+
+        plugin_installed = True
+    except Exception as e:
+        warning(f"Plugin install failed: {e}")
 
     # Step 6: Verify
     step(6, total_steps, "Verifying installation...")

@@ -100,9 +100,12 @@ def binary_info(
                     continue
                 name = ida_segment.get_segm_name(seg)
                 perm_str = ""
-                perm_str += "R" if seg.perm & idaapi.SFL_LOADER else "r"
-                perm_str += "W" if seg.perm & 2 else "-"
-                perm_str += "X" if seg.perm & 1 else "-"
+                read_mask = getattr(idaapi, "SEGPERM_READ", 1)
+                write_mask = getattr(idaapi, "SEGPERM_WRITE", 2)
+                exec_mask = getattr(idaapi, "SEGPERM_EXEC", 4)
+                perm_str += "R" if seg.perm & read_mask else "-"
+                perm_str += "W" if seg.perm & write_mask else "-"
+                perm_str += "X" if seg.perm & exec_mask else "-"
                 seg_class = ida_segment.get_segm_class(seg) or ""
                 ent = calc_entropy(seg.start_ea, seg.size())
                 sections.append(

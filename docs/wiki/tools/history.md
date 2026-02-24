@@ -1,43 +1,33 @@
 # HISTORY Tool Manual
 
-Database version control, snapshots, and undo management.
+## What It Does
+Wraps IDA undo/redo and snapshot-related capabilities, with lightweight snapshot lookup and a heuristic change report.
 
 ## Actions
-### Supported Actions
-- undo
-- redo
-- list
-- snapshot
-- restore
-- diff
+- `undo`: Perform up to `count` undo steps.
+- `redo`: Perform up to `count` redo steps.
+- `list`: Check undo/redo availability and descriptions (if supported).
+- `snapshot`: Create named snapshot (native if available, else save DB copy).
+- `restore`: Look up snapshot metadata by name.
+- `diff`: Heuristic list of non-default function names (not full DB diff).
 
+## Key Parameters
+- `action`: One of `undo|redo|list|snapshot|restore|diff`.
+- `count`: Undo/redo step count.
+- `name`: Snapshot identifier for `snapshot` and required for `restore`.
 
-### `redo`
-Redo the last undone change.
+## Examples
+```python
+history(action="undo", count=3)
+history(action="redo", count=1)
+history(action="list")
+history(action="snapshot", name="pre_patch")
+history(action="restore", name="pre_patch")
+history(action="diff")
+```
 
-### `list`
-List available items for this tool with optional paging where supported.
-
-### `restore`
-Restore a database snapshot.
-
-### `snapshot`
-Create a database snapshot.
-Creates a named save point of the current database.
-*   **Best for**: Creating a recovery point before performing risky bulk renames or script-heavy refactoring.
-*   **IDA 9.2**: Uses native snapshot API if available.
-
-### `undo` / `redo`
-Undo the last database change.
-Traditional undo stack manipulation.
-*   **Args**: `count` (Number of steps).
-
-### `diff`
-Show snapshot diffs.
-Shows a summary of modified functions since the database was opened.
-
-## Strategy
-Always call `history(action='snapshot', name='before_rename_session')` before letting an LLM do massive work. This gives you a one-click "undo" safety net.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `restore` with missing `name` or unknown snapshot metadata file.
+- Snapshot creation failure when native and copy fallback both fail.
+- `diff` is intentionally limited and not authoritative.
+- API differences across IDA versions reduce detail in `list`.

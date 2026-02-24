@@ -1,52 +1,51 @@
 # DATA Tool Manual
 
-Binary data queries and enumeration.
+## What It Does
+Query, filter, and list data items: functions, globals, strings, imports.
 
 ## Actions
-### Supported Actions
-- functions
-- globals
-- strings
-- imports
-- exports
-- lookup
-- bulk_query
+- `functions`: List/query functions with filters.
+- `globals`: List/query global data symbols.
+- `strings`: List/query discovered strings.
+- `imports`: List imports and related metadata.
+- `exports`: List exports and related metadata.
+- `lookup`: Resolve a symbol/name/address query.
+- `bulk_query`: Run mixed data queries in one request.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `query` (default `None`): Search query string or query payload.
+- `offset` (default `0`): Pagination offset or base offset.
+- `count` (default `100`): Item count or array length.
+- `include_prototype` (default `False`): Include function prototypes in data listings.
+- `include_xrefs` (default `False`): Include xref details in listing output.
+- `min_size` (default `None`): Minimum size filter for data results.
+- `named_only` (default `False`): Restrict to named symbols/items.
 
-### `globals`
-List global symbols with pagination and optional filtering.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "data",
+  "args": {
+    "action": "functions",
+    "count": 50,
+    "include_prototype": true
+  }
+}
+```
+```json
+{
+  "tool": "data",
+  "args": {
+    "action": "lookup",
+    "query": "sub_401000",
+    "include_xrefs": true
+  }
+}
+```
 
-### `exports`
-List exported entrypoints.
-
-### `functions`
-List functions with pagination and optional filtering.
-Lists all functions in the binary.
-*   **Args**: `query` (filter), `offset`, `count` (pagination).
-*   **Default**: Shows all functions. Use pagination for large binaries.
-
-### `strings`
-List string literals with pagination and optional filtering.
-Lists all strings found by IDA.
-*   **Note**: Use `search.string` for targeted searching; use this for global discovery.
-*   **Tip**: Pass `include_xrefs=true` to annotate xref counts.
-
-### `imports` / `exports`
-List imported modules and symbols.
-Lists all DLL imports and exported symbols. 
-*   **Strategy**: Best for mapping the external attack surface of a binary.
-
-### `lookup`
-Resolve name to address or address to name.
-Resolves a name to an address (or vice versa).
-
-### `bulk_query`
-Run multiple data queries in one call.
-Run multiple data queries in one call with per-item pagination controls.
-Supports per-item flags like `include_prototype`, `include_xrefs`, `min_size`, `named_only`.
-
-## Pagination
-Most `data` actions support `offset` and `count`. Always use these if the tool reports more than 100 items to avoid context window overflow.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `IDA_ERROR`: `Entry API not available in this IDA version`
+- `INVALID_ARGS`: `query required for lookup`
+- `INVALID_ARGS`: `items must be a list`
+- `INVALID_ARGS`: `Unknown action: {action}`

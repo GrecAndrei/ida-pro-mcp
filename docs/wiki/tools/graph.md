@@ -1,30 +1,29 @@
 # GRAPH Tool Manual
 
-Export control flow and call graphs for visualization.
+## What It Does
+Builds call graphs, CFGs, and xref graphs with JSON, DOT, or Mermaid output for quick visualization and traversal.
 
 ## Actions
-### Supported Actions
-- callgraph
-- cfg
-- xref_graph
+- `callgraph`: Traverse callee graph from a function start.
+- `cfg`: Emit per-basic-block control-flow graph for one function.
+- `xref_graph`: Traverse callers/callees around an address by direction.
 
+## Key Parameters
+- `action`: One of `callgraph|cfg|xref_graph`.
+- `addr`: Required starting point.
+- `depth`: Traversal depth limit.
+- `direction`: Used by `xref_graph` (`down|up|both`).
+- `format`: `json`, `dot`, or `mermaid`.
 
-### `xref_graph`
-Return a cross-reference graph for a symbol.
+## Examples
+```python
+graph(action="callgraph", addr="0x401000", depth=2, format="mermaid")
+graph(action="cfg", addr="0x401000", format="dot")
+graph(action="xref_graph", addr="0x401000", direction="both", depth=3, format="json")
+```
 
-### `cfg` (Control Flow Graph)
-Return a control flow graph for a function.
-Generates the basic block graph for a specific function.
-*   **Args**: `addr`, `format` (json|mermaid).
-*   **Mermaid**: Returns code that can be rendered as a flowchart.
-
-### `callgraph`
-Build a callgraph around the target function.
-Traces function calls starting from an address.
-*   **Args**: `addr`, `depth`, `direction` (up|down|both).
-
-## Optimization for LLMs
-Always prefer `format='mermaid'` when you need to reason about logic flow. It provides a topological map that is easier to parse than raw address lists.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- Missing/invalid `addr`.
+- Address not in function for function-oriented actions.
+- Large graph growth with high `depth`.
+- Unknown output `format`/`action` errors.

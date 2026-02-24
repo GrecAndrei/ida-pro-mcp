@@ -1,24 +1,25 @@
 # PLUGINS Tool Manual
 
-Access and management of IDA Pro third-party plugins.
+## What It Does
+Runs IDA plugins by name and exposes plugin-list behavior where supported by the installed IDA version.
 
 ## Actions
-### Supported Actions
-- list
-- run
+- `list`: Attempt to list plugins.
+- `run`: Execute a plugin by name.
 
+## Key Parameters
+- `action`: One of `list|run`.
+- `name`: Required for `run`; plugin display/internal name.
+- `arg`: Integer argument passed to plugin entry (`run_plugin`).
 
-### `list`
-List available items for this tool with optional paging where supported.
-Lists all installed and available plugins.
+## Examples
+```python
+plugins(action="list")
+plugins(action="run", name="Hex-Rays Decompiler", arg=0)
+```
 
-### `run`
-Run an IDA plugin by name.
-Executes a specific plugin by name.
-*   **Args**: `name` (e.g. 'hexrays', 'binexport').
-
-## Strategy
-Use this tool to trigger specialized third-party analysis (e.g. `LazyIDA`, `D810`) if they are installed.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `list` returns `NOT_IMPLEMENTED` on newer IDA versions.
+- Missing `name` for `run`.
+- Plugin not found by `find_plugin`.
+- Plugin run failure reported by IDA.

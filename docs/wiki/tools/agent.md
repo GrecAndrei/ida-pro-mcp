@@ -1,42 +1,54 @@
 # AGENT Tool Manual
 
-High-level triage and exploration "force multipliers".
+## What It Does
+High-level agent helpers for efficient binary analysis.
 
 ## Actions
-### Supported Actions
-- analyze_function
-- explore_address
-- find_references
-- search_all
-- search_structs
-- context_pack
+- `analyze_function`: Build a compact function summary with related context.
+- `explore_address`: Expand context around an address (calls, xrefs, nearby symbols).
+- `find_references`: Collect references to a target address or symbol.
+- `search_all`: Search names, strings, imports, and symbols with one query.
+- `search_structs`: Search structures and fields by query.
+- `context_pack`: Return a bundled context payload for an address/function.
+- `quick`: Fast lightweight overview for a location.
+- `rename_suggestions`: Generate candidate symbol names from behavior/context.
+- `batch_context`: Build context for multiple addresses in one request.
+- `similar`: Find similar functions around the target.
 
+## Key Parameters
+- `action` (required): Operation selector.
+- `addr` (default `None`): Target address or function start (hex string).
+- `query` (default `None`): Search query string or query payload.
+- `depth` (default `1`): Traversal/path depth bound.
+- `include_pseudocode` (default `False`): Include decompiled pseudocode in agent output.
+- `max_items` (default `25`): Maximum returned items.
+- `use_cache` (default `True`): Use cached intermediate context when available.
 
-### `find_references`
-Return code and data references to the target address.
+## Examples (JSON call snippets)
+```json
+{
+  "tool": "agent",
+  "args": {
+    "action": "analyze_function",
+    "addr": "0x401000",
+    "include_pseudocode": true
+  }
+}
+```
+```json
+{
+  "tool": "agent",
+  "args": {
+    "action": "search_all",
+    "query": "credential",
+    "max_items": 20
+  }
+}
+```
 
-### `analyze_function`
-Aggregate decompilation, callers/callees, and strings for a function.
-A wrapper around `code.analyze`. Provides the most comprehensive single-turn view of a function.
-
-### `explore_address`
-Summarize what exists at an address (name, type, xrefs).
-Used when you find a random pointer or address and don't know what it is. It checks for functions, data, segments, and xrefs.
-
-### `search_all`
-Search names, strings, and functions for a query.
-Universal search across names, strings, and functions. Use this for your first "recon" sweep of a binary.
-
-### `search_structs`
-Search structure names and fields for a query.
-Finds structs by type name or field name. 
-*   **Best for**: "Which struct has an 'apikey' field?"
-
-### `context_pack`
-Return a one-shot function context pack for LLM grounding.
-One-shot function context (pseudocode, callers/callees, xrefs, strings, types).
-*   **Best for**: fast per-function grounding for LLMs.
-*   **Args**: `addr`, `include_pseudocode`, `max_items`, `use_cache`.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+## Failure Modes
+- `INVALID_ARGS`: `addr required`
+- `INVALID_ARGS`: `query required`
+- `FUNCTION_NOT_FOUND`: `No function at {hex(ea)}`
+- `INVALID_ARGS`: `query required (comma-separated addresses)`
+- `INVALID_ARGS`: `Unknown action: {action}`

@@ -125,14 +125,20 @@ def hooks(
             
             # Generate arg loggers
             arg_logs = "\n".join([f'        console.log("    arg{i}:", args[{i}]);' for i in range(min(8, arg_count))])
+            module_hint = os.path.basename(idaapi.get_input_file_path() or "").lower()
+            offset = hex(ea - idaapi.get_imagebase())
             
             script = f'''// Frida hook for {name} at {hex(ea)}
-const moduleBase = Module.getBaseAddress(Process.enumerateModules()[0].name);
-const funcAddr = moduleBase.add({hex(ea - idaapi.get_imagebase())});
+const moduleHint = "{module_hint}";
+const targetModule = Process.enumerateModules().find(m => m.name.toLowerCase() === moduleHint) || Process.mainModule;
+if (!targetModule) {{
+    throw new Error("Unable to resolve target module");
+}}
+const funcAddr = targetModule.base.add({offset});
 
 Interceptor.attach(funcAddr, {{
     onEnter: function(args) {{
-        console.log("[+] {name} called");
+        console.log("[+] {name} called @ " + funcAddr + " (module=" + targetModule.name + ")");
 {arg_logs}
     }},
     onLeave: function(retval) {{

@@ -45,6 +45,7 @@ def wiki(
     # Go up from tools/ -> ida_mcp/ -> ida_pro_mcp/ -> src/ -> repo root
     _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_script_dir))))
     wiki_root = os.path.join(_repo_root, "docs", "wiki")
+    wiki_root_real = os.path.realpath(wiki_root)
     
     try:
         def collect_topics():
@@ -67,27 +68,55 @@ def wiki(
                     headers.append({"level": level, "text": text, "line": idx})
             return headers
 
+        def _is_inside_wiki(candidate: str) -> bool:
+            real_candidate = os.path.realpath(candidate)
+            try:
+                return os.path.commonpath([wiki_root_real, real_candidate]) == wiki_root_real
+            except ValueError:
+                return False
+
+        def resolve_topic_path(topic_name: str):
+            if not topic_name:
+                return None, make_error(MCPError.INVALID_ARGS, "topic required")
+
+            normalized = topic_name.strip().replace("\\", "/")
+            if not normalized:
+                return None, make_error(MCPError.INVALID_ARGS, "topic required")
+            if os.path.isabs(normalized):
+                return None, make_error(MCPError.PATH_TRAVERSAL, "Absolute topic paths are not allowed")
+            if normalized.startswith("/"):
+                normalized = normalized.lstrip("/")
+            if normalized.endswith(".md"):
+                normalized = normalized[:-3]
+
+            parts = [p for p in normalized.split("/") if p]
+            if not parts or any(p in (".", "..") for p in parts):
+                return None, make_error(MCPError.PATH_TRAVERSAL, "Invalid wiki topic path")
+
+            candidates = []
+            if len(parts) > 1:
+                candidates.append(os.path.join(wiki_root, *parts) + ".md")
+            else:
+                base = parts[0]
+                for sub in ["tools", "workflows", "skills", "core", ""]:
+                    candidates.append(os.path.join(wiki_root, sub, base + ".md"))
+
+            for cand in candidates:
+                if not _is_inside_wiki(cand):
+                    return None, make_error(MCPError.PATH_TRAVERSAL, "Topic path escapes wiki root")
+                if os.path.exists(cand):
+                    return cand, None
+
+            return None, make_error(MCPError.FILE_NOT_FOUND, f"Wiki topic '{topic_name}' not found")
+
         if action == "list_topics":
             return {"ok": True, "categories": collect_topics()}
 
         elif action == "read":
             if not topic: return make_error(MCPError.INVALID_ARGS, "topic required")
-            
-            # Resolve path
-            if "/" in topic:
-                path = os.path.join(wiki_root, topic.replace("/", os.sep) + ".md")
-            else:
-                # Try tools first, then workflows, then root
-                for sub in ["tools", "workflows", "skills", "core", ""]:
-                    p = os.path.join(wiki_root, sub, topic + ".md")
-                    if os.path.exists(p):
-                        path = p
-                        break
-                else:
-                    return make_error(MCPError.FILE_NOT_FOUND, f"Wiki topic '{topic}' not found")
-            
-            if not os.path.exists(path):
-                return make_error(MCPError.FILE_NOT_FOUND, f"Wiki topic '{topic}' not found")
+            path, err = resolve_topic_path(topic)
+            if err:
+                return err
             
             with open(path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
@@ -222,18 +251,9 @@ def wiki(
         elif action == "sections":
             if not topic:
                 return make_error(MCPError.INVALID_ARGS, "topic required")
-            if "/" in topic:
-                path = os.path.join(wiki_root, topic.replace("/", os.sep) + ".md")
-            else:
-                for sub in ["tools", "workflows", "skills", "core", ""]:
-                    p = os.path.join(wiki_root, sub, topic + ".md")
-                    if os.path.exists(p):
-                        path = p
-                        break
-                else:
-                    return make_error(MCPError.FILE_NOT_FOUND, f"Wiki topic '{topic}' not found")
-            if not os.path.exists(path):
-                return make_error(MCPError.FILE_NOT_FOUND, f"Wiki topic '{topic}' not found")
+            path, err = resolve_topic_path(topic)
+            if err:
+                return err
             with open(path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             headers = parse_headers(lines)
