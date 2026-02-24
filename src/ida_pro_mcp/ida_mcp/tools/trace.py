@@ -27,21 +27,39 @@ def trace(
         
         if action == "get":
             traces = []
-            # tev_t removed in IDA 9, check for availability
-            if not hasattr(ida_dbg, 'tev_t'):
-                return make_error(MCPError.NOT_IMPLEMENTED, "Trace API not available in this IDA version")
-            tev = ida_dbg.tev_t()
-            for i in range(min(ida_dbg.get_tev_qty(), count)):
-                if ida_dbg.get_tev_info(i, tev):
-                    entry = {"idx": i, "addr": hex(tev.ea), "type": tev.type}
-                    if addr and hex(tev.ea) != addr:
-                        continue
-                    traces.append(entry)
-            return {"ok": True, "traces": traces, "count": len(traces)}
+            has_tev = all(
+                hasattr(ida_dbg, attr)
+                for attr in ("tev_t", "get_tev_qty", "get_tev_info")
+            )
+            if has_tev:
+                tev = ida_dbg.tev_t()
+                for i in range(min(ida_dbg.get_tev_qty(), count)):
+                    if ida_dbg.get_tev_info(i, tev):
+                        entry = {"idx": i, "addr": hex(tev.ea), "type": tev.type}
+                        if addr and hex(tev.ea) != addr:
+                            continue
+                        traces.append(entry)
+                return {"ok": True, "traces": traces, "count": len(traces), "trace_api": "tev"}
+
+            # Compatibility fallback for builds without trace-event API.
+            return {
+                "ok": True,
+                "traces": [],
+                "count": 0,
+                "trace_api": "unavailable",
+                "note": "Trace event API is unavailable in this IDA runtime; import external trace data for analysis.",
+            }
         
         elif action == "clear":
-            ida_dbg.clear_trace()
-            return {"ok": True}
+            clear_fn = getattr(ida_dbg, "clear_trace", None)
+            if callable(clear_fn):
+                clear_fn()
+                return {"ok": True, "cleared": True}
+            return {
+                "ok": True,
+                "cleared": False,
+                "note": "Trace clear API is unavailable in this IDA runtime.",
+            }
         
         elif action == "set_options":
             err = check_debugger(require_active=True)

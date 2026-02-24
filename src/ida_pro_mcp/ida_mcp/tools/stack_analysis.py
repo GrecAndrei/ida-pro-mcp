@@ -4,7 +4,10 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import ida_struct
+try:
+    import ida_struct
+except Exception:
+    ida_struct = None
 
 
 # Canary symbol names across architectures
@@ -109,6 +112,36 @@ def _is_arm(arch):
     return "ARM" in p or "AARCH" in p
 
 
+def _frame_size(frame) -> int:
+    """Compute frame size with compatibility fallbacks across IDA builds."""
+    if not frame:
+        return 0
+
+    if ida_struct is not None and hasattr(ida_struct, "get_struc_size"):
+        try:
+            return int(ida_struct.get_struc_size(frame))
+        except Exception:
+            pass
+
+    getter = getattr(ida_frame, "get_struc_size", None)
+    if callable(getter):
+        try:
+            return int(getter(frame))
+        except Exception:
+            pass
+
+    # Last-resort estimate from member end offsets.
+    try:
+        max_eoff = 0
+        for i in range(getattr(frame, "memqty", 0)):
+            member = frame.get_member(i)
+            if member and hasattr(member, "eoff"):
+                max_eoff = max(max_eoff, int(member.eoff))
+        return max_eoff
+    except Exception:
+        return 0
+
+
 @tool
 @idaread
 def stack_analysis(
@@ -175,7 +208,7 @@ def stack_analysis(
             frame, err = _get_frame_or_error(func)
             if err:
                 return err
-            frame_size = ida_struct.get_struc_size(frame)
+            frame_size = _frame_size(frame)
             members = []
             for i, member, name, offset, size, type_str in _iter_frame_members(frame):
                 members.append({
@@ -267,7 +300,7 @@ def stack_analysis(
             frame, err = _get_frame_or_error(func)
             if err:
                 return err
-            frame_size = ida_struct.get_struc_size(frame)
+            frame_size = _frame_size(frame)
             # Determine alignment from frame size and architecture
             if frame_size == 0:
                 alignment = arch["ptr_size"]
@@ -347,7 +380,7 @@ def stack_analysis(
         # ---- usage: Stack usage analysis ----
         elif action == "usage":
             frame, _ = _get_frame_or_error(func)
-            frame_size = ida_struct.get_struc_size(frame) if frame else 0
+            frame_size = _frame_size(frame) if frame else 0
             # Track stack pointer delta across the function
             max_spd = 0
             min_spd = 0
@@ -392,7 +425,7 @@ def stack_analysis(
             frame, err = _get_frame_or_error(func)
             if err:
                 return err
-            frame_size = ida_struct.get_struc_size(frame)
+            frame_size = _frame_size(frame)
             variables = []
             for i, member, name, offset, size, type_str in _iter_frame_members(frame):
                 # Classify the variable
@@ -557,7 +590,7 @@ def stack_analysis(
         # ---- summary: Quick stack frame summary ----
         elif action == "summary":
             frame, _ = _get_frame_or_error(func)
-            frame_size = ida_struct.get_struc_size(frame) if frame else 0
+            frame_size = _frame_size(frame) if frame else 0
             local_count = 0
             arg_count = 0
             saved_count = 0
