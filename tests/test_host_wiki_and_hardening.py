@@ -16,10 +16,21 @@ class TestHostWikiTool(unittest.TestCase):
     def setUp(self):
         self._old_wiki_env = os.environ.get("IDA_MCP_WIKI_DIR")
         self.tmpdir = tempfile.mkdtemp(prefix="wiki-test-")
-        wiki_root = Path(self.tmpdir) / "docs" / "wiki" / "tools"
-        wiki_root.mkdir(parents=True, exist_ok=True)
-        (wiki_root / "demo.md").write_text(
-            "# DEMO Tool Manual\n\n## What It Does\nDemo.\n", encoding="utf-8"
+        wiki_tools = Path(self.tmpdir) / "docs" / "wiki" / "tools"
+        wiki_workflows = Path(self.tmpdir) / "docs" / "wiki" / "workflows"
+        wiki_tools.mkdir(parents=True, exist_ok=True)
+        wiki_workflows.mkdir(parents=True, exist_ok=True)
+        (wiki_tools / "demo.md").write_text(
+            "# DEMO Tool Manual\n\n## What It Does\nDemo analysis helper.\n\n## Failure Modes\nNone.\n",
+            encoding="utf-8",
+        )
+        (wiki_tools / "trace.md").write_text(
+            "# TRACE Tool Manual\n\n## What It Does\nTrace execution and summarize flow.\n",
+            encoding="utf-8",
+        )
+        (wiki_workflows / "ForensicProtocol.md").write_text(
+            "# Forensic Protocol\n\n## Steps\nCollect, verify, and report.\n",
+            encoding="utf-8",
         )
         os.environ["IDA_MCP_WIKI_DIR"] = str(Path(self.tmpdir) / "docs" / "wiki")
         self.server = IDAMCPServer()
@@ -51,6 +62,38 @@ class TestHostWikiTool(unittest.TestCase):
         )
         self.assertTrue(res.get("ok"))
         self.assertIn("WIKI Tool Manual", res.get("content", ""))
+
+    def test_search_supports_category_and_ranking(self):
+        res = self.server._execute_tool(
+            "wiki",
+            {
+                "action": "search",
+                "query": "trace",
+                "category": "tools",
+                "max_results": 5,
+                "fuzzy": True,
+            },
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertGreaterEqual(res.get("count", 0), 1)
+        self.assertEqual(res["matches"][0]["topic"], "tools/trace")
+
+    def test_read_missing_topic_returns_suggestions(self):
+        res = self.server._execute_tool(
+            "wiki", {"action": "read", "topic": "trce", "strict_topic": True}
+        )
+        self.assertTrue(res.get("error"))
+        self.assertEqual(res.get("code"), MCPError.FILE_NOT_FOUND)
+        suggestions = res.get("details", {}).get("suggestions", [])
+        self.assertTrue(any("tools/trace" == s for s in suggestions))
+
+    def test_read_includes_related_topics(self):
+        res = self.server._execute_tool(
+            "wiki", {"action": "read", "topic": "tools/demo", "include_related": True}
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertIn("related_topics", res)
+        self.assertIn("tools/trace", res["related_topics"])
 
 
 class TestHostHardening(unittest.TestCase):
