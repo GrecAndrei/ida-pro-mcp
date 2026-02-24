@@ -31,10 +31,48 @@ def plugins(
     """
     try:
         import ida_loader
+        import pathlib
         
         if action == "list":
-            # Plugin enumeration API removed in IDA 9
-            return make_error(MCPError.NOT_IMPLEMENTED, "Plugin listing not supported in this IDA version")
+            # IDA 9 removed old plugin-enumeration API; provide filesystem-based fallback.
+            plugin_dirs = []
+            try:
+                idadir = os.environ.get("IDADIR")
+                if idadir:
+                    plugin_dirs.append(os.path.join(idadir, "plugins"))
+            except Exception:
+                pass
+            try:
+                idausr = os.environ.get("IDAUSR") or os.path.join(pathlib.Path.home(), ".idapro")
+                plugin_dirs.append(os.path.join(str(idausr), "plugins"))
+            except Exception:
+                pass
+
+            discovered = []
+            seen = set()
+            exts = (".py", ".pyc", ".p64", ".plw", ".dll", ".so", ".dylib")
+            for d in plugin_dirs:
+                if not d or not os.path.isdir(d):
+                    continue
+                try:
+                    for entry in os.listdir(d):
+                        if not entry.lower().endswith(exts):
+                            continue
+                        full = os.path.join(d, entry)
+                        key = os.path.realpath(full)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        discovered.append({"name": entry, "path": full})
+                except Exception:
+                    continue
+
+            return {
+                "ok": True,
+                "plugins": sorted(discovered, key=lambda x: x["name"].lower()),
+                "count": len(discovered),
+                "note": "Filesystem-based plugin listing (runtime enumeration API not available in this IDA build).",
+            }
 
         elif action == "run":
             if not name:

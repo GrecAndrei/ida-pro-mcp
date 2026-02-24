@@ -35,6 +35,35 @@ for p in [_src_root, _pkg_root, _mcp_root]:
 os.environ["IDA_MCP_BYPASS_SYNC"] = "1"
 
 TOOLS = {}
+TOOL_ALIASES = {
+    # Compatibility typo used by some wrappers.
+    "xfer_analysis": "xref_analysis",
+}
+
+
+def _canonical_tool_name(name):
+    if not isinstance(name, str):
+        return name
+    return TOOL_ALIASES.get(name, name)
+
+
+def _try_load_single_tool(name):
+    import importlib
+
+    canonical = _canonical_tool_name(name)
+    if canonical in TOOLS:
+        return TOOLS[canonical], canonical, None
+    try:
+        module = importlib.import_module(f"ida_mcp.tools.{canonical}")
+        if hasattr(module, canonical):
+            tool_func = getattr(module, canonical)
+            TOOLS[canonical] = tool_func
+            return tool_func, canonical, None
+        return None, canonical, f"module '{canonical}' missing callable '{canonical}'"
+    except Exception as e:
+        return None, canonical, str(e)
+
+
 def load_tools():
     global TOOLS
     try:
@@ -47,6 +76,10 @@ def load_tools():
                     module = importlib.import_module(f"ida_mcp.tools.{name}")
                     if hasattr(module, name): TOOLS[name] = getattr(module, name)
                 except Exception as e: log_ev(f"Load error {name}: {e}")
+        # Register aliases only if target exists
+        for alias, target in TOOL_ALIASES.items():
+            if target in TOOLS:
+                TOOLS[alias] = TOOLS[target]
         log_ev(f"Loaded {len(TOOLS)} tools")
     except Exception as e: log_ev(f"Tool load error: {e}")
 
@@ -138,15 +171,27 @@ def run_server():
                 args = req.get("args", {})
                 log_ev(f"Calling tool: {tool_name}")
                 try:
-                    if tool_name not in TOOLS:
+                    canonical_tool = _canonical_tool_name(tool_name)
+                    if canonical_tool not in TOOLS:
+                        loaded_tool, loaded_name, load_err = _try_load_single_tool(tool_name)
+                        if loaded_tool:
+                            canonical_tool = loaded_name
+                            TOOLS[tool_name] = loaded_tool
+                            TOOLS[canonical_tool] = loaded_tool
+
+                    if canonical_tool not in TOOLS:
                         res = _build_error(
                             tool_name,
                             f"Tool not found: {tool_name}",
                             code="TOOL_NOT_FOUND",
-                            details={"available_tools": sorted(TOOLS.keys())},
+                            details={
+                                "available_tools": sorted(TOOLS.keys()),
+                                "canonical_tool": canonical_tool,
+                                "load_error": load_err if 'load_err' in locals() else None,
+                            },
                         )
                     else:
-                        tool_func = TOOLS[tool_name]
+                        tool_func = TOOLS[canonical_tool]
                         siginfo = _tool_signature_info(tool_func)
                         # Pre-validate action if possible
                         if "action" in args and siginfo["actions"]:

@@ -26,9 +26,6 @@ def trace(
         import ida_dbg
         
         if action == "get":
-            err = check_debugger(require_active=True)
-            if err: return err
-
             traces = []
             # tev_t removed in IDA 9, check for availability
             if not hasattr(ida_dbg, 'tev_t'):
@@ -43,8 +40,6 @@ def trace(
             return {"ok": True, "traces": traces, "count": len(traces)}
         
         elif action == "clear":
-            err = check_debugger(require_active=True)
-            if err: return err
             ida_dbg.clear_trace()
             return {"ok": True}
         
