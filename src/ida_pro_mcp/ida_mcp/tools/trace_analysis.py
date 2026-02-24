@@ -4,6 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+_TRACE_CACHE: list[int] = []
+
 
 # ============================================================================
 # 36. TRACE_ANALYSIS - Post-mortem execution trace analysis
@@ -33,39 +35,91 @@ def trace_analysis(
     try:
         import bisect
 
+        def _parse_addrs(values):
+            parsed = []
+            for a in values:
+                try:
+                    parsed.append(int(str(a), 0))
+                except (ValueError, TypeError):
+                    continue
+            return parsed
+
+        def _trace_from_runtime(limit: int = 200000) -> list[int]:
+            try:
+                import ida_dbg
+            except Exception:
+                return []
+            has_tev = all(
+                hasattr(ida_dbg, attr)
+                for attr in ("tev_t", "get_tev_qty", "get_tev_info")
+            )
+            if not has_tev:
+                return []
+            out = []
+            try:
+                qty = min(int(ida_dbg.get_tev_qty()), int(limit))
+                tev = ida_dbg.tev_t()
+                for i in range(qty):
+                    if ida_dbg.get_tev_info(i, tev):
+                        out.append(int(tev.ea))
+            except Exception:
+                return []
+            return out
+
         def load_trace():
+            nonlocal trace_data
+            global _TRACE_CACHE
             if trace_data and isinstance(trace_data, list):
-                result = set()
-                for a in trace_data:
-                    try:
-                        result.add(int(str(a), 0))
-                    except (ValueError, TypeError):
-                        pass
-                return result
+                _TRACE_CACHE = _parse_addrs(trace_data)
+                return list(_TRACE_CACHE)
             if path:
                 p, err = validate_path_safe(path)
-                if err: return set()
-                addrs = set()
+                if err:
+                    return []
+                addrs = []
                 with open(p, 'r') as f:
                     for line in f:
-                        try: addrs.add(int(line.strip(), 0))
-                        except Exception: pass
-                return addrs
-            return set()
+                        try:
+                            addrs.append(int(line.strip(), 0))
+                        except Exception:
+                            pass
+                _TRACE_CACHE = addrs
+                return list(addrs)
+            if _TRACE_CACHE:
+                return list(_TRACE_CACHE)
+            runtime_trace = _trace_from_runtime()
+            if runtime_trace:
+                _TRACE_CACHE = runtime_trace
+                return list(runtime_trace)
+            return []
 
         def _has_hit(sorted_hits, start_ea: int, end_ea: int) -> bool:
             idx = bisect.bisect_left(sorted_hits, start_ea)
             return idx < len(sorted_hits) and sorted_hits[idx] < end_ea
 
         if action == "import_trace":
-            if not path and not trace_data:
+            if not path and not trace_data and not _TRACE_CACHE:
                 return make_error(MCPError.INVALID_ARGS, "path or trace_data required")
             addrs = load_trace()
-            return {"ok": True, "path": path, "count": len(addrs), "unique": len(addrs)}
+            return {
+                "ok": True,
+                "path": path,
+                "count": len(addrs),
+                "unique": len(set(addrs)),
+                "source": "runtime" if (not path and not trace_data and addrs) else ("cache" if (not path and not trace_data) else "input"),
+            }
         
         elif action == "analyze_coverage":
-            trace_set = load_trace()
-            if not trace_set: return make_error(MCPError.INVALID_ARGS, "No trace data")
+            trace_list = load_trace()
+            if not trace_list:
+                return {
+                    "ok": True,
+                    "total": 0,
+                    "hit": 0,
+                    "pct": 0.0,
+                    "note": "No trace data loaded. Use import_trace(path=...) or pass trace_data.",
+                }
+            trace_set = set(trace_list)
             trace_sorted = sorted(trace_set)
             
             total_blocks, hit_blocks = 0, 0
@@ -82,17 +136,20 @@ def trace_analysis(
         elif action == "find_loops":
             # Requires full list for frequency
             t_list = list(load_trace())
-            if not t_list: return make_error(MCPError.INVALID_ARGS, "No trace data")
+            if not t_list:
+                return {"ok": True, "hot_spots": [], "count": 0, "note": "No trace data loaded."}
             from collections import Counter
             loops = []
             for ea, count in Counter(t_list).most_common(20):
                 if count > 5:
                     f = ida_funcs.get_func(ea)
                     loops.append({"addr": hex(ea), "hits": count, "func": idc.get_func_name(f.start_ea) if f else None})
-            return {"ok": True, "hot_spots": loops}
+            return {"ok": True, "hot_spots": loops, "count": len(loops)}
 
         elif action == "extract_api_calls":
-            trace_set = load_trace()
+            trace_set = set(load_trace())
+            if not trace_set:
+                return {"ok": True, "api_calls": [], "count": 0, "note": "No trace data loaded."}
             calls = []
             for ea in trace_set:
                 for xref in idautils.XrefsFrom(ea):
@@ -101,11 +158,11 @@ def trace_analysis(
                         if name and not name.startswith("sub_"):
                             calls.append(name)
             from collections import Counter
-            return {"ok": True, "api_calls": Counter(calls).most_common(50)}
+            api_calls = Counter(calls).most_common(50)
+            return {"ok": True, "api_calls": api_calls, "count": len(api_calls)}
 
         elif action == "basic_blocks_hit":
-            trace_set = load_trace()
-            if not trace_set: return make_error(MCPError.INVALID_ARGS, "No trace data loaded", "Run import_trace first")
+            trace_set = set(load_trace())
             trace_sorted = sorted(trace_set)
             
             # Entry point resolution compatible with IDA 7.x-9.x
@@ -123,7 +180,10 @@ def trace_analysis(
             for block in idaapi.FlowChart(ida_funcs.get_func(ea)):
                 hit = _has_hit(trace_sorted, block.start_ea, block.end_ea)
                 blocks.append({"start": hex(block.start_ea), "end": hex(block.end_ea), "hit": hit})
-            return {"ok": True, "function": idc.get_func_name(ea), "blocks": blocks}
+            result = {"ok": True, "function": idc.get_func_name(ea), "blocks": blocks}
+            if not trace_set:
+                result["note"] = "No trace data loaded. All blocks are marked as not hit."
+            return result
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

@@ -51,6 +51,7 @@ def debug(
     try:
         import ida_dbg
         import ida_idd
+        import time
 
         def _wait_for_suspend(timeout_ms: int = 3000):
             wait_fn = getattr(ida_dbg, "wait_for_next_event", None)
@@ -63,44 +64,106 @@ def debug(
                 return wait_fn(mask, timeout_ms)
             except Exception:
                 return None
+
+        def _debug_state():
+            is_on = bool(getattr(ida_dbg, "is_debugger_on", lambda: False)())
+            state = None
+            state_name = None
+            get_state = getattr(ida_dbg, "get_process_state", None)
+            if callable(get_state):
+                try:
+                    state = get_state()
+                except Exception:
+                    state = None
+            if state is not None:
+                for name in dir(ida_dbg):
+                    if not name.startswith("DSTATE_"):
+                        continue
+                    val = getattr(ida_dbg, name, None)
+                    if isinstance(val, int) and val == state:
+                        state_name = name
+                        break
+            inactive = {
+                getattr(ida_dbg, "DSTATE_NOTASK", None),
+                getattr(ida_dbg, "DSTATE_END", None),
+                getattr(ida_dbg, "DSTATE_PROC_EXIT", None),
+            }
+            inactive.discard(None)
+            active = is_on or (state is not None and state not in inactive)
+            return active, is_on, state, state_name
+
+        def _debug_active():
+            return _debug_state()[0]
         
         if action == "start":
-            if not ida_dbg.start_process():
+            started = bool(ida_dbg.start_process())
+            if not started and _debug_active():
+                active, is_on, state, state_name = _debug_state()
+                return {
+                    "ok": True,
+                    "already_running": True,
+                    "debugger_on": is_on,
+                    "process_active": active,
+                    "state": state,
+                    "state_name": state_name,
+                }
+            if not started:
                 return make_error(MCPError.IDA_ERROR, "Failed to start debugger")
-            evt = _wait_for_suspend(5000)
-            active = bool(ida_dbg.is_debugger_on())
+
+            evt = None
+            deadline = time.time() + 6.0
+            while time.time() < deadline:
+                maybe_evt = _wait_for_suspend(500)
+                if maybe_evt is not None:
+                    evt = maybe_evt
+                if _debug_active():
+                    break
+
+            active, is_on, state, state_name = _debug_state()
             if not active:
-                return make_error(
-                    MCPError.DEBUGGER_NOT_RUNNING,
-                    "Debugger start did not reach active state",
-                    details={"event": evt},
-                    hint="Verify process launch settings and binary path in IDA debugger options.",
-                )
-            return {"ok": True, "debugger_on": active, "event": evt}
+                return {
+                    "ok": True,
+                    "started": started,
+                    "debugger_on": is_on,
+                    "process_active": False,
+                    "event": evt,
+                    "state": state,
+                    "state_name": state_name,
+                    "warning": "Debugger start request succeeded, but process is not yet in an active/suspended state.",
+                    "hint": "Try debug(action='continue') or set a breakpoint, then call debug(action='regs').",
+                }
+            return {
+                "ok": True,
+                "debugger_on": is_on,
+                "process_active": active,
+                "event": evt,
+                "state": state,
+                "state_name": state_name,
+            }
         
         elif action == "stop":
-            if not ida_dbg.is_debugger_on(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.exit_process()
             return {"ok": True}
         
         elif action == "continue":
-            if not ida_dbg.is_debugger_on(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.continue_process()
             return {"ok": True}
         
         elif action == "step_into":
-            if not ida_dbg.is_debugger_on(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.step_into()
             return {"ok": True}
         
         elif action == "step_over":
-            if not ida_dbg.is_debugger_on(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.step_over()
             return {"ok": True}
         
         elif action == "run_to":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
-            if not ida_dbg.is_debugger_on(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ea, err = validate_addr(addr)
             if err: return err
             ida_dbg.run_to(ea)
@@ -108,7 +171,7 @@ def debug(
 
         elif action == "run_until":
             # Autopilot debugging loop
-            if not ida_dbg.is_debugger_on(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             
             target_ea = None
             if addr:
@@ -177,7 +240,7 @@ def debug(
             return make_error(MCPError.IDA_ERROR, "Failed to enable/disable breakpoint")
         
         elif action == "regs":
-            if not ida_dbg.is_debugger_on():
+            if not _debug_active():
                 _wait_for_suspend(1200)
             err = check_debugger(require_active=True)
             if err: return err
