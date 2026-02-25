@@ -1368,7 +1368,7 @@ TOOL_DESCRIPTIONS = {
     "wiki": "Built-in documentation system with ranked search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, sections, index.",
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
-    "vuln_scan": "Automated vulnerability scanner. Compact output: 'addr [severity] CWE func: description'. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify. Filter by severity param.",
+    "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query. Returns compact findings + structured items with severity/confidence, pagination, and optional OSV enrichment.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
@@ -1657,7 +1657,7 @@ TOOL_ACTIONS = {
     "vuln_scan": [
         "buffer_overflow", "format_string", "integer_overflow", "use_after_free",
         "command_injection", "race_condition", "null_deref", "info_leak",
-        "auth_bypass", "hardcoded_creds", "scan_all", "classify",
+        "auth_bypass", "hardcoded_creds", "scan_all", "classify", "osv_query",
     ],
     "deobfuscate": [
         "detect_encoding", "xor_scan", "stack_strings", "opaque_predicates",
@@ -1898,6 +1898,34 @@ TOOL_ARG_SCHEMAS = {
         "end": {"type": "string"},
         "case_sensitive": {"type": "boolean"},
         "include_context": {"type": "boolean"},
+    },
+    "vuln_scan": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["vuln_scan"]},
+        "addr": {"type": "string", "description": "Address or function scope for scanning."},
+        "limit": {"type": "integer", "description": "Max findings to return (capped for context safety)."},
+        "offset": {"type": "integer", "description": "Skip first N ranked findings."},
+        "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "Optional severity filter.",
+        },
+        "include_context": {
+            "type": "boolean",
+            "description": "Include compact decompiled context when available.",
+        },
+        "osv_coordinates": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "OSV package coordinates (ecosystem:name@version or pkg:purl). Used by osv_query and optional scan_all enrichment.",
+        },
+        "osv_ecosystem": {
+            "type": "string",
+            "description": "Default OSV ecosystem for shorthand coordinates like name@version.",
+        },
+        "osv_endpoint": {
+            "type": "string",
+            "description": "OSV endpoint/base URL (default: https://api.osv.dev).",
+        },
     },
     "segments": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["segments"]},

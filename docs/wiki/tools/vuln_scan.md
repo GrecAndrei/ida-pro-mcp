@@ -16,13 +16,34 @@ Runs heuristic static vulnerability scans and emits compact CWE-tagged findings 
 - `hardcoded_creds` (CWE-798)
 - `scan_all`: runs all scanners and aggregates
 - `classify`: runs all scanners around one address/function context
+- `osv_query`: queries OSV (`api.osv.dev`) for known vulnerable package versions
 
 ## Key Parameters
 - `action`: One of the actions above.
 - `addr`: Optional function/address scope for scans; required for `classify`.
 - `limit`: Max returned findings.
+- `offset`: Skip first N ranked findings.
 - `severity`: Optional filter `critical|high|medium|low`.
-- `include_context`: Accepted parameter; current output remains compact finding lines.
+- `include_context`: Adds compact decompiled context into structured items when available.
+- `osv_coordinates`: List of coordinates in `ecosystem:name@version` or `pkg:purl` format.
+- `osv_ecosystem`: Default ecosystem for shorthand coordinates like `name@version`.
+- `osv_endpoint`: Optional OSV endpoint/base URL (defaults to `https://api.osv.dev`).
+
+## Response Contract
+- `findings`: Backward-compatible compact newline output.
+- `items`: Structured findings with fields such as `addr`, `function`, `type`, `cwe`, `severity`, `confidence`, `description`, `pattern`, optional `context`.
+- `count`, `total`, `offset`, `truncated`: Stable pagination metadata.
+- `severity_counts`, `type_counts`: Aggregated triage summaries.
+
+## Major Improvements
+- API resolution now handles import variants (e.g. WinAPI `A/W`, decorated imports, `__imp_` prefixes) instead of exact-name only.
+- Findings are now deduplicated and ranked by `severity` then `confidence` for more useful top results.
+- `scan_all` gathers deeper candidate sets per scanner, then globally normalizes/ranks instead of naive concatenation.
+- `scan_all` can optionally include OSV-enriched findings when `osv_coordinates` are provided.
+- New `osv_query` action gives direct OSV-backed findings with the same normalized ranking/pagination contract.
+- Severity filtering is now structural (not string-tag matching).
+- `hardcoded_creds` now prefers assignment-style credential patterns (`key=value`, `key: value`) to reduce false positives.
+- Several scanner loops were hardened for scope correctness and noise reduction.
 
 ## Examples
 ```json
@@ -37,9 +58,14 @@ Runs heuristic static vulnerability scans and emits compact CWE-tagged findings 
 {"name":"vuln_scan","arguments":{"action":"classify","addr":"0x402120"}}
 ```
 
+```json
+{"name":"vuln_scan","arguments":{"action":"osv_query","osv_coordinates":["PyPI:requests@2.19.0","npm:lodash@4.17.20"]}}
+```
+
 ## Failure Modes
 - Invalid `severity` values are rejected.
 - `classify` without `addr` is rejected.
 - Unknown action returns invalid-args error.
 - Pattern-based heuristics can produce false positives/negatives; always validate manually in disassembly/decompilation.
-- Most findings are newline-joined strings (not structured per-field objects).
+- `osv_query` requires valid package coordinates; malformed coordinates are returned in `parse_errors`.
+- OSV network/API failures are reported in `osv_error` while preserving local scan results (for `scan_all`).

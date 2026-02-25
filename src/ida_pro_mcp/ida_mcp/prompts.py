@@ -102,6 +102,7 @@ QUICKREF_TEXT = """\
 
 ## Security Analysis
 - `vuln_scan(action="scan_all")` - Scan for all vulnerability classes (CWE-tagged)
+- `vuln_scan(action="osv_query", osv_coordinates=["PyPI:requests@2.19.0"])` - Query OSV for known vulnerable dependency versions
 - `vuln_scan(action="buffer_overflow")` - Find buffer overflow patterns
 - `gadgets(action="mitigations")` - Check ASLR/DEP/canary/CFI
 - `gadgets(action="rop")` - Find ROP gadgets
@@ -154,6 +155,7 @@ WORKFLOW_VULN = """\
 7. **Trace Data Flow**: `taint(action="find_sinks")` → where does user input reach dangerous APIs?
 8. **Stack Analysis**: `stack_analysis(action="buffers")` → find overflow targets
 9. **Classify by CWE**: `vuln_scan(action="classify", addr="0x...")` → classify specific address
+10. **OSV Dependency Check**: `vuln_scan(action="osv_query", osv_coordinates=["npm:lodash@4.17.20"])` → known package vulns from OSV
 10. **Document**: Use `annotation(action="mark_dangerous")` to annotate findings
 """
 
