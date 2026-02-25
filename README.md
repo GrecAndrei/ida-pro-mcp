@@ -240,6 +240,50 @@ Tool families include:
 
 For detailed per-tool docs, use the `wiki` tool or browse `docs/wiki/tools/`.
 
+### `vuln_scan` modes (local + OSV)
+
+`vuln_scan` now supports both:
+
+- Local static heuristics (buffer overflow, format string, command injection, etc.)
+- Public OSV lookups for package-version vulnerability intelligence
+
+Useful actions:
+
+- `scan_all`: aggregate all local scanners, optionally enriched with OSV
+- `osv_query`: OSV-only package vulnerability query
+- `classify`: classify one function/address context against scanner signatures
+
+OSV coordinates accepted:
+
+- `ecosystem:name@version` (recommended), e.g. `PyPI:requests@2.19.0`
+- `pkg:purl` format, e.g. `pkg:npm/lodash@4.17.20`
+
+Example calls:
+
+```json
+{
+  "name": "vuln_scan",
+  "arguments": {
+    "action": "osv_query",
+    "osv_coordinates": ["PyPI:requests@2.19.0", "npm:lodash@4.17.20"]
+  }
+}
+```
+
+```json
+{
+  "name": "vuln_scan",
+  "arguments": {
+    "action": "scan_all",
+    "limit": 80,
+    "severity": "high",
+    "osv_coordinates": ["PyPI:requests@2.19.0"]
+  }
+}
+```
+
+`vuln_scan` responses include compact `findings` plus structured `items`, with `count/total/offset/truncated` and summary buckets (`severity_counts`, `type_counts`).
+
 ## Technical Deep Dive
 
 ### 1) Process model and transport
