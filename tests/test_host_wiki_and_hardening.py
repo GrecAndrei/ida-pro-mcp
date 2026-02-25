@@ -124,9 +124,26 @@ class TestHostHardening(unittest.TestCase):
 
     def test_tools_list_keeps_wiki_tool_slot(self):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 9, "method": "tools/list"})
-        tools = {t["name"] for t in res["result"]["tools"]}
+        tools_payload = res["result"]["tools"]
+        tools = {t["name"] for t in tools_payload}
         self.assertIn("wiki", tools)
         self.assertIn("misc", tools)
+        self.assertNotIn("plugins", tools)
+        self.assertNotIn("xfer_analysis", tools)
+        self.assertIn("xref_analysis", tools)
+
+        misc_tool = next(t for t in tools_payload if t["name"] == "misc")
+        misc_actions = misc_tool["inputSchema"]["properties"]["action"]["enum"]
+        self.assertIn("plugin_list", misc_actions)
+        self.assertIn("plugin_run", misc_actions)
+        self.assertIn("health", misc_actions)
+
+        project_tool = next(t for t in tools_payload if t["name"] == "project")
+        project_actions = project_tool["inputSchema"]["properties"]["action"]["enum"]
+        self.assertNotIn("read", project_actions)
+        self.assertNotIn("write", project_actions)
+        self.assertNotIn("sessions", project_actions)
+        self.assertNotIn("batch", project_actions)
 
     def test_misc_health_requires_no_session(self):
         res = self.server._execute_tool("misc", {"action": "health"})
@@ -134,6 +151,15 @@ class TestHostHardening(unittest.TestCase):
         self.assertEqual(res.get("action"), "health")
         self.assertIn("runtime", res)
         self.assertIn("ida", res)
+
+    def test_batch_allows_legacy_plugins_alias_resolution(self):
+        res = self.server._handle_batch(
+            {"calls": [{"name": "plugins", "arguments": "not-an-object"}]}
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertTrue(res["results"][0]["result"].get("error"))
+        # If alias resolution failed, this would have been Unknown tool.
+        self.assertEqual(res["results"][0]["result"].get("code"), MCPError.INVALID_ARGS)
 
 
 class TestResponseCompaction(unittest.TestCase):
