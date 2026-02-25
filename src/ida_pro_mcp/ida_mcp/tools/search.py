@@ -117,6 +117,8 @@ def search(
         import fnmatch
         import re as re_module
 
+        MAX_LIMIT = 500
+        LINE_MAX = 240
         results = []
         truncated = False
         matches_seen = 0
@@ -126,10 +128,37 @@ def search(
             limit = 100
         if limit <= 0:
             limit = 1
+        if limit > MAX_LIMIT:
+            limit = MAX_LIMIT
         try:
             offset = max(0, int(offset))
         except Exception:
             offset = 0
+
+        def _clip(text: Optional[str], max_len: int = LINE_MAX) -> str:
+            if text is None:
+                return ""
+            compact = " ".join(str(text).split())
+            if len(compact) <= max_len:
+                return compact
+            return compact[: max_len - 3] + "..."
+
+        def _paginate_records(records, *, sort_key=None, reverse=True):
+            rows = list(records)
+            if sort_key is not None:
+                rows.sort(key=sort_key, reverse=reverse)
+            total = len(rows)
+            page = rows[offset : offset + limit]
+            is_truncated = (offset + len(page)) < total
+            return page, total, is_truncated
+
+        def _xref_count_limited(ea: int, max_count: int = 256) -> int:
+            count = 0
+            for _ in idautils.XrefsTo(ea, 0):
+                count += 1
+                if count >= max_count:
+                    break
+            return count
 
         def maybe_add(line):
             nonlocal matches_seen, truncated
@@ -594,77 +623,123 @@ def search(
         elif action == "find":
             # Smart unified search - auto-detects what user wants
             _find_matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
-            
-            results_by_type = {}
-            
-            # 1. If looks like hex/address, search xrefs
-            if pattern.startswith("0x") or (len(pattern) >= 6 and all(c in "0123456789abcdefABCDEF" for c in pattern)):
-                try:
-                    ea = int(pattern, 16)
-                    code_lines = []
-                    data_lines = []
+            ranked = []
+
+            def _add_find(kind: str, ea: int, line: str, score: int):
+                ranked.append(
+                    {
+                        "type": kind,
+                        "address": hex(ea),
+                        "address_ea": ea,
+                        "score": score,
+                        "line": line,
+                    }
+                )
+
+            # 1. If pattern looks like an address, surface xrefs first.
+            if looks_like_address(pattern):
+                ea, addr_err = validate_addr(pattern)
+                if addr_err:
+                    try:
+                        ea = int(pattern, 16)
+                    except Exception:
+                        ea = idaapi.BADADDR
+                if ea != idaapi.BADADDR:
                     for xref in idautils.XrefsTo(ea, 0):
-                        if len(code_lines) + len(data_lines) >= limit:
-                            break
                         func = idaapi.get_func(xref.frm)
                         fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
                         if xref.iscode:
-                            code_lines.append(f"{hex(xref.frm)}  {fn_name}")
+                            _add_find("code_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", 300)
                         else:
-                            data_lines.append(f"{hex(xref.frm)}  {fn_name}")
-                    if code_lines:
-                        results_by_type["code_refs"] = "\n".join(code_lines)
-                    if data_lines:
-                        results_by_type["data_refs"] = "\n".join(data_lines)
-                except Exception:
-                    pass
-            
+                            _add_find("data_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", 260)
+
             # 2. Search names (functions, globals)
-            name_lines = []
             for ea, name in idautils.Names():
-                if len(name_lines) >= limit:
-                    break
                 if _find_matcher(name):
                     kind = "func" if idaapi.get_func(ea) else "data"
-                    name_lines.append(f"{hex(ea)}  {kind}  {name}")
-            results_by_type["names"] = "\n".join(name_lines)
-            
+                    xref_count = _xref_count_limited(ea)
+                    score = 180 + min(xref_count, 64)
+                    _add_find("names", ea, f"{hex(ea)}  {kind}  {name}  xrefs={xref_count}", score)
+
             # 3. Search strings
-            string_lines = []
             for i in range(idaapi.get_strlist_qty()):
-                if len(string_lines) >= limit:
-                    break
                 sc = idaapi.string_info_t()
                 if idaapi.get_strlist_item(sc, i):
                     try:
                         content = idc.get_strlit_contents(sc.ea)
-                        if content:
-                            s = content.decode("utf-8", errors="replace")
-                            if _find_matcher(s):
-                                xref_count = len(list(idautils.XrefsTo(sc.ea)))
-                                string_lines.append(f"{hex(sc.ea)}  xrefs={xref_count}  {s[:200]}")
+                        if not content:
+                            continue
+                        s = content.decode("utf-8", errors="replace")
+                        if _find_matcher(s):
+                            xref_count = _xref_count_limited(sc.ea)
+                            score = 100 + min(xref_count, 64)
+                            _add_find(
+                                "strings",
+                                sc.ea,
+                                f"{hex(sc.ea)}  xrefs={xref_count}  {_clip(s, 180)}",
+                                score,
+                            )
                     except Exception:
                         pass
-            results_by_type["strings"] = "\n".join(string_lines)
-            
+
             # 4. Search imports
-            import_lines = []
             for i in range(ida_nalt.get_import_module_qty()):
-                mod_name = ida_nalt.get_import_module_name(i)
+                mod_name = ida_nalt.get_import_module_name(i) or f"mod_{i}"
+
                 def cb(ea, name, ordinal):
-                    if len(import_lines) >= limit:
-                        return False
                     if name and _find_matcher(name):
-                        xref_count = len(list(idautils.XrefsTo(ea)))
-                        import_lines.append(f"{hex(ea)}  {mod_name}  {name}  xrefs={xref_count}")
+                        xref_count = _xref_count_limited(ea)
+                        score = 220 + min(xref_count, 64)
+                        _add_find(
+                            "imports",
+                            ea,
+                            f"{hex(ea)}  {mod_name}  {name}  xrefs={xref_count}",
+                            score,
+                        )
                     return True
+
                 ida_nalt.enum_import_names(i, cb)
-            results_by_type["imports"] = "\n".join(import_lines)
-            
+
+            page, total, is_truncated = _paginate_records(
+                ranked, sort_key=lambda r: (r["score"], r["address_ea"])
+            )
+            by_type = {"names": [], "strings": [], "imports": [], "code_refs": [], "data_refs": []}
+            type_to_key = {
+                "names": "names",
+                "strings": "strings",
+                "imports": "imports",
+                "code_ref": "code_refs",
+                "data_ref": "data_refs",
+            }
+            for row in page:
+                key = type_to_key.get(row["type"])
+                if key:
+                    by_type[key].append(row["line"])
+
             return {
                 "ok": True,
                 "query": pattern,
-                **results_by_type
+                "matches": "\n".join(row["line"] for row in page),
+                "offset": offset,
+                "count": len(page),
+                "total": total,
+                "truncated": is_truncated,
+                "items": [
+                    {"type": row["type"], "address": row["address"], "score": row["score"], "text": row["line"]}
+                    for row in page
+                ],
+                "type_totals": {
+                    "names": sum(1 for r in ranked if r["type"] == "names"),
+                    "strings": sum(1 for r in ranked if r["type"] == "strings"),
+                    "imports": sum(1 for r in ranked if r["type"] == "imports"),
+                    "code_refs": sum(1 for r in ranked if r["type"] == "code_ref"),
+                    "data_refs": sum(1 for r in ranked if r["type"] == "data_ref"),
+                },
+                "names": "\n".join(by_type["names"]),
+                "strings": "\n".join(by_type["strings"]),
+                "imports": "\n".join(by_type["imports"]),
+                "code_refs": "\n".join(by_type["code_refs"]),
+                "data_refs": "\n".join(by_type["data_refs"]),
             }
         
         elif action == "callers":
@@ -678,29 +753,58 @@ def search(
             func = idaapi.get_func(target_ea)
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
-            
-            caller_lines = []
-            seen = set()
+
+            callers = {}
             for xref in idautils.XrefsTo(func.start_ea, 0):
-                if len(caller_lines) >= limit:
-                    truncated = True
-                    break
-                if xref.iscode:
-                    caller_func = idaapi.get_func(xref.frm)
-                    if caller_func and caller_func.start_ea not in seen:
-                        seen.add(caller_func.start_ea)
-                        line = f"{hex(caller_func.start_ea)}  {ida_funcs.get_func_name(caller_func.start_ea)}  call@{hex(xref.frm)}"
-                        if include_context:
-                            line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
-                        caller_lines.append(line)
-            
+                if not xref.iscode:
+                    continue
+                caller_func = idaapi.get_func(xref.frm)
+                if not caller_func:
+                    continue
+                key = caller_func.start_ea
+                if key not in callers:
+                    callers[key] = {
+                        "address_ea": key,
+                        "address": hex(key),
+                        "name": ida_funcs.get_func_name(key),
+                        "call_sites": [],
+                    }
+                callers[key]["call_sites"].append(xref.frm)
+
+            ranked = []
+            for row in callers.values():
+                call_sites = sorted(set(row["call_sites"]))
+                first_site = call_sites[0] if call_sites else row["address_ea"]
+                line = f"{row['address']}  {row['name']}  calls={len(call_sites)}  first@{hex(first_site)}"
+                if include_context and call_sites:
+                    line += f"  {_clip(ida_lines.tag_remove(idc.generate_disasm_line(first_site, 0)))}"
+                row["line"] = line
+                row["score"] = len(call_sites)
+                row["first_site"] = hex(first_site)
+                ranked.append(row)
+
+            page, total, is_truncated = _paginate_records(
+                ranked, sort_key=lambda r: (r["score"], r["address_ea"])
+            )
             return {
                 "ok": True,
                 "target": idc.get_name(target_ea) or hex(target_ea),
                 "target_addr": hex(func.start_ea),
-                "callers": "\n".join(caller_lines),
-                "count": len(caller_lines),
-                "truncated": len(caller_lines) >= limit
+                "callers": "\n".join(r["line"] for r in page),
+                "matches": "\n".join(r["line"] for r in page),
+                "items": [
+                    {
+                        "address": r["address"],
+                        "name": r["name"],
+                        "call_count": r["score"],
+                        "first_call_site": r["first_site"],
+                    }
+                    for r in page
+                ],
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
             }
         
         elif action == "callees":
@@ -714,83 +818,147 @@ def search(
             func = idaapi.get_func(target_ea)
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
-            
-            callee_lines = []
-            seen = set()
+
+            callees = {}
             for item in idautils.FuncItems(func.start_ea):
-                if len(callee_lines) >= limit:
-                    truncated = True
-                    break
                 for xref in idautils.XrefsFrom(item, 0):
-                    if xref.type in [17, 18, 19, 20, 21]:  # Call types
-                        callee_func = idaapi.get_func(xref.to)
-                        if callee_func and callee_func.start_ea not in seen:
-                            seen.add(callee_func.start_ea)
-                            name = ida_funcs.get_func_name(callee_func.start_ea)
-                            callee_lines.append(f"{hex(callee_func.start_ea)}  {name}  call@{hex(item)}")
-            
-            callee_lines.sort()
-            
+                    if xref.type not in [17, 18, 19, 20, 21]:
+                        continue
+                    callee_func = idaapi.get_func(xref.to)
+                    if not callee_func:
+                        continue
+                    key = callee_func.start_ea
+                    if key not in callees:
+                        callees[key] = {
+                            "address_ea": key,
+                            "address": hex(key),
+                            "name": ida_funcs.get_func_name(key),
+                            "call_sites": [],
+                        }
+                    callees[key]["call_sites"].append(item)
+
+            ranked = []
+            for row in callees.values():
+                call_sites = sorted(set(row["call_sites"]))
+                first_site = call_sites[0] if call_sites else row["address_ea"]
+                line = f"{row['address']}  {row['name']}  calls={len(call_sites)}  first@{hex(first_site)}"
+                if include_context and call_sites:
+                    line += f"  {_clip(ida_lines.tag_remove(idc.generate_disasm_line(first_site, 0)))}"
+                row["line"] = line
+                row["score"] = len(call_sites)
+                row["first_site"] = hex(first_site)
+                ranked.append(row)
+
+            page, total, is_truncated = _paginate_records(
+                ranked, sort_key=lambda r: (r["score"], r["address_ea"])
+            )
             return {
                 "ok": True,
                 "target": idc.get_name(target_ea) or hex(target_ea),
                 "target_addr": hex(func.start_ea),
-                "callees": "\n".join(callee_lines),
-                "count": len(callee_lines),
-                "truncated": len(callee_lines) >= limit
+                "callees": "\n".join(r["line"] for r in page),
+                "matches": "\n".join(r["line"] for r in page),
+                "items": [
+                    {
+                        "address": r["address"],
+                        "name": r["name"],
+                        "call_count": r["score"],
+                        "first_call_site": r["first_site"],
+                    }
+                    for r in page
+                ],
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
             }
         
         elif action == "api":
             # Find all uses of an API/import function
             import fnmatch
-            
-            # Find the import
-            target_ea = None
-            target_name = None
+
             pattern_lower = pattern.lower()
-            
+            matched_apis = []
+
             for i in range(ida_nalt.get_import_module_qty()):
-                if target_ea:
-                    break
+                mod_name = ida_nalt.get_import_module_name(i) or f"mod_{i}"
+
                 def cb(ea, name, ordinal):
-                    nonlocal target_ea, target_name
                     if name and (pattern_lower == name.lower() or fnmatch.fnmatch(name.lower(), pattern_lower)):
-                        target_ea = ea
-                        target_name = name
-                        return False  # Stop enumeration
+                        matched_apis.append({"ea": ea, "name": name, "module": mod_name})
                     return True
+
                 ida_nalt.enum_import_names(i, cb)
-            
-            if not target_ea:
-                # Try as a name
+
+            if not matched_apis:
                 target_ea = idc.get_name_ea_simple(pattern)
                 if target_ea != idaapi.BADADDR:
-                    target_name = pattern
-            
-            if not target_ea or target_ea == idaapi.BADADDR:
+                    matched_apis.append({"ea": target_ea, "name": pattern, "module": "symbol"})
+
+            if not matched_apis:
                 return make_error(MCPError.NOT_FOUND, f"API '{pattern}' not found")
-            
-            # Find all call sites
-            usage_lines = []
-            for xref in idautils.XrefsTo(target_ea, 0):
-                if len(usage_lines) >= limit:
-                    truncated = True
-                    break
-                if xref.iscode:
-                    func = idaapi.get_func(xref.frm)
+
+            usage_rows = []
+            for api_row in matched_apis:
+                ea = api_row["ea"]
+                name = api_row["name"]
+                mod_name = api_row["module"]
+                xrefs = [xr for xr in idautils.XrefsTo(ea, 0) if xr.iscode]
+                call_total = len(xrefs)
+                for xr in xrefs:
+                    func = idaapi.get_func(xr.frm)
                     fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
-                    line = f"{hex(xref.frm)}  {fn_name}"
+                    line = f"{hex(xr.frm)}  {fn_name}  -> {name} ({mod_name})  calls={call_total}"
                     if include_context:
-                        line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
-                    usage_lines.append(line)
-            
+                        line += f"  {_clip(ida_lines.tag_remove(idc.generate_disasm_line(xr.frm, 0)))}"
+                    usage_rows.append(
+                        {
+                            "api": name,
+                            "module": mod_name,
+                            "api_ea": ea,
+                            "address_ea": xr.frm,
+                            "address": hex(xr.frm),
+                            "function": fn_name,
+                            "score": call_total,
+                            "line": line,
+                        }
+                    )
+
+            page, total, is_truncated = _paginate_records(
+                usage_rows, sort_key=lambda r: (r["score"], r["address_ea"])
+            )
+            api_summary = sorted(
+                (
+                    {"api": r["name"], "module": r["module"], "address": hex(r["ea"]), "xref_count": _xref_count_limited(r["ea"])}
+                    for r in matched_apis
+                ),
+                key=lambda x: x["xref_count"],
+                reverse=True,
+            )
+
             return {
                 "ok": True,
-                "api": target_name,
-                "api_addr": hex(target_ea),
-                "total_calls": len(usage_lines),
-                "usages": "\n".join(usage_lines),
-                "truncated": len(usage_lines) >= limit
+                "api": api_summary[0]["api"],
+                "api_addr": api_summary[0]["address"],
+                "matched_apis": api_summary,
+                "total_calls": total,
+                "usages": "\n".join(r["line"] for r in page),
+                "matches": "\n".join(r["line"] for r in page),
+                "items": [
+                    {
+                        "address": r["address"],
+                        "function": r["function"],
+                        "api": r["api"],
+                        "module": r["module"],
+                        "api_addr": hex(r["api_ea"]),
+                        "api_xref_count": r["score"],
+                    }
+                    for r in page
+                ],
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
             }
         
         elif action == "vulnerable":
@@ -863,43 +1031,87 @@ def search(
             }
             
             findings = []
-            truncated = False
-            
+            severity_rank = {
+                "command_injection": 5,
+                "buffer_overflow": 5,
+                "format_string": 5,
+                "use_after_free": 4,
+                "path_traversal": 4,
+                "integer_overflow": 3,
+                "weak_crypto": 3,
+                "weak_random": 2,
+                "memory_alloc": 1,
+                "potential_overflow": 2,
+            }
+
             # Search for dangerous function calls
             for i in range(ida_nalt.get_import_module_qty()):
+                mod_name = ida_nalt.get_import_module_name(i) or f"mod_{i}"
+
                 def cb(ea, name, ordinal):
-                    if len(findings) >= limit:
-                        return False
                     if not name:
                         return True
-                    
+
                     # Check if this is a dangerous function
                     vuln_type = None
                     for dangerous, vtype in DANGEROUS_FUNCS.items():
-                        if dangerous.lower() in name.lower():
+                        lname = name.lower()
+                        if lname == dangerous.lower() or lname.startswith(dangerous.lower() + "@") or lname.startswith(dangerous.lower() + "_"):
                             vuln_type = vtype
                             break
-                    
+
                     if vuln_type:
                         # Find all callers of this dangerous function
                         for xref in idautils.XrefsTo(ea, 0):
-                            if len(findings) >= limit:
-                                return False
                             if xref.iscode:
                                 func = idaapi.get_func(xref.frm)
                                 fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
-                                line = f"{hex(xref.frm)}  {vuln_type}  {name}  in:{fn_name}"
+                                sev = severity_rank.get(vuln_type, 1)
+                                line = f"{hex(xref.frm)}  sev={sev}  {vuln_type}  {name}  in:{fn_name}"
                                 if include_context:
-                                    line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
-                                findings.append(line)
+                                    line += f"  {_clip(ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0)))}"
+                                findings.append(
+                                    {
+                                        "address_ea": xref.frm,
+                                        "address": hex(xref.frm),
+                                        "function": fn_name,
+                                        "api": name,
+                                        "module": mod_name,
+                                        "vuln_type": vuln_type,
+                                        "severity": sev,
+                                        "line": line,
+                                    }
+                                )
                     return True
                 ida_nalt.enum_import_names(i, cb)
-            
+
+            page, total, is_truncated = _paginate_records(
+                findings, sort_key=lambda r: (r["severity"], r["address_ea"])
+            )
+            by_type = {}
+            for row in findings:
+                by_type[row["vuln_type"]] = by_type.get(row["vuln_type"], 0) + 1
             return {
                 "ok": True,
-                "total_findings": len(findings),
-                "findings": "\n".join(findings),
-                "truncated": len(findings) >= limit
+                "total_findings": total,
+                "findings": "\n".join(r["line"] for r in page),
+                "matches": "\n".join(r["line"] for r in page),
+                "items": [
+                    {
+                        "address": r["address"],
+                        "function": r["function"],
+                        "type": r["vuln_type"],
+                        "severity": r["severity"],
+                        "api": r["api"],
+                        "module": r["module"],
+                    }
+                    for r in page
+                ],
+                "type_totals": by_type,
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
             }
         
         elif action == "constants":
@@ -964,96 +1176,125 @@ def search(
                 0x02014B50: "ZIP_CENTRAL_HEADER",
             }
             
-            found_lines = []
-            truncated = False
-            
-            # Search for immediates matching known constants
+            found_rows = []
             segments = seg_list if seg_list is not None else list(idautils.Segments())
-            
-            for const_val, const_name in KNOWN_CONSTANTS.items():
-                if len(found_lines) >= limit:
-                    truncated = True
-                    break
-                
-                # Search each segment for this constant
-                for seg_ea in segments:
-                    if len(found_lines) >= limit:
-                        truncated = True
-                        break
-                    
-                    curr = range_start if range_start and range_start >= seg_ea else seg_ea
-                    seg_end = range_end if range_end else idc.get_segm_end(seg_ea)
-                    
-                    search_count = 0
-                    while curr < seg_end and search_count < 10:  # Max 10 per constant per segment
-                        insn = ida_ua.insn_t()
-                        if ida_ua.decode_insn(insn, curr) > 0:
-                            for op in insn.ops:
-                                if op.type == ida_ua.o_imm and op.value == const_val:
-                                    func = idaapi.get_func(curr)
-                                    fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
-                                    line = f"{hex(curr)}  {hex(const_val)}  {const_name}  in:{fn_name}"
-                                    if include_context:
-                                        line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))}"
-                                    found_lines.append(line)
-                                    search_count += 1
-                                    
-                                    if len(found_lines) >= limit:
-                                        truncated = True
-                                        break
-                                    break
-                            curr += insn.size
-                        else:
-                            curr = idc.next_head(curr, seg_end)
-                        
-                        if truncated:
+
+            # Single-pass scan over instructions for known constants.
+            for seg_ea in segments:
+                seg = idaapi.getseg(seg_ea)
+                if not seg or (seg.perm & idaapi.SEGPERM_EXEC) == 0:
+                    continue
+
+                seg_start = seg.start_ea
+                seg_end = seg.end_ea
+                if range_start is not None:
+                    seg_start = max(seg_start, range_start)
+                    seg_end = min(seg_end, range_end)
+                    if seg_start >= seg_end:
+                        continue
+
+                curr = seg_start
+                while curr < seg_end:
+                    insn = ida_ua.insn_t()
+                    if ida_ua.decode_insn(insn, curr) > 0:
+                        for op in insn.ops:
+                            if op.type != ida_ua.o_imm:
+                                continue
+                            const_name = KNOWN_CONSTANTS.get(op.value)
+                            if not const_name:
+                                continue
+                            func = idaapi.get_func(curr)
+                            fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                            line = f"{hex(curr)}  {hex(op.value)}  {const_name}  in:{fn_name}"
+                            if include_context:
+                                line += f"  {_clip(ida_lines.tag_remove(idc.generate_disasm_line(curr, 0)))}"
+                            found_rows.append(
+                                {
+                                    "address_ea": curr,
+                                    "address": hex(curr),
+                                    "value": hex(op.value),
+                                    "name": const_name,
+                                    "function": fn_name,
+                                    "line": line,
+                                }
+                            )
                             break
-            
+                        curr += insn.size
+                    else:
+                        curr = idc.next_head(curr, seg_end)
+
+            page, total, is_truncated = _paginate_records(
+                found_rows, sort_key=lambda r: r["address_ea"], reverse=False
+            )
             return {
                 "ok": True,
-                "total_found": len(found_lines),
-                "findings": "\n".join(found_lines),
-                "truncated": truncated
+                "total_found": total,
+                "findings": "\n".join(r["line"] for r in page),
+                "matches": "\n".join(r["line"] for r in page),
+                "items": [
+                    {
+                        "address": r["address"],
+                        "value": r["value"],
+                        "name": r["name"],
+                        "function": r["function"],
+                    }
+                    for r in page
+                ],
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
             }
 
         elif action == "decompiled":
             # Search through decompiled pseudocode of all functions
             if not pattern:
                 return make_error(MCPError.INVALID_ARGS, "pattern required for decompiled search")
-            import re
-            try:
-                search_re = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
-            except re.error as e:
-                return make_error(MCPError.INVALID_ARGS, f"Invalid regex: {e}")
+            matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
 
-            matches = []
-            skipped = 0
+            rows = []
             for func_ea in idautils.Functions():
-                if len(matches) >= limit + offset:
-                    break
                 try:
                     cfunc = ida_hexrays.decompile(func_ea)
                     if not cfunc:
                         continue
                     pseudocode = str(cfunc)
                     for line_num, line in enumerate(pseudocode.splitlines(), 1):
-                        if search_re.search(line):
-                            if skipped < offset:
-                                skipped += 1
-                                continue
-                            if len(matches) >= limit:
-                                break
+                        if matcher(line):
                             func_name = idc.get_func_name(func_ea) or hex(func_ea)
-                            matches.append(f"{hex(func_ea)}  {func_name}  L{line_num}: {line.strip()}")
+                            text = _clip(line.strip(), 220)
+                            rows.append(
+                                {
+                                    "address_ea": func_ea,
+                                    "address": hex(func_ea),
+                                    "function": func_name,
+                                    "line_num": line_num,
+                                    "line": f"{hex(func_ea)}  {func_name}  L{line_num}: {text}",
+                                }
+                            )
                 except Exception:
                     continue
 
+            page, total, is_truncated = _paginate_records(
+                rows, sort_key=lambda r: (r["address_ea"], r["line_num"]), reverse=False
+            )
             return {
                 "ok": True,
                 "action": "decompiled",
                 "pattern": pattern,
-                "matches": "\n".join(matches),
-                "count": len(matches),
+                "matches": "\n".join(r["line"] for r in page),
+                "items": [
+                    {
+                        "address": r["address"],
+                        "function": r["function"],
+                        "line_num": r["line_num"],
+                    }
+                    for r in page
+                ],
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
             }
 
         else:
