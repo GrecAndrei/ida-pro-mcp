@@ -293,6 +293,7 @@ MAX_NOTE_LEN = 16_384
 MAX_NAME_LEN = 256
 MAX_WIKI_RESULTS = 200
 TOOL_ALIASES = {
+    "plugins": "misc",
     "xfer_analysis": "xref_analysis",
 }
 _COMPACT_DROP = object()
@@ -1242,7 +1243,6 @@ TOOLS = [
     "trace_analysis",
     # Project and file management
     "project",
-    "plugins",
     # Advanced analysis
     "agent",
     "microcode",
@@ -1294,8 +1294,6 @@ TOOLS = [
     "annotation",
     # Deep cross-reference analysis
     "xref_analysis",
-    # Backward-compatible alias used by some clients
-    "xfer_analysis",
     # String operations
     "string_ops",
     # CFG analysis
@@ -1330,7 +1328,7 @@ TOOL_DESCRIPTIONS = {
     "segments": "Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.",
     "bulk": "Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.",
     # Utilities
-    "misc": "Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. health runs host diagnostics without requiring a session.",
+    "misc": "Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. plugin_* manages IDA plugins. health runs host diagnostics without requiring a session.",
     "calc": "Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.",
     "nav": "Navigation and triage. Actions: goto, cursor, interesting.",
     # Debugging and tracing
@@ -1339,8 +1337,8 @@ TOOL_DESCRIPTIONS = {
     "coverage": "Code coverage import and analysis. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter.",
     "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.",
     # Project and file management
-    "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, read, write, sessions, batch.",
-    "plugins": "IDA plugin management. Actions: list (enumerate loaded plugins), run (execute plugin by name with optional arg).",
+    "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.",
+    "plugins": "Legacy alias for misc plugin actions. Prefer misc(action=plugin_list|plugin_run).",
     # Advanced analysis
     "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions.",
@@ -1383,7 +1381,7 @@ TOOL_DESCRIPTIONS = {
     "gadgets": "ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains.",
     "annotation": "Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.",
     "xref_analysis": "Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
-    "xfer_analysis": "Alias of xref_analysis (compatibility typo).",
+    "xfer_analysis": "Alias of xref_analysis (compatibility typo, not advertised in tools/list).",
     "string_ops": "Advanced string analysis. Query supports regex. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious.",
     "cfg_analysis": "Control flow graph metrics. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
     "binary_info": "Binary metadata analysis. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
@@ -1502,6 +1500,8 @@ TOOL_ACTIONS = {
         "cache_stats",
         "read_file",
         "write_file",
+        "plugin_list",
+        "plugin_run",
         "health",
     ],
     "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
@@ -1554,12 +1554,7 @@ TOOL_ACTIONS = {
         "set_cwd",
         "list_dir",
         "exists",
-        "read",
-        "write",
-        "sessions",
-        "batch",
     ],
-    "plugins": ["list", "run"],
     # Advanced analysis (LLM-friendly)
     "agent": [
         "analyze_function",
@@ -1864,6 +1859,7 @@ TOOL_ARG_SCHEMAS = {
         "expr": {"type": "string", "description": "Python expression or IDC script to evaluate"},
         "code": {"type": "string", "description": "Multi-line Python code to execute"},
         "name": {"type": "string", "description": "Signature name for load_sig"},
+        "arg": {"type": "integer", "description": "Plugin argument for plugin_run"},
         "path": {"type": "string", "description": "File path for read_file/write_file"},
         "content": {"type": "string", "description": "Content to write for write_file"},
         "encoding": {"type": "string", "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data."},
@@ -3767,6 +3763,7 @@ class IDAMCPServer:
         return payload
 
     def _execute_tool(self, tool_name, args):
+        original_tool_name = tool_name
         tool_name = TOOL_ALIASES.get(tool_name, tool_name)
         if tool_name not in TOOLS:
             return make_error(
@@ -3781,8 +3778,48 @@ class IDAMCPServer:
         args = dict(args)
         if tool_name == "wiki":
             return self._handle_wiki(args)
-        if tool_name == "misc" and args.get("action") == "health":
-            return self._handle_misc_health(args)
+        if tool_name == "misc":
+            action = args.get("action")
+            if action == "health":
+                return self._handle_misc_health(args)
+            # New plugin actions under misc.
+            if action == "plugin_list":
+                args["action"] = "list"
+                tool_name = "plugins"
+            elif action == "plugin_run":
+                args["action"] = "run"
+                tool_name = "plugins"
+            # Backward compatibility for callers still using plugins(...).
+            elif original_tool_name == "plugins":
+                if action in ("list", "run"):
+                    tool_name = "plugins"
+                else:
+                    return make_error(
+                        MCPError.ACTION_NOT_FOUND,
+                        f"Unsupported plugins action: '{action}'",
+                        hint="Use misc(action='plugin_list') or misc(action='plugin_run', name='...', arg=0).",
+                    )
+        if tool_name == "project":
+            action = args.get("action")
+            # Consolidate generic host file I/O into misc.
+            if action == "read":
+                args["action"] = "read_file"
+                tool_name = "misc"
+            elif action == "write":
+                args["action"] = "write_file"
+                tool_name = "misc"
+            elif action == "sessions":
+                return make_error(
+                    MCPError.NOT_IMPLEMENTED,
+                    "Use 'session' tool for session management",
+                    hint="sessions/list is handled by the host-level session tool.",
+                )
+            elif action == "batch":
+                return make_error(
+                    MCPError.NOT_IMPLEMENTED,
+                    "Use host-level batch/session orchestration for multi-file analysis",
+                    hint="Use batch(calls=[...]) and session actions instead of project(action='batch').",
+                )
 
         if tool_name == "session":
             action = args.get("action")
