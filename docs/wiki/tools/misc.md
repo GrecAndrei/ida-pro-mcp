@@ -1,7 +1,7 @@
 # MISC Tool Manual
 
 ## What It Does
-Hosts utility operations: execute Python/IDC snippets, schedule FLIRT signature load, inspect cache stats, and perform local file read/write.
+Hosts utility operations: execute Python/IDC snippets, schedule FLIRT signature load, inspect cache stats, perform local file read/write, and run host health diagnostics.
 
 ## Actions
 - `python`: Execute Python expression/script in IDA context.
@@ -10,14 +10,16 @@ Hosts utility operations: execute Python/IDC snippets, schedule FLIRT signature 
 - `cache_stats`: Return read-only cache statistics if cache module exists.
 - `read_file`: Read host file as text or hex-encoded binary.
 - `write_file`: Write host file as text or from hex-encoded binary.
+- `health`: Run host/runtime diagnostics (cache dir, IDA path, session/runtime status, wiki availability). Does not require an active session.
 
 ## Key Parameters
-- `action`: One of `python|idc|load_sig|cache_stats|read_file|write_file`.
+- `action`: One of `python|idc|load_sig|cache_stats|read_file|write_file|health`.
 - `expr` / `code`: Script input for `python` and `idc` (either accepted).
 - `name`: Required by `load_sig`.
 - `path`: Required by `read_file` and `write_file`.
 - `content`: Required by `write_file`.
 - `encoding`: Optional text encoding; use `binary` for hex mode.
+- `verbose`: Optional boolean for `health`; includes per-runtime detail when true.
 
 ## Examples
 ```python
@@ -29,6 +31,8 @@ misc(action="read_file", path="/tmp/report.txt")
 misc(action="read_file", path="/tmp/blob.bin", encoding="binary")
 misc(action="write_file", path="/tmp/out.txt", content="hello")
 misc(action="write_file", path="/tmp/out.bin", content="9090", encoding="binary")
+misc(action="health")
+misc(action="health", verbose=True)
 ```
 
 ## Failure Modes

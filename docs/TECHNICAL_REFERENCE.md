@@ -37,7 +37,7 @@ Located in `ida_mcp_stdio.py`, `SimpleLock` provides cross-platform, process-lev
 *   **Race Protection**: Uses an atomic "rename-to-temp then delete" pattern to avoid TOCTOU (Time-of-Check to Time-of-Use) vulnerabilities during cleanup.
 
 ### Session Isolation
-Sessions are stored in `.ida_mcp_cache/sessions/`. Each session gets a unique 8-character ID and a dedicated `.i64` database. This allows:
+Sessions are stored in `<runtime>/sessions/` (resolved from `IDA_MCP_CACHE_DIR`/`IDA_MCP_DATA_DIR` or OS defaults). Each session gets a unique 8-character ID and a dedicated `.i64` database. This allows:
 *   **Multi-Agent Parallelism**: Two different LLMs can analyze the same binary simultaneously without interference.
 *   **Persistence**: Analysis state is preserved across tool calls within the same session.
 

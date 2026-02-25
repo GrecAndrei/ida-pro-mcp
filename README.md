@@ -30,7 +30,7 @@ It provides:
 - A host MCP server (`ida_mcp_stdio.py`) that LLM clients talk to
 - A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`)
 - 60+ analysis tools under `src/ida_pro_mcp/ida_mcp/tools/`
-- Persistent session/bookmark metadata in `ida_mcp_cache/`
+- Persistent session/bookmark metadata in user runtime directory (`IDA_MCP_CACHE_DIR` or OS default)
 - Built-in wiki docs accessible through the `wiki` tool
 
 The design goal is simple: make LLM binary analysis stable, scriptable, and token-efficient.
@@ -184,7 +184,7 @@ Practical agent rules:
 ```mermaid
 flowchart LR
     A[LLM MCP Client\nCodex/Claude/Cursor/etc] -->|JSON-RPC over stdio| B[Host Server\nida_mcp_stdio.py]
-    B -->|Session + Runtime Management| C[(ida_mcp_cache)]
+    B -->|Session + Runtime Management| C[(User Runtime Dir)]
     B -->|TCP localhost RPC| D[IDA Runtime Bridge\nserver_script.py]
     D --> E[Tool Modules\nida_mcp.tools.*]
     E --> F[IDA SDK + Hex-Rays APIs]
@@ -257,10 +257,18 @@ Why split it this way:
 
 ### 2) Session manager internals
 
-Session metadata is persisted under:
+Session metadata is persisted under runtime storage:
 
-- `ida_mcp_cache/sessions/SID_<ID>_metadata.json`
-- `ida_mcp_cache/sessions/SID_<ID>_bookmarks.json`
+- `<runtime>/sessions/SID_<ID>_metadata.json`
+- `<runtime>/sessions/SID_<ID>_bookmarks.json`
+
+Runtime directory resolution:
+
+- `IDA_MCP_CACHE_DIR` (preferred override)
+- `IDA_MCP_DATA_DIR` (legacy override)
+- Windows default: `%LOCALAPPDATA%/ida-pro-mcp`
+- macOS default: `~/Library/Application Support/ida-pro-mcp`
+- Linux default: `$XDG_STATE_HOME/ida-pro-mcp` or `~/.local/state/ida-pro-mcp`
 
 Key properties tracked:
 

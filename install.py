@@ -237,12 +237,6 @@ def relocate_self(dest_dir: Path):
             if (src_dir / item).exists():
                 shutil.copy2(src_dir / item, dest_dir / item)
 
-        # 3. USER DATA (Preserve existing if upgrading)
-        # Note: bookmarks.json and cache should stay
-        if not is_upgrade:
-            # First time install, setup basic folders
-            (dest_dir / "ida_mcp_cache").mkdir(exist_ok=True)
-        
         success(f"{action_str} successful")
         return True
     except Exception as e:
