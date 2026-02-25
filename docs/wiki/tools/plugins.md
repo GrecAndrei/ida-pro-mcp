@@ -1,21 +1,22 @@
-# PLUGINS Tool Manual
+# PLUGINS Tool Manual (Legacy Alias)
 
 ## What It Does
-Runs IDA plugins by name and exposes plugin-list behavior where supported by the installed IDA version.
+`plugins` is maintained for compatibility. Primary plugin operations now live under `misc`.
 
 ## Actions
-- `list`: Attempt to list plugins.
-- `run`: Execute a plugin by name.
+- Legacy alias only.
+- Use `misc(action="plugin_list")`.
+- Use `misc(action="plugin_run", name="...", arg=0)`.
 
 ## Key Parameters
-- `action`: One of `list|run`.
-- `name`: Required for `run`; plugin display/internal name.
-- `arg`: Integer argument passed to plugin entry (`run_plugin`).
+- `action`: legacy `list|run` still accepted.
+- `name`: plugin display/internal name (legacy `run` or `misc(plugin_run)`).
+- `arg`: integer plugin argument (legacy `run` or `misc(plugin_run)`).
 
 ## Examples
 ```python
-plugins(action="list")
-plugins(action="run", name="Hex-Rays Decompiler", arg=0)
+misc(action="plugin_list")
+misc(action="plugin_run", name="Hex-Rays Decompiler", arg=0)
 ```
 
 ## Failure Modes

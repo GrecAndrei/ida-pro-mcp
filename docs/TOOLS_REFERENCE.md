@@ -269,13 +269,16 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `cache_stats`
 - `read_file`
 - `write_file`
+- `plugin_list`
+- `plugin_run`
 - `health`
 
 ### Args
-- `action`: enum(python, idc, load_sig, cache_stats, read_file, write_file, health)
+- `action`: enum(python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health)
 - `expr`: string
 - `code`: string
 - `name`: string
+- `arg`: integer
 - `path`: string
 - `content`: string
 - `encoding`: string
@@ -370,24 +373,18 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `set_cwd`
 - `list_dir`
 - `exists`
-- `read`
-- `write`
-- `sessions`
-- `batch`
 
 ### Args
 - `action`: enum (see Actions)
 - `idb`: string
 
-## plugins
+## plugins (legacy alias)
 
 ### Actions
-- `list`
-- `run`
+- Legacy alias only.
 
 ### Args
-- `action`: enum (see Actions)
-- `idb`: string
+- Prefer `misc(action="plugin_list")` and `misc(action="plugin_run", name="...", arg=0)`.
 
 ## trace
 
