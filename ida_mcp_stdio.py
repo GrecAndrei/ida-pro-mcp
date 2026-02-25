@@ -26,6 +26,7 @@ import uuid
 import shlex
 import copy
 import shutil
+import tempfile
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -34,8 +35,82 @@ from datetime import datetime, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
 
-# Debug Logging for Bridge
-CACHE_DIR = os.path.join(SCRIPT_DIR, "ida_mcp_cache")
+# Runtime data/cache directories (outside repo by default)
+def _default_runtime_dir() -> str:
+    if sys.platform == "win32":
+        root = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return os.path.realpath(os.path.join(root, "ida-pro-mcp"))
+    if sys.platform == "darwin":
+        return os.path.realpath(os.path.join(str(Path.home()), "Library", "Application Support", "ida-pro-mcp"))
+    xdg_state = os.environ.get("XDG_STATE_HOME")
+    if xdg_state:
+        return os.path.realpath(os.path.join(xdg_state, "ida-pro-mcp"))
+    return os.path.realpath(os.path.join(str(Path.home()), ".local", "state", "ida-pro-mcp"))
+
+
+def _resolve_runtime_dir() -> str:
+    explicit = os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR")
+    if explicit:
+        return os.path.realpath(os.path.expanduser(explicit))
+    return _default_runtime_dir()
+
+
+def _is_writable_dir(path: str) -> bool:
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, f".ida_mcp_probe_{uuid.uuid4().hex}")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+
+def _select_runtime_dir(preferred: str) -> str:
+    candidates: List[str] = []
+    for candidate in (
+        preferred,
+        _default_runtime_dir(),
+        os.path.join(tempfile.gettempdir(), "ida-pro-mcp"),
+        os.path.join(SCRIPT_DIR, "ida_mcp_cache"),
+    ):
+        candidate = os.path.realpath(os.path.expanduser(candidate))
+        if candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        if _is_writable_dir(candidate):
+            return candidate
+    return os.path.realpath(os.path.join(SCRIPT_DIR, "ida_mcp_cache"))
+
+
+def _migrate_legacy_runtime_dir(target_dir: str):
+    legacy_dir = os.path.join(SCRIPT_DIR, "ida_mcp_cache")
+    if not os.path.isdir(legacy_dir):
+        return
+    if os.path.realpath(legacy_dir) == os.path.realpath(target_dir):
+        return
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+    except Exception:
+        return
+    try:
+        for name in os.listdir(legacy_dir):
+            src = os.path.join(legacy_dir, name)
+            dst = os.path.join(target_dir, name)
+            if os.path.exists(dst):
+                continue
+            if os.path.isdir(src):
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+    except Exception:
+        # Best effort migration only.
+        pass
+
+
+CACHE_DIR = _select_runtime_dir(_resolve_runtime_dir())
+_migrate_legacy_runtime_dir(CACHE_DIR)
 os.makedirs(CACHE_DIR, exist_ok=True)
 BRIDGE_LOG = os.path.join(CACHE_DIR, "bridge.log")
 
@@ -1255,7 +1330,7 @@ TOOL_DESCRIPTIONS = {
     "segments": "Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.",
     "bulk": "Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.",
     # Utilities
-    "misc": "Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file. Use python for full IDAPython access. read_file/write_file for host filesystem I/O.",
+    "misc": "Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. health runs host diagnostics without requiring a session.",
     "calc": "Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.",
     "nav": "Navigation and triage. Actions: goto, cursor, interesting.",
     # Debugging and tracing
@@ -1420,7 +1495,15 @@ TOOL_ACTIONS = {
         "export_annotations",
     ],
     # Utilities
-    "misc": ["python", "idc", "load_sig", "cache_stats", "read_file", "write_file"],
+    "misc": [
+        "python",
+        "idc",
+        "load_sig",
+        "cache_stats",
+        "read_file",
+        "write_file",
+        "health",
+    ],
     "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
     "nav": ["goto", "cursor", "interesting"],
     # Debugging and tracing
@@ -1784,6 +1867,7 @@ TOOL_ARG_SCHEMAS = {
         "path": {"type": "string", "description": "File path for read_file/write_file"},
         "content": {"type": "string", "description": "Content to write for write_file"},
         "encoding": {"type": "string", "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data."},
+        "verbose": {"type": "boolean", "description": "Include per-runtime details for health action."},
     },
     "analysis": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["analysis"]},
@@ -2036,7 +2120,12 @@ class IDAMCPServer:
         self.ida_dir = self._detect_ida_dir()
         self.idat_exe = self._find_idat()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.cache_dir = os.path.join(self.script_dir, "ida_mcp_cache")
+        preferred_cache = (
+            os.environ.get("IDA_MCP_CACHE_DIR")
+            or os.environ.get("IDA_MCP_DATA_DIR")
+            or CACHE_DIR
+        )
+        self.cache_dir = _select_runtime_dir(preferred_cache)
         os.makedirs(self.cache_dir, exist_ok=True)
         self.session_mgr = SessionManager(self.cache_dir)
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
@@ -3623,6 +3712,60 @@ class IDAMCPServer:
             result["lines_remaining"] = total_lines - end
         return result
 
+    def _handle_misc_health(self, args: dict) -> dict:
+        verbose = bool(args.get("verbose", False))
+        wiki_root = self._resolve_wiki_root()
+        wiki_available = bool(wiki_root and os.path.isdir(wiki_root))
+        idat_path = self.idat_exe or ""
+        idat_exists = bool(idat_path and os.path.exists(idat_path))
+        runtime_states = []
+        running = 0
+        stale = 0
+        for sid, runtime in self.session_runtimes.items():
+            alive = bool(runtime and runtime.is_alive())
+            if alive:
+                running += 1
+            else:
+                stale += 1
+            if verbose:
+                runtime_states.append(
+                    {
+                        "session_id": sid,
+                        "alive": alive,
+                        "port": runtime.port if runtime else None,
+                    }
+                )
+
+        payload = {
+            "ok": True,
+            "action": "health",
+            "server": {"name": "ida-pro-mcp", "version": "3.0.0"},
+            "runtime": {
+                "cache_dir": self.cache_dir,
+                "cache_writable": _is_writable_dir(self.cache_dir),
+                "cache_exists": os.path.isdir(self.cache_dir),
+            },
+            "ida": {
+                "ida_dir": self.ida_dir,
+                "idat_path": idat_path or None,
+                "idat_found": idat_exists,
+            },
+            "sessions": {
+                "total": len(self.session_mgr.discover_sessions()),
+                "active": self.current_session.session_id if self.current_session else None,
+                "runtime_processes": {
+                    "tracked": len(self.session_runtimes),
+                    "running": running,
+                    "stale": stale,
+                },
+            },
+            "wiki": {"root": wiki_root or None, "available": wiki_available},
+            "tools": {"registered": len(TOOLS)},
+        }
+        if verbose:
+            payload["sessions"]["runtimes"] = runtime_states
+        return payload
+
     def _execute_tool(self, tool_name, args):
         tool_name = TOOL_ALIASES.get(tool_name, tool_name)
         if tool_name not in TOOLS:
@@ -3636,9 +3779,10 @@ class IDAMCPServer:
         if not isinstance(args, dict):
             return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
         args = dict(args)
-
         if tool_name == "wiki":
             return self._handle_wiki(args)
+        if tool_name == "misc" and args.get("action") == "health":
+            return self._handle_misc_health(args)
 
         if tool_name == "session":
             action = args.get("action")
@@ -4260,6 +4404,7 @@ class IDAMCPServer:
             else:
                 name = call.get("name")
                 call_args = call.get("arguments", {})
+            resolved_name = TOOL_ALIASES.get(name, name) if isinstance(name, str) else name
 
             if not name:
                 res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing 'name' field",
@@ -4268,7 +4413,7 @@ class IDAMCPServer:
                 res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-string 'name'")
             elif name == "batch":
                 res = make_error(MCPError.INVALID_ARGS, "Nested batch calls are not allowed")
-            elif name not in TOOLS:
+            elif resolved_name not in TOOLS:
                 res = make_error(MCPError.INVALID_ARGS, f"Unknown tool '{name}' in batch call at index {idx}",
                                 hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.")
             elif call_args is None:

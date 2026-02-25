@@ -122,6 +122,19 @@ class TestHostHardening(unittest.TestCase):
         self.assertTrue(res["results"][0]["result"].get("error"))
         self.assertEqual(res["results"][0]["result"].get("code"), MCPError.INVALID_ARGS)
 
+    def test_tools_list_keeps_wiki_tool_slot(self):
+        res = self.server.handle_request({"jsonrpc": "2.0", "id": 9, "method": "tools/list"})
+        tools = {t["name"] for t in res["result"]["tools"]}
+        self.assertIn("wiki", tools)
+        self.assertIn("misc", tools)
+
+    def test_misc_health_requires_no_session(self):
+        res = self.server._execute_tool("misc", {"action": "health"})
+        self.assertTrue(res.get("ok"))
+        self.assertEqual(res.get("action"), "health")
+        self.assertIn("runtime", res)
+        self.assertIn("ida", res)
+
 
 class TestResponseCompaction(unittest.TestCase):
     def setUp(self):
