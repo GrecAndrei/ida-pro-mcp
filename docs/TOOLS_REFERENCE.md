@@ -266,12 +266,20 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `python`
 - `idc`
 - `load_sig`
+- `cache_stats`
+- `read_file`
+- `write_file`
+- `health`
 
 ### Args
-- `action`: enum(python, idc, load_sig)
+- `action`: enum(python, idc, load_sig, cache_stats, read_file, write_file, health)
 - `expr`: string
 - `code`: string
 - `name`: string
+- `path`: string
+- `content`: string
+- `encoding`: string
+- `verbose`: boolean
 - `idb`: string
 
 ## debug
