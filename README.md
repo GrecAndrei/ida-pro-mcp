@@ -11,6 +11,7 @@ LLM-first reverse engineering for IDA Pro.
 - [Requirements](#requirements)
 - [Install](#install)
 - [Documentation Map](#documentation-map)
+- [Skillized Tool Catalog](#skillized-tool-catalog)
 - [Quick Start](#quick-start)
 - [How LLMs Should Use It](#how-llms-should-use-it)
 - [Architecture Graphs](#architecture-graphs)
@@ -66,7 +67,8 @@ Installer behavior:
 2. Creates `.venv` and installs dependencies.
 3. Auto-detects IDA install path (`IDADIR`/`IDA_MCP_IDAT` fallback logic included).
 4. Configures supported MCP clients.
-5. Sets wiki path automatically when available.
+5. Installs generated Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`).
+6. Sets wiki path automatically when available.
 
 Default install directory:
 
@@ -104,6 +106,28 @@ Primary documentation now lives under `docs/`:
 - `docs/TOOLS_REFERENCE.md`: tool-focused reference.
 
 Legacy/superseded notes were moved to `docs/legacy/` to keep repo root clean.
+
+## Skillized Tool Catalog
+
+To reduce prompt/context churn from large tool metadata blocks, this repo now includes generated per-tool Codex skills:
+
+- Root: `.agents/skills/`
+- One skill per tool: `.agents/skills/ida-tool-<tool>/SKILL.md`
+- Router skill: `.agents/skills/ida-tool-router/SKILL.md`
+
+Regenerate after tool metadata changes:
+
+```bash
+python3 scripts/generate_tool_skills.py
+```
+
+Source of truth for generation:
+
+- `TOOL_DESCRIPTIONS`
+- `TOOL_ACTIONS`
+- `TOOL_ARG_SCHEMAS`
+
+all in `ida_mcp_stdio.py`.
 
 ## Quick Start
 

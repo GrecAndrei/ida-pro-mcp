@@ -185,10 +185,15 @@ def kill_processes_for_paths(paths, kill_ida=True):
                 subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
     else:
         for p in targets:
-            subprocess.run(["pkill", "-f", p], capture_output=True)
+            # Use an anchored regex so we only match commands that start with this
+            # exact executable path, rather than broad substring matches.
+            safe_pattern = rf"^{re.escape(p)}([[:space:]].*)?$"
+            subprocess.run(["pkill", "-f", safe_pattern], capture_output=True)
         if kill_ida:
+            # Never use broad `pkill -f ida` patterns: they can match unrelated
+            # processes (e.g. paths containing "ida-pro-mcp") and kill terminals.
             for name in ["idat", "idat64", "ida", "ida64"]:
-                subprocess.run(["pkill", "-f", name], capture_output=True)
+                subprocess.run(["pkill", "-x", name], capture_output=True)
 
 def get_permanent_dir():
     """Get a professional permanent directory for the MCP server."""
@@ -205,6 +210,89 @@ def get_ida_plugin_dir():
         ida_folder = get_ida_user_dir()
     return ida_folder / "plugins"
 
+
+def get_codex_home_dir():
+    """Get Codex home directory."""
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        return Path(codex_home).expanduser()
+    return Path.home() / ".codex"
+
+
+def _safe_remove_path(path: Path):
+    """Remove existing file/dir/symlink safely."""
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def _ensure_generated_skills(install_path: Path):
+    """
+    Ensure `.agents/skills` exists.
+    If missing but generator is available, run it once.
+    """
+    skills_root = install_path / ".agents" / "skills"
+    if skills_root.exists():
+        return skills_root
+
+    generator = install_path / "scripts" / "generate_tool_skills.py"
+    if generator.exists():
+        try:
+            _run_checked([sys.executable, str(generator)], cwd=install_path)
+        except Exception:
+            return None
+    return skills_root if skills_root.exists() else None
+
+
+def install_codex_skills(install_path: Path):
+    """
+    Install generated per-tool Codex skills into CODEX_HOME/skills.
+    Returns dict: {ok, linked, copied, total, path, reason?}
+    """
+    try:
+        skills_root = _ensure_generated_skills(install_path)
+        if not skills_root or not skills_root.exists():
+            return {"ok": False, "reason": "generated skills not found"}
+
+        codex_skills_dir = get_codex_home_dir() / "skills"
+        codex_skills_dir.mkdir(parents=True, exist_ok=True)
+
+        source_skill_dirs = sorted(
+            p for p in skills_root.iterdir()
+            if p.is_dir() and (p / "SKILL.md").exists()
+        )
+        if not source_skill_dirs:
+            return {"ok": False, "reason": "no skill directories with SKILL.md found"}
+
+        linked = 0
+        copied = 0
+        for src in source_skill_dirs:
+            dst = codex_skills_dir / src.name
+            try:
+                _safe_remove_path(dst)
+            except Exception:
+                pass
+
+            try:
+                os.symlink(src, dst, target_is_directory=True)
+                linked += 1
+            except OSError:
+                shutil.copytree(src, dst)
+                copied += 1
+
+        return {
+            "ok": True,
+            "linked": linked,
+            "copied": copied,
+            "total": len(source_skill_dirs),
+            "path": str(codex_skills_dir),
+        }
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
 def relocate_self(dest_dir: Path):
     """Copy or upgrade the project in a permanent location."""
     src_dir = get_script_dir()
@@ -220,7 +308,7 @@ def relocate_self(dest_dir: Path):
         dest_dir.mkdir(parents=True, exist_ok=True)
         
         # 1. CORE CODE (Always replace to ensure upgrade)
-        core_items = ["src", "docs", "ida_mcp_stdio.py", "pyproject.toml"]
+        core_items = ["src", "docs", ".agents", "scripts", "ida_mcp_stdio.py", "pyproject.toml"]
         for item in core_items:
             s = src_dir / item
             d = dest_dir / item
@@ -250,6 +338,47 @@ def check_uv_installed():
         return True
     except:
         return False
+
+
+def _run_checked(cmd, *, cwd=None, env=None):
+    """Run a subprocess and return concise diagnostics on failure."""
+    result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        detail = stderr or stdout
+        if detail:
+            lines = [line for line in detail.splitlines() if line.strip()]
+            tail = " | ".join(lines[-6:])[:600]
+            raise RuntimeError(f"{' '.join(cmd)} failed (exit {result.returncode}): {tail}")
+        raise RuntimeError(f"{' '.join(cmd)} failed (exit {result.returncode})")
+    return result
+
+
+def _pick_writable_uv_cache(install_path: Path) -> Path:
+    """Return a writable cache dir for uv with safe fallbacks."""
+    candidates = []
+    env_cache = os.environ.get("UV_CACHE_DIR")
+    if env_cache:
+        candidates.append(Path(env_cache).expanduser())
+    candidates.extend(
+        [
+            get_permanent_dir() / "cache" / "uv",
+            install_path / ".uv-cache",
+            Path("/tmp") / "ida-pro-mcp-uv-cache",
+        ]
+    )
+    for cand in candidates:
+        try:
+            cand.mkdir(parents=True, exist_ok=True)
+            probe = cand / ".write_probe"
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("ok")
+            probe.unlink(missing_ok=True)
+            return cand
+        except Exception:
+            continue
+    raise RuntimeError("Unable to create a writable uv cache directory")
 
 def get_mcp_server_config(install_path: Path):
     """Get the MCP server configuration pointing to the permanent venv python."""
@@ -294,15 +423,23 @@ def setup_virtualenv(install_path: Path):
                 shutil.rmtree(venv_dir)
 
         if check_uv_installed():
-            subprocess.run(["uv", "venv", ".venv"], cwd=install_path, capture_output=True, check=True)
+            uv_env = os.environ.copy()
+            uv_cache = _pick_writable_uv_cache(install_path)
+            uv_env["UV_CACHE_DIR"] = str(uv_cache)
+            _run_checked(["uv", "venv", ".venv"], cwd=install_path, env=uv_env)
             # Install core dependencies into the permanent venv
-            subprocess.run(["uv", "pip", "install", "idapro", "yara-python", "requests", "tomli-w", "-e", "."], 
-                           cwd=install_path, capture_output=True, check=True)
+            _run_checked(
+                ["uv", "pip", "install", "idapro", "yara-python", "requests", "tomli-w", "-e", "."],
+                cwd=install_path,
+                env=uv_env,
+            )
         else:
-            subprocess.run([sys.executable, "-m", "venv", ".venv"], cwd=install_path, capture_output=True, check=True)
+            _run_checked([sys.executable, "-m", "venv", ".venv"], cwd=install_path)
             pip_exe = install_path / (".venv/Scripts/pip.exe" if sys.platform == "win32" else ".venv/bin/pip")
-            subprocess.run([str(pip_exe), "install", "idapro", "yara-python", "requests", "tomli-w", "-e", "."], 
-                           cwd=install_path, capture_output=True, check=True)
+            _run_checked(
+                [str(pip_exe), "install", "idapro", "yara-python", "requests", "tomli-w", "-e", "."],
+                cwd=install_path,
+            )
         success("Environment optimized")
         return True
     except Exception as e:
@@ -626,7 +763,7 @@ def do_install():
     print(LOGO)
     print(f"   {C.DIM}Version 3.1  |  Professional Migration Edition{C.RESET}\n")
     
-    total_steps = 6
+    total_steps = 7
     script_dir = get_script_dir()
     perm_dir = get_permanent_dir()
     
@@ -695,8 +832,20 @@ def do_install():
                 configured.append(client)
                 success(f"{client}")
 
-    # Step 5: Install IDA Plugin
-    step(5, total_steps, "Installing IDA Pro plugin...")
+    # Step 5: Install Codex Skills
+    step(5, total_steps, "Installing Codex skills...")
+    codex_skills_result = install_codex_skills(install_path)
+    if codex_skills_result.get("ok"):
+        success(
+            f"Codex skills: {codex_skills_result.get('total', 0)} "
+            f"(linked={codex_skills_result.get('linked', 0)}, copied={codex_skills_result.get('copied', 0)})"
+        )
+        dim(f"Installed to: {codex_skills_result.get('path')}")
+    else:
+        warning(f"Codex skills install skipped: {codex_skills_result.get('reason', 'unknown error')}")
+
+    # Step 6: Install IDA Plugin
+    step(6, total_steps, "Installing IDA Pro plugin...")
     ida_plugin_dir = get_ida_plugin_dir()
     plugin_installed = False
 
@@ -738,8 +887,8 @@ def do_install():
     except Exception as e:
         warning(f"Plugin install failed: {e}")
 
-    # Step 6: Verify
-    step(6, total_steps, "Verifying installation...")
+    # Step 7: Verify
+    step(7, total_steps, "Verifying installation...")
     server_script = install_path / "ida_mcp_stdio.py"
     if server_script.exists():
         success(f"Active server at: {server_script}")
@@ -755,6 +904,7 @@ def do_install():
    {C.WHITE}Deployed Components:{C.RESET}
       - {C.CYAN}MCP Server{C.RESET} (headless host for IDEs)
       - {C.CYAN}IDA Plugin{C.RESET} {'(installed)' if plugin_installed else '(not installed - IDA not found)'}
+      - {C.CYAN}Codex Skills{C.RESET} {'(installed)' if codex_skills_result.get('ok') else '(not installed)'}
 
    {C.WHITE}Configured MCP Clients:{C.RESET}
 """)
