@@ -22,6 +22,8 @@ def search(
     end: Annotated[Optional[str], "End address for bounded searches"] = None,
     case_sensitive: Annotated[bool, "Case sensitive search (for string/text/comment)"] = False,
     include_context: Annotated[bool, "Include surrounding context in results"] = False,
+    include_items: Annotated[bool, "Include structured item arrays in output (default: false for context efficiency)"] = False,
+    include_breakdown: Annotated[bool, "Include per-type breakdown fields for multi-source actions"] = False,
     **kwargs
 ) -> dict:
     """
@@ -99,7 +101,9 @@ def search(
         Params: pattern (e.g. "args:3+", "calls:malloc", "size:>100")
 
     decompiled - Search through decompiled pseudocode (Hex-Rays)
-        Params: pattern (regex), case_sensitive, limit
+        Params: pattern, case_sensitive, limit
+                Optional guardrails: addr (single function scope), timeout_ms,
+                max_functions, sample, sample_max_funcs
         Returns: {matches: "addr  func_name  L42: matching line\\n...", count}
         Example: search(action="decompiled", pattern="memcpy.*sizeof")
     """
@@ -716,31 +720,35 @@ def search(
                 if key:
                     by_type[key].append(row["line"])
 
-            return {
+            result = {
                 "ok": True,
+                "action": "find",
                 "query": pattern,
                 "matches": "\n".join(row["line"] for row in page),
                 "offset": offset,
                 "count": len(page),
                 "total": total,
                 "truncated": is_truncated,
-                "items": [
+            }
+            if include_items:
+                result["items"] = [
                     {"type": row["type"], "address": row["address"], "score": row["score"], "text": row["line"]}
                     for row in page
-                ],
-                "type_totals": {
+                ]
+            if include_breakdown:
+                result["type_totals"] = {
                     "names": sum(1 for r in ranked if r["type"] == "names"),
                     "strings": sum(1 for r in ranked if r["type"] == "strings"),
                     "imports": sum(1 for r in ranked if r["type"] == "imports"),
                     "code_refs": sum(1 for r in ranked if r["type"] == "code_ref"),
                     "data_refs": sum(1 for r in ranked if r["type"] == "data_ref"),
-                },
-                "names": "\n".join(by_type["names"]),
-                "strings": "\n".join(by_type["strings"]),
-                "imports": "\n".join(by_type["imports"]),
-                "code_refs": "\n".join(by_type["code_refs"]),
-                "data_refs": "\n".join(by_type["data_refs"]),
-            }
+                }
+                result["names"] = "\n".join(by_type["names"])
+                result["strings"] = "\n".join(by_type["strings"])
+                result["imports"] = "\n".join(by_type["imports"])
+                result["code_refs"] = "\n".join(by_type["code_refs"])
+                result["data_refs"] = "\n".join(by_type["data_refs"])
+            return result
         
         elif action == "callers":
             # Find all functions that call the target
@@ -786,13 +794,19 @@ def search(
             page, total, is_truncated = _paginate_records(
                 ranked, sort_key=lambda r: (r["score"], r["address_ea"])
             )
-            return {
+            result = {
                 "ok": True,
+                "action": "callers",
                 "target": idc.get_name(target_ea) or hex(target_ea),
                 "target_addr": hex(func.start_ea),
-                "callers": "\n".join(r["line"] for r in page),
                 "matches": "\n".join(r["line"] for r in page),
-                "items": [
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+            }
+            if include_items:
+                result["items"] = [
                     {
                         "address": r["address"],
                         "name": r["name"],
@@ -800,12 +814,8 @@ def search(
                         "first_call_site": r["first_site"],
                     }
                     for r in page
-                ],
-                "count": len(page),
-                "total": total,
-                "offset": offset,
-                "truncated": is_truncated,
-            }
+                ]
+            return result
         
         elif action == "callees":
             # Find all functions called by the target
@@ -852,13 +862,19 @@ def search(
             page, total, is_truncated = _paginate_records(
                 ranked, sort_key=lambda r: (r["score"], r["address_ea"])
             )
-            return {
+            result = {
                 "ok": True,
+                "action": "callees",
                 "target": idc.get_name(target_ea) or hex(target_ea),
                 "target_addr": hex(func.start_ea),
-                "callees": "\n".join(r["line"] for r in page),
                 "matches": "\n".join(r["line"] for r in page),
-                "items": [
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+            }
+            if include_items:
+                result["items"] = [
                     {
                         "address": r["address"],
                         "name": r["name"],
@@ -866,12 +882,8 @@ def search(
                         "first_call_site": r["first_site"],
                     }
                     for r in page
-                ],
-                "count": len(page),
-                "total": total,
-                "offset": offset,
-                "truncated": is_truncated,
-            }
+                ]
+            return result
         
         elif action == "api":
             # Find all uses of an API/import function
@@ -936,15 +948,19 @@ def search(
                 reverse=True,
             )
 
-            return {
+            result = {
                 "ok": True,
+                "action": "api",
                 "api": api_summary[0]["api"],
                 "api_addr": api_summary[0]["address"],
-                "matched_apis": api_summary,
-                "total_calls": total,
-                "usages": "\n".join(r["line"] for r in page),
                 "matches": "\n".join(r["line"] for r in page),
-                "items": [
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+            }
+            if include_items:
+                result["items"] = [
                     {
                         "address": r["address"],
                         "function": r["function"],
@@ -954,12 +970,11 @@ def search(
                         "api_xref_count": r["score"],
                     }
                     for r in page
-                ],
-                "count": len(page),
-                "total": total,
-                "offset": offset,
-                "truncated": is_truncated,
-            }
+                ]
+            if include_breakdown:
+                result["matched_apis"] = api_summary
+                result["total_calls"] = total
+            return result
         
         elif action == "vulnerable":
             # Find potentially vulnerable patterns
@@ -1091,12 +1106,18 @@ def search(
             by_type = {}
             for row in findings:
                 by_type[row["vuln_type"]] = by_type.get(row["vuln_type"], 0) + 1
-            return {
+            result = {
                 "ok": True,
+                "action": "vulnerable",
                 "total_findings": total,
-                "findings": "\n".join(r["line"] for r in page),
                 "matches": "\n".join(r["line"] for r in page),
-                "items": [
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+            }
+            if include_items:
+                result["items"] = [
                     {
                         "address": r["address"],
                         "function": r["function"],
@@ -1106,13 +1127,10 @@ def search(
                         "module": r["module"],
                     }
                     for r in page
-                ],
-                "type_totals": by_type,
-                "count": len(page),
-                "total": total,
-                "offset": offset,
-                "truncated": is_truncated,
-            }
+                ]
+            if include_breakdown:
+                result["type_totals"] = by_type
+            return result
         
         elif action == "constants":
             # Find crypto/magic constants
@@ -1226,12 +1244,18 @@ def search(
             page, total, is_truncated = _paginate_records(
                 found_rows, sort_key=lambda r: r["address_ea"], reverse=False
             )
-            return {
+            result = {
                 "ok": True,
+                "action": "constants",
                 "total_found": total,
-                "findings": "\n".join(r["line"] for r in page),
                 "matches": "\n".join(r["line"] for r in page),
-                "items": [
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+            }
+            if include_items:
+                result["items"] = [
                     {
                         "address": r["address"],
                         "value": r["value"],
@@ -1239,21 +1263,69 @@ def search(
                         "function": r["function"],
                     }
                     for r in page
-                ],
-                "count": len(page),
-                "total": total,
-                "offset": offset,
-                "truncated": is_truncated,
-            }
+                ]
+            return result
 
         elif action == "decompiled":
             # Search through decompiled pseudocode of all functions
             if not pattern:
                 return make_error(MCPError.INVALID_ARGS, "pattern required for decompiled search")
             matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
+            import time as _time
+
+            # Guardrails: allow scoped decompilation, bounded function scan, and timeout budget.
+            scope_addr = kwargs.get("addr") or kwargs.get("func") or kwargs.get("function") or kwargs.get("scope")
+            timeout_ms = kwargs.get("timeout_ms", 8000)
+            try:
+                timeout_ms = int(timeout_ms)
+            except Exception:
+                timeout_ms = 8000
+            timeout_ms = max(250, min(timeout_ms, 120000))
+            timeout_s = timeout_ms / 1000.0
+
+            max_functions = kwargs.get("max_functions", kwargs.get("sample_max_funcs", 180))
+            try:
+                max_functions = int(max_functions)
+            except Exception:
+                max_functions = 180
+            max_functions = max(1, min(max_functions, 5000))
+            sample = bool(kwargs.get("sample", False))
+
+            target_funcs = []
+            scope_func = None
+            all_func_count = 0
+            if scope_addr:
+                target_ea, err = validate_addr(str(scope_addr))
+                if err:
+                    target_ea = idc.get_name_ea_simple(str(scope_addr))
+                    if target_ea == idaapi.BADADDR:
+                        return make_error(MCPError.INVALID_ARGS, f"Scope '{scope_addr}' not found")
+                scope_func = idaapi.get_func(target_ea)
+                if not scope_func:
+                    return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
+                target_funcs = [scope_func.start_ea]
+            else:
+                all_funcs = list(idautils.Functions())
+                all_func_count = len(all_funcs)
+                if sample and len(all_funcs) > max_functions:
+                    step = max(1, len(all_funcs) // max_functions)
+                    target_funcs = all_funcs[::step][:max_functions]
+                else:
+                    target_funcs = all_funcs[:max_functions]
+
+            scan_truncated = False
+            if not scope_func and len(target_funcs) >= max_functions:
+                scan_truncated = all_func_count > len(target_funcs)
 
             rows = []
-            for func_ea in idautils.Functions():
+            scanned_functions = 0
+            timed_out = False
+            started_at = _time.time()
+            for func_ea in target_funcs:
+                if (_time.time() - started_at) >= timeout_s:
+                    timed_out = True
+                    break
+                scanned_functions += 1
                 try:
                     cfunc = ida_hexrays.decompile(func_ea)
                     if not cfunc:
@@ -1278,24 +1350,38 @@ def search(
             page, total, is_truncated = _paginate_records(
                 rows, sort_key=lambda r: (r["address_ea"], r["line_num"]), reverse=False
             )
-            return {
+            result = {
                 "ok": True,
                 "action": "decompiled",
                 "pattern": pattern,
                 "matches": "\n".join(r["line"] for r in page),
-                "items": [
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+                "scanned_functions": scanned_functions,
+                "scan_limit": max_functions if not scope_func else 1,
+                "timeout_ms": timeout_ms,
+                "timed_out": timed_out,
+            }
+            if scope_func:
+                result["scope"] = hex(scope_func.start_ea)
+            if scan_truncated or timed_out:
+                result["analysis_truncated"] = True
+                if timed_out:
+                    result["hint"] = "Increase timeout_ms or scope with addr to search one function."
+                elif not scope_func:
+                    result["hint"] = "Increase max_functions or set sample=false for broader coverage."
+            if include_items:
+                result["items"] = [
                     {
                         "address": r["address"],
                         "function": r["function"],
                         "line_num": r["line_num"],
                     }
                     for r in page
-                ],
-                "count": len(page),
-                "total": total,
-                "offset": offset,
-                "truncated": is_truncated,
-            }
+                ]
+            return result
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

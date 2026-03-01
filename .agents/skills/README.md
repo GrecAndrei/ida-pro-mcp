@@ -10,10 +10,14 @@ python3 scripts/generate_tool_skills.py
 ```
 
 ## Generated Skill Count
-`67` (`66` per-tool + router)
+`1` router skill (`ida-tool-router`)
+
+## Generated Tool Doc Count
+`66` per-tool docs
 
 ## Notes
-- These skills are intended to reduce prompt/context churn by loading tool docs on demand.
+- Keep only one skill loaded (`ida-tool-router`) to avoid startup skill-list bloat.
+- Per-tool docs are plain markdown in `.agents/tool-docs/` and loaded on demand.
 - Edit source metadata in `ida_mcp_stdio.py`, then regenerate.
 
 ## Manifest
@@ -21,6 +25,7 @@ python3 scripts/generate_tool_skills.py
 {
   "tool_count": 66,
   "skills_root": ".agents/skills",
-  "router_skill": ".agents/skills/ida-tool-router/SKILL.md"
+  "router_skill": ".agents/skills/ida-tool-router/SKILL.md",
+  "tool_docs_root": ".agents/tool-docs"
 }
 ```

@@ -22,6 +22,19 @@ Creates, removes, inspects, and updates function definitions, including naming, 
 - `comment`, `repeatable`: For `add_comment`.
 - `query`, `named_only`, `offset`, `count`: `list` controls.
 - `include_prototype`, `include_stack`: richer output for `list`/`info`.
+- `include_items`: include structured list objects for `list` (default false to save context).
+- `include_xrefs`: include caller/callee sample arrays for `info`.
+
+## Output Notes
+- `list` returns both:
+  - `functions`: compact text lines (default, context-efficient).
+  - `items`: structured entries (`addr`, `end`, `size`, `name`, optional `prototype`) only when `include_items=true`.
+  - pagination fields: `total`, `offset`, `count`, `requested_count`, `has_more`.
+- `info` now includes call graph hints:
+  - `caller_count`, `callee_count`
+  - `callers_sample`, `callees_sample` only when `include_xrefs=true`
+  - optional comments when present.
+- `create(force=True, end=...)` now removes overlapping functions in range safely before creation and reports them in `removed_overlaps`.
 
 ## Examples
 ```python
@@ -30,7 +43,9 @@ funcs(action="delete", addr="0x401050")
 funcs(action="set_name", addr="0x401000", name="process_packet")
 funcs(action="add_comment", addr="0x401000", comment="decrypt stage", repeatable=True)
 funcs(action="list", query="*crypto*", named_only=True, offset=0, count=50, include_prototype=True)
+funcs(action="list", query="*crypto*", include_items=True, count=20)
 funcs(action="info", addr="0x401000", include_prototype=True, include_stack=True)
+funcs(action="info", addr="0x401000", include_xrefs=True)
 ```
 
 ## Failure Modes
@@ -39,3 +54,4 @@ funcs(action="info", addr="0x401000", include_prototype=True, include_stack=True
 - Address cannot be converted into code for creation.
 - Function not found for delete/flag/info paths.
 - Rename rejected due naming constraints.
+- Invalid `list` query regex/glob pattern.

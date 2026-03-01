@@ -3,9 +3,10 @@
 Generate Codex skill files from ida_mcp_stdio.py tool metadata.
 
 Output:
-  .agents/skills/ida-tool-<tool>/SKILL.md
   .agents/skills/ida-tool-router/SKILL.md
+  .agents/tool-docs/ida-tool-<tool>.md
   .agents/skills/README.md
+  .agents/tool-docs/README.md
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_FILE = REPO_ROOT / "ida_mcp_stdio.py"
 SKILLS_ROOT = REPO_ROOT / ".agents" / "skills"
+TOOL_DOCS_ROOT = REPO_ROOT / ".agents" / "tool-docs"
 GEN_MARKER = "<!-- GENERATED: scripts/generate_tool_skills.py -->"
 
 
@@ -105,22 +107,19 @@ def _render_param(name: str, schema: dict[str, Any]) -> str:
     return " - ".join(bits)
 
 
-def _render_tool_skill(
+def _render_tool_doc(
     tool_name: str,
     description: str,
     actions: list[str],
     arg_schema: dict[str, dict[str, Any]],
 ) -> str:
     lines: list[str] = []
-    lines.append("# IDA MCP Tool Skill")
+    lines.append(f"# IDA MCP Tool Doc: `{tool_name}`")
     lines.append(GEN_MARKER)
     lines.append("")
-    lines.append(f"## Tool")
-    lines.append(f"`{tool_name}`")
-    lines.append("")
-    lines.append("## Use This Skill When")
-    lines.append(f"- You need to call the `{tool_name}` tool.")
-    lines.append("- You want exact action/parameter contract without scanning global tool metadata.")
+    lines.append("## Purpose")
+    lines.append(f"- Reference contract for the `{tool_name}` MCP tool.")
+    lines.append("- Load this doc on demand from the router skill to minimize startup context.")
     lines.append("")
     lines.append("## Description")
     lines.append(description.strip() if description else "No description available.")
@@ -130,6 +129,7 @@ def _render_tool_skill(
         lines.extend([f"- `{a}`" for a in actions])
     else:
         lines.append("- (none documented)")
+    lines.append("- `grep` (host wrapper): run another action, then grep its output lines.")
     lines.append("")
     lines.append("## Parameters")
     if arg_schema:
@@ -146,34 +146,34 @@ def _render_tool_skill(
     return "\n".join(lines).strip() + "\n"
 
 
-def _render_router_skill(
-    tools: list[str],
-    descriptions: dict[str, str],
-    actions: dict[str, list[str]],
-) -> str:
+def _render_router_skill(tools: list[str]) -> str:
     lines: list[str] = []
+    lines.append("---")
+    lines.append('name: "ida-tool-router"')
+    lines.append('description: "Use to select the correct per-tool IDA MCP tool doc and avoid loading all tool docs at once."')
+    lines.append("metadata:")
+    lines.append('  short-description: "Route to one tool skill"')
+    lines.append("---")
+    lines.append("")
     lines.append("# IDA MCP Tool Router Skill")
     lines.append(GEN_MARKER)
     lines.append("")
     lines.append("## Purpose")
-    lines.append("Route to the specific per-tool skill instead of loading all tool docs.")
+    lines.append("Load only one tool doc at a time to keep context small.")
     lines.append("")
     lines.append("## How To Use")
     lines.append("- Identify the intended tool name from the user request.")
-    lines.append("- Open only `.agents/skills/ida-tool-<tool>/SKILL.md` for that tool.")
-    lines.append("- Avoid opening unrelated tool skills to keep context small.")
+    lines.append("- Open only `.agents/tool-docs/ida-tool-<tool>.md` for that tool.")
+    lines.append("- Avoid opening unrelated tool docs to keep context small.")
     lines.append("")
-    lines.append("## Tool Index")
-    for t in tools:
-        d = descriptions.get(t, "").strip()
-        d = re.sub(r"\s+", " ", d)
-        if len(d) > 120:
-            d = d[:117] + "..."
-        act = actions.get(t, [])
-        act_str = ", ".join(act[:8])
-        if len(act) > 8:
-            act_str += ", ..."
-        lines.append(f"- `{t}`: {d} | actions: {act_str if act_str else 'n/a'}")
+    lines.append("## Resolution Rules")
+    lines.append("- Default doc filename: `ida-tool-<tool>.md`")
+    lines.append("- Example: tool `search` -> `.agents/tool-docs/ida-tool-search.md`")
+    lines.append("- Alias: `xfer_analysis` -> `ida-tool-xfer_analysis.md`")
+    lines.append("- If unsure, list docs under `.agents/tool-docs/` and pick exact match.")
+    lines.append("")
+    lines.append("## Available Tool Count")
+    lines.append(f"- `{len(tools)}`")
     lines.append("")
     return "\n".join(lines).strip() + "\n"
 
@@ -208,6 +208,21 @@ def _cleanup_old_generated(root: Path) -> None:
                         pass
 
 
+def _cleanup_old_generated_docs(root: Path) -> None:
+    if not root.exists():
+        return
+    for doc in root.glob("ida-tool-*.md"):
+        try:
+            text = doc.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if GEN_MARKER in text:
+            try:
+                doc.unlink()
+            except OSError:
+                pass
+
+
 def main() -> None:
     source_text = SOURCE_FILE.read_text(encoding="utf-8")
     module = ast.parse(source_text, filename=str(SOURCE_FILE))
@@ -232,21 +247,22 @@ def main() -> None:
             seen.add(t)
 
     _cleanup_old_generated(SKILLS_ROOT)
+    _cleanup_old_generated_docs(TOOL_DOCS_ROOT)
 
     for tool in ordered_tools:
-        skill_dir = SKILLS_ROOT / f"ida-tool-{_slug(tool)}"
-        content = _render_tool_skill(
+        doc_file = TOOL_DOCS_ROOT / f"ida-tool-{_slug(tool)}.md"
+        content = _render_tool_doc(
             tool_name=tool,
             description=tool_descriptions.get(tool, ""),
             actions=tool_actions.get(tool, []),
             arg_schema=tool_arg_schemas.get(tool, {}),
         )
-        _write_file(skill_dir / "SKILL.md", content)
+        _write_file(doc_file, content)
 
     router_dir = SKILLS_ROOT / "ida-tool-router"
     _write_file(
         router_dir / "SKILL.md",
-        _render_router_skill(ordered_tools, tool_descriptions, tool_actions),
+        _render_router_skill(ordered_tools),
     )
 
     readme = [
@@ -261,11 +277,15 @@ def main() -> None:
         "python3 scripts/generate_tool_skills.py",
         "```",
         "",
-        f"## Generated Skill Count",
-        f"`{len(ordered_tools) + 1}` (`{len(ordered_tools)}` per-tool + router)",
+        "## Generated Skill Count",
+        "`1` router skill (`ida-tool-router`)",
+        "",
+        "## Generated Tool Doc Count",
+        f"`{len(ordered_tools)}` per-tool docs",
         "",
         "## Notes",
-        "- These skills are intended to reduce prompt/context churn by loading tool docs on demand.",
+        "- Keep only one skill loaded (`ida-tool-router`) to avoid startup skill-list bloat.",
+        "- Per-tool docs are plain markdown in `.agents/tool-docs/` and loaded on demand.",
         "- Edit source metadata in `ida_mcp_stdio.py`, then regenerate.",
         "",
         "## Manifest",
@@ -275,6 +295,7 @@ def main() -> None:
                 "tool_count": len(ordered_tools),
                 "skills_root": str(SKILLS_ROOT.relative_to(REPO_ROOT)),
                 "router_skill": str((router_dir / "SKILL.md").relative_to(REPO_ROOT)),
+                "tool_docs_root": str(TOOL_DOCS_ROOT.relative_to(REPO_ROOT)),
             },
             indent=2,
         ),
@@ -282,7 +303,25 @@ def main() -> None:
         "",
     ]
     _write_file(SKILLS_ROOT / "README.md", "\n".join(readme))
-    print(f"Generated {len(ordered_tools)} tool skills + router under {SKILLS_ROOT}")
+
+    docs_readme = [
+        "# Generated IDA Tool Docs",
+        GEN_MARKER,
+        "",
+        "- Source: `ida_mcp_stdio.py` metadata",
+        "- Generator: `scripts/generate_tool_skills.py`",
+        "",
+        "These are per-tool reference docs intentionally not exposed as skills.",
+        "",
+        "## Count",
+        f"`{len(ordered_tools)}` docs",
+        "",
+    ]
+    _write_file(TOOL_DOCS_ROOT / "README.md", "\n".join(docs_readme))
+    print(
+        f"Generated router skill under {SKILLS_ROOT} and "
+        f"{len(ordered_tools)} tool docs under {TOOL_DOCS_ROOT}"
+    )
 
 
 if __name__ == "__main__":
