@@ -222,6 +222,7 @@ class MCPError:
     FILE_LOCKED = "FILE_LOCKED"
     IDA_TIMEOUT = "IDA_TIMEOUT"
     IDA_CRASHED = "IDA_CRASHED"
+    NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
     SESSION_REQUIRED = "SESSION_REQUIRED"
     INVALID_ARGS = "INVALID_ARGS"
     ACTION_NOT_FOUND = "ACTION_NOT_FOUND"
@@ -241,6 +242,7 @@ _HOST_ERROR_HINTS = {
     MCPError.FILE_LOCKED: "The IDB or file is locked. Close other IDA instances first.",
     MCPError.IDA_TIMEOUT: "IDA took too long to start. Increase IDA_MCP_STARTUP_TIMEOUT or check IDA installation.",
     MCPError.IDA_CRASHED: "IDA exited unexpectedly. Check the log for details.",
+    MCPError.NOT_IMPLEMENTED: "This action is not available in the current runtime/build.",
     MCPError.SESSION_REQUIRED: "No active session. Create one with session(action='create', binary_path='...').",
     MCPError.INVALID_ARGS: "Invalid arguments. Check the tool description for valid parameters.",
     MCPError.ACTION_NOT_FOUND: "Unknown action. Check the tool description for valid actions.",
@@ -296,6 +298,7 @@ TOOL_ALIASES = {
     "plugins": "misc",
     "xfer_analysis": "xref_analysis",
 }
+WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
 _COMPACT_DROP = object()
 _COMPACT_META_KEYS = {
     "traceback",
@@ -374,6 +377,41 @@ def _parse_str_list(value: Any) -> List[str]:
         return out
     s = str(value).strip()
     return [s] if s else []
+
+
+def _parse_line_range(value: Any) -> tuple[Optional[int], Optional[int]]:
+    """
+    Parse flexible line selectors:
+      - "10-40", "10:40", "10..40"
+      - "25" (single line)
+      - "10-" (start only)
+      - "-40" (end only)
+    Returns (start, end), where each may be None.
+    """
+    if value is None:
+        return None, None
+    if isinstance(value, int):
+        n = max(1, int(value))
+        return n, n
+    s = str(value).strip()
+    if not s:
+        return None, None
+    if s.isdigit():
+        n = max(1, int(s))
+        return n, n
+    m = re.fullmatch(r"(\d+)\s*(?:-|\.\.|:)\s*(\d+)", s)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        if a > b:
+            a, b = b, a
+        return max(1, a), max(1, b)
+    m = re.fullmatch(r"(\d+)\s*(?:-|\.\.|:)\s*", s)
+    if m:
+        return max(1, int(m.group(1))), None
+    m = re.fullmatch(r"\s*(?:-|\.\.|:)\s*(\d+)", s)
+    if m:
+        return None, max(1, int(m.group(1)))
+    return None, None
 
 
 # =============================================================================
@@ -1306,7 +1344,7 @@ TOOLS = [
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls), update (modify session fields), rename (set custom name), duplicate (clone session), export_session/import_session (portable metadata), archive/unarchive (archive management), tag/untag/find_by_tag (tagging), add_note/clear_notes (notes), cleanup_stale (remove old sessions), stats (session statistics), validate (check integrity), bulk_delete/bulk_tag (batch operations), search_notes (search across notes), recent/oldest (sorted access), snapshot/restore_snapshot (point-in-time snapshots), merge (combine session metadata). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls), update (modify session fields), rename (set custom name), duplicate (clone session), export_session/import_session (portable metadata), archive/unarchive (archive management), tag/untag/find_by_tag (tagging), add_note/clear_notes (notes), cleanup_stale (remove old sessions), stats (session statistics), validate (check integrity), bulk_delete/bulk_tag (batch operations), search_notes (search across notes), recent/oldest (sorted access), snapshot/restore_snapshot (point-in-time snapshots), merge (combine session metadata), macro_set/macro_get/macro_list/macro_delete/macro_run (session macro presets), recent_workset (merged recent actions/bookmarks for rapid LLM resume). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
@@ -1395,7 +1433,9 @@ TOOL_ACTIONS = {
                 "archive", "unarchive", "tag", "untag", "find_by_tag", "add_note",
                 "clear_notes", "cleanup_stale", "stats", "validate",
                 "bulk_delete", "bulk_tag", "search_notes", "recent", "oldest",
-                "snapshot", "restore_snapshot", "merge"],
+                "snapshot", "restore_snapshot", "merge",
+                "macro_set", "macro_get", "macro_list", "macro_delete", "macro_run",
+                "recent_workset"],
     "truncation": ["continue"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
     "batch": ["run"],
@@ -1785,6 +1825,14 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "description": "Free-form notes for the session (create action).",
         },
+        "name": {"type": "string", "description": "Name for macro_* actions or rename action."},
+        "macro": {"type": "string", "description": "Alias for macro name in macro_* actions."},
+        "data": {"type": "object", "description": "Macro payload for macro_set."},
+        "macro_data": {"type": "object", "description": "Alias for macro payload in macro_set."},
+        "run_action": {"type": "string", "description": "Session action to execute for macro_run (default from macro or create)."},
+        "n": {"type": "integer", "description": "Count for recent/oldest/recent_workset actions."},
+        "include_bookmarks": {"type": "boolean", "description": "Include bookmark entries in recent_workset."},
+        "include_items": {"type": "boolean", "description": "Include structured items in recent_workset response."},
     },
     "truncation": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["truncation"]},
@@ -1819,6 +1867,8 @@ TOOL_ARG_SCHEMAS = {
         "named_only": {"type": "boolean"},
         "include_prototype": {"type": "boolean"},
         "include_stack": {"type": "boolean"},
+        "include_items": {"type": "boolean"},
+        "include_xrefs": {"type": "boolean"},
     },
     "calc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["calc"]},
@@ -1892,12 +1942,19 @@ TOOL_ARG_SCHEMAS = {
         "action": {"type": "string", "enum": TOOL_ACTIONS["search"]},
         "pattern": {"type": "string"},
         "query": {"type": "string"},
+        "addr": {"type": "string"},
         "limit": {"type": "integer"},
         "offset": {"type": "integer"},
         "start": {"type": "string"},
         "end": {"type": "string"},
         "case_sensitive": {"type": "boolean"},
         "include_context": {"type": "boolean"},
+        "include_items": {"type": "boolean"},
+        "include_breakdown": {"type": "boolean"},
+        "timeout_ms": {"type": "integer"},
+        "max_functions": {"type": "integer"},
+        "sample": {"type": "boolean"},
+        "sample_max_funcs": {"type": "integer"},
     },
     "vuln_scan": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["vuln_scan"]},
@@ -1996,6 +2053,12 @@ TOOL_ARG_SCHEMAS = {
         "topic": {"type": "string"},
         "query": {"type": "string"},
         "section": {"type": "string"},
+        "lines": {
+            "type": "string",
+            "description": "Line selector such as '10-40', '25', '10-', or '-40'.",
+        },
+        "line_start": {"type": "integer"},
+        "line_end": {"type": "integer"},
         "offset": {"type": "integer"},
         "limit": {"type": "integer"},
         "max_results": {"type": "integer"},
@@ -2005,6 +2068,10 @@ TOOL_ARG_SCHEMAS = {
         "include_related": {"type": "boolean"},
         "include_snippets": {"type": "boolean"},
         "context_lines": {"type": "integer"},
+        "verbose": {
+            "type": "boolean",
+            "description": "Include full structural metadata in wiki responses.",
+        },
     },
     "bulk": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["bulk"]},
@@ -2073,7 +2140,70 @@ GLOBAL_RESPONSE_CONTROLS = {
         "enum": ["none", "basic", "full"],
         "description": "Controls verbosity of error details.",
     },
+    "_qol_mode": {
+        "type": "string",
+        "enum": ["tiny", "balanced", "debug"],
+        "description": "QoL profile shortcut for response compaction presets.",
+    },
 }
+
+
+GLOBAL_WRAPPER_ACTION_CONTROLS = {
+    "source_action": {
+        "type": "string",
+        "description": "For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).",
+    },
+    "target_action": {"type": "string"},
+    "on": {"type": "string"},
+    "subaction": {"type": "string"},
+    "grep": {
+        "type": "string",
+        "description": "Grep pattern (substring by default; regex if grep_regex=true).",
+    },
+    "grep_pattern": {"type": "string"},
+    "grep_regex": {"type": "boolean"},
+    "grep_case_sensitive": {"type": "boolean"},
+    "grep_invert": {"type": "boolean"},
+    "grep_field": {
+        "type": "string",
+        "description": "Optional top-level source field to grep (e.g. matches, functions, content).",
+    },
+    "grep_limit": {"type": "integer"},
+    "grep_offset": {"type": "integer"},
+    "pick_fields": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "For action='pick': top-level fields to include.",
+    },
+    "pick_omit": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "For action='pick': top-level fields to omit after pick_fields.",
+    },
+    "head_n": {"type": "integer"},
+    "tail_n": {"type": "integer"},
+    "next_token": {"type": "string"},
+    "token": {"type": "string"},
+    "cursor": {"type": "string"},
+    "stats_include_payload": {"type": "boolean"},
+    "_qol_mode": {
+        "type": "string",
+        "enum": ["tiny", "balanced", "debug"],
+        "description": "QoL response profile preset.",
+    },
+    "qol_mode": {
+        "type": "string",
+        "enum": ["tiny", "balanced", "debug"],
+    },
+}
+
+
+def _action_enum_with_grep(tool_name: str) -> list[str]:
+    actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
+    for wrapper_action in WRAPPER_ACTIONS:
+        if wrapper_action not in actions:
+            actions.append(wrapper_action)
+    return actions
 
 
 def build_input_schema(tool_name: str) -> dict:
@@ -2096,8 +2226,126 @@ def build_input_schema(tool_name: str) -> dict:
             "description": "Optional: Path to IDB file or binary. If not provided, uses the current active session.",
         }
     if "action" in props:
+        action_schema = props.get("action")
+        if isinstance(action_schema, dict):
+            action_schema = dict(action_schema)
+            action_schema["enum"] = _action_enum_with_grep(tool_name)
+            props["action"] = action_schema
+        for key, schema in GLOBAL_WRAPPER_ACTION_CONTROLS.items():
+            props.setdefault(key, schema)
         required.append("action")
     return {"type": "object", "properties": props, "required": required}
+
+
+def _lean_prop_schema(prop_name: str, schema: Any) -> dict:
+    """
+    Produce an ultra-lean per-parameter schema for tools/list.
+    Keep action enum, but collapse other fields to just a basic type.
+    """
+    if not isinstance(schema, dict):
+        return {"type": "string"}
+
+    out: dict[str, Any] = {}
+    raw_type = schema.get("type")
+    if isinstance(raw_type, str):
+        out["type"] = raw_type
+    elif isinstance(raw_type, list):
+        # Prefer a concrete scalar-ish type to avoid noisy anyOf-style payloads.
+        preferred = None
+        for t in ("string", "integer", "number", "boolean", "array", "object"):
+            if t in raw_type:
+                preferred = t
+                break
+        out["type"] = preferred or "string"
+    elif prop_name == "action":
+        out["type"] = "string"
+    else:
+        out["type"] = "string"
+
+    if prop_name == "action":
+        enum_vals = schema.get("enum")
+        if isinstance(enum_vals, list):
+            out["enum"] = enum_vals
+    return out
+
+
+def build_input_schema_lean(tool_name: str) -> dict:
+    """
+    Build a minimal input schema for tools/list to reduce prompt/context overhead.
+    Preserves essential per-tool argument fields while stripping verbose text.
+    """
+    props = {}
+    required = []
+    if tool_name in TOOL_ARG_SCHEMAS:
+        for k, v in TOOL_ARG_SCHEMAS[tool_name].items():
+            props[k] = _lean_prop_schema(k, v)
+    elif tool_name in TOOL_ACTIONS:
+        props["action"] = {"type": "string", "enum": TOOL_ACTIONS[tool_name]}
+    if tool_name not in ("session", "bookmarks", "wiki", "batch"):
+        props["idb"] = {"type": "string"}
+    if "action" in props:
+        action_schema = props.get("action")
+        if isinstance(action_schema, dict):
+            action_schema = dict(action_schema)
+            action_schema["enum"] = _action_enum_with_grep(tool_name)
+            props["action"] = action_schema
+        for key, schema in GLOBAL_WRAPPER_ACTION_CONTROLS.items():
+            props.setdefault(key, _lean_prop_schema(key, schema))
+        required.append("action")
+    return {"type": "object", "properties": props, "required": required}
+
+
+def build_input_schema_ultra(tool_name: str) -> dict:
+    """
+    Build a very small schema for tools/list to minimize startup context.
+    Keeps action enums and only the most important wrapper/page args.
+    """
+    if tool_name == "batch":
+        return {
+            "type": "object",
+            "properties": {
+                "calls": {"type": "array"},
+                "continue_on_error": {"type": "boolean"},
+            },
+            "required": ["calls"],
+        }
+    if tool_name == "truncation":
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": TOOL_ACTIONS["truncation"]},
+                "token": {"type": "string"},
+            },
+            "required": ["action"],
+        }
+
+    props: Dict[str, Any] = {}
+    required: List[str] = []
+    action_enum = TOOL_ACTIONS.get(tool_name)
+    if action_enum:
+        props["action"] = {"type": "string", "enum": _action_enum_with_grep(tool_name)}
+        required.append("action")
+        for key in ("source_action", "grep", "pick_fields", "head_n", "tail_n", "next_token"):
+            if key in GLOBAL_WRAPPER_ACTION_CONTROLS:
+                props[key] = _lean_prop_schema(key, GLOBAL_WRAPPER_ACTION_CONTROLS[key])
+    if tool_name not in ("session", "bookmarks", "wiki", "batch", "truncation"):
+        props["idb"] = {"type": "string"}
+    return {"type": "object", "properties": props, "required": required}
+
+
+def build_tool_description_lean(tool_name: str) -> str:
+    """Return a short description without embedded action lists."""
+    full = str(TOOL_DESCRIPTIONS.get(tool_name, "") or "").strip()
+    if not full:
+        return ""
+    if "Actions:" in full:
+        full = full.split("Actions:", 1)[0].strip()
+    full = re.sub(r"\s+", " ", full).strip(" .")
+    if not full:
+        return ""
+    if len(full) > 140:
+        full = full[:137].rstrip() + "..."
+    return full + "."
 
 
 # =============================================================================
@@ -2110,36 +2358,104 @@ class IDAMCPServer:
         mode = str(os.environ.get("IDA_MCP_RESPONSE_MODE", "compact")).strip().lower()
         if mode not in {"compact", "full"}:
             mode = "compact"
+        qol_mode = str(os.environ.get("IDA_MCP_QOL_MODE", "balanced")).strip().lower()
+        if qol_mode not in {"tiny", "balanced", "debug"}:
+            qol_mode = "balanced"
+        tools_list_mode = str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "ultra")).strip().lower()
+        if tools_list_mode not in {"ultra", "lean", "full"}:
+            tools_list_mode = "ultra"
         detail_level = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
         if detail_level not in {"none", "basic", "full"}:
             detail_level = "basic"
         self.default_response_mode = mode
+        self.default_qol_mode = qol_mode
+        self.default_tools_list_mode = tools_list_mode
         self.default_error_detail_level = detail_level
         self.default_batch_compact = _env_bool("IDA_MCP_BATCH_COMPACT", True)
         self.default_table_mode = _env_bool("IDA_MCP_TABLE_COMPACT", False)
         self.default_compact_max_items = _bounded_int(
-            os.environ.get("IDA_MCP_COMPACT_MAX_ITEMS", 80),
-            80,
+            os.environ.get("IDA_MCP_COMPACT_MAX_ITEMS", 48),
+            48,
             min_value=1,
             max_value=10_000,
         )
         self.default_compact_max_string = _bounded_int(
-            os.environ.get("IDA_MCP_COMPACT_MAX_STRING", 2400),
-            2400,
+            os.environ.get("IDA_MCP_COMPACT_MAX_STRING", 1400),
+            1400,
             min_value=64,
             max_value=500_000,
         )
         self.default_compact_char_budget = _bounded_int(
-            os.environ.get("IDA_MCP_COMPACT_CHAR_BUDGET", 45_000),
-            45_000,
+            os.environ.get("IDA_MCP_COMPACT_CHAR_BUDGET", 30_000),
+            30_000,
             min_value=500,
             max_value=2_000_000,
         )
         self.default_truncate_tokens = _bounded_int(
-            os.environ.get("IDA_MCP_TRUNCATE_TOKENS", 2500),
-            2500,
+            os.environ.get("IDA_MCP_TRUNCATE_TOKENS", 2000),
+            2000,
             min_value=500,
             max_value=200_000,
+        )
+        self.default_wiki_read_limit = _bounded_int(
+            os.environ.get("IDA_MCP_WIKI_DEFAULT_LIMIT", 140),
+            140,
+            min_value=0,
+            max_value=5000,
+        )
+        self._qol_profiles = {
+            "tiny": {
+                "mode": "compact",
+                "max_items": 24,
+                "max_string": 800,
+                "char_budget": 12_000,
+                "drop_empty": True,
+                "drop_false": True,
+                "drop_ok": True,
+                "dedupe_counts": True,
+                "strip_meta": True,
+                "table_mode": False,
+                "batch_compact": True,
+                "error_details": "none",
+            },
+            "balanced": {
+                "mode": self.default_response_mode,
+                "max_items": self.default_compact_max_items,
+                "max_string": self.default_compact_max_string,
+                "char_budget": self.default_compact_char_budget,
+                "drop_empty": True,
+                "drop_false": True,
+                "drop_ok": True,
+                "dedupe_counts": True,
+                "strip_meta": True,
+                "table_mode": self.default_table_mode,
+                "batch_compact": self.default_batch_compact,
+                "error_details": self.default_error_detail_level,
+            },
+            "debug": {
+                "mode": "full",
+                "max_items": 10_000,
+                "max_string": 500_000,
+                "char_budget": 0,
+                "drop_empty": False,
+                "drop_false": False,
+                "drop_ok": False,
+                "dedupe_counts": False,
+                "strip_meta": False,
+                "table_mode": False,
+                "batch_compact": False,
+                "error_details": "full",
+            },
+        }
+        self._next_cache: Dict[str, Dict[str, Any]] = {}
+        self._next_cache_ttl_seconds = 1800
+        self._activity_log: List[Dict[str, Any]] = []
+        self._activity_log_max = 4000
+        # Controls whether tools/list returns the full monolithic description/schema payload.
+        # Default OFF for context efficiency in LLM clients.
+        self.monolithic_tool_descriptions = _env_bool(
+            "IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS",
+            False,
         )
         self.ida_dir = self._detect_ida_dir()
         self.idat_exe = self._find_idat()
@@ -2153,6 +2469,8 @@ class IDAMCPServer:
         os.makedirs(self.cache_dir, exist_ok=True)
         self.session_mgr = SessionManager(self.cache_dir)
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
+        self._macro_path = os.path.join(self.cache_dir, "session_macros.json")
+        self._session_macros: Dict[str, Dict[str, Any]] = {}
         self.current_session = None
         self.session_runtimes = {}
         self._wiki_cache: Dict[str, Any] = {
@@ -2162,6 +2480,7 @@ class IDAMCPServer:
             "pages": [],
         }
         self._wiki_cache_ttl = 5.0
+        self._load_session_macros()
 
     def _ida_binary_names(self) -> List[str]:
         if sys.platform == "win32":
@@ -2329,12 +2648,459 @@ class IDAMCPServer:
                 return mapping.pop(key)
         return default
 
+    def _load_session_macros(self):
+        self._session_macros = {}
+        try:
+            with open(self._macro_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            return
+        except Exception:
+            return
+        if not isinstance(raw, dict):
+            return
+        for key, value in raw.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            name = str(value.get("name") or key).strip()
+            data = value.get("data")
+            if not name or not isinstance(data, dict):
+                continue
+            self._session_macros[key.lower()] = {
+                "name": name,
+                "data": data,
+                "updated_at": value.get("updated_at"),
+            }
+
+    def _save_session_macros(self):
+        try:
+            tmp = self._macro_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._session_macros, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, self._macro_path)
+        except Exception:
+            pass
+
+    def _normalize_macro_name(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        name = str(value).strip()
+        if not name:
+            return None
+        name = re.sub(r"\s+", " ", name)[:80]
+        return name or None
+
+    def _prune_next_cache(self):
+        if not self._next_cache:
+            return
+        now = time.time()
+        expired = [
+            token
+            for token, row in self._next_cache.items()
+            if (now - float(row.get("created_at", 0.0))) > float(self._next_cache_ttl_seconds)
+        ]
+        for token in expired:
+            self._next_cache.pop(token, None)
+
+    def _parse_action_tail_tokens(self, tail: str) -> dict:
+        parsed: Dict[str, Any] = {}
+        if not tail:
+            return parsed
+        try:
+            tokens = shlex.split(tail)
+        except Exception:
+            tokens = tail.split()
+        positional: List[str] = []
+        for token in tokens:
+            if "=" in token:
+                k, v = token.split("=", 1)
+                key = str(k).strip()
+                val = str(v).strip()
+                if key and key not in parsed:
+                    parsed[key] = val
+            else:
+                positional.append(token)
+        if positional:
+            parsed.setdefault("_positional", " ".join(positional).strip())
+        return parsed
+
+    def _normalize_tool_call_args(self, tool_name: str, args: dict) -> dict:
+        out = dict(args or {})
+        valid_actions = TOOL_ACTIONS.get(tool_name, [])
+        lower_map = {a.lower(): a for a in valid_actions}
+
+        action = out.get("action")
+        if isinstance(action, dict):
+            nested = dict(action)
+            out.pop("action", None)
+            for k, v in nested.items():
+                out.setdefault(k, v)
+            action = out.get("action")
+
+        if isinstance(action, str):
+            action_text = action.strip()
+            if action_text.startswith("{") and action_text.endswith("}"):
+                try:
+                    payload = json.loads(action_text)
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    for k, v in payload.items():
+                        out.setdefault(k, v)
+                    action_text = str(payload.get("action", "")).strip()
+
+            if action_text:
+                parts = action_text.split(None, 1)
+                base = parts[0].strip()
+                if base.endswith("()"):
+                    base = base[:-2]
+                mapped = lower_map.get(base.lower(), base)
+                out["action"] = mapped
+                if len(parts) > 1:
+                    parsed_tail = self._parse_action_tail_tokens(parts[1].strip())
+                    for k, v in parsed_tail.items():
+                        out.setdefault(k, v)
+                    positional = parsed_tail.get("_positional")
+                    if isinstance(positional, str) and positional:
+                        if mapped in ("read", "sections") and tool_name == "wiki":
+                            out.setdefault("topic", positional)
+                        elif mapped == "search":
+                            out.setdefault("query", positional)
+                        elif "pattern" in TOOL_ARG_SCHEMAS.get(tool_name, {}):
+                            out.setdefault("pattern", positional)
+                    out.pop("_positional", None)
+            else:
+                out.pop("action", None)
+        elif action is not None and valid_actions:
+            out.pop("action", None)
+
+        if "action" not in out and valid_actions:
+            for candidate_key in ("subaction",):
+                candidate = out.get(candidate_key)
+                if isinstance(candidate, str):
+                    mapped = lower_map.get(candidate.strip().lower())
+                    if mapped:
+                        out["action"] = mapped
+                        break
+        return out
+
+    def _wrapper_source_action(self, tool_name: str, args: dict, wrapper_action: str) -> tuple[Optional[str], Optional[dict]]:
+        source_action = (
+            args.get("source_action")
+            or args.get("target_action")
+            or args.get("on")
+            or args.get("subaction")
+        )
+        if not source_action or not isinstance(source_action, str):
+            return None, make_error(
+                MCPError.INVALID_ARGS,
+                f"action='{wrapper_action}' requires source_action",
+                hint=(
+                    f"Example: {tool_name}(action='{wrapper_action}', source_action='list'). "
+                    "Aliases: on, target_action, subaction."
+                ),
+            )
+        source_action = source_action.strip()
+        if not source_action:
+            return None, make_error(MCPError.INVALID_ARGS, "source_action cannot be empty")
+        native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
+        if source_action in WRAPPER_ACTIONS and source_action not in native_actions:
+            return None, make_error(
+                MCPError.INVALID_ARGS,
+                f"source_action cannot be '{source_action}'",
+                hint=f"Use a concrete tool action first, then action='{wrapper_action}'.",
+            )
+        return source_action, None
+
+    def _strip_wrapper_args(self, args: dict) -> dict:
+        child_args = dict(args or {})
+        for key in (
+            "source_action",
+            "target_action",
+            "on",
+            "subaction",
+            "grep",
+            "grep_pattern",
+            "grep_regex",
+            "grep_case_sensitive",
+            "grep_invert",
+            "grep_field",
+            "grep_limit",
+            "grep_offset",
+            "pick_fields",
+            "pick_omit",
+            "head_n",
+            "tail_n",
+            "next_token",
+            "token",
+            "cursor",
+            "stats_include_payload",
+        ):
+            child_args.pop(key, None)
+        return child_args
+
+    def _lineify_item(self, item: Any) -> str:
+        if isinstance(item, str):
+            return item.strip()
+        if isinstance(item, dict):
+            return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+        if item is None:
+            return ""
+        return str(item).strip()
+
+    def _collect_wrapper_items(
+        self, payload: Any, field: Optional[str] = None
+    ) -> tuple[list[Any], str, str]:
+        if isinstance(payload, dict):
+            if field:
+                value = payload.get(field)
+                if isinstance(value, str):
+                    return [line for line in value.splitlines() if line.strip()], field, "string"
+                if isinstance(value, list):
+                    return list(value), field, "list"
+                if value is None:
+                    return [], field, "list"
+                return [value], field, "list"
+            for key in (
+                "sessions",
+                "bookmarks",
+                "macros",
+                "items",
+                "results",
+                "matches",
+                "functions",
+                "findings",
+                "usages",
+                "callers",
+                "callees",
+                "content",
+                "sections",
+                "names",
+                "strings",
+                "imports",
+                "code_refs",
+                "data_refs",
+            ):
+                if key not in payload:
+                    continue
+                value = payload.get(key)
+                if isinstance(value, str):
+                    return [line for line in value.splitlines() if line.strip()], key, "string"
+                if isinstance(value, list):
+                    return list(value), key, "list"
+            return [payload], "payload", "list"
+        if isinstance(payload, list):
+            return list(payload), "payload", "list"
+        if isinstance(payload, str):
+            return [line for line in payload.splitlines() if line.strip()], "payload", "string"
+        if payload is None:
+            return [], "payload", "list"
+        return [payload], "payload", "list"
+
+    def _cache_next_page(self, tool_name: str, args: dict, payload: Any) -> Any:
+        if not isinstance(payload, dict) or payload.get("error"):
+            return payload
+        if not _coerce_bool(payload.get("truncated"), False):
+            return payload
+        try:
+            offset = int(payload.get("offset", args.get("offset", 0)) or 0)
+            count = int(payload.get("count", 0) or 0)
+            total = int(payload.get("total", 0) or 0)
+        except Exception:
+            return payload
+        next_offset = payload.get("next_offset")
+        if next_offset is None and total > (offset + count):
+            next_offset = offset + count
+        try:
+            next_offset = int(next_offset)
+        except Exception:
+            return payload
+        if next_offset <= offset:
+            return payload
+
+        self._prune_next_cache()
+        token = uuid.uuid4().hex[:12].upper()
+        action = args.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return payload
+        cache_args = dict(args)
+        cache_args.pop("next_token", None)
+        cache_args.pop("token", None)
+        cache_args.pop("cursor", None)
+        self._next_cache[token] = {
+            "tool": tool_name,
+            "action": action,
+            "args": cache_args,
+            "next_offset": next_offset,
+            "created_at": time.time(),
+        }
+        out = dict(payload)
+        out["next_token"] = token
+        out["next_offset"] = next_offset
+        return out
+
+    def _record_activity(
+        self,
+        tool_name: str,
+        call_args: Any,
+        result: Any,
+        *,
+        session_id: Optional[str] = None,
+    ):
+        if not isinstance(call_args, dict):
+            return
+        if not isinstance(result, dict) or result.get("error"):
+            return
+        sid = session_id
+        if not sid:
+            sid = _normalize_session_id(call_args.get("session_id"))
+        if not sid and self.current_session:
+            sid = self.current_session.session_id
+        if not sid:
+            return
+
+        action = call_args.get("action")
+        if not isinstance(action, str):
+            action = ""
+        addresses: List[str] = []
+        if isinstance(result.get("items"), list):
+            for item in result["items"][:16]:
+                if not isinstance(item, dict):
+                    continue
+                addr = item.get("address") or item.get("addr")
+                if addr is None and isinstance(item.get("address_ea"), int):
+                    addr = hex(item.get("address_ea"))
+                if isinstance(addr, str) and addr.startswith("0x"):
+                    addresses.append(addr.lower())
+        matches = result.get("matches")
+        if isinstance(matches, str):
+            addresses.extend(re.findall(r"0x[0-9a-fA-F]+", matches)[:16])
+        deduped_addresses: List[str] = []
+        seen = set()
+        for addr in addresses:
+            a = addr.lower()
+            if a in seen:
+                continue
+            seen.add(a)
+            deduped_addresses.append(a)
+
+        entry = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "session_id": sid,
+            "tool": tool_name,
+            "action": action,
+            "addresses": deduped_addresses[:8],
+            "topic": result.get("resolved_topic") or result.get("topic"),
+            "target": result.get("target") or result.get("query") or result.get("pattern"),
+        }
+        self._activity_log.append(entry)
+        if len(self._activity_log) > self._activity_log_max:
+            self._activity_log = self._activity_log[-self._activity_log_max :]
+
+    def _build_recent_workset(
+        self,
+        sid: str,
+        n: int,
+        include_bookmarks: bool,
+        include_items: bool,
+    ) -> dict:
+        n = _bounded_int(n, 20, min_value=1, max_value=200)
+        entries: List[Dict[str, Any]] = []
+        seen = set()
+        for row in reversed(self._activity_log):
+            if row.get("session_id") != sid:
+                continue
+            key = (
+                row.get("tool"),
+                row.get("action"),
+                tuple(row.get("addresses") or []),
+                row.get("topic"),
+                row.get("target"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append(
+                {
+                    "kind": "activity",
+                    "ts": row.get("ts"),
+                    "tool": row.get("tool"),
+                    "action": row.get("action"),
+                    "addresses": row.get("addresses") or [],
+                    "topic": row.get("topic"),
+                    "target": row.get("target"),
+                }
+            )
+            if len(entries) >= n:
+                break
+
+        if include_bookmarks:
+            bm_res = self.bookmark_mgr.list(sid, {"limit": max(1, n), "offset": 0})
+            for bm in bm_res.get("bookmarks", [])[:n]:
+                if not isinstance(bm, dict):
+                    continue
+                entries.append(
+                    {
+                        "kind": "bookmark",
+                        "ts": bm.get("timestamp"),
+                        "address": bm.get("addr"),
+                        "name": bm.get("name"),
+                        "category": bm.get("category"),
+                        "tags": bm.get("tags") or [],
+                    }
+                )
+                if len(entries) >= (n * 2):
+                    break
+
+        lines: List[str] = []
+        for item in entries:
+            if item.get("kind") == "bookmark":
+                lines.append(
+                    f"{item.get('ts','')}  bookmark  {item.get('address','')}  {item.get('name','')}".strip()
+                )
+                continue
+            addr_part = ",".join(item.get("addresses") or [])
+            tail_parts = [item.get("tool"), item.get("action")]
+            if addr_part:
+                tail_parts.append(addr_part)
+            if item.get("topic"):
+                tail_parts.append(str(item.get("topic")))
+            elif item.get("target"):
+                tail_parts.append(str(item.get("target")))
+            tail = "  ".join([p for p in tail_parts if p])
+            lines.append(f"{item.get('ts','')}  {tail}".strip())
+
+        out = {
+            "ok": True,
+            "action": "recent_workset",
+            "session_id": sid,
+            "workset": "\n".join(lines),
+            "count": len(entries),
+        }
+        if include_items:
+            out["items"] = entries
+        return out
+
     def _extract_response_options(self, args: Any) -> tuple[dict, dict]:
         if not isinstance(args, dict):
             return {}, self._default_response_options()
 
         exec_args = dict(args)
         opts = self._default_response_options()
+
+        qol_mode = self._pop_first(exec_args, ["_qol_mode", "qol_mode"], None)
+        if isinstance(qol_mode, str):
+            qol_mode = qol_mode.strip().lower()
+        if qol_mode in {"tiny", "balanced", "debug"}:
+            profile = self._qol_profiles.get(qol_mode, {})
+            if profile:
+                opts.update(profile)
+        else:
+            qol_mode = self.default_qol_mode
+            profile = self._qol_profiles.get(qol_mode, {})
+            if profile:
+                opts.update(profile)
+        opts["qol_mode"] = qol_mode
 
         mode = self._pop_first(exec_args, ["_response_mode", "response_mode"], None)
         compact_toggle = self._pop_first(exec_args, ["_compact", "compact"], None)
@@ -2343,13 +3109,17 @@ class IDAMCPServer:
         if isinstance(mode, str):
             mode = mode.strip().lower()
         if mode not in {"compact", "full"}:
-            mode = self.default_response_mode
+            mode = opts.get("mode", self.default_response_mode)
         opts["mode"] = mode
         compact_mode = mode == "compact"
 
         detail_level = self._pop_first(exec_args, ["_error_details"], None)
         if detail_level is None:
-            detail_level = self.default_error_detail_level if compact_mode else "full"
+            detail_level = (
+                opts.get("error_details", self.default_error_detail_level)
+                if compact_mode
+                else "full"
+            )
         if isinstance(detail_level, str):
             detail_level = detail_level.strip().lower()
         if detail_level not in {"none", "basic", "full"}:
@@ -2366,7 +3136,7 @@ class IDAMCPServer:
         opts["max_items"] = (
             _bounded_int(
                 max_items_raw,
-                self.default_compact_max_items,
+                int(opts.get("max_items", self.default_compact_max_items)),
                 min_value=1,
                 max_value=10_000,
             )
@@ -2376,7 +3146,7 @@ class IDAMCPServer:
         opts["max_string"] = (
             _bounded_int(
                 max_string_raw,
-                self.default_compact_max_string,
+                int(opts.get("max_string", self.default_compact_max_string)),
                 min_value=64,
                 max_value=500_000,
             )
@@ -2386,7 +3156,7 @@ class IDAMCPServer:
         opts["char_budget"] = (
             _bounded_int(
                 char_budget_raw,
-                self.default_compact_char_budget,
+                int(opts.get("char_budget", self.default_compact_char_budget)),
                 min_value=500,
                 max_value=2_000_000,
             )
@@ -2396,31 +3166,31 @@ class IDAMCPServer:
 
         opts["drop_empty"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_drop_empty"], None),
-            compact_mode,
+            bool(opts.get("drop_empty", compact_mode)),
         )
         opts["drop_false"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_drop_false"], None),
-            compact_mode,
+            bool(opts.get("drop_false", compact_mode)),
         )
         opts["drop_ok"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_drop_ok"], None),
-            compact_mode,
+            bool(opts.get("drop_ok", compact_mode)),
         )
         opts["dedupe_counts"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_dedupe_counts"], None),
-            compact_mode,
+            bool(opts.get("dedupe_counts", compact_mode)),
         )
         opts["strip_meta"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_strip_meta"], None),
-            compact_mode,
+            bool(opts.get("strip_meta", compact_mode)),
         )
         opts["table_mode"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_table"], None),
-            self.default_table_mode if compact_mode else False,
+            bool(opts.get("table_mode", self.default_table_mode if compact_mode else False)),
         )
         opts["batch_compact"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_batch_compact"], None),
-            self.default_batch_compact if compact_mode else False,
+            bool(opts.get("batch_compact", self.default_batch_compact if compact_mode else False)),
         )
         return exec_args, opts
 
@@ -2542,6 +3312,15 @@ class IDAMCPServer:
                     out.pop("next_offset", None)
                 if isinstance(out.get("results"), list) and out.get("count") == len(out["results"]):
                     out.pop("count", None)
+                # Prefer compact text form when both are present unless caller explicitly requests items.
+                requested_fields = set(opts.get("fields") or [])
+                if (
+                    "functions" in out
+                    and isinstance(out.get("functions"), str)
+                    and isinstance(out.get("items"), list)
+                    and "items" not in requested_fields
+                ):
+                    out.pop("items", None)
             if not out and opts.get("drop_empty"):
                 return _COMPACT_DROP
             return out
@@ -3225,6 +4004,81 @@ class IDAMCPServer:
             return None, make_error(MCPError.INVALID_ARGS, "Invalid wiki topic path")
         return "/".join(parts), None
 
+    def _normalize_wiki_args(self, args: dict) -> dict:
+        """
+        Accept tolerant wiki call shapes often produced by LLMs:
+        - action: "read topic=tools/query"
+        - action: "read QuickStart"
+        - action: "{\"action\":\"read\",\"topic\":\"tools/query\"}"
+        """
+        out = dict(args or {})
+        raw_action = out.get("action")
+        if not isinstance(raw_action, str):
+            return out
+        action_text = raw_action.strip()
+        if not action_text:
+            return out
+
+        # Handle JSON stuffed into action field.
+        if action_text.startswith("{") and action_text.endswith("}"):
+            try:
+                payload = json.loads(action_text)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                for k, v in payload.items():
+                    out.setdefault(k, v)
+                out["action"] = str(payload.get("action", "")).strip()
+                return out
+
+        parts = action_text.split(None, 1)
+        base = parts[0].strip()
+        if base not in TOOL_ACTIONS["wiki"]:
+            return out
+
+        out["action"] = base
+        tail = parts[1].strip() if len(parts) > 1 else ""
+        if tail:
+            positional: List[str] = []
+            for token in shlex.split(tail):
+                if "=" in token:
+                    k, v = token.split("=", 1)
+                    key = k.strip()
+                    val = v.strip()
+                    if key and val and key not in out:
+                        out[key] = val
+                else:
+                    rng_start, rng_end = _parse_line_range(token)
+                    if (
+                        base in ("read", "sections")
+                        and (rng_start is not None or rng_end is not None)
+                        and not out.get("lines")
+                    ):
+                        out["lines"] = token
+                    else:
+                        positional.append(token)
+
+            if positional:
+                joined = " ".join(positional).strip()
+                if joined:
+                    if base in ("read", "sections") and not out.get("topic"):
+                        out["topic"] = joined
+                    elif base == "search" and not out.get("query"):
+                        out["query"] = joined
+
+        # Tolerate callers that accidentally pass topic in `idb` for wiki actions.
+        if base in ("read", "sections") and not out.get("topic"):
+            maybe_topic = out.get("idb")
+            if isinstance(maybe_topic, str):
+                candidate = maybe_topic.strip()
+                if (
+                    candidate
+                    and not os.path.isabs(candidate)
+                    and not re.search(r"\.(i64|idb|exe|dll|so|dylib|bin)$", candidate, re.IGNORECASE)
+                ):
+                    out["topic"] = candidate
+        return out
+
     def _wiki_generated_tool_doc(self, tool_name: str) -> Optional[str]:
         if not isinstance(tool_name, str):
             return None
@@ -3477,12 +4331,18 @@ class IDAMCPServer:
         return None
 
     def _handle_wiki(self, args: dict) -> dict:
+        args = self._normalize_wiki_args(args)
         action = args.get("action")
         if action not in TOOL_ACTIONS["wiki"]:
             return make_error(
                 MCPError.ACTION_NOT_FOUND,
                 f"Unsupported wiki action: '{action}'",
-                hint=f"Valid wiki actions: {', '.join(TOOL_ACTIONS['wiki'])}",
+                hint=(
+                    f"Valid wiki actions: {', '.join(TOOL_ACTIONS['wiki'])}. "
+                    "Examples: wiki(action='read', topic='tools/query'), "
+                    "wiki(action='search', query='session'), "
+                    "wiki(action='read', topic='tools/query', lines='20-60')."
+                ),
             )
 
         wiki_root = self._resolve_wiki_root()
@@ -3490,7 +4350,18 @@ class IDAMCPServer:
         topics: Dict[str, List[str]] = wiki_index.get("topics", {})
         pages: List[dict] = wiki_index.get("pages", [])
 
-        q_limit = _bounded_int(args.get("limit", 0), 0, min_value=0, max_value=2000)
+        verbose = bool(args.get("verbose", False))
+        default_limit = (
+            self.default_wiki_read_limit
+            if action == "read" and not verbose
+            else 0
+        )
+        q_limit = _bounded_int(
+            args.get("limit", default_limit),
+            default_limit,
+            min_value=0,
+            max_value=2000,
+        )
         q_offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=200000)
         context_lines = _bounded_int(
             args.get("context_lines", 2), 2, min_value=0, max_value=10
@@ -3498,11 +4369,14 @@ class IDAMCPServer:
         include_snippets = bool(args.get("include_snippets", False))
         category_filter = args.get("category")
         max_results = _bounded_int(
-            args.get("max_results", 20), 20, min_value=1, max_value=MAX_WIKI_RESULTS
+            args.get("max_results", 20 if verbose else 8),
+            20 if verbose else 8,
+            min_value=1,
+            max_value=MAX_WIKI_RESULTS,
         )
         fuzzy = bool(args.get("fuzzy", True))
         strict_topic = bool(args.get("strict_topic", False))
-        include_related = bool(args.get("include_related", True))
+        include_related = bool(args.get("include_related", True if verbose else False))
 
         if action == "list_topics":
             if topics:
@@ -3568,12 +4442,16 @@ class IDAMCPServer:
                             }
                         )
                 matches = matches[:max_results]
-            return {
+            response = {
                 "ok": True,
                 "query": query,
                 "matches": matches,
                 "count": len(matches),
             }
+            if not verbose:
+                # Keep default search payload compact for LLM context efficiency.
+                response["matches"] = [m.get("topic") for m in matches]
+            return response
 
         topic_name, topic_err = self._wiki_normalize_topic(args.get("topic"))
         if topic_err:
@@ -3640,6 +4518,16 @@ class IDAMCPServer:
         ]
 
         if action == "sections":
+            if not verbose:
+                return {
+                    "ok": True,
+                    "topic": topic_name,
+                    "resolved_topic": resolved_topic,
+                    "source": source,
+                    "title": title,
+                    "sections": [h["title"] for h in available_sections],
+                    "count": len(available_sections),
+                }
             return {
                 "ok": True,
                 "topic": topic_name,
@@ -3687,10 +4575,15 @@ class IDAMCPServer:
                         target_header = best_header
 
             if target_header is None:
+                details_payload = (
+                    {"available_sections": available_sections[:50]}
+                    if verbose
+                    else {"available_sections": [s["title"] for s in available_sections[:20]]}
+                )
                 return make_error(
                     MCPError.INVALID_ARGS,
                     f"Section '{section}' not found",
-                    details={"available_sections": available_sections[:50]},
+                    details=details_payload,
                 )
 
             section_filter = target_header["text"]
@@ -3705,35 +4598,75 @@ class IDAMCPServer:
                     break
             content_lines = lines[start_idx:end_idx]
 
+        line_sel_start, line_sel_end = _parse_line_range(args.get("lines"))
+        if args.get("line_start") is not None:
+            line_sel_start = _bounded_int(
+                args.get("line_start"), 1, min_value=1, max_value=2_000_000
+            )
+        if args.get("line_end") is not None:
+            line_sel_end = _bounded_int(
+                args.get("line_end"), 1, min_value=1, max_value=2_000_000
+            )
+        has_line_window = (line_sel_start is not None) or (line_sel_end is not None)
+
         total_lines = len(content_lines)
-        start = min(q_offset, total_lines)
-        end = total_lines if q_limit <= 0 else min(total_lines, start + q_limit)
-        slice_lines = content_lines[start:end]
-        absolute_start = section_start_line + start
-        absolute_end = (
-            absolute_start + len(slice_lines) - 1 if slice_lines else absolute_start
-        )
+        if has_line_window:
+            section_abs_start = section_start_line
+            section_abs_end = section_start_line + max(0, total_lines - 1)
+
+            abs_start_req = line_sel_start if line_sel_start is not None else section_abs_start
+            abs_end_req = line_sel_end if line_sel_end is not None else section_abs_end
+            if abs_end_req < abs_start_req:
+                abs_start_req, abs_end_req = abs_end_req, abs_start_req
+
+            abs_start = max(section_abs_start, abs_start_req)
+            abs_end = min(section_abs_end, abs_end_req)
+
+            if total_lines <= 0 or abs_end < abs_start:
+                slice_lines = []
+                absolute_start = section_abs_start
+                absolute_end = section_abs_start
+            else:
+                local_start = abs_start - section_abs_start
+                local_end_exclusive = abs_end - section_abs_start + 1
+                slice_lines = content_lines[local_start:local_end_exclusive]
+                absolute_start = abs_start
+                absolute_end = abs_end
+        else:
+            start = min(q_offset, total_lines)
+            end = total_lines if q_limit <= 0 else min(total_lines, start + q_limit)
+            slice_lines = content_lines[start:end]
+            absolute_start = section_start_line + start
+            absolute_end = (
+                absolute_start + len(slice_lines) - 1 if slice_lines else absolute_start
+            )
         result = {
             "ok": True,
             "topic": topic_name,
             "resolved_topic": resolved_topic,
-            "source": source,
             "title": title,
-            "category": category,
-            "line_range": f"{absolute_start}-{absolute_end}",
-            "total_lines_in_topic": len(lines),
-            "headers": [h["text"] for h in headers[:100]],
-            "available_sections": available_sections[:100],
             "content": "".join(slice_lines),
+            "line_range": f"{absolute_start}-{absolute_end}",
         }
+        if verbose:
+            result.update(
+                {
+                    "source": source,
+                    "category": category,
+                    "total_lines_in_topic": len(lines),
+                    "headers": [h["text"] for h in headers[:100]],
+                    "available_sections": available_sections[:100],
+                }
+            )
         if section_filter:
             result["section_filter"] = section_filter
         if include_related and pages and resolved_topic:
             result["related_topics"] = self._wiki_related_topics(resolved_topic, pages)
-        if q_limit > 0 and end < total_lines:
+        if (not has_line_window) and q_limit > 0 and end < total_lines:
             result["_truncated"] = True
             result["next_offset"] = end
             result["lines_remaining"] = total_lines - end
+            result["hint"] = "Use wiki(action='read', topic='...', offset=next_offset, limit=...)"
         return result
 
     def _handle_misc_health(self, args: dict) -> dict:
@@ -3790,6 +4723,322 @@ class IDAMCPServer:
             payload["sessions"]["runtimes"] = runtime_states
         return payload
 
+    def _grep_value_lines(self, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [line for line in value.splitlines() if line.strip()]
+        if isinstance(value, list):
+            out: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    out.extend([line for line in item.splitlines() if line.strip()])
+                elif isinstance(item, dict):
+                    out.append(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+                else:
+                    s = str(item).strip()
+                    if s:
+                        out.append(s)
+            return out
+        if isinstance(value, dict):
+            out: list[str] = []
+            for k, v in value.items():
+                if isinstance(v, str):
+                    for line in v.splitlines():
+                        line = line.strip()
+                        if line:
+                            out.append(line)
+                elif isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, str) and item.strip():
+                            out.append(item.strip())
+            if out:
+                return out
+            return [json.dumps(value, ensure_ascii=False, separators=(",", ":"))]
+        s = str(value).strip()
+        return [s] if s else []
+
+    def _grep_collect_lines(self, payload: Any, field: Optional[str] = None) -> tuple[list[str], str]:
+        if field and isinstance(payload, dict):
+            return self._grep_value_lines(payload.get(field)), field
+        if isinstance(payload, dict):
+            preferred_fields = (
+                "sessions",
+                "bookmarks",
+                "macros",
+                "items",
+                "results",
+                "matches",
+                "functions",
+                "findings",
+                "usages",
+                "callers",
+                "callees",
+                "content",
+                "sections",
+                "names",
+                "strings",
+                "imports",
+                "code_refs",
+                "data_refs",
+            )
+            for key in preferred_fields:
+                if key in payload:
+                    lines = self._grep_value_lines(payload.get(key))
+                    if lines:
+                        return lines, key
+            return self._grep_value_lines(payload), "payload"
+        return self._grep_value_lines(payload), "payload"
+
+    def _handle_tool_grep_action(self, tool_name: str, args: dict) -> dict:
+        source_action, source_err = self._wrapper_source_action(tool_name, args, "grep")
+        if source_err:
+            return source_err
+
+        grep_pattern = (
+            args.get("grep")
+            or args.get("grep_pattern")
+            or args.get("pattern")
+            or args.get("query")
+        )
+        if not isinstance(grep_pattern, str) or not grep_pattern.strip():
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "grep pattern required",
+                hint="Set grep='...' (or grep_pattern/pattern/query) with action='grep'.",
+            )
+        grep_pattern = grep_pattern.strip()
+
+        grep_regex = _coerce_bool(args.get("grep_regex"), False)
+        grep_case_sensitive = _coerce_bool(args.get("grep_case_sensitive"), False)
+        grep_invert = _coerce_bool(args.get("grep_invert"), False)
+        grep_field = args.get("grep_field")
+        if grep_field is not None and not isinstance(grep_field, str):
+            return make_error(MCPError.INVALID_ARGS, "grep_field must be a string")
+        grep_limit = _bounded_int(args.get("grep_limit", 200), 200, min_value=1, max_value=5000)
+        grep_offset = _bounded_int(args.get("grep_offset", 0), 0, min_value=0, max_value=500000)
+
+        child_args = self._strip_wrapper_args(args)
+        child_args["action"] = source_action
+
+        source_payload = self._execute_tool(tool_name, child_args)
+        if isinstance(source_payload, dict) and source_payload.get("error"):
+            return source_payload
+
+        lines, used_field = self._grep_collect_lines(source_payload, grep_field)
+        if grep_regex:
+            flags = 0 if grep_case_sensitive else re.IGNORECASE
+            try:
+                rx = re.compile(grep_pattern, flags)
+            except re.error as e:
+                return make_error(MCPError.INVALID_ARGS, f"Invalid grep regex: {e}")
+            matched = [line for line in lines if bool(rx.search(line)) != grep_invert]
+        else:
+            needle = grep_pattern if grep_case_sensitive else grep_pattern.lower()
+            matched = []
+            for line in lines:
+                hay = line if grep_case_sensitive else line.lower()
+                found = needle in hay
+                if found != grep_invert:
+                    matched.append(line)
+
+        total = len(matched)
+        page = matched[grep_offset : grep_offset + grep_limit]
+        is_truncated = (grep_offset + len(page)) < total
+
+        return {
+            "ok": True,
+            "action": "grep",
+            "tool": tool_name,
+            "source_action": source_action,
+            "field": used_field,
+            "pattern": grep_pattern,
+            "matches": "\n".join(page),
+            "source_count": len(lines),
+            "count": len(page),
+            "total": total,
+            "offset": grep_offset,
+            "truncated": is_truncated,
+            "next_offset": (grep_offset + len(page)) if is_truncated else None,
+        }
+
+    def _handle_tool_pick_action(self, tool_name: str, args: dict) -> dict:
+        source_action, source_err = self._wrapper_source_action(tool_name, args, "pick")
+        if source_err:
+            return source_err
+        fields = _parse_str_list(args.get("pick_fields"))
+        if not fields:
+            fields = _parse_str_list(args.get("_response_fields"))
+        if not fields:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "action='pick' requires pick_fields",
+                hint=f"Example: {tool_name}(action='pick', source_action='list', pick_fields='functions,count').",
+            )
+        omit = set(_parse_str_list(args.get("pick_omit")))
+
+        child_args = self._strip_wrapper_args(args)
+        child_args["action"] = source_action
+        source_payload = self._execute_tool(tool_name, child_args)
+        if isinstance(source_payload, dict) and source_payload.get("error"):
+            return source_payload
+        if not isinstance(source_payload, dict):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "pick wrapper requires source payload object",
+                hint="Pick is top-level field projection; use grep/head/tail for line-oriented payloads.",
+            )
+
+        selected = {}
+        missing: List[str] = []
+        for key in fields:
+            if key in source_payload:
+                selected[key] = source_payload.get(key)
+            else:
+                missing.append(key)
+        for key in omit:
+            selected.pop(key, None)
+
+        out = {
+            "ok": True,
+            "action": "pick",
+            "tool": tool_name,
+            "source_action": source_action,
+            "picked": list(selected.keys()),
+            **selected,
+        }
+        if missing:
+            out["missing_fields"] = missing
+        return out
+
+    def _handle_tool_head_tail_action(self, tool_name: str, args: dict, *, tail: bool = False) -> dict:
+        wrapper_name = "tail" if tail else "head"
+        source_action, source_err = self._wrapper_source_action(tool_name, args, wrapper_name)
+        if source_err:
+            return source_err
+
+        default_n = 20
+        n_key = "tail_n" if tail else "head_n"
+        n = _bounded_int(args.get(n_key, default_n), default_n, min_value=1, max_value=5000)
+        field = args.get("grep_field") or args.get("field")
+        if field is not None and not isinstance(field, str):
+            return make_error(MCPError.INVALID_ARGS, "field must be a string")
+
+        child_args = self._strip_wrapper_args(args)
+        child_args["action"] = source_action
+        source_payload = self._execute_tool(tool_name, child_args)
+        if isinstance(source_payload, dict) and source_payload.get("error"):
+            return source_payload
+
+        items, used_field, item_kind = self._collect_wrapper_items(source_payload, field)
+        total = len(items)
+        if tail:
+            page = items[max(0, total - n):]
+            offset = max(0, total - len(page))
+        else:
+            page = items[:n]
+            offset = 0
+
+        lines = [self._lineify_item(item) for item in page]
+        lines = [line for line in lines if line]
+        is_truncated = len(page) < total
+        out = {
+            "ok": True,
+            "action": wrapper_name,
+            "tool": tool_name,
+            "source_action": source_action,
+            "field": used_field,
+            "matches": "\n".join(lines),
+            "count": len(page),
+            "total": total,
+            "offset": offset,
+            "truncated": is_truncated,
+            "next_offset": (offset + len(page)) if (not tail and is_truncated) else None,
+        }
+        if _coerce_bool(args.get("include_items"), False):
+            out["items"] = page if item_kind == "list" else lines
+        return out
+
+    def _handle_tool_next_action(self, tool_name: str, args: dict) -> dict:
+        token = args.get("next_token") or args.get("token") or args.get("cursor")
+        if not isinstance(token, str) or not token.strip():
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "action='next' requires next_token (or token/cursor)",
+                hint=f"Use the next_token returned by {tool_name} or wrapper actions with truncated=true.",
+            )
+        token = token.strip()
+        self._prune_next_cache()
+        entry = self._next_cache.get(token)
+        if not entry:
+            return make_error(
+                MCPError.TRUNCATION_TOKEN_INVALID,
+                f"next token '{token}' not found or expired",
+                hint="Re-run the original paginated call to get a fresh next_token.",
+            )
+        cached_tool = str(entry.get("tool") or "")
+        if cached_tool and cached_tool != tool_name:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"next token belongs to tool '{cached_tool}', not '{tool_name}'",
+            )
+
+        child_args = dict(entry.get("args") or {})
+        child_args["action"] = entry.get("action")
+        child_args["offset"] = entry.get("next_offset", child_args.get("offset", 0))
+
+        overrides = dict(args or {})
+        for key in ("action", "next_token", "token", "cursor"):
+            overrides.pop(key, None)
+        child_args.update(overrides)
+        result = self._execute_tool(tool_name, child_args)
+        if isinstance(result, dict):
+            result = dict(result)
+            result["continued_from"] = token
+        return result
+
+    def _handle_tool_stats_action(self, tool_name: str, args: dict) -> dict:
+        source_action, source_err = self._wrapper_source_action(tool_name, args, "stats")
+        if source_err:
+            return source_err
+        include_payload = _coerce_bool(args.get("stats_include_payload"), False)
+
+        child_args = self._strip_wrapper_args(args)
+        child_args["action"] = source_action
+        source_payload = self._execute_tool(tool_name, child_args)
+        if isinstance(source_payload, dict) and source_payload.get("error"):
+            return source_payload
+
+        try:
+            serialized = json.dumps(source_payload, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            serialized = str(source_payload)
+        items, used_field, item_kind = self._collect_wrapper_items(source_payload)
+        top_keys: List[str] = []
+        if isinstance(source_payload, dict):
+            top_keys = list(source_payload.keys())[:64]
+        stats = {
+            "type": type(source_payload).__name__,
+            "top_level_keys": top_keys,
+            "line_count": len([line for line in serialized.splitlines() if line.strip()]),
+            "char_count": len(serialized),
+            "item_count": len(items),
+            "item_field": used_field,
+            "item_kind": item_kind,
+            "has_error": bool(isinstance(source_payload, dict) and source_payload.get("error")),
+            "truncated": bool(isinstance(source_payload, dict) and source_payload.get("truncated")),
+        }
+        out = {
+            "ok": True,
+            "action": "stats",
+            "tool": tool_name,
+            "source_action": source_action,
+            "stats": stats,
+        }
+        if include_payload:
+            out["payload"] = source_payload
+        return out
+
     def _execute_tool(self, tool_name, args):
         original_tool_name = tool_name
         tool_name = TOOL_ALIASES.get(tool_name, tool_name)
@@ -3803,7 +5052,36 @@ class IDAMCPServer:
             args = {}
         if not isinstance(args, dict):
             return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
-        args = dict(args)
+        args = self._normalize_tool_call_args(tool_name, args)
+        action = args.get("action")
+        if isinstance(action, str):
+            action = action.strip()
+            args["action"] = action
+            native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
+            has_wrapper_source = any(
+                key in args for key in ("source_action", "target_action", "on", "subaction")
+            )
+            if action in WRAPPER_ACTIONS:
+                use_wrapper = action not in native_actions
+                if action in ("grep", "pick", "head", "tail", "stats"):
+                    use_wrapper = use_wrapper or has_wrapper_source
+                elif action == "next":
+                    use_wrapper = use_wrapper or any(
+                        key in args for key in ("next_token", "token", "cursor")
+                    )
+                if use_wrapper:
+                    if action == "grep":
+                        return self._handle_tool_grep_action(tool_name, args)
+                    if action == "pick":
+                        return self._handle_tool_pick_action(tool_name, args)
+                    if action == "head":
+                        return self._handle_tool_head_tail_action(tool_name, args, tail=False)
+                    if action == "tail":
+                        return self._handle_tool_head_tail_action(tool_name, args, tail=True)
+                    if action == "next":
+                        return self._handle_tool_next_action(tool_name, args)
+                    if action == "stats":
+                        return self._handle_tool_stats_action(tool_name, args)
         if tool_name == "wiki":
             return self._handle_wiki(args)
         if tool_name == "misc":
@@ -4373,6 +5651,125 @@ class IDAMCPServer:
                 if result is None:
                     return make_error(MCPError.SESSION_NOT_FOUND, "One or both sessions not found")
                 return {"ok": True, "session": result.to_dict()}
+            if action == "macro_set":
+                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                if not macro_name:
+                    return make_error(MCPError.INVALID_ARGS, "name required for macro_set")
+                macro_payload = args.get("data")
+                if macro_payload is None:
+                    macro_payload = args.get("macro_data")
+                if macro_payload is None:
+                    macro_payload = {
+                        k: v
+                        for k, v in args.items()
+                        if k
+                        not in (
+                            "action",
+                            "name",
+                            "macro",
+                            "data",
+                            "macro_data",
+                            "run_action",
+                        )
+                    }
+                if not isinstance(macro_payload, dict):
+                    return make_error(MCPError.INVALID_ARGS, "macro payload must be an object")
+                macro_key = macro_name.lower()
+                self._session_macros[macro_key] = {
+                    "name": macro_name,
+                    "data": macro_payload,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                }
+                self._save_session_macros()
+                return {
+                    "ok": True,
+                    "action": "macro_set",
+                    "name": macro_name,
+                    "data": macro_payload,
+                }
+            if action == "macro_get":
+                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                if not macro_name:
+                    return make_error(MCPError.INVALID_ARGS, "name required for macro_get")
+                entry = self._session_macros.get(macro_name.lower())
+                if not entry:
+                    return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
+                return {"ok": True, "action": "macro_get", **entry}
+            if action == "macro_list":
+                macros = sorted(
+                    [
+                        {
+                            "name": entry.get("name") or key,
+                            "updated_at": entry.get("updated_at"),
+                            "keys": sorted((entry.get("data") or {}).keys())[:32],
+                        }
+                        for key, entry in self._session_macros.items()
+                        if isinstance(entry, dict)
+                    ],
+                    key=lambda m: str(m.get("name", "")).lower(),
+                )
+                return {"ok": True, "action": "macro_list", "macros": macros, "count": len(macros)}
+            if action == "macro_delete":
+                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                if not macro_name:
+                    return make_error(MCPError.INVALID_ARGS, "name required for macro_delete")
+                removed = self._session_macros.pop(macro_name.lower(), None)
+                if removed is None:
+                    return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
+                self._save_session_macros()
+                return {"ok": True, "action": "macro_delete", "name": macro_name}
+            if action == "macro_run":
+                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                if not macro_name:
+                    return make_error(MCPError.INVALID_ARGS, "name required for macro_run")
+                entry = self._session_macros.get(macro_name.lower())
+                if not entry:
+                    return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
+                base_args = dict(entry.get("data") or {})
+                run_action = args.get("run_action") or base_args.get("action") or "create"
+                if not isinstance(run_action, str) or not run_action.strip():
+                    return make_error(MCPError.INVALID_ARGS, "invalid run_action for macro_run")
+                run_action = run_action.strip()
+                if run_action.startswith("macro_"):
+                    return make_error(MCPError.INVALID_ARGS, "macro_run cannot execute macro_* actions")
+                if run_action not in TOOL_ACTIONS["session"]:
+                    return make_error(
+                        MCPError.ACTION_NOT_FOUND,
+                        f"Unsupported run_action '{run_action}' for macro_run",
+                        hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
+                    )
+                run_args = dict(base_args)
+                for k, v in args.items():
+                    if k in ("action", "name", "macro", "run_action"):
+                        continue
+                    run_args[k] = v
+                run_args["action"] = run_action
+                run_result = self._execute_tool("session", run_args)
+                if isinstance(run_result, dict) and not run_result.get("error"):
+                    run_result = dict(run_result)
+                    run_result["macro"] = macro_name
+                    run_result["run_action"] = run_action
+                return run_result
+            if action == "recent_workset":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "session_id required (or have an active session)",
+                    )
+                if not self.session_mgr.session_exists(sid):
+                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                n = _bounded_int(args.get("n", 20), 20, min_value=1, max_value=200)
+                include_bookmarks = _coerce_bool(args.get("include_bookmarks"), True)
+                include_items = _coerce_bool(args.get("include_items"), False)
+                return self._build_recent_workset(
+                    sid,
+                    n=n,
+                    include_bookmarks=include_bookmarks,
+                    include_items=include_items,
+                )
             return make_error(
                 MCPError.ACTION_NOT_FOUND, f"Unsupported session action: '{action}'",
                 hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
@@ -4489,6 +5886,9 @@ class IDAMCPServer:
             else:
                 cleaned_args, _ = self._extract_response_options(call_args)
                 res = self._execute_tool(name, cleaned_args)
+                if isinstance(cleaned_args, dict):
+                    res = self._cache_next_page(resolved_name or name, cleaned_args, res)
+                    self._record_activity(resolved_name or name, cleaned_args, res)
             results.append({"index": idx, "name": name, "result": res})
             if res.get("error") and not continue_on_error:
                 break
@@ -4509,15 +5909,30 @@ class IDAMCPServer:
         if rid is None:
             return None
         if m == "tools/list":
+            mode = self.default_tools_list_mode
+            if self.monolithic_tool_descriptions:
+                mode = "full"
             tools = [
                 {
                     "name": t,
-                    "description": TOOL_DESCRIPTIONS.get(t, ""),
-                    "inputSchema": build_input_schema(t),
+                    "description": (
+                        TOOL_DESCRIPTIONS.get(t, "")
+                        if mode == "full"
+                        else build_tool_description_lean(t)
+                    ),
+                    "inputSchema": (
+                        build_input_schema(t)
+                        if mode == "full"
+                        else (
+                            build_input_schema_lean(t)
+                            if mode == "lean"
+                            else build_input_schema_ultra(t)
+                        )
+                    ),
                 }
                 for t in TOOLS
             ]
-            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools}}
+            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools, "mode": mode}}
         if m == "tools/call":
             tn, args = p.get("name"), p.get("arguments", {})
             if isinstance(args, dict):
@@ -4532,6 +5947,10 @@ class IDAMCPServer:
                     res = self._handle_batch(call_args)
             else:
                 res = self._execute_tool(tn, call_args)
+                if isinstance(call_args, dict):
+                    resolved_tn = TOOL_ALIASES.get(tn, tn) if isinstance(tn, str) else tn
+                    res = self._cache_next_page(resolved_tn or "", call_args, res)
+                    self._record_activity(resolved_tn or "", call_args, res)
             res = self._prepare_response_payload(res, response_opts)
             is_error = bool(isinstance(res, dict) and res.get("error"))
             return {

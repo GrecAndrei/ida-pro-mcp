@@ -67,8 +67,9 @@ Installer behavior:
 2. Creates `.venv` and installs dependencies.
 3. Auto-detects IDA install path (`IDADIR`/`IDA_MCP_IDAT` fallback logic included).
 4. Configures supported MCP clients.
-5. Installs generated Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`).
+5. Installs Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`) with `router` mode by default (single skill, minimal context).
 6. Sets wiki path automatically when available.
+7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=0` in client config for lean `tools/list` metadata by default.
 
 Default install directory:
 
@@ -109,11 +110,17 @@ Legacy/superseded notes were moved to `docs/legacy/` to keep repo root clean.
 
 ## Skillized Tool Catalog
 
-To reduce prompt/context churn from large tool metadata blocks, this repo now includes generated per-tool Codex skills:
+To reduce prompt/context churn from large tool metadata blocks, this repo uses a router-plus-docs layout:
 
 - Root: `.agents/skills/`
-- One skill per tool: `.agents/skills/ida-tool-<tool>/SKILL.md`
-- Router skill: `.agents/skills/ida-tool-router/SKILL.md`
+- Router skill (only skill by default): `.agents/skills/ida-tool-router/SKILL.md`
+- Per-tool docs (not skills, loaded on demand): `.agents/tool-docs/ida-tool-<tool>.md`
+
+Installer skill modes:
+
+- `router` (default): install only `ida-tool-router` (best for context efficiency)
+- `full`: install every skill directory under `.agents/skills`
+- `none`: skip Codex skill installation
 
 Regenerate after tool metadata changes:
 
@@ -435,10 +442,20 @@ Per-call response controls supported by host:
 - `_response_table`: optional table compaction for repeated object rows
 - `_response_batch_compact`: compact `batch` envelopes
 - `_error_details`: `none|basic|full`
+- `_qol_mode`: `tiny|balanced|debug` preset profile
+
+Global action wrappers (all action-based tools):
+- `action="grep"`: run `source_action`, then grep line output.
+- `action="pick"`: run `source_action`, then keep top-level fields from `pick_fields`.
+- `action="head"` / `action="tail"`: run `source_action`, then keep first/last N rows.
+- `action="stats"`: run `source_action`, return payload statistics.
+- `action="next"`: continue paginated output using `next_token` (also accepts `token`/`cursor`).
 
 Environment defaults:
 
 - `IDA_MCP_RESPONSE_MODE`
+- `IDA_MCP_QOL_MODE` (`balanced` default)
+- `IDA_MCP_TOOLS_LIST_MODE` (`ultra` default)
 - `IDA_MCP_ERROR_DETAIL_LEVEL`
 - `IDA_MCP_BATCH_COMPACT`
 - `IDA_MCP_TABLE_COMPACT`
@@ -446,6 +463,24 @@ Environment defaults:
 - `IDA_MCP_COMPACT_MAX_STRING`
 - `IDA_MCP_COMPACT_CHAR_BUDGET`
 - `IDA_MCP_TRUNCATE_TOKENS`
+- `IDA_MCP_WIKI_DEFAULT_LIMIT`
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`0` default lean, `1` full verbose tool metadata)
+
+Installer defaults now bias for low-context operation:
+- `IDA_MCP_RESPONSE_MODE=compact`
+- `IDA_MCP_QOL_MODE=balanced`
+- `IDA_MCP_TOOLS_LIST_MODE=ultra`
+- `IDA_MCP_BATCH_COMPACT=1`
+- `IDA_MCP_COMPACT_MAX_ITEMS=48`
+- `IDA_MCP_COMPACT_MAX_STRING=1400`
+- `IDA_MCP_COMPACT_CHAR_BUDGET=30000`
+- `IDA_MCP_TRUNCATE_TOKENS=2000`
+- `IDA_MCP_WIKI_DEFAULT_LIMIT=140`
+
+Session QoL additions:
+- Session macros: `macro_set`, `macro_get`, `macro_list`, `macro_delete`, `macro_run`.
+- Resume context quickly with `session(action="recent_workset")`.
+- Tool-call activity is captured in-memory and merged with session bookmarks for workset output.
 
 ## Troubleshooting
 

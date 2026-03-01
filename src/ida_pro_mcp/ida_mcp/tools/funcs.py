@@ -9,6 +9,47 @@ except ImportError:
 # 10. FUNCS - Function management
 # ============================================================================
 
+
+def _clip_text(value: Any, max_len: int = 240) -> str:
+    text = "" if value is None else str(value)
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _iter_overlapping_functions(start_ea: int, end_ea: int):
+    """Yield functions whose ranges overlap [start_ea, end_ea)."""
+    for fn_start in idautils.Functions():
+        fn = ida_funcs.get_func(fn_start)
+        if not fn:
+            continue
+        if fn.end_ea <= start_ea or fn.start_ea >= end_ea:
+            continue
+        yield fn
+
+
+def _collect_callers(func_start_ea: int) -> list[int]:
+    callers = set()
+    for xref_ea in idautils.CodeRefsTo(func_start_ea, 0):
+        caller = ida_funcs.get_func(xref_ea)
+        if caller and caller.start_ea != func_start_ea:
+            callers.add(caller.start_ea)
+    return sorted(callers)
+
+
+def _collect_callees(func_start_ea: int) -> list[int]:
+    fn = ida_funcs.get_func(func_start_ea)
+    if not fn:
+        return []
+    callees = set()
+    for item_ea in idautils.FuncItems(fn.start_ea):
+        for ref in idautils.CodeRefsFrom(item_ea, 0):
+            target = ida_funcs.get_func(ref)
+            if target and target.start_ea != fn.start_ea:
+                callees.add(target.start_ea)
+    return sorted(callees)
+
+
 @tool
 @idawrite
 def funcs(
@@ -27,6 +68,8 @@ def funcs(
     named_only: Annotated[bool, "Only return named functions (list action)"] = False,
     include_prototype: Annotated[bool, "Include function prototype (info/list)"] = False,
     include_stack: Annotated[bool, "Include stack frame variables (info)"] = False,
+    include_items: Annotated[bool, "Include structured `items` list in list output (default: false for context efficiency)"] = False,
+    include_xrefs: Annotated[bool, "Include caller/callee samples in info output"] = False,
     **kwargs
 ) -> dict:
     """
@@ -64,11 +107,21 @@ def funcs(
                     MCPError.INVALID_ARGS,
                     f"end address {hex(end_ea)} must be greater than start address {hex(ea)}",
                 )
+            if name is not None and not str(name).strip():
+                return make_error(MCPError.INVALID_ARGS, "name cannot be empty")
+
             existing = ida_funcs.get_func(ea)
             if existing and existing.start_ea == ea:
                 if name:
-                    idc.set_name(ea, name, ida_name.SN_FORCE)
-                return {"ok": True, "addr": hex(ea), "name": name or ida_funcs.get_func_name(ea), "note": "Function already exists at this address"}
+                    if not idc.set_name(ea, name, ida_name.SN_FORCE):
+                        return make_error(MCPError.IDA_ERROR, f"Function exists at {hex(ea)} but failed to rename to '{name}'")
+                return {
+                    "ok": True,
+                    "addr": hex(ea),
+                    "end": hex(existing.end_ea),
+                    "name": ida_funcs.get_func_name(ea),
+                    "note": "Function already exists at this address",
+                }
             if existing:
                 # Address is inside an existing function but not at its start
                 if force:
@@ -83,6 +136,29 @@ def funcs(
                         f"Address {hex(ea)} is inside function {ida_funcs.get_func_name(existing.start_ea)} ({hex(existing.start_ea)}-{hex(existing.end_ea)})",
                         "Delete the existing function first with funcs(action='delete', addr='" + hex(ea) + "') which will delete the containing function, then create the new one",
                     )
+
+            removed_overlaps = []
+            if end_ea is not None and force:
+                # Delete overlapping functions before undefining data/code range.
+                for overlap in _iter_overlapping_functions(ea, end_ea):
+                    if overlap.start_ea == ea and overlap.end_ea == end_ea:
+                        continue
+                    ov_name = ida_funcs.get_func_name(overlap.start_ea)
+                    if ida_funcs.del_func(overlap.start_ea):
+                        removed_overlaps.append(
+                            {
+                                "addr": hex(overlap.start_ea),
+                                "end": hex(overlap.end_ea),
+                                "name": ov_name,
+                            }
+                        )
+                    else:
+                        return make_error(
+                            MCPError.IDA_ERROR,
+                            f"Failed to delete overlapping function at {hex(overlap.start_ea)}",
+                        )
+                ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
+
             # Ensure code exists at the start address - auto-convert if possible
             byte_flags = ida_bytes.get_flags(ea)
             if not ida_bytes.is_code(byte_flags):
@@ -98,12 +174,14 @@ def funcs(
                             f"Address {hex(ea)} cannot be converted to code",
                             "The bytes at this address may not form valid instructions. Try data_ops(action='make_code', addr=...) first.",
                         )
-            if end_ea and force:
-                ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
+
             if ida_funcs.add_func(ea, end_ea or idaapi.BADADDR):
-                if name:
-                    idc.set_name(ea, name, ida_name.SN_FORCE)
                 fn = ida_funcs.get_func(ea)
+                if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
+                    return make_error(
+                        MCPError.IDA_ERROR,
+                        f"Function created at {hex(ea)} but failed to set name '{name}'",
+                    )
                 if fn and flags:
                     fn.flags |= flags
                     ida_funcs.update_func(fn)
@@ -112,9 +190,16 @@ def funcs(
                     ida_auto.auto_wait()
                 except (ImportError, AttributeError):
                     pass
-                # Get the created function's actual boundaries
-                actual_end = hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None)
-                return {"ok": True, "addr": hex(ea), "end": actual_end, "name": name or (ida_funcs.get_func_name(ea) if fn else None)}
+                fn = ida_funcs.get_func(ea)
+                result = {
+                    "ok": True,
+                    "addr": hex(ea),
+                    "end": hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None),
+                    "name": ida_funcs.get_func_name(ea) if fn else name,
+                }
+                if removed_overlaps:
+                    result["removed_overlaps"] = removed_overlaps
+                return result
             if end_ea and hasattr(idaapi, "auto_mark_range"):
                 try:
                     idaapi.auto_mark_range(ea, end_ea, idaapi.AU_FINAL)
@@ -123,11 +208,24 @@ def funcs(
                     pass
                 if ida_funcs.add_func(ea, end_ea):
                     fn = ida_funcs.get_func(ea)
+                    if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
+                        return make_error(
+                            MCPError.IDA_ERROR,
+                            f"Function created at {hex(ea)} but failed to set name '{name}'",
+                        )
                     if fn and flags:
                         fn.flags |= flags
                         ida_funcs.update_func(fn)
-                    actual_end = hex(fn.end_ea) if fn else hex(end_ea)
-                    return {"ok": True, "addr": hex(ea), "end": actual_end, "name": name or (ida_funcs.get_func_name(ea) if fn else None), "note": "Function created after auto-analysis retry"}
+                    result = {
+                        "ok": True,
+                        "addr": hex(ea),
+                        "end": hex(fn.end_ea) if fn else hex(end_ea),
+                        "name": ida_funcs.get_func_name(ea) if fn else name,
+                        "note": "Function created after auto-analysis retry",
+                    }
+                    if removed_overlaps:
+                        result["removed_overlaps"] = removed_overlaps
+                    return result
             return make_error(MCPError.IDA_ERROR, f"Failed to create function at {hex(ea)}", "Ensure code exists at the address and there are no overlapping functions. Try specifying an explicit end address.")
 
         elif action == "delete":
@@ -152,8 +250,15 @@ def funcs(
             func = ida_funcs.get_func(ea)
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            old_flags = func.flags
             func.flags = flags
-            if ida_funcs.update_func(func): return {"ok": True, "addr": hex(func.start_ea), "flags": hex(flags)}
+            if ida_funcs.update_func(func):
+                return {
+                    "ok": True,
+                    "addr": hex(func.start_ea),
+                    "old_flags": hex(old_flags),
+                    "flags": hex(flags),
+                }
             return make_error(MCPError.IDA_ERROR, "Failed to update flags")
 
         elif action == "set_name":
@@ -162,7 +267,9 @@ def funcs(
             if not name: return make_error(MCPError.INVALID_ARGS, "name required")
             # Find the function containing this address
             func = ida_funcs.get_func(ea)
-            target_ea = func.start_ea if func else ea
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
+            target_ea = func.start_ea
             if idc.set_name(target_ea, name, ida_name.SN_FORCE):
                 result = {"ok": True, "addr": hex(target_ea), "name": name}
                 if func and target_ea != ea:
@@ -176,16 +283,27 @@ def funcs(
             if comment is None: return make_error(MCPError.INVALID_ARGS, "comment required")
             # Find function start for the comment
             func = ida_funcs.get_func(ea)
-            target_ea = func.start_ea if func else ea
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
+            target_ea = func.start_ea
             idc.set_func_cmt(target_ea, comment, 1 if repeatable else 0)
             return {"ok": True, "addr": hex(target_ea), "comment": comment, "repeatable": repeatable}
 
         elif action == "list":
+            if offset < 0:
+                return make_error(MCPError.INVALID_ARGS, "offset must be >= 0")
+            if count < 0:
+                return make_error(MCPError.INVALID_ARGS, "count must be >= 0 (or 0 for all)")
+
             func_lines = []
+            items = [] if include_items else None
             total = 0
             # Use smart pattern matching for queries
             if query:
-                matcher = compile_smart_pattern(query, case_sensitive=False)
+                try:
+                    matcher = compile_smart_pattern(query, case_sensitive=False)
+                except Exception as e:
+                    return make_error(MCPError.INVALID_ARGS, f"Invalid query pattern: {e}")
             else:
                 matcher = None
 
@@ -203,14 +321,42 @@ def funcs(
                     continue
 
                 fn = idaapi.get_func(ea)
+                if not fn:
+                    continue
                 size = hex_size(fn.end_ea - fn.start_ea)
+                item = None
+                if include_items:
+                    item = {
+                        "addr": hex_ea(ea),
+                        "end": hex_ea(fn.end_ea),
+                        "size": size,
+                        "name": fname,
+                    }
                 if include_prototype:
                     proto = get_prototype(fn)
-                    func_lines.append(f"{hex_ea(ea)}  {size}  {fname}  {proto}")
+                    proto_text = _clip_text(proto, 280)
+                    if item is not None:
+                        item["prototype"] = proto_text
+                    func_lines.append(f"{hex_ea(ea)}  {size}  {fname}  {proto_text}")
                 else:
                     func_lines.append(f"{hex_ea(ea)}  {size}  {fname}")
+                if item is not None:
+                    items.append(item)
 
-            return {"ok": True, "functions": "\n".join(func_lines), "total": total, "offset": offset, "count": len(func_lines)}
+            returned = len(func_lines)
+            has_more = (count != 0) and ((offset + returned) < total)
+            result = {
+                "ok": True,
+                "functions": "\n".join(func_lines),
+                "total": total,
+                "offset": offset,
+                "count": returned,
+                "requested_count": count,
+                "has_more": has_more,
+            }
+            if include_items:
+                result["items"] = items
+            return result
 
         elif action == "info":
             ea, err = validate_addr(addr)
@@ -230,7 +376,21 @@ def funcs(
                 "size": hex(fn.end_ea - fn.start_ea),
                 "name": fname,
                 "flags": hex(fn.flags),
+                "chunk_count": len(list(idautils.Chunks(fn.start_ea))),
             }
+            cmt = idc.get_func_cmt(fn.start_ea, 0)
+            rcmt = idc.get_func_cmt(fn.start_ea, 1)
+            if cmt:
+                info["comment"] = cmt
+            if rcmt:
+                info["repeatable_comment"] = rcmt
+            callers = _collect_callers(fn.start_ea)
+            callees = _collect_callees(fn.start_ea)
+            info["caller_count"] = len(callers)
+            info["callee_count"] = len(callees)
+            if include_xrefs:
+                info["callers_sample"] = [hex_ea(x) for x in callers[:16]]
+                info["callees_sample"] = [hex_ea(x) for x in callees[:16]]
             if include_prototype:
                 info["prototype"] = get_prototype(fn)
             if include_stack:

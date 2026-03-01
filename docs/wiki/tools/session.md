@@ -22,6 +22,8 @@ Manages host-side multi-session lifecycle (create/reuse/switch/rebuild/delete), 
 - `recent`, `oldest`
 - `snapshot`, `restore_snapshot`
 - `merge`
+- `macro_set`, `macro_get`, `macro_list`, `macro_delete`, `macro_run`
+- `recent_workset` (activity + bookmarks quick resume context)
 
 Host-side companion tools in the same stdio server:
 - `bookmarks` actions: `add`, `list`, `delete`, `update`, `clear`, `find`, `export` (requires an active session).
@@ -34,6 +36,10 @@ Host-side companion tools in the same stdio server:
 - `analysis_options` and related create/rebuild keys (`processor`, `loader`, `bitness`, `endian`, etc.).
 - `ida_args`: String or array of strings passed to IDA runtime.
 - `session_id`: Required by many session-targeted actions.
+- `name`/`macro`: Macro identifier for `macro_*` actions.
+- `data`/`macro_data`: Macro payload object (usually saved session arguments).
+- `run_action`: Override action used by `macro_run` (defaults to macro payload action or `create`).
+- `include_bookmarks`, `include_items`: `recent_workset` output shaping.
 - `query`, `limit`, `offset`: Filters/pagination for listing/search.
 - `bookmarks` common args: `addr`, `id`, `name`, `notes`, `category`, `priority`, `tags`, `query`.
 - `truncation` args: `token` (required), plus optional `field`, `offset`, `count`.
@@ -49,6 +55,18 @@ Host-side companion tools in the same stdio server:
 
 ```json
 {"name":"session","arguments":{"action":"switch","session_id":"A1B2C3D4"}}
+```
+
+```json
+{"name":"session","arguments":{"action":"macro_set","name":"quick_linux","data":{"action":"create","binary_path":"/samples/a.out","processor":"metapc","bitness":64}}}
+```
+
+```json
+{"name":"session","arguments":{"action":"macro_run","name":"quick_linux","binary_path":"/samples/b.out"}}
+```
+
+```json
+{"name":"session","arguments":{"action":"recent_workset","n":25,"include_bookmarks":true}}
 ```
 
 ```json
