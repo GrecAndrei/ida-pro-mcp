@@ -229,6 +229,73 @@ def _safe_remove_path(path: Path):
         shutil.rmtree(path)
 
 
+def _same_link_target(dst: Path, src: Path) -> bool:
+    """Return True if dst is a symlink that resolves to src."""
+    if not dst.is_symlink():
+        return False
+    try:
+        return dst.resolve() == src.resolve()
+    except Exception:
+        return False
+
+
+def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
+    """
+    Ensure dst points to src.
+    Returns one of: linked, copied, reused
+    """
+    if _same_link_target(dst, src):
+        return "reused"
+
+    if dst.exists() or dst.is_symlink():
+        _safe_remove_path(dst)
+
+    try:
+        os.symlink(src, dst, target_is_directory=True)
+        return "linked"
+    except OSError:
+        # Handle races / stale entries where dst appeared after removal.
+        if dst.exists() or dst.is_symlink():
+            _safe_remove_path(dst)
+        shutil.copytree(src, dst)
+        return "copied"
+
+
+def _is_generated_skill_dir(path: Path) -> bool:
+    """True if directory contains a generated SKILL.md from this repo's generator."""
+    skill_file = path / "SKILL.md"
+    if not skill_file.exists():
+        return False
+    try:
+        text = skill_file.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    return "GENERATED: scripts/generate_tool_skills.py" in text
+
+
+def _prune_generated_skills(codex_skills_dir: Path, keep_names: set[str]) -> int:
+    """Remove generated ida-tool-* skills not in keep_names."""
+    removed = 0
+    if not codex_skills_dir.exists():
+        return removed
+
+    for child in codex_skills_dir.iterdir():
+        if not child.name.startswith("ida-tool-"):
+            continue
+        if child.name in keep_names:
+            continue
+        if not child.is_dir():
+            continue
+        if not _is_generated_skill_dir(child):
+            continue
+        try:
+            _safe_remove_path(child)
+            removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 def _ensure_generated_skills(install_path: Path):
     """
     Ensure `.agents/skills` exists.
@@ -247,7 +314,7 @@ def _ensure_generated_skills(install_path: Path):
     return skills_root if skills_root.exists() else None
 
 
-def install_codex_skills(install_path: Path):
+def install_codex_skills(install_path: Path, skills_mode: str = "router"):
     """
     Install generated per-tool Codex skills into CODEX_HOME/skills.
     Returns dict: {ok, linked, copied, total, path, reason?}
@@ -267,28 +334,60 @@ def install_codex_skills(install_path: Path):
         if not source_skill_dirs:
             return {"ok": False, "reason": "no skill directories with SKILL.md found"}
 
+        if skills_mode == "router":
+            source_skill_dirs = [p for p in source_skill_dirs if p.name == "ida-tool-router"]
+            if not source_skill_dirs:
+                return {"ok": False, "reason": "router skill not found"}
+        elif skills_mode == "full":
+            pass
+        elif skills_mode == "none":
+            return {
+                "ok": True,
+                "linked": 0,
+                "copied": 0,
+                "reused": 0,
+                "removed": 0,
+                "total": 0,
+                "path": str(codex_skills_dir),
+                "mode": "none",
+            }
+        else:
+            return {"ok": False, "reason": f"invalid skills mode: {skills_mode}"}
+
+        keep_names = {p.name for p in source_skill_dirs}
+        removed = _prune_generated_skills(codex_skills_dir, keep_names)
+
         linked = 0
         copied = 0
+        reused = 0
         for src in source_skill_dirs:
             dst = codex_skills_dir / src.name
             try:
-                _safe_remove_path(dst)
-            except Exception:
-                pass
+                result = _replace_with_symlink_or_copy(src, dst)
+            except PermissionError:
+                # If a correct symlink already exists but cannot be replaced
+                # (e.g., restricted environment), treat it as reusable.
+                if _same_link_target(dst, src):
+                    result = "reused"
+                else:
+                    raise
 
-            try:
-                os.symlink(src, dst, target_is_directory=True)
+            if result == "linked":
                 linked += 1
-            except OSError:
-                shutil.copytree(src, dst)
+            elif result == "copied":
                 copied += 1
+            elif result == "reused":
+                reused += 1
 
         return {
             "ok": True,
             "linked": linked,
             "copied": copied,
+            "reused": reused,
+            "removed": removed,
             "total": len(source_skill_dirs),
             "path": str(codex_skills_dir),
+            "mode": skills_mode,
         }
     except Exception as e:
         return {"ok": False, "reason": str(e)}
@@ -401,6 +500,19 @@ def get_mcp_server_config(install_path: Path):
     wiki_dir = install_path / "docs" / "wiki"
     if wiki_dir.exists():
         env["IDA_MCP_WIKI_DIR"] = str(wiki_dir)
+    # Keep tool metadata lean by default; full monolithic schemas/descriptions
+    # can be re-enabled by setting this to "1".
+    env["IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS"] = "0"
+    # Aggressive context defaults for LLM clients (can be overridden per-call/env).
+    env["IDA_MCP_RESPONSE_MODE"] = "compact"
+    env["IDA_MCP_QOL_MODE"] = "balanced"
+    env["IDA_MCP_TOOLS_LIST_MODE"] = "ultra"
+    env["IDA_MCP_BATCH_COMPACT"] = "1"
+    env["IDA_MCP_COMPACT_MAX_ITEMS"] = "48"
+    env["IDA_MCP_COMPACT_MAX_STRING"] = "1400"
+    env["IDA_MCP_COMPACT_CHAR_BUDGET"] = "30000"
+    env["IDA_MCP_TRUNCATE_TOKENS"] = "2000"
+    env["IDA_MCP_WIKI_DEFAULT_LIMIT"] = "140"
 
     return {
         "command": str(python_exe),
@@ -758,7 +870,7 @@ def configure_client(client_name: str, config_path: Path) -> bool:
 # Install
 # ============================================================================
 
-def do_install():
+def do_install(skills_mode: str = "router"):
     clear()
     print(LOGO)
     print(f"   {C.DIM}Version 3.1  |  Professional Migration Edition{C.RESET}\n")
@@ -834,12 +946,14 @@ def do_install():
 
     # Step 5: Install Codex Skills
     step(5, total_steps, "Installing Codex skills...")
-    codex_skills_result = install_codex_skills(install_path)
+    codex_skills_result = install_codex_skills(install_path, skills_mode=skills_mode)
     if codex_skills_result.get("ok"):
         success(
             f"Codex skills: {codex_skills_result.get('total', 0)} "
-            f"(linked={codex_skills_result.get('linked', 0)}, copied={codex_skills_result.get('copied', 0)})"
+            f"(linked={codex_skills_result.get('linked', 0)}, copied={codex_skills_result.get('copied', 0)}, "
+            f"reused={codex_skills_result.get('reused', 0)}, removed={codex_skills_result.get('removed', 0)})"
         )
+        dim(f"Mode: {codex_skills_result.get('mode', skills_mode)}")
         dim(f"Installed to: {codex_skills_result.get('path')}")
     else:
         warning(f"Codex skills install skipped: {codex_skills_result.get('reason', 'unknown error')}")
@@ -904,7 +1018,7 @@ def do_install():
    {C.WHITE}Deployed Components:{C.RESET}
       - {C.CYAN}MCP Server{C.RESET} (headless host for IDEs)
       - {C.CYAN}IDA Plugin{C.RESET} {'(installed)' if plugin_installed else '(not installed - IDA not found)'}
-      - {C.CYAN}Codex Skills{C.RESET} {'(installed)' if codex_skills_result.get('ok') else '(not installed)'}
+      - {C.CYAN}Codex Skills{C.RESET} {'(installed)' if codex_skills_result.get('ok') else '(not installed)'} [{codex_skills_result.get('mode', skills_mode)}]
 
    {C.WHITE}Configured MCP Clients:{C.RESET}
 """)
@@ -930,13 +1044,22 @@ def do_install():
 def main():
     parser = argparse.ArgumentParser(description="IDA Pro MCP Installer")
     parser.add_argument('--uninstall', '-u', action='store_true', help='Uninstall IDA Pro MCP')
+    parser.add_argument(
+        '--skills-mode',
+        choices=['router', 'full', 'none'],
+        default='router',
+        help='Codex skill install mode (default: router). '
+             '"router" installs only ida-tool-router to reduce context overhead; '
+             '"full" installs every skill directory found under .agents/skills; '
+             '"none" skips skill installation.',
+    )
     args = parser.parse_args()
     
     try:
         if args.uninstall:
             print("Uninstall not fully implemented in this version. Please verify config files manually.")
         else:
-            do_install()
+            do_install(skills_mode=args.skills_mode)
     except KeyboardInterrupt:
         print("\nCancelled.")
         sys.exit(1)

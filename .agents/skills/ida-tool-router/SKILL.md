@@ -1,78 +1,26 @@
+---
+name: "ida-tool-router"
+description: "Use to select the correct per-tool IDA MCP tool doc and avoid loading all tool docs at once."
+metadata:
+  short-description: "Route to one tool skill"
+---
+
 # IDA MCP Tool Router Skill
 <!-- GENERATED: scripts/generate_tool_skills.py -->
 
 ## Purpose
-Route to the specific per-tool skill instead of loading all tool docs.
+Load only one tool doc at a time to keep context small.
 
 ## How To Use
 - Identify the intended tool name from the user request.
-- Open only `.agents/skills/ida-tool-<tool>/SKILL.md` for that tool.
-- Avoid opening unrelated tool skills to keep context small.
+- Open only `.agents/tool-docs/ida-tool-<tool>.md` for that tool.
+- Avoid opening unrelated tool docs to keep context small.
 
-## Tool Index
-- `session`: Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports proces... | actions: discover, create, get, list, switch, close, status, rebuild, ...
-- `truncation`: Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field). | actions: continue
-- `bookmarks`: Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substri... | actions: add, list, delete, update, clear, find, export
-- `batch`: Run multiple tool calls in a single request. Arguments: calls[], continue_on_error. | actions: run
-- `analysis`: Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_arch... | actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze
-- `query`: Unified read-only query hub. Actions: data, search, idb, code, types, imports_deep, symbols, patterns. | actions: data, search, idb, code, types, imports_deep, symbols, patterns
-- `edit`: Unified write/edit hub. Quick actions: rename, comment, type, patch, create_func, bulk. | actions: rename, comment, type, patch, create_func, bulk
-- `idb`: Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview. | actions: meta, summary, segments, entrypoints, bookmarks, overview
-- `code`: Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, calle... | actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, ...
-- `data`: Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exp... | actions: functions, globals, strings, imports, exports, lookup, bulk_query
-- `search`: Pattern and reference search. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_... | actions: bytes, string, immediate, name, insns, text, operand, comment, ...
-- `types`: Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_st... | actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, ...
-- `memory`: Direct database memory access. Actions: read, write, hexdump. | actions: read, write, hexdump
-- `modify`: Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set... | actions: rename, comment, set_type, patch_asm
-- `funcs`: Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force de... | actions: create, delete, set_flags, set_name, rename, add_comment, list, info
-- `segments`: Segment management. Actions: list, add, delete, set_attr, set_perms, move, info. | actions: list, add, delete, set_attr, set_perms, move, info
-- `bulk`: Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_a... | actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations
-- `misc`: Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health. Use p... | actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, ...
-- `calc`: Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align. | actions: eval, offset, convert, resolve, deref, chain, align
-- `nav`: Navigation and triage. Actions: goto, cursor, interesting. | actions: goto, cursor, interesting
-- `debug`: Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, break... | actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, ...
-- `trace`: Execution tracing. Actions: get, clear, set_options. | actions: get, clear, set_options
-- `coverage`: Code coverage import and analysis. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter. | actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter
-- `trace_analysis`: Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit. | actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit
-- `project`: Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, ex... | actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, ...
-- `agent`: High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_str... | actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, ...
-- `microcode`: Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions. | actions: get, blocks, instructions
-- `graph`: Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph. | actions: callgraph, cfg, xref_graph
-- `ctree`: Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logi... | actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow
-- `taint`: Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_t... | actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice
-- `emulate`: Static tracing and emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr. | actions: static_trace, appcall, decrypt_strings, eval_expr
-- `entropy`: Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary. | actions: section, region, packed_detect, crypto_detect, compare, window, summary
-- `structs`: Structure recovery and reconstruction. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_... | actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable
-- `imports_deep`: Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve. | actions: thunks, delay, forwarded, ordinal, api_sets, resolve
-- `patterns`: Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, create_sig. | actions: generate, match, list_sigs, apply_sig, create_sig, matched
-- `symbols`: PDB/DWARF symbol management. Actions: load_pdb, load_dwarf, status, apply, export. | actions: load_pdb, load_dwarf, status, apply, export
-- `diff`: Binary differential analysis. Actions: functions, bytes, signatures, summary, export_binexport. | actions: functions, bytes, signatures, summary, export_binexport
-- `lumina`: Lumina server interaction. Actions: pull, push, status, history, search. | actions: pull, push, status, history, search, get_metadata
-- `export`: Database export. Actions: listing, html, idc, json, binexport, headers. | actions: listing, html, idc, json, binexport, headers
-- `history`: Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff. | actions: undo, redo, list, snapshot, restore, diff
-- `comments_ai`: AI-optimized comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary. | actions: get_context, set_structured, bulk_set, export_md, import_md, summary
-- `colorize`: Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern. | actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern
-- `data_ops`: Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code. | actions: make_data, make_array, make_string, undefine, make_code
-- `fixups`: Relocation/fixup management. Actions: list, get, add, delete. | actions: list, get, add, delete
-- `hooks`: Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks. | actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks
-- `wiki`: Built-in documentation system with ranked search, fuzzy topic resolution, section navigation, related-topic discovery... | actions: list_topics, read, search, sections, index
-- `yara_hunt`: YARA pattern matching. Actions: scan, compile, list_rules. | actions: scan, compile, list_rules
-- `vuln_scan`: Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_i... | actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, ...
-- `gadgets`: ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_wha... | actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, ...
-- `c2_detect`: C2/malware behavior detection. Actions: indicators, persistence, evasion, injection, exfiltration, lateral_movement, ... | actions: indicators, persistence, evasion, injection, exfiltration, lateral_movement, privilege_escalation, capabilities, ...
-- `deobfuscate`: Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte ... | actions: detect_encoding, xor_scan, stack_strings, opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, ...
-- `crypto_id`: Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, k... | actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, ...
-- `abi`: ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail... | actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, ...
-- `summarize`: LLM-friendly summarization with compact output. Actions: binary, function, segment, imports_by_category, strings_by_c... | actions: binary, function, segment, imports_by_category, strings_by_category, complexity, call_hierarchy, data_flow, ...
-- `classify`: Function purpose classification. Actions: function, binary, all_functions, library_code, wrappers, callbacks, initial... | actions: function, binary, all_functions, library_code, wrappers, callbacks, initializers, error_handlers, ...
-- `compare`: Function comparison and similarity. Actions: functions (side-by-side diff), blocks, apis, strings, constants, structu... | actions: functions, blocks, apis, strings, constants, structure, semantics, batch_compare, ...
-- `stack_analysis`: Stack frame analysis. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, su... | actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, ...
-- `protocol`: Network protocol analysis. Query supports regex. Actions: detect, parsers, serializers, handlers, endpoints, tls_conf... | actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, ...
-- `annotation`: Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mar... | actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, ...
-- `xref_analysis`: Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, re... | actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, ...
-- `string_ops`: Advanced string analysis. Query supports regex. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, ... | actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, ...
-- `cfg_analysis`: Control flow graph metrics. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, nat... | actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, ...
-- `binary_info`: Binary metadata analysis. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamp... | actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, ...
-- `llm_helpers`: LLM workflow helpers. Actions: context_window (token-budgeted context), function_digest, binary_digest, explain_addre... | actions: context_window, function_digest, binary_digest, explain_address, suggest_next, progress_report, focus_area, question_answer, ...
-- `plugins`: Legacy alias for misc plugin actions. Prefer misc(action=plugin_list|plugin_run). | actions: n/a
-- `xfer_analysis`: Alias of xref_analysis (compatibility typo, not advertised in tools/list). | actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, ...
+## Resolution Rules
+- Default doc filename: `ida-tool-<tool>.md`
+- Example: tool `search` -> `.agents/tool-docs/ida-tool-search.md`
+- Alias: `xfer_analysis` -> `ida-tool-xfer_analysis.md`
+- If unsure, list docs under `.agents/tool-docs/` and pick exact match.
+
+## Available Tool Count
+- `66`
