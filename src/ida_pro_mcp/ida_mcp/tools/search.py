@@ -1272,6 +1272,12 @@ def search(
                 return make_error(MCPError.INVALID_ARGS, "pattern required for decompiled search")
             matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             import time as _time
+            if not hasattr(ida_hexrays, "init_hexrays_plugin") or not ida_hexrays.init_hexrays_plugin():
+                return make_error(
+                    MCPError.DECOMPILER_UNAVAILABLE,
+                    "Hex-Rays decompiler not available for decompiled search",
+                    hint=ERROR_HINTS.get(MCPError.DECOMPILER_UNAVAILABLE),
+                )
 
             # Guardrails: allow scoped decompilation, bounded function scan, and timeout budget.
             scope_addr = kwargs.get("addr") or kwargs.get("func") or kwargs.get("function") or kwargs.get("scope")
@@ -1320,6 +1326,9 @@ def search(
             rows = []
             scanned_functions = 0
             timed_out = False
+            decompiled_functions = 0
+            decompile_failures = 0
+            failure_samples = []
             started_at = _time.time()
             for func_ea in target_funcs:
                 if (_time.time() - started_at) >= timeout_s:
@@ -1329,7 +1338,9 @@ def search(
                 try:
                     cfunc = ida_hexrays.decompile(func_ea)
                     if not cfunc:
+                        decompile_failures += 1
                         continue
+                    decompiled_functions += 1
                     pseudocode = str(cfunc)
                     for line_num, line in enumerate(pseudocode.splitlines(), 1):
                         if matcher(line):
@@ -1344,8 +1355,23 @@ def search(
                                     "line": f"{hex(func_ea)}  {func_name}  L{line_num}: {text}",
                                 }
                             )
-                except Exception:
+                except Exception as e:
+                    decompile_failures += 1
+                    if len(failure_samples) < 5:
+                        failure_samples.append(str(e))
                     continue
+
+            if scanned_functions > 0 and decompiled_functions == 0 and decompile_failures > 0:
+                return make_error(
+                    MCPError.DECOMPILER_FAILED,
+                    "Decompiled search failed to decompile any function in scope",
+                    hint=ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
+                    details={
+                        "scanned_functions": scanned_functions,
+                        "decompile_failures": decompile_failures,
+                        "sample_errors": failure_samples,
+                    },
+                )
 
             page, total, is_truncated = _paginate_records(
                 rows, sort_key=lambda r: (r["address_ea"], r["line_num"]), reverse=False
@@ -1360,6 +1386,8 @@ def search(
                 "offset": offset,
                 "truncated": is_truncated,
                 "scanned_functions": scanned_functions,
+                "decompiled_functions": decompiled_functions,
+                "decompile_failures": decompile_failures,
                 "scan_limit": max_functions if not scope_func else 1,
                 "timeout_ms": timeout_ms,
                 "timed_out": timed_out,
