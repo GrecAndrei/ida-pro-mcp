@@ -299,6 +299,7 @@ TOOL_ALIASES = {
     "xfer_analysis": "xref_analysis",
 }
 WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
+HIDDEN_TOOLS_IN_LIST = {"plugins", "xfer_analysis"}
 _COMPACT_DROP = object()
 _COMPACT_META_KEYS = {
     "traceback",
@@ -1272,6 +1273,7 @@ TOOLS = [
     "bulk",
     # Utilities
     "misc",
+    "plugins",
     "calc",
     "nav",
     # Debugging and tracing
@@ -1332,6 +1334,7 @@ TOOLS = [
     "annotation",
     # Deep cross-reference analysis
     "xref_analysis",
+    "xfer_analysis",
     # String operations
     "string_ops",
     # CFG analysis
@@ -1595,6 +1598,7 @@ TOOL_ACTIONS = {
         "list_dir",
         "exists",
     ],
+    "plugins": ["list", "run"],
     # Advanced analysis (LLM-friendly)
     "agent": [
         "analyze_function",
@@ -4448,9 +4452,6 @@ class IDAMCPServer:
                 "matches": matches,
                 "count": len(matches),
             }
-            if not verbose:
-                # Keep default search payload compact for LLM context efficiency.
-                response["matches"] = [m.get("topic") for m in matches]
             return response
 
         topic_name, topic_err = self._wiki_normalize_topic(args.get("topic"))
@@ -5136,9 +5137,14 @@ class IDAMCPServer:
                 if raw_sid is None:
                     return None, None
                 sid = _normalize_session_id(raw_sid)
-                if not sid:
-                    return None, make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
-                return sid, None
+                if sid:
+                    return sid, None
+                # Compatibility: treat short/simple alnum values as "not found",
+                # while still rejecting clearly malformed/path-like payloads.
+                raw_txt = str(raw_sid).strip()
+                if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
+                    return raw_txt.upper(), None
+                return None, make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
 
             if action == "create":
                 binary_path = args.get("binary_path")
@@ -5263,13 +5269,17 @@ class IDAMCPServer:
                 sessions = [s.to_dict() for s in self.session_mgr.discover_sessions(query=q)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "get":
-                sid = args.get("session_id")
-                if not sid:
+                raw_sid = args.get("session_id")
+                if not raw_sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required",
                                      hint="Provide a session_id. Use session(action='list') to see available sessions.")
-                sid = _normalize_session_id(sid)
+                sid = _normalize_session_id(raw_sid)
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
+                    raw_txt = str(raw_sid).strip()
+                    if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
+                        sid = raw_txt.upper()
+                    else:
+                        return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
                 session = self.session_mgr.get_session(sid)
                 if not session:
                     return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found",
@@ -5343,9 +5353,15 @@ class IDAMCPServer:
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id or binary_path required",
                                      hint="Provide session_id or binary_path. Use session(action='list') to see sessions.")
-                sid = _normalize_session_id(sid)
-                if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
+                normalized_sid = _normalize_session_id(sid)
+                if normalized_sid:
+                    sid = normalized_sid
+                else:
+                    raw_txt = str(sid).strip()
+                    if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
+                        sid = raw_txt.upper()
+                    else:
+                        return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
                 session = self.session_mgr.get_session(sid)
                 if session:
                     self.current_session = session
@@ -5931,6 +5947,7 @@ class IDAMCPServer:
                     ),
                 }
                 for t in TOOLS
+                if t not in HIDDEN_TOOLS_IN_LIST
             ]
             return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools, "mode": mode}}
         if m == "tools/call":
