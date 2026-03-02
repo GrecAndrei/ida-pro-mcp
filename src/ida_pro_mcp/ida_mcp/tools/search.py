@@ -226,30 +226,71 @@ def search(
                         ea, _ = ida_bytes.bin_search(ea + 1, seg_end, pt, ida_bytes.BIN_SEARCH_FORWARD)
                 else:
                     # Fallback for older IDA builds lacking compiled_binpat_vec_t.
-                    if not hasattr(ida_search, "find_binary"):
-                        return make_error(
-                            MCPError.NOT_IMPLEMENTED,
-                            "Byte search is not supported by this IDA build",
-                        )
+                    def _parse_pat_tokens(text: str):
+                        toks = [t.strip() for t in text.split() if t.strip()]
+                        parsed = []
+                        for tok in toks:
+                            tok = tok.upper()
+                            if tok in ("?", "??"):
+                                parsed.append(None)
+                                continue
+                            if len(tok) != 2 or any(c not in "0123456789ABCDEF?" for c in tok):
+                                raise ValueError(f"Invalid byte token: {tok}")
+                            hi = None if tok[0] == "?" else int(tok[0], 16)
+                            lo = None if tok[1] == "?" else int(tok[1], 16)
+                            parsed.append((hi, lo))
+                        return parsed
+
+                    def _match_pat(byte_val: int, spec) -> bool:
+                        if spec is None:
+                            return True
+                        hi, lo = spec
+                        if hi is not None and ((byte_val >> 4) & 0xF) != hi:
+                            return False
+                        if lo is not None and (byte_val & 0xF) != lo:
+                            return False
+                        return True
 
                     try:
-                        flags = getattr(ida_search, "SEARCH_DOWN", 0)
-                        ea = ida_search.find_binary(seg_start, seg_end, pattern, 16, flags)
-                        while ea != idaapi.BADADDR:
-                            line = hex(ea)
-                            if include_context:
-                                match_bytes = ida_bytes.get_bytes(ea, min(32, seg_end - ea))
-                                if match_bytes:
-                                    line += f"  {match_bytes.hex()}"
-                                line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}"
-                            if maybe_add(line):
-                                break
-                            ea = ida_search.find_binary(ea + 1, seg_end, pattern, 16, flags)
+                        if hasattr(ida_search, "find_binary"):
+                            flags = getattr(ida_search, "SEARCH_DOWN", 0)
+                            ea = ida_search.find_binary(seg_start, seg_end, pattern, 16, flags)
+                            while ea != idaapi.BADADDR:
+                                line = hex(ea)
+                                if include_context:
+                                    match_bytes = ida_bytes.get_bytes(ea, min(32, seg_end - ea))
+                                    if match_bytes:
+                                        line += f"  {match_bytes.hex()}"
+                                    line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}"
+                                if maybe_add(line):
+                                    break
+                                ea = ida_search.find_binary(ea + 1, seg_end, pattern, 16, flags)
+                        else:
+                            pat_specs = _parse_pat_tokens(pattern)
+                            if not pat_specs:
+                                return make_error(MCPError.INVALID_ARGS, "Empty byte pattern")
+                            seg_bytes = ida_bytes.get_bytes(seg_start, max(0, seg_end - seg_start)) or b""
+                            plen = len(pat_specs)
+                            if len(seg_bytes) >= plen:
+                                for i in range(0, len(seg_bytes) - plen + 1):
+                                    ok = True
+                                    for j, spec in enumerate(pat_specs):
+                                        if not _match_pat(seg_bytes[i + j], spec):
+                                            ok = False
+                                            break
+                                    if not ok:
+                                        continue
+                                    ea = seg_start + i
+                                    line = hex(ea)
+                                    if include_context:
+                                        match_bytes = seg_bytes[i : i + min(32, len(seg_bytes) - i)]
+                                        if match_bytes:
+                                            line += f"  {match_bytes.hex()}"
+                                        line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))}"
+                                    if maybe_add(line):
+                                        break
                     except Exception as e:
-                        return make_error(
-                            MCPError.NOT_IMPLEMENTED,
-                            f"Byte search fallback failed: {e}",
-                        )
+                        return make_error(MCPError.IDA_ERROR, f"Byte search fallback failed: {e}")
                         
                 if range_end is not None and seg.end_ea >= range_end:
                     break

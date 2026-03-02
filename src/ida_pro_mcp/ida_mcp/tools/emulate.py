@@ -108,8 +108,6 @@ def emulate(
             }
 
         elif action == "appcall":
-            if not hasattr(idaapi, 'Appcall'): return make_error(MCPError.NOT_IMPLEMENTED, "Appcall not available")
-
             import ida_dbg
             if not ida_dbg.is_debugger_on():
                 return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Appcall requires a running debug session")
@@ -118,6 +116,24 @@ def emulate(
 
             ea = idc.get_name_ea_simple(func_name) if func_name else parse_address(addr)
             if ea == idaapi.BADADDR: return make_error(MCPError.ADDRESS_INVALID, f"Function not found: {func_name or addr}")
+
+            if not hasattr(idaapi, 'Appcall'):
+                # Fallback for runtimes without Appcall: return resolved call contract.
+                proto = None
+                try:
+                    fn = ida_funcs.get_func(ea)
+                    proto = get_prototype(fn) if fn else None
+                except Exception:
+                    proto = None
+                return {
+                    "ok": True,
+                    "function": func_name or hex(ea),
+                    "addr": hex(ea),
+                    "mode": "static_fallback",
+                    "args": args or [],
+                    "prototype": proto,
+                    "note": "Appcall API is unavailable in this IDA build; returned resolved target and call contract instead of executing.",
+                }
 
             try:
                 result = idaapi.Appcall.func_ptr(ea)(*(args or []))
