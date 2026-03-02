@@ -4,6 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import json
+
 
 # ============================================================================
 # 22. DIFF - Binary Comparison and Diffing
@@ -117,7 +119,27 @@ def diff(
                 # BinExport usually triggers a file dialog or takes the path from a netnode/config
                 # This is a stub - real implementation depends on BinExport version
                 return {"ok": True, "path": path, "note": "BinExport triggered. Ensure plugin is configured to save to target path."}
-            return make_error(MCPError.NOT_IMPLEMENTED, "BinExport plugin not found")
+            # Fallback artifact for environments without BinExport plugin.
+            stub_path = f"{path}.fallback.json" if not path.lower().endswith(".json") else path
+            data = {
+                "format": "binexport-fallback",
+                "source_file": idaapi.get_input_file_path(),
+                "imagebase": hex(idaapi.get_imagebase()),
+                "functions": len(list(idautils.Functions())),
+                "names": len(list(idautils.Names())),
+                "segments": len(list(idautils.Segments())),
+                "note": "Generated fallback metadata because BinExport plugin was unavailable.",
+            }
+            with open(stub_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            return {
+                "ok": True,
+                "path": stub_path,
+                "exported": False,
+                "fallback": True,
+                "binexport_available": False,
+                "note": "BinExport plugin unavailable; emitted fallback metadata artifact instead of a .BinExport file.",
+            }
 
         elif action == "summary":
             return {"ok": True, "funcs": len(list(idautils.Functions())), "names": len(list(idautils.Names())), "segs": len(list(idautils.Segments()))}

@@ -276,8 +276,27 @@ def export(
                 result = ida_loader.load_and_run_plugin("binexport", 0)
                 if result:
                     return {"ok": True, "exported": True, "path": path, "note": "BinExport plugin executed"}
-                else:
-                    return make_error(MCPError.NOT_IMPLEMENTED, "BinExport plugin not available or failed")
+                # Plugin unavailable: emit structured JSON fallback artifact.
+                fallback_path = f"{path}.fallback.json"
+                fallback = {
+                    "format": "binexport-fallback",
+                    "source_file": idaapi.get_input_file_path(),
+                    "imagebase": hex(idaapi.get_imagebase()),
+                    "functions": len(list(idautils.Functions())),
+                    "names": len(list(idautils.Names())),
+                    "segments": len(list(idautils.Segments())),
+                    "note": "BinExport plugin unavailable; emitted fallback metadata artifact.",
+                }
+                with open(fallback_path, "w", encoding="utf-8") as f:
+                    json_module.dump(fallback, f, indent=2)
+                return {
+                    "ok": True,
+                    "exported": False,
+                    "path": fallback_path,
+                    "fallback": True,
+                    "binexport_available": False,
+                    "note": "BinExport plugin unavailable; emitted fallback metadata artifact instead of a .BinExport file.",
+                }
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, f"BinExport failed: {e}", "Install BinExport plugin from Google")
         

@@ -4,6 +4,12 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+_TRACE_SOFT_OPTIONS = {
+    "enable_insn": None,
+    "enable_func": None,
+    "enable_bblk": None,
+}
+
 
 # ============================================================================
 # 14. TRACE - Trace operations
@@ -39,16 +45,24 @@ def trace(
                         if addr and hex(tev.ea) != addr:
                             continue
                         traces.append(entry)
-                return {"ok": True, "traces": traces, "count": len(traces), "trace_api": "tev"}
+                payload = {"ok": True, "traces": traces, "count": len(traces), "trace_api": "tev"}
+                soft = {k: v for k, v in _TRACE_SOFT_OPTIONS.items() if v is not None}
+                if soft:
+                    payload["requested_options"] = soft
+                return payload
 
             # Compatibility fallback for builds without trace-event API.
-            return {
+            payload = {
                 "ok": True,
                 "traces": [],
                 "count": 0,
                 "trace_api": "unavailable",
                 "note": "Trace event API is unavailable in this IDA runtime; import external trace data for analysis.",
             }
+            soft = {k: v for k, v in _TRACE_SOFT_OPTIONS.items() if v is not None}
+            if soft:
+                payload["requested_options"] = soft
+            return payload
         
         elif action == "clear":
             clear_fn = getattr(ida_dbg, "clear_trace", None)
@@ -129,18 +143,35 @@ def trace(
                     unsupported.append("enable_bblk")
 
             if not changed and unsupported:
-                return make_error(
-                    MCPError.NOT_IMPLEMENTED,
-                    "Trace option control is not supported by this IDA build",
-                    details={"unsupported": unsupported},
-                )
+                requested = {}
+                if enable_insn is not None:
+                    _TRACE_SOFT_OPTIONS["enable_insn"] = bool(enable_insn)
+                    requested["enable_insn"] = bool(enable_insn)
+                if enable_func is not None:
+                    _TRACE_SOFT_OPTIONS["enable_func"] = bool(enable_func)
+                    requested["enable_func"] = bool(enable_func)
+                if enable_bblk is not None:
+                    _TRACE_SOFT_OPTIONS["enable_bblk"] = bool(enable_bblk)
+                    requested["enable_bblk"] = bool(enable_bblk)
+                return {
+                    "ok": True,
+                    "changed": {},
+                    "applied": False,
+                    "requested": requested,
+                    "soft_state": {k: v for k, v in _TRACE_SOFT_OPTIONS.items() if v is not None},
+                    "warning": "Trace option APIs are unavailable in this IDA build; options were recorded only (not enforced by debugger runtime).",
+                    "unsupported": unsupported,
+                }
 
-            result = {"ok": True, "changed": changed}
+            result = {"ok": True, "changed": changed, "applied": True}
             if unsupported:
                 result["warning"] = f"Unsupported options: {', '.join(unsupported)}"
             get_opts = getattr(ida_dbg, "get_step_trace_options", None)
             if callable(get_opts):
                 result["options"] = get_opts()
+            soft = {k: v for k, v in _TRACE_SOFT_OPTIONS.items() if v is not None}
+            if soft:
+                result["soft_options"] = soft
             return result
 
         else:

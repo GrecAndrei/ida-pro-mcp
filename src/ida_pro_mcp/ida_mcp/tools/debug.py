@@ -310,7 +310,66 @@ def debug(
                     for frame in frames:
                         stack.append({"addr": hex(frame.ea), "func": idc.get_name(frame.ea) or ""})
                 return {"ok": True, "callstack": stack}
-            return make_error(MCPError.NOT_IMPLEMENTED, "Callstack API not available")
+            # Fallback frame-walk for runtimes without collect_stack_trace().
+            ptr_size = 8 if (hasattr(idaapi, "get_inf_structure") and idaapi.get_inf_structure().is_64bit()) else 4
+            fp_names = ["RBP", "EBP", "X29", "FP"]
+            fp_val = None
+            fp_name = None
+            for candidate in fp_names:
+                try:
+                    reg_v = ida_dbg.get_reg_val(candidate)
+                except Exception:
+                    reg_v = None
+                if isinstance(reg_v, int) and reg_v != 0:
+                    fp_val = reg_v
+                    fp_name = candidate
+                    break
+
+            stack = []
+            try:
+                ip = ida_dbg.get_ip_val()
+                if isinstance(ip, int) and ip != 0:
+                    stack.append({"addr": hex(ip), "func": idc.get_name(ip) or idc.get_func_name(ip) or ""})
+            except Exception:
+                pass
+
+            if fp_val is None:
+                return {"ok": True, "callstack": stack, "note": "Frame-pointer fallback unavailable (no frame register)."}
+
+            def _read_ptr(ea: int):
+                raw = ida_dbg.read_dbg_memory(ea, ptr_size)
+                if not raw or len(raw) < ptr_size:
+                    return None
+                return int.from_bytes(raw[:ptr_size], "little")
+
+            visited_fp = set()
+            cur_fp = int(fp_val)
+            max_frames = 64
+            for _ in range(max_frames):
+                if cur_fp in visited_fp or cur_fp == 0:
+                    break
+                visited_fp.add(cur_fp)
+                next_fp = _read_ptr(cur_fp)
+                ret_ea = _read_ptr(cur_fp + ptr_size)
+                if not isinstance(ret_ea, int) or ret_ea == 0 or ret_ea == idaapi.BADADDR:
+                    break
+                stack.append(
+                    {
+                        "addr": hex(ret_ea),
+                        "func": idc.get_name(ret_ea) or idc.get_func_name(ret_ea) or "",
+                        "fp": hex(cur_fp),
+                    }
+                )
+                if not isinstance(next_fp, int) or next_fp <= cur_fp:
+                    break
+                cur_fp = next_fp
+
+            return {
+                "ok": True,
+                "callstack": stack,
+                "mode": "frame_pointer_fallback",
+                "frame_register": fp_name,
+            }
         
         elif action == "read_mem":
             err = check_debugger(require_active=True)

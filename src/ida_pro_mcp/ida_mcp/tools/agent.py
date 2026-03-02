@@ -82,6 +82,16 @@ def agent(
         Returns: matching struct definitions
     """
     try:
+        def _lines(value):
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return [str(x) for x in value if str(x).strip()]
+            text = str(value)
+            if not text:
+                return []
+            return [line for line in text.splitlines() if line.strip()]
+
         if action == "analyze_function":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
@@ -92,7 +102,9 @@ def agent(
                     import tempfile
                     with open(os.path.join(tempfile.gettempdir(), "ida_mcp_emergency.log"), "a") as f:
                         f.write(f"[{time.ctime()}] AGENT: {msg}\n")
-                except Exception: pass
+                except Exception:
+                    return False
+                return True
 
             # Aggregate multi-modal analysis
             debug_log_agent(f"Starting code analysis for {addr}...")
@@ -142,7 +154,16 @@ def agent(
             from .search import search as search_tool
             code_refs = search_tool(action="code_ref", pattern=addr, limit=20)
             data_refs = search_tool(action="data_ref", pattern=addr, limit=20)
-            return {"ok": True, "addr": hex(ea), "code_refs": code_refs.get("matches", []), "data_refs": data_refs.get("matches", [])}
+            code_text = code_refs.get("matches", "")
+            data_text = data_refs.get("matches", "")
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "code_refs": _lines(code_text),
+                "data_refs": _lines(data_text),
+                "code_refs_text": code_text,
+                "data_refs_text": data_text,
+            }
         
         elif action == "search_all":
             if not query: return make_error(MCPError.INVALID_ARGS, "query required")
@@ -150,7 +171,19 @@ def agent(
             funcs = data_tool(action="functions", query=query, count=10)
             strings = data_tool(action="strings", query=query, count=10)
             names = data_tool(action="globals", query=query, count=10)
-            return {"ok": True, "query": query, "functions": funcs.get("functions", []), "strings": strings.get("strings", []), "names": names.get("globals", [])}
+            funcs_text = funcs.get("functions", "")
+            strings_text = strings.get("strings", "")
+            names_text = names.get("globals", "")
+            return {
+                "ok": True,
+                "query": query,
+                "functions": _lines(funcs_text),
+                "strings": _lines(strings_text),
+                "names": _lines(names_text),
+                "functions_text": funcs_text,
+                "strings_text": strings_text,
+                "names_text": names_text,
+            }
 
         elif action == "search_structs":
             if not query: return make_error(MCPError.INVALID_ARGS, "query required")
