@@ -5,6 +5,68 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 
+def _decompile_with_diagnostics(func_ea: int):
+    """
+    Decompile with structured diagnostics.
+    Returns (cfunc, err_dict_or_none).
+    """
+    try:
+        if not hasattr(ida_hexrays, "init_hexrays_plugin") or not ida_hexrays.init_hexrays_plugin():
+            return None, make_error(
+                MCPError.DECOMPILER_UNAVAILABLE,
+                "Hex-Rays decompiler not available",
+                hint=ERROR_HINTS.get(MCPError.DECOMPILER_UNAVAILABLE),
+            )
+    except Exception as e:
+        return None, make_error(
+            MCPError.DECOMPILER_UNAVAILABLE,
+            f"Decompiler initialization failed: {e}",
+            hint=ERROR_HINTS.get(MCPError.DECOMPILER_UNAVAILABLE),
+        )
+
+    try:
+        if hasattr(ida_hexrays, "decompile_func") and hasattr(ida_hexrays, "hexrays_failure_t"):
+            failure = ida_hexrays.hexrays_failure_t()
+            flags = getattr(ida_hexrays, "DECOMP_WARNINGS", 0)
+            cfunc = ida_hexrays.decompile_func(func_ea, failure, flags)
+            if cfunc:
+                return cfunc, None
+            details = {"addr": hex(func_ea)}
+            code = getattr(failure, "code", None)
+            if code is not None:
+                details["failure_code"] = code
+            errea = getattr(failure, "errea", idaapi.BADADDR)
+            if errea != idaapi.BADADDR:
+                details["failure_ea"] = hex(errea)
+            fmsg = getattr(failure, "str", None)
+            msg = "Decompilation failed"
+            if fmsg:
+                msg = f"{msg}: {fmsg}"
+            return None, make_error(
+                MCPError.DECOMPILER_FAILED,
+                msg,
+                hint=ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
+                details=details,
+            )
+
+        cfunc = ida_hexrays.decompile(func_ea)
+        if cfunc:
+            return cfunc, None
+        return None, make_error(
+            MCPError.DECOMPILER_FAILED,
+            "Decompilation failed",
+            hint=ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
+            details={"addr": hex(func_ea)},
+        )
+    except Exception as e:
+        return None, make_error(
+            MCPError.DECOMPILER_FAILED,
+            f"Decompilation exception: {e}",
+            hint=ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
+            details={"addr": hex(func_ea)},
+        )
+
+
 # ============================================================================
 # 2. CODE - Decompilation & Disassembly
 # ============================================================================
@@ -124,11 +186,7 @@ def code(
                     continue
                 
                 try:
-                    if not ida_hexrays.init_hexrays_plugin():
-                        results.append({"addr": addr, "error": "Hex-Rays decompiler not available"})
-                        continue
-                        
-                    cfunc = ida_hexrays.decompile(func.start_ea)
+                    cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     if cfunc:
                         results.append({
                             "ok": True,
@@ -137,7 +195,13 @@ def code(
                             "prototype": get_prototype(func)
                         })
                     else:
-                        results.append({"addr": addr, "error": "Decompilation failed"})
+                        results.append({
+                            "addr": addr,
+                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
+                            "error_code": dec_err.get("code") if isinstance(dec_err, dict) else MCPError.DECOMPILER_FAILED,
+                            "hint": dec_err.get("hint") if isinstance(dec_err, dict) else None,
+                            "details": dec_err.get("details") if isinstance(dec_err, dict) else None,
+                        })
                 except Exception as e:
                     results.append({"addr": addr, "error": str(e)})
             
@@ -252,11 +316,14 @@ def code(
                 
                 # Decompile
                 try:
-                    if ida_hexrays.init_hexrays_plugin():
-                        cfunc = ida_hexrays.decompile(func.start_ea)
-                        info["pseudocode"] = str(cfunc) if cfunc else None
-                    else:
-                        info["pseudocode"] = "Decompiler not available"
+                    cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
+                    info["pseudocode"] = str(cfunc) if cfunc else None
+                    if dec_err:
+                        info["decompiler_error"] = {
+                            "code": dec_err.get("code"),
+                            "message": dec_err.get("message"),
+                            "hint": dec_err.get("hint"),
+                        }
                 except Exception:
                     info["pseudocode"] = None
                 
@@ -485,11 +552,18 @@ def code(
                 if err: return err
 
                 import difflib
-                try:
-                    cfunc_a = ida_hexrays.decompile(ea_a)
-                    cfunc_b = ida_hexrays.decompile(ea_b)
-                except Exception as e:
-                    return make_error(MCPError.IDA_ERROR, f"Decompilation failed: {e}")
+                cfunc_a, err_a = _decompile_with_diagnostics(ea_a)
+                cfunc_b, err_b = _decompile_with_diagnostics(ea_b)
+                if err_a or err_b:
+                    return make_error(
+                        MCPError.DECOMPILER_FAILED,
+                        "Decompilation failed for one or both functions",
+                        hint=ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
+                        details={
+                            "func_a": {"addr": hex(ea_a), "error": err_a} if err_a else {"addr": hex(ea_a)},
+                            "func_b": {"addr": hex(ea_b), "error": err_b} if err_b else {"addr": hex(ea_b)},
+                        },
+                    )
 
                 code_a = str(cfunc_a) if cfunc_a else ""
                 code_b = str(cfunc_b) if cfunc_b else ""

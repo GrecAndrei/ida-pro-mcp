@@ -2598,15 +2598,102 @@ class IDAMCPServer:
             return ""
         return ""
 
-    def _get_ida_diagnostics(self, stdout_log=None):
+    def _tail_text_file(self, path: Optional[str], tail_lines: int = 40) -> str:
+        if not path:
+            return ""
+        if not os.path.exists(path):
+            return ""
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            return "".join(lines[-max(1, int(tail_lines)):]).strip()
+        except Exception:
+            return ""
+
+    def _get_ida_diagnostics(self, stdout_log=None, stderr_log=None, tail_lines: int = 40):
         out_log = stdout_log or os.path.join(self.cache_dir, "ida_stdout.log")
-        if os.path.exists(out_log):
+        err_log = stderr_log
+        if err_log is None and out_log:
+            # Best effort: derive sibling stderr path for per-session logs.
+            err_guess = out_log.replace("ida_stdout_", "ida_stderr_")
+            if err_guess != out_log:
+                err_log = err_guess
+        out_tail = self._tail_text_file(out_log, tail_lines=tail_lines)
+        err_tail = self._tail_text_file(err_log, tail_lines=tail_lines)
+        if not out_tail and not err_tail:
+            return "No log available."
+        blocks = []
+        if out_tail:
+            blocks.append(f"[stdout]\n{out_tail}")
+        if err_tail:
+            blocks.append(f"[stderr]\n{err_tail}")
+        return "\n\n".join(blocks)
+
+    def _extract_library_init_failure(self, diag: str) -> Optional[dict]:
+        if not isinstance(diag, str) or not diag.strip():
+            return None
+        low = diag.lower()
+        has_phrase = ("library init failed" in low) or ("library initialization failed" in low)
+        err_code = None
+        m_err = re.search(r"\berr(?:or)?\s*[:=]?\s*(\d+)\b", low)
+        if m_err:
             try:
-                with open(out_log, "r", encoding="utf-8", errors="ignore") as f:
-                    return "".join(f.readlines()[-20:])
+                err_code = int(m_err.group(1))
             except Exception:
-                pass
-        return "No log available."
+                err_code = None
+        has_err2 = bool(re.search(r"\berr(?:or)?\s*[:=]?\s*2\b", low))
+        if not has_phrase and not has_err2:
+            return None
+
+        causes: List[str] = []
+        hints: List[str] = []
+        if (
+            "cannot open shared object file" in low
+            or "no such file or directory" in low
+            or "failed to load shared library" in low
+        ):
+            causes.append("Missing shared runtime library (loader error).")
+            hints.append("Verify IDA runtime dependencies are installed and loadable (ldd on idat64).")
+        if "glibcxx" in low or "cxxabi" in low:
+            causes.append("C++ runtime ABI mismatch (libstdc++ / libc++ conflict).")
+            hints.append("Unset conflicting LD_LIBRARY_PATH entries or use system-compatible libstdc++.")
+        if "qt.qpa.plugin" in low or "xcb" in low or "qt platform plugin" in low:
+            causes.append("Qt platform/plugin initialization failure.")
+            hints.append("Check Qt plugin paths and system GUI/runtime deps (e.g. xcb plugin packages).")
+        if "wrong elf class" in low or "bad cpu type" in low or "exec format error" in low:
+            causes.append("Binary/runtime architecture mismatch.")
+            hints.append("Use the correct IDA binary for host architecture and compatible target runtime.")
+        if "permission denied" in low:
+            causes.append("Filesystem permission error while loading runtime components.")
+            hints.append("Fix file execute/read permissions on IDA installation and plugins.")
+        if "plugin" in low and "failed" in low:
+            causes.append("A plugin failed during startup and broke library initialization.")
+            hints.append("Disable third-party plugins and retry startup.")
+        if "python" in low and ("init" in low or "module" in low):
+            causes.append("Embedded Python/runtime initialization mismatch.")
+            hints.append("Ensure no conflicting PYTHONHOME/PYTHONPATH overrides are injected.")
+        if not causes:
+            causes.append("Generic library initialization failure.")
+            hints.append("Inspect stdout/stderr tails for missing dependency details.")
+
+        return {
+            "detected": True,
+            "error_code": err_code,
+            "err2": bool(has_err2 or (err_code == 2)),
+            "causes": causes,
+            "recommendations": hints,
+        }
+
+    def _is_library_init_err2(self, diag: str) -> bool:
+        info = self._extract_library_init_failure(diag)
+        if not info:
+            return False
+        if info.get("error_code") == 2:
+            return True
+        if info.get("err2"):
+            return True
+        # Preserve previous behavior: phrase alone still triggers recovery path.
+        return bool(info.get("detected"))
 
     def _normalize_ida_args(self, ida_args: Optional[Union[str, List[str]]]) -> List[str]:
         if ida_args is None:
@@ -3604,20 +3691,24 @@ class IDAMCPServer:
             time.sleep(0.5)
 
         if ida_crashed:
-            diag = self._get_ida_diagnostics(stdout_log)
-            if "library init failed" in diag.lower() or "err 2" in diag:
+            diag = self._get_ida_diagnostics(stdout_log, stderr_log)
+            if self._is_library_init_err2(diag):
                 return self._attempt_session_recovery(session, diag, server_port)
+            lib_init = self._extract_library_init_failure(diag)
+            details = {"log": diag}
+            if lib_init:
+                details["library_init"] = lib_init
             return make_error(
                 MCPError.IDA_CRASHED,
                 f"IDA exited with code {exit_code}",
-                details={"log": diag},
+                details=details,
             )
 
         return make_error(
             MCPError.IDA_TIMEOUT, f"IDA failed to initialize within {startup_timeout}s."
         )
 
-    def _launch_and_wait(self, session, server_port):
+    def _launch_and_wait(self, session, server_port, sanitize_env: bool = False):
         script_path = os.path.join(SCRIPT_DIR, "src", "ida_pro_mcp", "server_script.py")
         env = os.environ.copy()
         ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
@@ -3627,6 +3718,16 @@ class IDAMCPServer:
         env["IDA_MCP_BYPASS_SYNC"] = "1"
         env["IDA_MCP_SESSION_ID"] = session.session_id
         env["IDA_MCP_CACHE_DIR"] = self.cache_dir
+        if sanitize_env:
+            for k in (
+                "LD_LIBRARY_PATH",
+                "DYLD_LIBRARY_PATH",
+                "PYTHONHOME",
+                "PYTHONPATH",
+                "QT_PLUGIN_PATH",
+                "QT_QPA_PLATFORM_PLUGIN_PATH",
+            ):
+                env.pop(k, None)
         sid_tag = session.session_id
         log_file = os.path.join(self.cache_dir, f"ida_mcp_{sid_tag}.log")
         stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
@@ -3653,10 +3754,13 @@ class IDAMCPServer:
         while time.time() - start_time < startup_timeout:
             exit_code = server_process.poll()
             if exit_code is not None:
+                diag = self._get_ida_diagnostics(stdout_log, stderr_log)
                 return {
                     "error": True,
                     "exit_code": exit_code,
-                    "log": self._get_ida_diagnostics(stdout_log),
+                    "log": diag,
+                    "library_init": self._extract_library_init_failure(diag),
+                    "sanitize_env": sanitize_env,
                 }
 
             try:
@@ -3681,20 +3785,30 @@ class IDAMCPServer:
 
     def _attempt_session_recovery(self, session, diag, server_port):
         opts = session.analysis_options or {}
+        lib_init = self._extract_library_init_failure(diag)
         if opts.get("recover") is False:
+            details = {"log": diag, "recovery_attempted": False}
+            if lib_init:
+                details["library_init"] = lib_init
             return make_error(
                 MCPError.IDA_CRASHED,
                 "IDA failed with 'library init failed' and recovery is disabled.",
-                details={"log": diag, "recovery_attempted": False},
+                details=details,
             )
-        log_rpc("Detected 'library init failed err 2' - attempting recovery...")
+        if lib_init:
+            log_rpc(
+                f"Detected library init failure (err={lib_init.get('error_code')}) "
+                f"causes={lib_init.get('causes')} - attempting recovery..."
+            )
+        else:
+            log_rpc("Detected library init failure - attempting recovery...")
         self._cleanup_runtime(session.session_id)
         time.sleep(1)
 
         backup_path = None
         if opts.get("backup_on_recover", True):
             backup_path = self._backup_idb(session.idb_path)
-        self._nuclear_reset(session.idb_path, aggressive=True)
+        self._nuclear_reset(session.idb_path, aggressive=bool(opts.get("aggressive_cleanup", True)))
 
         if not session.binary_path or not os.path.exists(session.binary_path):
             return make_error(
@@ -3711,11 +3825,26 @@ class IDAMCPServer:
         self.session_mgr._save_metadata(session)
 
         result = self._launch_and_wait(session, server_port)
+        if "error" in result and result.get("library_init"):
+            # One extra attempt with sanitized runtime env to avoid host LD/Python contamination.
+            retry_result = self._launch_and_wait(session, server_port, sanitize_env=True)
+            if "error" not in retry_result:
+                result = retry_result
+            else:
+                result["sanitized_retry"] = retry_result
         if "error" in result:
+            details = {"log": diag, "backup": backup_path, "recovery_attempted": True}
+            if lib_init:
+                details["library_init"] = lib_init
+            if isinstance(result.get("sanitized_retry"), dict):
+                details["sanitized_retry"] = {
+                    "exit_code": result["sanitized_retry"].get("exit_code"),
+                    "library_init": result["sanitized_retry"].get("library_init"),
+                }
             return make_error(
                 MCPError.IDA_CRASHED,
                 "IDA failed to recover the session after cleanup.",
-                details={"log": diag, "backup": backup_path, "recovery_attempted": True},
+                details=details,
             )
 
         runtime = self.session_runtimes.get(session.session_id)
@@ -3872,7 +4001,10 @@ class IDAMCPServer:
                     MCPError.IDA_CRASHED,
                     f"IDA exited with code {exit_code}",
                     details={
-                        "log": self._get_ida_diagnostics(runtime.get("stdout_log"))
+                        "log": self._get_ida_diagnostics(
+                            runtime.get("stdout_log"),
+                            runtime.get("stderr_log"),
+                        )
                     },
                 )
             return make_error(MCPError.IDA_CRASHED, str(e))
