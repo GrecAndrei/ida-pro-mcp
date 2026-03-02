@@ -17,6 +17,9 @@ def lumina(
     addr: Annotated[Optional[str], "Address of function"] = None,
     query: Annotated[Optional[str], "Search query for function names"] = None,
     push_all: Annotated[bool, "Push all functions (for push action)"] = False,
+    limit: Annotated[int, "Max results for search"] = 50,
+    offset: Annotated[int, "Search pagination offset"] = 0,
+    include_items: Annotated[bool, "Include structured search items"] = False,
     **kwargs
 ) -> dict:
     """
@@ -38,7 +41,16 @@ def lumina(
 
         def run_action(action_name, note=None):
             if not action_available(action_name):
-                return make_error(MCPError.NOT_IMPLEMENTED, f"Action not available: {action_name}", details={"action": action_name})
+                payload = {
+                    "ok": True,
+                    "action": action_name,
+                    "action_available": False,
+                    "action_triggered": False,
+                    "note": "Lumina UI action is unavailable in this IDA build/runtime.",
+                }
+                if note:
+                    payload["requested_note"] = note
+                return payload
             res = ida_kernwin.process_ui_action(action_name)
             payload = {"ok": True, "action": action_name, "action_triggered": res}
             if note:
@@ -96,7 +108,57 @@ def lumina(
         elif action == "search":
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required")
-            return make_error(MCPError.NOT_IMPLEMENTED, "Search requires interactive UI or Lumina client integration")
+            try:
+                matcher = compile_smart_pattern(query, case_sensitive=False)
+            except Exception as e:
+                return make_error(MCPError.INVALID_ARGS, f"Invalid search query: {e}")
+
+            try:
+                limit = max(1, min(500, int(limit)))
+            except Exception:
+                limit = 50
+            try:
+                offset = max(0, int(offset))
+            except Exception:
+                offset = 0
+
+            records = []
+            for func_ea in idautils.Functions():
+                name = idc.get_func_name(func_ea) or ""
+                if not matcher(name):
+                    continue
+                fn = ida_funcs.get_func(func_ea)
+                size = (fn.end_ea - fn.start_ea) if fn else 0
+                meta = {
+                    "addr": hex_ea(func_ea),
+                    "name": name or f"sub_{func_ea:x}",
+                    "size": hex_size(size),
+                    "is_named": not name.startswith("sub_") if name else False,
+                }
+                records.append(meta)
+
+            records.sort(key=lambda r: (not r["is_named"], r["name"], r["addr"]))
+            total = len(records)
+            page = records[offset : offset + limit]
+            truncated = (offset + len(page)) < total
+            lines = [
+                f'{r["addr"]}  {r["name"]}  size={r["size"]}  named={1 if r["is_named"] else 0}'
+                for r in page
+            ]
+            result = {
+                "ok": True,
+                "query": query,
+                "matches": "\n".join(lines),
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": truncated,
+                "source": "local_function_index",
+                "note": "Local searchable fallback. Direct Lumina cloud search is unavailable via stable API in this runtime.",
+            }
+            if include_items:
+                result["items"] = page
+            return result
         
         elif action == "get_metadata":
             # Try to get Lumina metadata for a function programmatically

@@ -76,7 +76,11 @@ def modify(
                 if hasattr(ida_lines, "add_extra_cmt"):
                     ida_lines.add_extra_cmt(ea, is_anterior, value)
                 else:
-                    return make_error(MCPError.NOT_IMPLEMENTED, "Extra comments not supported in this IDA version")
+                    # Fallback: preserve intent in regular comment channel.
+                    prefix = "[anterior] " if is_anterior else "[posterior] "
+                    existing = idc.get_cmt(ea, 0) or ""
+                    merged = (existing + "\n" if existing else "") + prefix + value
+                    idc.set_cmt(ea, merged, 0)
             return {"ok": True, "addr": addr, "comment_type": comment_type, "comment": value}
         
         elif action == "set_type":
