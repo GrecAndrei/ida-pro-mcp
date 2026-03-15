@@ -466,6 +466,11 @@ Environment defaults:
 - `IDA_MCP_WIKI_DEFAULT_LIMIT`
 - `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`0` default lean, `1` full verbose tool metadata)
 
+`tools/list` mode behavior:
+- `ultra` (default): tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb`).
+- `lean`: shortened per-tool descriptions + compact parameter typing.
+- `full`: full descriptions and full input schema.
+
 Installer defaults now bias for low-context operation:
 - `IDA_MCP_RESPONSE_MODE=compact`
 - `IDA_MCP_QOL_MODE=balanced`
