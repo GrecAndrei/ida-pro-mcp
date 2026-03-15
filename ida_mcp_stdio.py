@@ -2302,7 +2302,7 @@ def build_input_schema_lean(tool_name: str) -> dict:
 def build_input_schema_ultra(tool_name: str) -> dict:
     """
     Build a very small schema for tools/list to minimize startup context.
-    Keeps action enums and only the most important wrapper/page args.
+    Keeps only the essential invocation shape (action enum + optional idb).
     """
     if tool_name == "batch":
         return {
@@ -2329,12 +2329,16 @@ def build_input_schema_ultra(tool_name: str) -> dict:
     if action_enum:
         props["action"] = {"type": "string", "enum": _action_enum_with_grep(tool_name)}
         required.append("action")
-        for key in ("source_action", "grep", "pick_fields", "head_n", "tail_n", "next_token"):
-            if key in GLOBAL_WRAPPER_ACTION_CONTROLS:
-                props[key] = _lean_prop_schema(key, GLOBAL_WRAPPER_ACTION_CONTROLS[key])
     if tool_name not in ("session", "bookmarks", "wiki", "batch", "truncation"):
         props["idb"] = {"type": "string"}
     return {"type": "object", "properties": props, "required": required}
+
+
+def build_tool_description_ultra(tool_name: str) -> str:
+    """Return a tiny wiki-first routing hint for ultra tools/list mode."""
+    if tool_name == "wiki":
+        return "Wiki index + docs. Start with wiki(action='index')."
+    return f"Use wiki(topic='tools/{tool_name}') for usage."
 
 
 def build_tool_description_lean(tool_name: str) -> str:
@@ -6066,7 +6070,11 @@ class IDAMCPServer:
                     "description": (
                         TOOL_DESCRIPTIONS.get(t, "")
                         if mode == "full"
-                        else build_tool_description_lean(t)
+                        else (
+                            build_tool_description_lean(t)
+                            if mode == "lean"
+                            else build_tool_description_ultra(t)
+                        )
                     ),
                     "inputSchema": (
                         build_input_schema(t)
