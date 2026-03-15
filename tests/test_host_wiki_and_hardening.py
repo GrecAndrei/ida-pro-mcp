@@ -145,6 +145,22 @@ class TestHostHardening(unittest.TestCase):
         self.assertNotIn("sessions", project_actions)
         self.assertNotIn("batch", project_actions)
 
+    def test_tools_list_ultra_routes_docs_to_wiki_and_keeps_schema_tiny(self):
+        res = self.server.handle_request({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})
+        self.assertEqual(res["result"]["mode"], "ultra")
+        tools_payload = res["result"]["tools"]
+
+        funcs_tool = next(t for t in tools_payload if t["name"] == "funcs")
+        self.assertEqual(funcs_tool["description"], "Use wiki(topic='tools/funcs') for usage.")
+        funcs_props = funcs_tool["inputSchema"]["properties"]
+        self.assertIn("action", funcs_props)
+        self.assertIn("idb", funcs_props)
+        self.assertNotIn("source_action", funcs_props)
+        self.assertNotIn("next_token", funcs_props)
+
+        wiki_tool = next(t for t in tools_payload if t["name"] == "wiki")
+        self.assertEqual(wiki_tool["description"], "Wiki index + docs. Start with wiki(action='index').")
+
     def test_misc_health_requires_no_session(self):
         res = self.server._execute_tool("misc", {"action": "health"})
         self.assertTrue(res.get("ok"))
