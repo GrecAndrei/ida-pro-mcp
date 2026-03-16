@@ -5990,7 +5990,7 @@ class IDAMCPServer:
     def _handle_batch(self, args):
         calls = args.get("calls", [])
         if not isinstance(calls, list):
-            return make_error(MCPError.INVALID_ARGS, "'calls' must be a list of {name, arguments} objects")
+            return make_error(MCPError.INVALID_ARGS, "calls must be a list of {name, arguments} objects")
         if not calls:
             return make_error(MCPError.BATCH_EMPTY, "No calls provided in batch",
                              hint="Provide at least one call: batch(calls=[{name: 'tool', arguments: {...}}])")
@@ -6021,20 +6021,20 @@ class IDAMCPServer:
             resolved_name = TOOL_ALIASES.get(name, name) if isinstance(name, str) else name
 
             if not name:
-                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing 'name' field",
-                                hint="Each batch call must have a 'name' field specifying the tool.")
+                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing name field",
+                                hint="Each batch call must have a name field specifying the tool.")
             elif not isinstance(name, str):
-                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-string 'name'")
+                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-string name")
             elif name == "batch":
                 res = make_error(MCPError.INVALID_ARGS, "Nested batch calls are not allowed")
             elif resolved_name not in TOOLS:
-                res = make_error(MCPError.INVALID_ARGS, f"Unknown tool '{name}' in batch call at index {idx}",
+                res = make_error(MCPError.INVALID_ARGS, f"Unknown tool {name} in batch call at index {idx}",
                                 hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.")
             elif call_args is None:
                 call_args = {}
                 res = self._execute_tool(name, call_args)
             elif not isinstance(call_args, dict):
-                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-object 'arguments'")
+                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-object arguments")
             else:
                 cleaned_args, _ = self._extract_response_options(call_args)
                 res = self._execute_tool(name, cleaned_args)

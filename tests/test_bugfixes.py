@@ -79,6 +79,23 @@ class TestMCPErrorCodes(unittest.TestCase):
             self.assertGreater(len(hint), 10,
                               f"Hint for {code} too short: '{hint}'")
 
+    def test_tool_mcp_error_references_exist(self):
+        import re
+        from pathlib import Path
+        from error_handling import MCPError as ToolMCPError
+
+        tool_dir = Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "ida_mcp" / "tools"
+        defined = {
+            attr for attr in dir(ToolMCPError)
+            if not attr.startswith('_') and isinstance(getattr(ToolMCPError, attr), str)
+        }
+        referenced = set()
+        for path in tool_dir.glob("*.py"):
+            referenced.update(re.findall(r"MCPError\\.([A-Z_]+)", path.read_text(encoding="utf-8")))
+
+        missing = sorted(referenced - defined)
+        self.assertEqual(missing, [], f"Undefined MCPError constants referenced in tools: {missing}")
+
 
 class TestMakeErrorWithHints(unittest.TestCase):
     def test_auto_hint(self):
@@ -382,6 +399,19 @@ class TestImprovedErrors(unittest.TestCase):
     def test_batch_invalid_tool(self):
         r = self.server._handle_batch({"calls": [{"name": "nonexistent_tool"}]})
         self.assertTrue(r["results"][0]["result"].get("error"))
+
+    def test_batch_error_messages_avoid_quoted_field_names(self):
+        r = self.server._handle_batch({"calls": "not-a-list"})
+        self.assertEqual(r.get("code"), "INVALID_ARGS")
+        self.assertNotIn("'calls'", r.get("message", ""))
+
+        r = self.server._handle_batch({"calls": [{"arguments": {}}]})
+        msg = r["results"][0]["result"].get("message", "")
+        self.assertNotIn("'name'", msg)
+
+        r = self.server._handle_batch({"calls": [{"name": "wiki", "arguments": "x"}]})
+        msg = r["results"][0]["result"].get("message", "")
+        self.assertNotIn("'arguments'", msg)
 
 
 # =============================================================================
