@@ -84,14 +84,17 @@ class TestMCPErrorCodes(unittest.TestCase):
         from pathlib import Path
         from error_handling import MCPError as ToolMCPError
 
-        tool_dir = Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "ida_mcp" / "tools"
+        repo_root = Path(__file__).resolve().parents[1]
+        tool_dir = repo_root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools"
+        self.assertTrue(tool_dir.is_dir(), f"Tool directory not found: {tool_dir}")
+        # MCPError constants are intentionally represented as uppercase string values.
         defined = {
             attr for attr in dir(ToolMCPError)
             if not attr.startswith('_') and isinstance(getattr(ToolMCPError, attr), str)
         }
         referenced = set()
         for path in tool_dir.glob("*.py"):
-            referenced.update(re.findall(r"MCPError\\.([A-Z_]+)", path.read_text(encoding="utf-8")))
+            referenced.update(re.findall(r"MCPError\.([A-Z_]+)", path.read_text(encoding="utf-8")))
 
         missing = sorted(referenced - defined)
         self.assertEqual(missing, [], f"Undefined MCPError constants referenced in tools: {missing}")
