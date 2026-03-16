@@ -653,7 +653,7 @@ def protocol(
             fname = idc.get_func_name(ea)
             fn = ida_funcs.get_func(ea)
             if not fn:
-                return make_error(MCPError.FUNC_NOT_FOUND, f"No function at {hex(ea)}")
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
 
             callees = _get_func_callees(ea)
             byte_order_calls = [c[1] for c in callees
