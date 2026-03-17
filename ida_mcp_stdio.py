@@ -293,6 +293,8 @@ MAX_TAGS_PER_SESSION = 64
 MAX_TAG_LEN = 64
 MAX_NOTE_LEN = 16_384
 MAX_NAME_LEN = 256
+MAX_SESSION_ID_RETRIES = 1024
+MAX_SNAPSHOT_ID_RETRIES = 128
 MAX_WIKI_RESULTS = 200
 TOOL_ALIASES = {
     "plugins": "misc",
@@ -356,6 +358,16 @@ def _normalize_session_id(value: Any) -> Optional[str]:
     if not SESSION_ID_RE.fullmatch(sid):
         return None
     return sid
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    """Best-effort ISO datetime parser for persisted metadata."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
 
 
 def _bounded_int(
@@ -515,17 +527,19 @@ class Session:
     @classmethod
     def from_dict(cls, data: dict) -> "Session":
         """Load session from metadata dict"""
-        created = (
-            datetime.fromisoformat(data["created_at"]) if "created_at" in data else None
-        )
-        accessed = (
-            datetime.fromisoformat(data["last_accessed"])
-            if "last_accessed" in data
-            else None
-        )
+        sid = _normalize_session_id(data.get("session_id"))
+        if not sid:
+            raise ValueError("invalid or missing session_id")
+        idb_path = data.get("idb_path")
+        if idb_path is None:
+            idb_path = ""
+        elif not isinstance(idb_path, str):
+            raise ValueError("idb_path must be a string")
+        created = _parse_iso_datetime(data.get("created_at"))
+        accessed = _parse_iso_datetime(data.get("last_accessed"))
         return cls(
-            data["session_id"],
-            data["idb_path"],
+            sid,
+            idb_path,
             data.get("binary_path", ""),
             data.get("analysis_options", {}) or {},
             data.get("analysis_applied", False),
@@ -576,6 +590,15 @@ class SessionManager:
         if not name:
             return ""
         return str(name).strip()[:MAX_NAME_LEN]
+
+    def _new_session_id(self) -> str:
+        for _ in range(MAX_SESSION_ID_RETRIES):
+            sid = uuid.uuid4().hex[:8].upper()
+            if sid not in self.sessions:
+                return sid
+        raise RuntimeError(
+            f"failed to allocate unique session id after {MAX_SESSION_ID_RETRIES} retries"
+        )
 
     def _get_metadata_path(self, sid: str) -> str:
         """Get path to session metadata file"""
@@ -653,7 +676,7 @@ class SessionManager:
         notes: str = "",
     ) -> Session:
         with self._lock:
-            sid = "".join(uuid.uuid4().hex[:8].upper())
+            sid = self._new_session_id()
             # Use SID-specific name to avoid collisions and track metadata easily
             idb_base = os.path.basename(binary_path) if binary_path else f"session_{sid}"
             idb_name = f"SID_{sid}_{idb_base}.i64"
@@ -690,11 +713,11 @@ class SessionManager:
     def find_session_by_path(self, path: str) -> Optional[Session]:
         """Find a session by binary_path or idb_path (normalized comparison)."""
         with self._lock:
-            norm = os.path.normpath(os.path.abspath(path))
+            norm = os.path.realpath(os.path.abspath(path))
             for s in self.sessions.values():
-                if s.binary_path and os.path.normpath(os.path.abspath(s.binary_path)) == norm:
+                if s.binary_path and os.path.realpath(os.path.abspath(s.binary_path)) == norm:
                     return copy.copy(s)
-                if s.idb_path and os.path.normpath(os.path.abspath(s.idb_path)) == norm:
+                if s.idb_path and os.path.realpath(os.path.abspath(s.idb_path)) == norm:
                     return copy.copy(s)
             return None
 
@@ -782,7 +805,7 @@ class SessionManager:
             session = self.sessions.get(sid)
             if not session:
                 return None
-            new_sid = "".join(uuid.uuid4().hex[:8].upper())
+            new_sid = self._new_session_id()
             new_session = Session(
                 new_sid,
                 session.idb_path,
@@ -812,7 +835,7 @@ class SessionManager:
         """Import a session from exported dict."""
         with self._lock:
             # Generate a new SID to avoid collisions
-            new_sid = "".join(uuid.uuid4().hex[:8].upper())
+            new_sid = self._new_session_id()
             data_copy = dict(data)
             data_copy["session_id"] = new_sid
             data_copy.pop("_exported_at", None)
@@ -1060,7 +1083,18 @@ class SessionManager:
             session = self.sessions.get(sid)
             if not session:
                 return None
-            snapshot_id = uuid.uuid4().hex[:8]
+            seen = {s.get("_snapshot_id") for s in self._snapshots.get(sid, [])}
+            snapshot_id = None
+            for _ in range(MAX_SNAPSHOT_ID_RETRIES):
+                candidate = uuid.uuid4().hex[:8]
+                if candidate not in seen:
+                    snapshot_id = candidate
+                    break
+            if snapshot_id is None:
+                log_rpc(
+                    f"Failed to allocate snapshot id for session {sid} after {MAX_SNAPSHOT_ID_RETRIES} retries"
+                )
+                return None
             snapshot = session.to_dict()
             snapshot["_snapshot_id"] = snapshot_id
             snapshot["_snapshot_time"] = datetime.now().isoformat()
@@ -1382,7 +1416,7 @@ HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"p
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session lifecycle + context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
+    "session": "Session lifecycle + runtime context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Supports shorthand calls like 'tool:action' and inline {name, action, ...args} objects. Returns compact per-call rows + summary.",
@@ -2918,6 +2952,7 @@ class IDAMCPServer:
         return out
 
     def _wrapper_source_action(self, tool_name: str, args: dict, wrapper_action: str) -> tuple[Optional[str], Optional[dict]]:
+        native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
         source_action = (
             args.get("source_action")
             or args.get("target_action")
@@ -2925,6 +2960,9 @@ class IDAMCPServer:
             or args.get("subaction")
         )
         if not source_action or not isinstance(source_action, str):
+            # Prefer list-style source if available, so head/grep/pick can be used tersely.
+            if "list" in native_actions:
+                return "list", None
             return None, make_error(
                 MCPError.INVALID_ARGS,
                 f"action='{wrapper_action}' requires source_action",
@@ -2936,7 +2974,6 @@ class IDAMCPServer:
         source_action = source_action.strip()
         if not source_action:
             return None, make_error(MCPError.INVALID_ARGS, "source_action cannot be empty")
-        native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
         if source_action in WRAPPER_ACTIONS and source_action not in native_actions:
             return None, make_error(
                 MCPError.INVALID_ARGS,
@@ -4994,12 +5031,8 @@ class IDAMCPServer:
         if source_err:
             return source_err
 
-        grep_pattern = (
-            args.get("grep")
-            or args.get("grep_pattern")
-            or args.get("pattern")
-            or args.get("query")
-        )
+        explicit_pattern = args.get("grep") or args.get("grep_pattern")
+        grep_pattern = explicit_pattern or args.get("pattern") or args.get("query")
         if not isinstance(grep_pattern, str) or not grep_pattern.strip():
             return make_error(
                 MCPError.INVALID_ARGS,
@@ -5018,6 +5051,9 @@ class IDAMCPServer:
         grep_offset = _bounded_int(args.get("grep_offset", 0), 0, min_value=0, max_value=500000)
 
         child_args = self._strip_wrapper_args(args)
+        if explicit_pattern is None:
+            child_args.pop("pattern", None)
+            child_args.pop("query", None)
         child_args["action"] = source_action
 
         source_payload = self._execute_tool(tool_name, child_args)
