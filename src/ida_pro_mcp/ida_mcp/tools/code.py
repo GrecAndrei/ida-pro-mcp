@@ -5,6 +5,16 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 
+def _get_prev_func(ea: int):
+    getter = getattr(ida_funcs, "get_prev_func", None) or getattr(idaapi, "get_prev_func", None)
+    return getter(ea) if getter else None
+
+
+def _get_next_func(ea: int):
+    getter = getattr(ida_funcs, "get_next_func", None) or getattr(idaapi, "get_next_func", None)
+    return getter(ea) if getter else None
+
+
 def _decompile_with_diagnostics(func_ea: int):
     """
     Decompile with structured diagnostics.
@@ -174,8 +184,8 @@ def code(
                 func = idaapi.get_func(ea)
                 if not func:
                     # Find nearest function for better error
-                    prev_func = idaapi.get_prev_func(ea)
-                    next_func = idaapi.get_next_func(ea)
+                    prev_func = _get_prev_func(ea)
+                    next_func = _get_next_func(ea)
                     suggestion = ""
                     if prev_func:
                         suggestion = f" Try {hex_ea(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
