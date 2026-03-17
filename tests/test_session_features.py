@@ -14,6 +14,7 @@ import copy
 import unittest
 import threading
 from unittest.mock import patch
+import ida_mcp_stdio
 
 # Add parent dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -1025,14 +1026,15 @@ class TestDuplicateSIDCollision(unittest.TestCase):
             def __init__(self, hex_value):
                 self.hex = hex_value
 
-        with patch(
-            "ida_mcp_stdio.uuid.uuid4",
+        with patch.object(
+            ida_mcp_stdio.uuid,
+            "uuid4",
             side_effect=[_FakeUUID(existing_prefix), _FakeUUID(fresh_prefix)],
         ):
             s2 = self.mgr.create_session(self.test_binary)
 
         self.assertNotEqual(s2.session_id, original_id)
-        self.assertEqual(s2.session_id, "A1B2C3D4")
+        self.assertEqual(s2.session_id, fresh_prefix[:8].upper())
 
 
 class TestCorruptJSONMetadata(unittest.TestCase):
