@@ -949,7 +949,7 @@ def search(
                     matched_apis.append({"ea": target_ea, "name": pattern, "module": "symbol"})
 
             if not matched_apis:
-                return make_error(MCPError.NOT_FOUND, f"API '{pattern}' not found")
+                return make_error(MCPError.NO_RESULTS, f"API {pattern} not found")
 
             usage_rows = []
             for api_row in matched_apis:
