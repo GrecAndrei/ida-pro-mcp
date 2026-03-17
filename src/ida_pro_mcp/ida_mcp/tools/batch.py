@@ -67,14 +67,14 @@ def batch(
 
         tool_name = call.get("tool")
         if not tool_name:
-            results.append(make_error(MCPError.INVALID_ARGS, f"Call {i}: 'tool' key is required"))
+            results.append(make_error(MCPError.INVALID_ARGS, f"Call {i}: tool key is required"))
             if stop_on_error:
                 break
             continue
 
         tool_func = get_tool(tool_name)
         if tool_func is None:
-            results.append(make_error(MCPError.TOOL_NOT_FOUND, f"Call {i}: tool '{tool_name}' not found"))
+            results.append(make_error(MCPError.TOOL_NOT_FOUND, f"Call {i}: tool {tool_name} not found"))
             if stop_on_error:
                 break
             continue
