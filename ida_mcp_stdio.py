@@ -531,7 +531,9 @@ class Session:
         if not sid:
             raise ValueError("invalid or missing session_id")
         idb_path = data.get("idb_path")
-        if not isinstance(idb_path, str):
+        if idb_path is None:
+            idb_path = ""
+        elif not isinstance(idb_path, str):
             raise ValueError("idb_path must be a string")
         created = _parse_iso_datetime(data.get("created_at"))
         accessed = _parse_iso_datetime(data.get("last_accessed"))
@@ -711,11 +713,11 @@ class SessionManager:
     def find_session_by_path(self, path: str) -> Optional[Session]:
         """Find a session by binary_path or idb_path (normalized comparison)."""
         with self._lock:
-            norm = os.path.normpath(os.path.abspath(path))
+            norm = os.path.realpath(os.path.abspath(path))
             for s in self.sessions.values():
-                if s.binary_path and os.path.normpath(os.path.abspath(s.binary_path)) == norm:
+                if s.binary_path and os.path.realpath(os.path.abspath(s.binary_path)) == norm:
                     return copy.copy(s)
-                if s.idb_path and os.path.normpath(os.path.abspath(s.idb_path)) == norm:
+                if s.idb_path and os.path.realpath(os.path.abspath(s.idb_path)) == norm:
                     return copy.copy(s)
             return None
 
@@ -1414,7 +1416,7 @@ HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"p
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session lifecycle + context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
+    "session": "Session lifecycle + runtime context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Supports shorthand calls like 'tool:action' and inline {name, action, ...args} objects. Returns compact per-call rows + summary.",

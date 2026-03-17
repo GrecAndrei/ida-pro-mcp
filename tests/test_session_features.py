@@ -13,6 +13,7 @@ import time
 import copy
 import unittest
 import threading
+from unittest.mock import patch
 
 # Add parent dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -940,10 +941,6 @@ class TestExecuteToolNewActions(unittest.TestCase):
         self.assertTrue(result.get("error"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ============================================================================
 # NEW TESTS FOR SESSION MANAGEMENT ROBUSTNESS (10 Critical Bugs)
 # ============================================================================
@@ -972,18 +969,10 @@ class TestCorruptedDatetimeMetadata(unittest.TestCase):
             "last_accessed": "2024-12-32T25:00:00"  # Invalid date
         }
         
-        # Current code would crash; fixed version should handle gracefully
-        try:
-            session = Session.from_dict(corrupted_data)
-            # If it doesn't crash, timestamps should be None or default
-            self.assertIsNotNone(session)
-            # Either dates are None or they're set to now() as fallback
-            self.assertIsNotNone(session.created_at)
-        except ValueError:
-            # Acceptable if from_dict validates and raises ValueError
-            pass
-        except Exception as e:
-            self.fail(f"Unexpected exception: {type(e).__name__}: {e}")
+        session = Session.from_dict(corrupted_data)
+        self.assertIsNotNone(session)
+        self.assertIsNotNone(session.created_at)
+        self.assertIsNotNone(session.last_accessed)
     
     def test_incomplete_metadata_dict(self):
         """CRITICAL: Missing required keys should not crash from_dict()."""
@@ -994,14 +983,8 @@ class TestCorruptedDatetimeMetadata(unittest.TestCase):
             # idb_path is MISSING
         }
         
-        # Should either raise ValueError or create with defaults
-        try:
-            session = Session.from_dict(incomplete_data)
-            # If created, idb_path should be empty string, not None
-            self.assertEqual(session.idb_path, "")
-        except (ValueError, KeyError):
-            # Also acceptable - indicates validation
-            pass
+        session = Session.from_dict(incomplete_data)
+        self.assertEqual(session.idb_path, "")
     
     def test_null_datetime_fields_safe(self):
         """Empty/None datetime fields should not crash."""
@@ -1031,25 +1014,25 @@ class TestDuplicateSIDCollision(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
     
     def test_duplicate_sid_collision(self):
-        """HIGH: Manual SID collision should be detected."""
+        """HIGH: create_session should retry when candidate SID already exists."""
         # Create first session
         s1 = self.mgr.create_session(self.test_binary)
         original_id = s1.session_id
-        
-        # Try to manually insert duplicate (simulating collision)
-        duplicate_session = Session(
-            original_id,  # Same SID
-            "/tmp/other.idb",
-            "/tmp/other.exe"
-        )
-        
-        # If manually inserted, it should overwrite - but at least verify
-        # that the session exists in the manager
-        self.assertIn(original_id, self.mgr.sessions)
-        self.assertEqual(self.mgr.sessions[original_id].session_id, original_id)
-        
-        # create_session() now allocates IDs via _new_session_id(), so
-        # normal creation path avoids collisions even if this manual overwrite can.
+        existing_prefix = original_id.lower() + ("0" * 24)
+        fresh_prefix = "a1b2c3d4" + ("f" * 24)
+
+        class _FakeUUID:
+            def __init__(self, hex_value):
+                self.hex = hex_value
+
+        with patch(
+            "ida_mcp_stdio.uuid.uuid4",
+            side_effect=[_FakeUUID(existing_prefix), _FakeUUID(fresh_prefix)],
+        ):
+            s2 = self.mgr.create_session(self.test_binary)
+
+        self.assertNotEqual(s2.session_id, original_id)
+        self.assertEqual(s2.session_id, "A1B2C3D4")
 
 
 class TestCorruptJSONMetadata(unittest.TestCase):
@@ -1333,7 +1316,7 @@ class TestSessionCreateEdgeCases(unittest.TestCase):
         self.assertEqual(len(set(sessions)), 10)
         for sid in sessions:
             self.assertEqual(len(sid), 8)
-            self.assertTrue(sid.isupper())
+            self.assertEqual(sid, sid.upper())
             self.assertTrue(all(c in "0123456789ABCDEF" for c in sid))
 
 
@@ -1377,3 +1360,7 @@ class TestMetadataPersistence(unittest.TestCase):
         self.assertEqual(restored.binary_path, session.binary_path)
         self.assertEqual(restored.tags, session.tags)
         self.assertEqual(restored.notes, session.notes)
+
+
+if __name__ == "__main__":
+    unittest.main()
