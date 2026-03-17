@@ -1382,7 +1382,7 @@ HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"p
 
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls), update (modify session fields), rename (set custom name), duplicate (clone session), export_session/import_session (portable metadata), archive/unarchive (archive management), tag/untag/find_by_tag (tagging), add_note/clear_notes (notes), cleanup_stale (remove old sessions), stats (session statistics), validate (check integrity), bulk_delete/bulk_tag (batch operations), search_notes (search across notes), recent/oldest (sorted access), snapshot/restore_snapshot (point-in-time snapshots), merge (combine session metadata), macro_set/macro_get/macro_list/macro_delete/macro_run (session macro presets), recent_workset (merged recent actions/bookmarks for rapid LLM resume). IDB is optional: after create/switch, tools run from active session; when provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
+    "session": "Session lifecycle + context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
     "batch": "Run multiple tool calls in a single request. Supports shorthand calls like 'tool:action' and inline {name, action, ...args} objects. Returns compact per-call rows + summary.",
@@ -3516,6 +3516,7 @@ class IDAMCPServer:
             raw_result = item.get("result")
             is_error = bool(isinstance(raw_result, dict) and raw_result.get("error"))
             entry = {
+                # Keep compact external key as `tool` for readability (source batch rows use `name`).
                 "tool": item.get("name"),
                 "ok": not is_error,
                 "data": raw_result,
@@ -3997,6 +3998,7 @@ class IDAMCPServer:
             self._cleanup_runtime(sid)
 
     def _resolve_session_from_idb_ref(self, idb_ref: Any) -> Optional[Session]:
+        """Resolve idb references from session id, SID_* idb id/name, path, or basename."""
         if not isinstance(idb_ref, str):
             return None
         raw = idb_ref.strip()
@@ -4010,6 +4012,7 @@ class IDAMCPServer:
                 return session
 
         base = os.path.basename(raw)
+        # SID_* filenames encode the canonical 8-char session id (SESSION_ID_RE).
         sid_match = re.match(r"^SID_([A-Za-z0-9]{8})(?:_|$)", base)
         if sid_match:
             session = self.session_mgr.get_session(sid_match.group(1).upper())
@@ -6047,6 +6050,13 @@ class IDAMCPServer:
         return self.call_tool(tool_name, ip, **args)
 
     def _normalize_batch_call(self, call: Any, idx: int) -> tuple[Optional[str], Any, Optional[dict]]:
+        """
+        Normalize one batch entry.
+        Supported forms:
+        - "tool:action" / "tool"
+        - {"name": "...", "arguments": {...}} (or args)
+        - {"tool": "...", "action": "...", ...inline_args}
+        """
         if isinstance(call, str):
             raw = call.strip()
             if not raw:
@@ -6114,7 +6124,10 @@ class IDAMCPServer:
             resolved_name = TOOL_ALIASES.get(name, name) if isinstance(name, str) else name
 
             if normalize_err:
-                pass
+                results.append({"index": idx, "name": name, "result": res})
+                if res.get("error") and not continue_on_error:
+                    break
+                continue
             elif not name:
                 res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing name field",
                                 hint="Each batch call must have a name field specifying the tool.")
