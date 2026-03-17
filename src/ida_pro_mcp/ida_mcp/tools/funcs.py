@@ -320,7 +320,7 @@ def funcs(
                 if count != 0 and len(func_lines) >= count:
                     continue
 
-                fn = idaapi.get_func(ea)
+                fn = ida_funcs.get_func(ea)
                 if not fn:
                     continue
                 size = hex_size(fn.end_ea - fn.start_ea)
@@ -361,7 +361,7 @@ def funcs(
         elif action == "info":
             ea, err = validate_addr(addr)
             if err: return err
-            fn = idaapi.get_func(ea)
+            fn = ida_funcs.get_func(ea)
             if not fn:
                 # Try to find containing function
                 func = ida_funcs.get_func(ea)
