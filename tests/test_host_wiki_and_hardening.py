@@ -192,12 +192,21 @@ class TestHostHardening(unittest.TestCase):
             session = self.server.session_mgr.create_session("/tmp/demo.bin")
             session.idb_path = os.path.join(tempdir, f"SID_{session.session_id}_demo.i64")
             self.server.session_mgr.sessions[session.session_id] = session
+            self.assertFalse(os.path.exists(session.idb_path))
             self.assertEqual(
                 self.server._resolve_session_from_idb_ref(session.session_id).session_id,
                 session.session_id,
             )
             self.assertEqual(
                 self.server._resolve_session_from_idb_ref(os.path.basename(session.idb_path)).session_id,
+                session.session_id,
+            )
+            self.assertEqual(
+                self.server._resolve_session_from_idb_ref(session.idb_path).session_id,
+                session.session_id,
+            )
+            self.assertEqual(
+                self.server._resolve_session_from_idb_ref(session.binary_path).session_id,
                 session.session_id,
             )
         finally:
@@ -258,6 +267,10 @@ class TestResponseCompaction(unittest.TestCase):
         payload = json.loads(resp["result"]["content"][0]["text"])
         self.assertIn("results", payload)
         self.assertIn("summary", payload)
+        self.assertEqual(payload["summary"]["total"], 1)
+        self.assertEqual(payload["summary"]["ok"], 1)
+        self.assertEqual(payload["summary"]["errors"], 0)
+        self.assertFalse(payload["summary"].get("stopped_on_error", False))
         self.assertEqual(payload["results"][0]["tool"], "session")
         self.assertTrue(payload["results"][0]["ok"])
         self.assertEqual(payload["results"][0]["data"], {"total_sessions": 0})
