@@ -162,7 +162,8 @@ From your MCP client:
 
 ### 3) Call tools without repeating `idb`
 
-Once a session is active, most tools automatically use current session context.
+IDB is **not required** to run MCP. Once a session is active, most tools automatically use current session context.
+If you pass `idb`, it can be a session ID (`AB12CD34`), a `SID_*` IDB identifier/name, a binary path, or a full IDB path.
 
 ```json
 {
@@ -184,6 +185,21 @@ Once a session is active, most tools automatically use current session context.
       {"name": "idb", "arguments": {"action": "meta"}},
       {"name": "data", "arguments": {"action": "imports"}},
       {"name": "search", "arguments": {"action": "strings", "pattern": "http"}}
+    ]
+  }
+}
+```
+
+Shorthand is also supported to reduce bracket noise:
+
+```json
+{
+  "name": "batch",
+  "arguments": {
+    "calls": [
+      "idb:meta",
+      {"name": "data", "action": "imports"},
+      {"tool": "search", "action": "strings", "pattern": "http"}
     ]
   }
 }
@@ -258,7 +274,8 @@ stateDiagram-v2
 
 ## Tool Surface
 
-Tool families include:
+The advertised `tools/list` surface is intentionally compact (~30 core tools) for limited context windows.
+Additional specialized capabilities remain accessible via hub tools + wiki docs.
 
 - Core/session: `session`, `batch`, `bookmarks`, `wiki`, `truncation`
 - Data access: `idb`, `data`, `code`, `search`, `types`, `memory`
@@ -467,7 +484,7 @@ Environment defaults:
 - `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`0` default lean, `1` full verbose tool metadata)
 
 `tools/list` mode behavior:
-- `ultra` (default): tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb`).
+- `ultra` (default): tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
 - `lean`: shortened per-tool descriptions + compact parameter typing.
 - `full`: full descriptions and full input schema.
 
