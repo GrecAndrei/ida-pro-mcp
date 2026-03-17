@@ -1048,8 +1048,8 @@ class TestDuplicateSIDCollision(unittest.TestCase):
         self.assertIn(original_id, self.mgr.sessions)
         self.assertEqual(self.mgr.sessions[original_id].session_id, original_id)
         
-        # This test verifies the collision CAN happen; real fix needs
-        # collision check in create_session() before assignment
+        # create_session() now allocates IDs via _new_session_id(), so
+        # normal creation path avoids collisions even if this manual overwrite can.
 
 
 class TestCorruptJSONMetadata(unittest.TestCase):
