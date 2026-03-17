@@ -1148,7 +1148,12 @@ class TestSymlinkSessionBypass(unittest.TestCase):
         
         # Both should find the same session
         self.assertIsNotNone(found_real)
-        # This may fail without the realpath fix, proving the vulnerability
+        self.assertIsNotNone(found_link)
+        self.assertEqual(
+            found_real.session_id,
+            found_link.session_id,
+        )
+        # These assertions may fail without the realpath fix, proving the vulnerability
 
 
 class TestSnapshotIDDuplicate(unittest.TestCase):
