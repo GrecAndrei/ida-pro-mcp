@@ -299,6 +299,38 @@ TOOL_ALIASES = {
     "xfer_analysis": "xref_analysis",
 }
 WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
+ADVERTISED_TOOLS = [
+    "session",
+    "truncation",
+    "bookmarks",
+    "batch",
+    "wiki",
+    "analysis",
+    "query",
+    "edit",
+    "idb",
+    "code",
+    "data",
+    "search",
+    "types",
+    "memory",
+    "modify",
+    "funcs",
+    "segments",
+    "bulk",
+    "misc",
+    "calc",
+    "nav",
+    "project",
+    "debug",
+    "trace",
+    "coverage",
+    "agent",
+    "summarize",
+    "classify",
+    "compare",
+    "vuln_scan",
+]
 HIDDEN_TOOLS_IN_LIST = {"plugins", "xfer_analysis"}
 _COMPACT_DROP = object()
 _COMPACT_META_KEYS = {
@@ -1345,12 +1377,15 @@ TOOLS = [
     "llm_helpers",
 ]
 
+# Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
+HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"plugins", "xfer_analysis"})
+
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
-    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls), update (modify session fields), rename (set custom name), duplicate (clone session), export_session/import_session (portable metadata), archive/unarchive (archive management), tag/untag/find_by_tag (tagging), add_note/clear_notes (notes), cleanup_stale (remove old sessions), stats (session statistics), validate (check integrity), bulk_delete/bulk_tag (batch operations), search_notes (search across notes), recent/oldest (sorted access), snapshot/restore_snapshot (point-in-time snapshots), merge (combine session metadata), macro_set/macro_get/macro_list/macro_delete/macro_run (session macro presets), recent_workset (merged recent actions/bookmarks for rapid LLM resume). Once a session is created or switched, all other tools automatically use it without requiring the 'idb' parameter.",
+    "session": "Session management. Actions: discover, create (auto-detects existing sessions for same binary or IDB, supports processor/bitness/endian/loader params, analysis_options, idb_path, ida_args, tags, notes, and force_new), get (single session lookup by ID with runtime status), list (supports limit/offset for pagination, query for regex/glob/substring filtering, includes runtime status), switch (by session_id or binary_path), close (PERMANENTLY DELETES session and all associated files including IDB), status (shows current session with runtime info), rebuild (recreate IDB with new analysis options and recovery controls), update (modify session fields), rename (set custom name), duplicate (clone session), export_session/import_session (portable metadata), archive/unarchive (archive management), tag/untag/find_by_tag (tagging), add_note/clear_notes (notes), cleanup_stale (remove old sessions), stats (session statistics), validate (check integrity), bulk_delete/bulk_tag (batch operations), search_notes (search across notes), recent/oldest (sorted access), snapshot/restore_snapshot (point-in-time snapshots), merge (combine session metadata), macro_set/macro_get/macro_list/macro_delete/macro_run (session macro presets), recent_workset (merged recent actions/bookmarks for rapid LLM resume). IDB is optional: after create/switch, tools run from active session; when provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
     "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
     "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
-    "batch": "Run multiple tool calls in a single request. Arguments: calls[], continue_on_error.",
+    "batch": "Run multiple tool calls in a single request. Supports shorthand calls like 'tool:action' and inline {name, action, ...args} objects. Returns compact per-call rows + summary.",
     # Analysis configuration
     "analysis": "Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze.",
     # Unified query/edit hubs
@@ -2087,12 +2122,8 @@ TOOL_ARG_SCHEMAS = {
         "calls": {
             "type": "array",
             "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "arguments": {"type": "object"},
-                },
-                "required": ["name"],
+                "type": ["object", "string"],
+                "description": "Each item can be 'tool:action', {name, arguments}, or {name, action, ...args}.",
             },
         },
         "continue_on_error": {"type": "boolean"},
@@ -2227,7 +2258,7 @@ def build_input_schema(tool_name: str) -> dict:
     ):
         props["idb"] = {
             "type": "string",
-            "description": "Optional: Path to IDB file or binary. If not provided, uses the current active session.",
+            "description": "Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.",
         }
     if "action" in props:
         action_schema = props.get("action")
@@ -2308,7 +2339,7 @@ def build_input_schema_ultra(tool_name: str) -> dict:
         return {
             "type": "object",
             "properties": {
-                "calls": {"type": "array"},
+                "calls": {"type": "array", "items": {"type": ["object", "string"]}},
                 "continue_on_error": {"type": "boolean"},
             },
             "required": ["calls"],
@@ -2330,7 +2361,10 @@ def build_input_schema_ultra(tool_name: str) -> dict:
         props["action"] = {"type": "string", "enum": _action_enum_with_grep(tool_name)}
         required.append("action")
     if tool_name not in ("session", "bookmarks", "wiki", "batch", "truncation"):
-        props["idb"] = {"type": "string"}
+        props["idb"] = {
+            "type": "string",
+            "description": "Optional. session_id, SID_* id, binary path, or full IDB path.",
+        }
     return {"type": "object", "properties": props, "required": required}
 
 
@@ -2338,6 +2372,10 @@ def build_tool_description_ultra(tool_name: str) -> str:
     """Return a tiny wiki-first routing hint for ultra tools/list mode."""
     if tool_name == "wiki":
         return "Wiki index + docs. Start with wiki(action='index')."
+    if tool_name == "session":
+        return "Session hub. IDB is optional after create/switch."
+    if tool_name == "batch":
+        return "Batch hub. Use calls as 'tool:action' or {name,action,...}."
     return f"Use wiki(topic='tools/{tool_name}') for usage."
 
 
@@ -3475,14 +3513,17 @@ class IDAMCPServer:
             if not isinstance(item, dict):
                 compact_results.append(item)
                 continue
+            raw_result = item.get("result")
+            is_error = bool(isinstance(raw_result, dict) and raw_result.get("error"))
             entry = {
-                "name": item.get("name"),
-                "result": item.get("result"),
+                "tool": item.get("name"),
+                "ok": not is_error,
+                "data": raw_result,
             }
-            if isinstance(entry["result"], dict) and entry["result"].get("error"):
-                entry["error"] = True
             compact_results.append(entry)
         out = {"results": compact_results}
+        if isinstance(payload.get("summary"), dict):
+            out["summary"] = payload.get("summary")
         if payload.get("error"):
             out["error"] = payload.get("error")
         return out
@@ -3955,28 +3996,46 @@ class IDAMCPServer:
         for sid in list(self.session_runtimes.keys()):
             self._cleanup_runtime(sid)
 
+    def _resolve_session_from_idb_ref(self, idb_ref: Any) -> Optional[Session]:
+        if not isinstance(idb_ref, str):
+            return None
+        raw = idb_ref.strip()
+        if not raw:
+            return None
+
+        sid = _normalize_session_id(raw)
+        if sid:
+            session = self.session_mgr.get_session(sid)
+            if session:
+                return session
+
+        base = os.path.basename(raw)
+        sid_match = re.match(r"^SID_([A-Za-z0-9]{8})(?:_|$)", base)
+        if sid_match:
+            session = self.session_mgr.get_session(sid_match.group(1).upper())
+            if session:
+                return session
+
+        found = self.session_mgr.find_session_by_path(raw)
+        if found:
+            return found
+
+        wanted = base.lower()
+        if not wanted:
+            return None
+        for session in self.session_mgr.discover_sessions():
+            if os.path.basename(session.idb_path or "").lower() == wanted:
+                return session
+        return None
+
     def call_tool(self, tool_name, idb_path, **kwargs):
-        path = validate_path(idb_path)
-        if not path:
-            return make_error(MCPError.INVALID_ARGS, "Invalid path")
-
-        # Find the session associated with this IDB path
-        session = None
-        for s in self.session_mgr.sessions.values():
-            if os.path.normpath(s.idb_path) == os.path.normpath(path):
-                session = s
-                break
-
+        session = self._resolve_session_from_idb_ref(idb_path)
         if not session:
-            # Fallback: check if the path is actually the binary path of the current session
-            if self.current_session and os.path.normpath(path) == os.path.normpath(
-                self.current_session.binary_path
-            ):
-                session = self.current_session
-            else:
-                return make_error(
-                    MCPError.FILE_NOT_FOUND, f"No session found for IDB: {path}"
-                )
+            return make_error(
+                MCPError.FILE_NOT_FOUND,
+                f"No session found for idb reference: {idb_path}",
+                hint="Use session_id, SID_* IDB id, binary/idb path, or create/switch a session first.",
+            )
 
         runtime = self.session_runtimes.get(session.session_id)
         if (
@@ -5987,10 +6046,48 @@ class IDAMCPServer:
             )
         return self.call_tool(tool_name, ip, **args)
 
+    def _normalize_batch_call(self, call: Any, idx: int) -> tuple[Optional[str], Any, Optional[dict]]:
+        if isinstance(call, str):
+            raw = call.strip()
+            if not raw:
+                return None, {}, make_error(MCPError.INVALID_ARGS, f"Call at index {idx} is empty")
+            if ":" in raw:
+                name, action = raw.split(":", 1)
+                name = name.strip()
+                action = action.strip()
+                if not name:
+                    return None, {}, make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing tool name")
+                call_args = {"action": action} if action else {}
+                return name, call_args, None
+            return raw, {}, None
+        if not isinstance(call, dict):
+            return None, {}, make_error(MCPError.INVALID_ARGS, f"Call at index {idx} must be an object or string")
+
+        name = call.get("name", call.get("tool"))
+        call_args = call.get("arguments", call.get("args"))
+        if call_args is None:
+            call_args = {}
+        if not isinstance(call_args, dict):
+            return name, call_args, None
+
+        if "action" not in call_args and isinstance(call.get("action"), str):
+            call_args = dict(call_args)
+            call_args["action"] = call.get("action")
+        passthrough = {
+            k: v
+            for k, v in call.items()
+            if k not in {"name", "tool", "arguments", "args", "action"}
+        }
+        if passthrough:
+            call_args = dict(call_args)
+            for k, v in passthrough.items():
+                call_args.setdefault(k, v)
+        return name, call_args, None
+
     def _handle_batch(self, args):
         calls = args.get("calls", [])
         if not isinstance(calls, list):
-            return make_error(MCPError.INVALID_ARGS, "calls must be a list of {name, arguments} objects")
+            return make_error(MCPError.INVALID_ARGS, "calls must be a list of call objects or 'tool:action' strings")
         if not calls:
             return make_error(MCPError.BATCH_EMPTY, "No calls provided in batch",
                              hint="Provide at least one call: batch(calls=[{name: 'tool', arguments: {...}}])")
@@ -6011,16 +6108,14 @@ class IDAMCPServer:
         continue_on_error = bool(args.get("continue_on_error", False))
         results = []
         for idx, call in enumerate(calls):
-            if not isinstance(call, dict):
-                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} must be an object")
-                name = None
-                call_args = {}
-            else:
-                name = call.get("name")
-                call_args = call.get("arguments", {})
+            name, call_args, normalize_err = self._normalize_batch_call(call, idx)
+            if normalize_err:
+                res = normalize_err
             resolved_name = TOOL_ALIASES.get(name, name) if isinstance(name, str) else name
 
-            if not name:
+            if normalize_err:
+                pass
+            elif not name:
                 res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing name field",
                                 hint="Each batch call must have a name field specifying the tool.")
             elif not isinstance(name, str):
@@ -6044,7 +6139,18 @@ class IDAMCPServer:
             results.append({"index": idx, "name": name, "result": res})
             if res.get("error") and not continue_on_error:
                 break
-        return {"ok": True, "results": results, "count": len(results)}
+        errors = sum(1 for item in results if isinstance(item.get("result"), dict) and item["result"].get("error"))
+        return {
+            "ok": True,
+            "results": results,
+            "count": len(results),
+            "summary": {
+                "total": len(results),
+                "ok": len(results) - errors,
+                "errors": errors,
+                "stopped_on_error": bool(errors and not continue_on_error and len(results) < len(calls)),
+            },
+        }
 
     def handle_request(self, req):
         m, rid, p = req.get("method"), req.get("id"), req.get("params", {})
