@@ -212,6 +212,34 @@ class TestHostHardening(unittest.TestCase):
         finally:
             shutil.rmtree(tempdir, ignore_errors=True)
 
+    def test_wrapper_source_action_defaults_to_list_when_available(self):
+        action, err = self.server._wrapper_source_action("funcs", {"action": "head"}, "head")
+        self.assertIsNone(err)
+        self.assertEqual(action, "list")
+
+    def test_wrapper_source_action_requires_source_when_no_list_action(self):
+        action, err = self.server._wrapper_source_action("code", {"action": "head"}, "head")
+        self.assertIsNone(action)
+        self.assertTrue(err.get("error"))
+        self.assertEqual(err.get("code"), MCPError.INVALID_ARGS)
+
+    def test_grep_pattern_alias_not_forwarded_to_source_action(self):
+        captured = {}
+
+        def fake_execute(tool_name, args):
+            captured["tool"] = tool_name
+            captured["args"] = dict(args)
+            return {"functions": "sub_main"}
+
+        self.server._execute_tool = fake_execute
+        res = IDAMCPServer._handle_tool_grep_action(
+            self.server,
+            "funcs",
+            {"action": "grep", "source_action": "list", "pattern": "sub_main"},
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertNotIn("pattern", captured["args"])
+
 
 class TestResponseCompaction(unittest.TestCase):
     def setUp(self):

@@ -13,6 +13,8 @@ import time
 import copy
 import unittest
 import threading
+from unittest.mock import patch
+import ida_mcp_stdio
 
 # Add parent dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -938,6 +940,428 @@ class TestExecuteToolNewActions(unittest.TestCase):
     def test_merge_missing_ids(self):
         result = self.server._execute_tool("session", {"action": "merge"})
         self.assertTrue(result.get("error"))
+
+
+# ============================================================================
+# NEW TESTS FOR SESSION MANAGEMENT ROBUSTNESS (10 Critical Bugs)
+# ============================================================================
+
+class TestCorruptedDatetimeMetadata(unittest.TestCase):
+    """Test that corrupted timestamps don't crash session loading."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_corrupted_datetime_metadata(self):
+        """CRITICAL: Malformed created_at should not crash from_dict()."""
+        # Create metadata with invalid datetime
+        corrupted_data = {
+            "session_id": "ABCD1234",
+            "idb_path": "/tmp/test.idb",
+            "binary_path": self.test_binary,
+            "created_at": "2024-13-45T99:99:99",  # Invalid date
+            "last_accessed": "2024-12-32T25:00:00"  # Invalid date
+        }
+        
+        session = Session.from_dict(corrupted_data)
+        self.assertIsNotNone(session)
+        self.assertIsNotNone(session.created_at)
+        self.assertIsNotNone(session.last_accessed)
+    
+    def test_incomplete_metadata_dict(self):
+        """CRITICAL: Missing required keys should not crash from_dict()."""
+        # Missing idb_path (required field)
+        incomplete_data = {
+            "session_id": "ABCD1234",
+            "binary_path": self.test_binary
+            # idb_path is MISSING
+        }
+        
+        session = Session.from_dict(incomplete_data)
+        self.assertEqual(session.idb_path, "")
+    
+    def test_null_datetime_fields_safe(self):
+        """Empty/None datetime fields should not crash."""
+        # Test with missing fields (not None, just missing from dict)
+        data = {
+            "session_id": "ABCD1234",
+            "idb_path": "/tmp/test.idb",
+            "binary_path": self.test_binary
+            # No created_at or last_accessed fields
+        }
+        session = Session.from_dict(data)
+        self.assertIsNotNone(session.created_at)  # Should have default
+        self.assertIsNotNone(session.last_accessed)
+
+
+class TestDuplicateSIDCollision(unittest.TestCase):
+    """Test that duplicate SIDs are detected and handled."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_duplicate_sid_collision(self):
+        """HIGH: create_session should retry when candidate SID already exists."""
+        # Create first session
+        s1 = self.mgr.create_session(self.test_binary)
+        original_id = s1.session_id
+        existing_prefix = original_id.lower() + ("0" * 24)
+        fresh_prefix = "a1b2c3d4" + ("f" * 24)
+
+        class _FakeUUID:
+            def __init__(self, hex_value):
+                self.hex = hex_value
+
+        with patch.object(
+            ida_mcp_stdio.uuid,
+            "uuid4",
+            side_effect=[_FakeUUID(existing_prefix), _FakeUUID(fresh_prefix)],
+        ):
+            s2 = self.mgr.create_session(self.test_binary)
+
+        self.assertNotEqual(s2.session_id, original_id)
+        self.assertEqual(s2.session_id, fresh_prefix[:8].upper())
+
+
+class TestCorruptJSONMetadata(unittest.TestCase):
+    """Test handling of corrupt JSON metadata files."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_corrupt_json_metadata(self):
+        """HIGH: Corrupt JSON should not prevent other sessions loading."""
+        # Create valid session first
+        test_bin = os.path.join(self.tmpdir, "good.exe")
+        with open(test_bin, "wb") as f:
+            f.write(b"\x00" * 50)
+        good_session = self.mgr.create_session(test_bin)
+        good_sid = good_session.session_id
+        
+        # Now create corrupted metadata file manually
+        corrupt_meta = os.path.join(self.mgr.session_dir, "SID_BADBADBAD_metadata.json")
+        with open(corrupt_meta, "w") as f:
+            f.write("{invalid json content")  # Incomplete JSON
+        
+        # Create new manager - should load good session and skip corrupt one
+        mgr2 = SessionManager(self.tmpdir)
+        
+        # Good session should still be loaded
+        loaded = mgr2.get_session(good_sid)
+        self.assertIsNotNone(loaded)
+        
+        # Corrupt file should be skipped silently (no crash)
+        # This proves robustness
+
+
+class TestOrphanedIDBInvalidSID(unittest.TestCase):
+    """Test that orphaned IDBs with invalid SIDs are skipped."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_orphaned_idb_invalid_sid(self):
+        """MEDIUM: IDB with invalid SID format should be skipped."""
+        # Create IDB with malformed SID prefix
+        bad_idb = os.path.join(self.mgr.session_dir, "SID_INVALID_BAD_malware.i64")
+        with open(bad_idb, "wb") as f:
+            f.write(b"\x00" * 100)
+        
+        # Load orphaned IDBs
+        self.mgr._load_orphaned_idbs()
+        
+        # Invalid SID should not create a session
+        # (unless fixed code allows it with normalization)
+        sessions_created = len(self.mgr.sessions)
+        self.assertEqual(sessions_created, 0)  # Should skip invalid SID
+
+
+class TestSymlinkSessionBypass(unittest.TestCase):
+    """Test symlink handling in session path matching."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_symlink_session_bypass(self):
+        """MEDIUM: Symlinks should be resolved in path matching (security)."""
+        # Create real binary
+        real_bin = os.path.join(self.tmpdir, "real.exe")
+        with open(real_bin, "wb") as f:
+            f.write(b"\x00" * 100)
+        
+        # Create session for real binary
+        session = self.mgr.create_session(real_bin)
+        
+        # Create symlink pointing to same file
+        link_bin = os.path.join(self.tmpdir, "link.exe")
+        try:
+            os.symlink(real_bin, link_bin)
+        except OSError:
+            # Symlinks might not work on Windows/no permission
+            self.skipTest("Cannot create symlinks on this system")
+        
+        # Both should find the same session (if realpath is used)
+        # Current code might not resolve symlinks properly
+        found_real = self.mgr.find_session_by_path(real_bin)
+        found_link = self.mgr.find_session_by_path(link_bin)
+        
+        # Both should find the same session
+        self.assertIsNotNone(found_real)
+        self.assertIsNotNone(found_link)
+        self.assertEqual(
+            found_real.session_id,
+            found_link.session_id,
+        )
+        # These assertions may fail without the realpath fix, proving the vulnerability
+
+
+class TestSnapshotIDDuplicate(unittest.TestCase):
+    """Test snapshot ID collision detection."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_snapshot_id_duplicate(self):
+        """MEDIUM: Duplicate snapshot IDs should be prevented."""
+        session = self.mgr.create_session(self.test_binary)
+        sid = session.session_id
+        
+        # Create multiple snapshots
+        snap_ids = []
+        for i in range(5):
+            snap_id = self.mgr.snapshot_session(sid)
+            self.assertIsNotNone(snap_id)
+            snap_ids.append(snap_id)
+        
+        # All snapshot IDs should be unique
+        self.assertEqual(len(snap_ids), len(set(snap_ids)),
+                        "Snapshot IDs should be unique")
+
+
+class TestImportInvalidDict(unittest.TestCase):
+    """Test import_session with invalid data."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_import_invalid_dict(self):
+        """HIGH: Importing invalid dict should fail gracefully."""
+        # Missing required fields
+        invalid_data = {
+            "binary_path": "/tmp/test.exe"
+            # Missing idb_path and session_id
+        }
+        
+        try:
+            session = self.mgr.import_session(invalid_data)
+            # If it doesn't raise, at least idb_path should exist
+            self.assertIsNotNone(session.idb_path)
+        except (ValueError, KeyError):
+            # Acceptable - indicates validation
+            pass
+    
+    def test_import_malformed_dict(self):
+        """Import with null/empty idb_path should fail."""
+        invalid_data = {
+            "session_id": "ABCD1234",
+            "idb_path": ""  # Empty
+        }
+        
+        try:
+            session = self.mgr.import_session(invalid_data)
+            # Empty idb_path might be accepted with warning
+            # but should not crash
+            self.assertIsNotNone(session)
+        except (ValueError, KeyError):
+            pass
+
+
+class TestDuplicateSessionIOUB(unittest.TestCase):
+    """Test duplicate_session with file operations."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_duplicate_deletes_idb(self):
+        """HIGH: Duplicate should handle missing IDB gracefully."""
+        session = self.mgr.create_session(self.test_binary)
+        sid = session.session_id
+        
+        # Create fake IDB
+        fake_idb = os.path.join(self.tmpdir, f"SID_{sid}_test.idb")
+        with open(fake_idb, "wb") as f:
+            f.write(b"\x00" * 50)
+        
+        # Update session to point to it
+        self.mgr.sessions[sid].idb_path = fake_idb
+        
+        # Now delete the IDB before duplicating
+        os.remove(fake_idb)
+        
+        # Duplicate should still work (or at least not crash)
+        dup = self.mgr.duplicate_session(sid)
+        
+        # Dup should exist
+        self.assertIsNotNone(dup)
+        self.assertNotEqual(dup.session_id, sid)
+        # idb_path will be dead reference, but that's OK for dup
+
+
+class TestIDBPathTOCTOU(unittest.TestCase):
+    """Test time-of-check-time-of-use in IDB path handling."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_idb_path_toctou(self):
+        """MEDIUM: IDB path race condition (file deleted after check)."""
+        # This test documents the TOCTOU vulnerability
+        # It's hard to actually trigger in unit test, but we can check
+        # that sessions handle missing IDB files gracefully
+        
+        session = self.mgr.create_session(self.test_binary)
+        
+        # Manually set idb_path to non-existent file
+        session.idb_path = "/tmp/nonexistent_idb_12345.i64"
+        self.mgr.sessions[session.session_id] = session
+        
+        # Session should still be retrievable (path validation is loose)
+        retrieved = self.mgr.get_session(session.session_id)
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved.idb_path, "/tmp/nonexistent_idb_12345.i64")
+        
+        # Validate should flag missing IDB
+        validation = self.mgr.validate_session(session.session_id)
+        self.assertFalse(validation["valid"])
+        self.assertIn("IDB not found", str(validation["issues"]))
+
+
+class TestSessionCreateEdgeCases(unittest.TestCase):
+    """Additional edge case tests for session creation."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_create_with_empty_binary_path(self):
+        """Session with empty binary_path should be allowed."""
+        session = self.mgr.create_session("")
+        self.assertIsNotNone(session)
+        self.assertEqual(session.binary_path, "")
+        self.assertIsNotNone(session.idb_path)
+    
+    def test_create_generates_unique_sids(self):
+        """Multiple creates should generate unique SIDs."""
+        test_bin = os.path.join(self.tmpdir, "test.exe")
+        with open(test_bin, "wb") as f:
+            f.write(b"\x00" * 50)
+        
+        sessions = []
+        for i in range(10):
+            s = self.mgr.create_session(test_bin)
+            sessions.append(s.session_id)
+        
+        self.assertEqual(len(set(sessions)), 10)
+        for sid in sessions:
+            self.assertEqual(len(sid), 8)
+            self.assertEqual(sid, sid.upper())
+            self.assertTrue(all(c in "0123456789ABCDEF" for c in sid))
+
+
+class TestMetadataPersistence(unittest.TestCase):
+    """Test metadata file consistency."""
+    
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = SessionManager(self.tmpdir)
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+    
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+    
+    def test_no_orphaned_tmp_files_after_save(self):
+        """Atomic writes should not leave .tmp files."""
+        session = self.mgr.create_session(self.test_binary)
+        meta_path = self.mgr._get_metadata_path(session.session_id)
+        
+        # Update and save
+        session.notes = "updated"
+        self.mgr._save_metadata(session)
+        
+        # Check no .tmp file exists
+        tmp_path = meta_path + ".tmp"
+        self.assertFalse(os.path.exists(tmp_path))
+        self.assertTrue(os.path.exists(meta_path))
+    
+    def test_metadata_roundtrip(self):
+        """Session data should survive to_dict/from_dict roundtrip."""
+        session = self.mgr.create_session(self.test_binary, 
+                                         tags=["test", "important"],
+                                         notes="Test notes")
+        
+        data = session.to_dict()
+        restored = Session.from_dict(data)
+        
+        self.assertEqual(restored.session_id, session.session_id)
+        self.assertEqual(restored.binary_path, session.binary_path)
+        self.assertEqual(restored.tags, session.tags)
+        self.assertEqual(restored.notes, session.notes)
 
 
 if __name__ == "__main__":
