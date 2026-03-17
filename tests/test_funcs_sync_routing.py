@@ -58,7 +58,23 @@ class TestFuncsSyncRouting(unittest.TestCase):
             None,
         )
         self.assertIsNotNone(funcs_fn)
-        if_stmt = next((n for n in funcs_fn.body if isinstance(n, ast.If)), None)
+        decorators = {_decorator_name(d) for d in funcs_fn.decorator_list}
+        self.assertIn("tool", decorators)
+        self.assertNotIn("idawrite", decorators)
+
+        if_stmt = next(
+            (
+                n
+                for n in funcs_fn.body
+                if isinstance(n, ast.If)
+                and isinstance(n.test, ast.Compare)
+                and isinstance(n.test.left, ast.Name)
+                and n.test.left.id == "normalized_action"
+                and len(n.test.ops) == 1
+                and isinstance(n.test.ops[0], ast.In)
+            ),
+            None,
+        )
         self.assertIsNotNone(if_stmt)
 
         test_expr = if_stmt.test
