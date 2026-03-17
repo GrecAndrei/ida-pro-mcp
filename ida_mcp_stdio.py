@@ -293,6 +293,8 @@ MAX_TAGS_PER_SESSION = 64
 MAX_TAG_LEN = 64
 MAX_NOTE_LEN = 16_384
 MAX_NAME_LEN = 256
+MAX_SESSION_ID_RETRIES = 1024
+MAX_SNAPSHOT_ID_RETRIES = 128
 MAX_WIKI_RESULTS = 200
 TOOL_ALIASES = {
     "plugins": "misc",
@@ -530,7 +532,7 @@ class Session:
             raise ValueError("invalid or missing session_id")
         idb_path = data.get("idb_path")
         if not isinstance(idb_path, str):
-            raise ValueError("missing idb_path")
+            raise ValueError("idb_path must be a string")
         created = _parse_iso_datetime(data.get("created_at"))
         accessed = _parse_iso_datetime(data.get("last_accessed"))
         return cls(
@@ -588,11 +590,13 @@ class SessionManager:
         return str(name).strip()[:MAX_NAME_LEN]
 
     def _new_session_id(self) -> str:
-        for _ in range(1024):
+        for _ in range(MAX_SESSION_ID_RETRIES):
             sid = uuid.uuid4().hex[:8].upper()
             if sid not in self.sessions:
                 return sid
-        raise RuntimeError("failed to allocate unique session id")
+        raise RuntimeError(
+            f"failed to allocate unique session id after {MAX_SESSION_ID_RETRIES} retries"
+        )
 
     def _get_metadata_path(self, sid: str) -> str:
         """Get path to session metadata file"""
@@ -1079,12 +1083,15 @@ class SessionManager:
                 return None
             seen = {s.get("_snapshot_id") for s in self._snapshots.get(sid, [])}
             snapshot_id = None
-            for _ in range(128):
+            for _ in range(MAX_SNAPSHOT_ID_RETRIES):
                 candidate = uuid.uuid4().hex[:8]
                 if candidate not in seen:
                     snapshot_id = candidate
                     break
             if snapshot_id is None:
+                log_rpc(
+                    f"Failed to allocate snapshot id for session {sid} after {MAX_SNAPSHOT_ID_RETRIES} retries"
+                )
                 return None
             snapshot = session.to_dict()
             snapshot["_snapshot_id"] = snapshot_id
@@ -2951,6 +2958,7 @@ class IDAMCPServer:
             or args.get("subaction")
         )
         if not source_action or not isinstance(source_action, str):
+            # Prefer list-style source if available, so head/grep/pick can be used tersely.
             if "list" in native_actions:
                 return "list", None
             return None, make_error(
