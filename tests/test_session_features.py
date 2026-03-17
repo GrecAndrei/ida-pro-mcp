@@ -1322,7 +1322,7 @@ class TestSessionCreateEdgeCases(unittest.TestCase):
         
         sessions = []
         for i in range(10):
-            s = self.mgr.create_session(test_bin, force_new=True)
+            s = self.mgr.create_session(test_bin)
             sessions.append(s.session_id)
         
         self.assertEqual(len(set(sessions)), 10)
@@ -1372,4 +1372,3 @@ class TestMetadataPersistence(unittest.TestCase):
         self.assertEqual(restored.binary_path, session.binary_path)
         self.assertEqual(restored.tags, session.tags)
         self.assertEqual(restored.notes, session.notes)
-
