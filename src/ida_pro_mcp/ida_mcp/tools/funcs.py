@@ -432,6 +432,24 @@ def funcs(
     include_xrefs: Annotated[bool, "Include caller/callee samples in info output"] = False,
     **kwargs
 ) -> dict:
+    """
+    Create and modify function definitions.
+
+    Actions:
+    - create: Define a new function at `addr`. Automatically converts bytes to code
+      if needed. If address is inside an existing function, offers to split or
+      suggests using the existing function's start. Optionally set `end`, `name`,
+      `flags`, or `force` to delete overlapping functions/data.
+    - delete: Remove function definition at `addr`. If addr is inside a function
+      (but not at its start), the containing function is deleted.
+    - set_flags: Update function attribute flags.
+    - set_name/rename: Rename function at `addr`.
+    - add_comment: Set function-level comment.
+    - list: Paginated listing with optional name filtering.
+      Query supports regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.
+      Returns compact text: "addr  size  name [prototype]" per line.
+    - info: Detailed info about a single function.
+    """
     call_kwargs = {
         "action": action,
         "addr": addr,
