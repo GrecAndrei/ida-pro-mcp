@@ -9,18 +9,44 @@
 AI-optimized comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.
 
 ## Actions
-- `get_context`
-- `set_structured`
-- `bulk_set`
-- `export_md`
-- `import_md`
-- `summary`
+- `get_context` (tool-specific)
+- `set_structured` (tool-specific)
+- `bulk_set` (tool-specific)
+- `export_md` (tool-specific)
+- `import_md` (tool-specific)
+- `summary` (read/discovery)
 - `grep` (host wrapper): run another action, then grep its output lines.
+
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/comments_ai')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
 - (tool takes action-only or dynamic args)
+
+## Minimal Call Shapes
+```json
+{
+  "name": "comments_ai",
+  "arguments": {
+    "action": "get_context"
+  }
+}
+```
+```json
+{
+  "name": "comments_ai",
+  "arguments": {
+    "action": "grep",
+    "source_action": "get_context",
+    "pattern": "<needle>"
+  }
+}
+```
 
 ## Invocation Guidance
 - Prefer compact responses first, then zoom in with narrower arguments.
 - Use `offset`/`limit` style pagination where supported.
 - If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.

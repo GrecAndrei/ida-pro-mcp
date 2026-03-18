@@ -79,6 +79,24 @@ class TestHostWikiTool(unittest.TestCase):
         self.assertGreaterEqual(res.get("count", 0), 1)
         self.assertEqual(res["matches"][0]["topic"], "tools/trace")
 
+    def test_semantic_search_matches_conceptual_query(self):
+        res = self.server._execute_tool(
+            "wiki",
+            {
+                "action": "semantic_search",
+                "query": "runtime path tracking",
+                "category": "tools",
+                "max_results": 5,
+            },
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertEqual(res.get("action"), "semantic_search")
+        self.assertGreaterEqual(res.get("count", 0), 1)
+        topics = [m.get("topic") for m in res.get("matches", [])]
+        self.assertIn("tools/trace", topics)
+        trace_match = next(m for m in res["matches"] if m.get("topic") == "tools/trace")
+        self.assertIn("semantic_overlap", trace_match.get("matched_on", []))
+
     def test_read_missing_topic_returns_suggestions(self):
         res = self.server._execute_tool(
             "wiki", {"action": "read", "topic": "trce", "strict_topic": True}

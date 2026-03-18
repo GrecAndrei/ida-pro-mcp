@@ -9,14 +9,19 @@
 Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.
 
 ## Actions
-- `section`
-- `region`
-- `packed_detect`
-- `crypto_detect`
-- `compare`
-- `window`
-- `summary`
+- `section` (tool-specific)
+- `region` (tool-specific)
+- `packed_detect` (tool-specific)
+- `crypto_detect` (tool-specific)
+- `compare` (tool-specific)
+- `window` (tool-specific)
+- `summary` (read/discovery)
 - `grep` (host wrapper): run another action, then grep its output lines.
+
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/entropy')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
 - `action`: `string` - allowed: `section, region, packed_detect, crypto_detect, compare, window, summary`
@@ -28,7 +33,28 @@ Entropy and packing detection. Actions: section, region, packed_detect, crypto_d
 - `threshold`: `number`
 - `window`: `integer`
 
+## Minimal Call Shapes
+```json
+{
+  "name": "entropy",
+  "arguments": {
+    "action": "section"
+  }
+}
+```
+```json
+{
+  "name": "entropy",
+  "arguments": {
+    "action": "grep",
+    "source_action": "section",
+    "pattern": "<needle>"
+  }
+}
+```
+
 ## Invocation Guidance
 - Prefer compact responses first, then zoom in with narrower arguments.
 - Use `offset`/`limit` style pagination where supported.
 - If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.
