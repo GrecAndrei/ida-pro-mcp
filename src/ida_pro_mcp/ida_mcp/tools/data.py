@@ -14,7 +14,7 @@ except ImportError:
 def data(
     action: Annotated[Literal["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query"],
                       "Action: functions|globals|strings|imports|exports|lookup|bulk_query"],
-    query: Annotated[Optional[str], "Filter pattern or name/address for lookup"] = None,
+    query: Annotated[Optional[str], "Filter pattern or name/address for lookup (regex/glob/substring/semantic auto-detected)"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
     include_prototype: Annotated[bool, "Include function prototypes (functions action)"] = False,
@@ -25,6 +25,7 @@ def data(
 ) -> dict:
     """
     Query, filter, and list data items: functions, globals, strings, imports.
+    Pattern filters use shared auto-detect matching (regex/glob/substring/semantic).
     All list actions return compact text (one item per line) to minimize LLM context usage.
     
     ACTIONS:
@@ -50,9 +51,9 @@ def data(
         Params: offset, count
         Returns: {exports: "addr  name  size\\n...", total, offset, count}
         
-    lookup - Resolve a name to address or address to name
+        lookup - Resolve a name to address or address to name (exact first, then pattern fallback)
         Params: query (name or address)
-        Returns: {addr, name, type, size}
+        Returns: {addr, name, type, size} or {matches, count} when no exact symbol is found
         
     bulk_query - Execute multiple queries in one call
         Params: items (list of {kind, query, offset, count, include_prototype, include_xrefs, min_size, named_only})
@@ -321,6 +322,38 @@ def data(
                         result["is_function"] = False
                 return {"ok": True, **result}
             except Exception as e:
+                # Fallback: search names with smart pattern matching when exact resolution fails.
+                matcher = compile_smart_pattern(query, case_sensitive=False)
+                matches = []
+                for ea, name in idautils.Names():
+                    if not name:
+                        continue
+                    if not matcher(name):
+                        continue
+                    item = {"addr": hex_ea(ea), "name": name}
+                    func = idaapi.get_func(ea)
+                    item["type"] = "function" if func else "symbol"
+                    if func:
+                        item["func_size"] = hex_size(func.end_ea - func.start_ea)
+                    else:
+                        item["size"] = idc.get_item_size(ea)
+                    matches.append(item)
+                    if len(matches) >= 200:
+                        break
+                if matches:
+                    page = matches[offset : offset + count] if count != 0 else matches[offset:]
+                    lines = [f"{m['addr']}  {m['name']}  {m['type']}" for m in page]
+                    return {
+                        "ok": True,
+                        "query": query,
+                        "exact_match": False,
+                        "matches": "\n".join(lines),
+                        "items": page,
+                        "total": len(matches),
+                        "offset": offset,
+                        "count": len(page),
+                        "note": "No exact symbol match; returning pattern-matched symbols",
+                    }
                 return make_error(MCPError.FILE_NOT_FOUND, str(e))
 
         elif action == "bulk_query":

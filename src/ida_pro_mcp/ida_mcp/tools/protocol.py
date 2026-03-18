@@ -210,15 +210,12 @@ def _strip_api_suffix(name):
     return name
 
 
-def _match_query(text, query):
-    """Check if text matches query filter (regex/substring auto-detected)."""
-    if not query:
+def _match_query(text, matcher):
+    """Check if text matches query filter (regex/glob/substring/semantic auto-detected)."""
+    if not matcher:
         return True
-    import re
-    try:
-        return bool(re.search(query, text, re.IGNORECASE))
-    except re.error:
-        return query.lower() in text.lower()
+    value = "" if text is None else str(text)
+    return bool(matcher(value))
 
 
 @tool
@@ -230,7 +227,7 @@ def protocol(
                       "Protocol analysis action"],
     addr: Annotated[Optional[str], "Address or function to analyze"] = None,
     limit: Annotated[int, "Max results"] = 50,
-    query: Annotated[Optional[str], "Filter query (regex/glob/substring auto-detected)"] = None,
+    query: Annotated[Optional[str], "Filter query (regex/glob/substring/semantic auto-detected)"] = None,
 ) -> dict:
     """
     Analyze network protocol structures, parsing code, and communication patterns.
@@ -277,6 +274,7 @@ def protocol(
         Returns: {state_machines}
     """
     try:
+        query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
         # ----------------------------------------------------------------
         # ACTION: detect
         # ----------------------------------------------------------------
@@ -342,7 +340,7 @@ def protocol(
                 if len(parsers) >= limit:
                     break
                 fname = idc.get_func_name(func_ea)
-                if not _match_query(fname, query):
+                if not _match_query(fname, query_matcher):
                     continue
                 callees = _get_func_callees(func_ea)
                 callee_names = {_strip_api_suffix(c[1]).lower() for c in callees}
@@ -401,7 +399,7 @@ def protocol(
                 if len(serializers) >= limit:
                     break
                 fname = idc.get_func_name(func_ea)
-                if not _match_query(fname, query):
+                if not _match_query(fname, query_matcher):
                     continue
                 callees = _get_func_callees(func_ea)
                 callee_names = {_strip_api_suffix(c[1]).lower() for c in callees}
@@ -444,7 +442,7 @@ def protocol(
                 if len(handlers) >= limit:
                     break
                 fname = idc.get_func_name(func_ea)
-                if not _match_query(fname, query):
+                if not _match_query(fname, query_matcher):
                     continue
 
                 case_count = _count_switch_cases(func_ea)
@@ -493,7 +491,7 @@ def protocol(
 
             all_strings = _get_all_strings()
             for s_ea, s_val, s_len in all_strings:
-                if not _match_query(s_val, query):
+                if not _match_query(s_val, query_matcher):
                     continue
 
                 # URLs
@@ -729,7 +727,7 @@ def protocol(
                         val = ida_bytes.get_dword(ea_cursor)
                         if val in _KNOWN_MAGIC:
                             proto, desc = _KNOWN_MAGIC[val]
-                            if _match_query(proto, query):
+                            if _match_query(proto, query_matcher):
                                 results.append(f"{hex(ea_cursor)}  {hex(val)}  {proto}  {desc}")
                     ea_cursor = ida_bytes.next_head(ea_cursor, seg_end)
                     if ea_cursor == idaapi.BADADDR:
@@ -742,7 +740,7 @@ def protocol(
                 if len(results) >= limit:
                     break
                 for m in version_re.finditer(s_val):
-                    if _match_query(s_val, query):
+                    if _match_query(s_val, query_matcher):
                         results.append(f"{hex(s_ea)}  {m.group()}  version_id  {s_val[:80]}")
                         break
 
