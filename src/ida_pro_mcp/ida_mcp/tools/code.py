@@ -224,9 +224,12 @@ def code(
             addrs = addr
         if not addrs:
             return make_error(MCPError.INVALID_ARGS, "addrs or addr parameter required")
-        if isinstance(limit, int) and limit > 0:
-            # Keep hard cap to prevent unexpectedly huge responses in MCP context.
-            max_items = min(max(limit, 1), DISASM_MAX_LINES)
+        if action == "disasm":
+            disasm_max = limit if isinstance(limit, int) else max_items
+            if not isinstance(disasm_max, int):
+                disasm_max = max_items
+            # Clamp disasm rows even when caller uses max_items directly.
+            max_items = min(max(disasm_max, 1), DISASM_MAX_LINES)
         addrs = normalize_list_input(addrs)
         results = []
         
