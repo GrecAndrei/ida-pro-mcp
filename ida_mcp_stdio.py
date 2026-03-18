@@ -158,6 +158,93 @@ try:
     from ida_pro_mcp.ida_mcp.utils import _is_regex, smart_match, compile_smart_pattern
 except ImportError:
     # Inline fallback for standalone mode
+    _SEMANTIC_CANONICALS = {
+        "find": "search",
+        "lookup": "search",
+        "locate": "search",
+        "discover": "search",
+        "query": "search",
+        "match": "search",
+        "decompiler": "decompile",
+        "decompiled": "decompile",
+        "pseudocode": "decompile",
+        "hexrays": "decompile",
+        "ctree": "decompile",
+        "routine": "function",
+        "procedure": "function",
+        "proc": "function",
+        "method": "function",
+        "subroutine": "function",
+        "global": "data",
+        "variable": "data",
+        "memory": "data",
+        "xref": "reference",
+        "ref": "reference",
+        "refs": "reference",
+        "callsite": "reference",
+        "caller": "reference",
+        "callee": "reference",
+        "literal": "string",
+        "text": "string",
+        "api": "import",
+        "symbol": "import",
+        "extern": "import",
+    }
+
+    def _normalize_semantic_token(token: str) -> str:
+        tok = token.lower().strip()
+        if not tok:
+            return tok
+        for suffix in ("ing", "ers", "er", "ies", "ied", "ed", "es", "s"):
+            if len(tok) > 4 and tok.endswith(suffix):
+                if suffix in ("ies", "ied"):
+                    tok = tok[:-3] + "y"
+                else:
+                    tok = tok[: -len(suffix)]
+                break
+        return _SEMANTIC_CANONICALS.get(tok, tok)
+
+    def _semantic_tokenize(text: str):
+        if not text:
+            return []
+        tokens = []
+        for raw in re.findall(r"[a-z0-9_]+", text.lower()):
+            for part in raw.split("_"):
+                tok = _normalize_semantic_token(part)
+                if len(tok) >= 2:
+                    tokens.append(tok)
+        return tokens
+
+    def _compile_semantic_matcher(pattern: str):
+        query_tokens = _semantic_tokenize(pattern)
+        if not query_tokens:
+            return None
+        if len(query_tokens) == 1 and len(query_tokens[0]) < 5 and " " not in pattern:
+            return None
+
+        query_set = set(query_tokens)
+        overlap_needed = max(1, (len(query_set) + 1) // 2)
+        fuzzy_tokens = [tok for tok in query_set if len(tok) >= 5]
+
+        def _semantic_matches(text: str) -> bool:
+            text_tokens = set(_semantic_tokenize(text))
+            if not text_tokens:
+                return False
+            overlap = len(query_set.intersection(text_tokens))
+            if overlap >= overlap_needed:
+                return True
+            if not fuzzy_tokens:
+                return False
+            fuzzy_hits = 0
+            for qtok in fuzzy_tokens:
+                if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=0.86):
+                    fuzzy_hits += 1
+                    if overlap + fuzzy_hits >= overlap_needed:
+                        return True
+            return False
+
+        return _semantic_matches
+
     def _is_regex(pattern):
         if not pattern:
             return False
@@ -203,7 +290,10 @@ except ImportError:
         if case_sensitive:
             return lambda _t, _p=pattern: _p in _t
         pl = pattern.lower()
-        return lambda _t, _p=pl: _p in _t.lower()
+        semantic_match = _compile_semantic_matcher(pattern)
+        if semantic_match is None:
+            return lambda _t, _p=pl: _p in _t.lower()
+        return lambda _t, _p=pl, _sem=semantic_match: (_p in _t.lower()) or _sem(_t)
 
     def smart_match(pattern, text, case_sensitive=False):
         return compile_smart_pattern(pattern, case_sensitive)(text)

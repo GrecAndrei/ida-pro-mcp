@@ -1,4 +1,5 @@
 import fnmatch
+import difflib
 import json
 import os
 import re
@@ -797,13 +798,116 @@ def _is_regex(pattern: str) -> bool:
     return False
 
 
+_SEMANTIC_CANONICALS = {
+    # Search / discovery
+    "find": "search",
+    "lookup": "search",
+    "locate": "search",
+    "discover": "search",
+    "query": "search",
+    "match": "search",
+    # Decompilation / pseudocode
+    "decompiler": "decompile",
+    "decompiled": "decompile",
+    "pseudocode": "decompile",
+    "hexrays": "decompile",
+    "ctree": "decompile",
+    # Function naming
+    "routine": "function",
+    "procedure": "function",
+    "proc": "function",
+    "method": "function",
+    "subroutine": "function",
+    # Data naming
+    "global": "data",
+    "variable": "data",
+    "memory": "data",
+    # Cross-reference naming
+    "xref": "reference",
+    "ref": "reference",
+    "refs": "reference",
+    "callsite": "reference",
+    "caller": "reference",
+    "callee": "reference",
+    # String naming
+    "literal": "string",
+    "text": "string",
+    # Import/symbol naming
+    "api": "import",
+    "symbol": "import",
+    "extern": "import",
+}
+
+
+def _normalize_semantic_token(token: str) -> str:
+    tok = token.lower().strip()
+    if not tok:
+        return tok
+    # Light stemming for noisy search tokens.
+    for suffix in ("ing", "ers", "er", "ies", "ied", "ed", "es", "s"):
+        if len(tok) > 4 and tok.endswith(suffix):
+            if suffix in ("ies", "ied"):
+                tok = tok[:-3] + "y"
+            else:
+                tok = tok[: -len(suffix)]
+            break
+    return _SEMANTIC_CANONICALS.get(tok, tok)
+
+
+def _semantic_tokenize(text: str) -> list[str]:
+    if not text:
+        return []
+    tokens: list[str] = []
+    for raw in re.findall(r"[a-z0-9_]+", text.lower()):
+        for part in raw.split("_"):
+            tok = _normalize_semantic_token(part)
+            if len(tok) >= 2:
+                tokens.append(tok)
+    return tokens
+
+
+def _compile_semantic_matcher(pattern: str):
+    query_tokens = _semantic_tokenize(pattern)
+    if not query_tokens:
+        return None
+    # Keep semantic fallback conservative for short plain tokens.
+    if len(query_tokens) == 1 and len(query_tokens[0]) < 5 and " " not in pattern:
+        return None
+
+    query_set = set(query_tokens)
+    overlap_needed = max(1, (len(query_set) + 1) // 2)
+    fuzzy_tokens = [tok for tok in query_set if len(tok) >= 5]
+
+    def _semantic_matches(text: str) -> bool:
+        text_tokens = set(_semantic_tokenize(text))
+        if not text_tokens:
+            return False
+
+        overlap = len(query_set.intersection(text_tokens))
+        if overlap >= overlap_needed:
+            return True
+
+        if not fuzzy_tokens:
+            return False
+        fuzzy_hits = 0
+        for qtok in fuzzy_tokens:
+            if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=0.86):
+                fuzzy_hits += 1
+                if overlap + fuzzy_hits >= overlap_needed:
+                    return True
+        return False
+
+    return _semantic_matches
+
+
 def smart_match(pattern: str, text: str, case_sensitive: bool = False) -> bool:
     """Match *text* against *pattern*, auto-detecting the match strategy.
 
     1. ``/pattern/flags`` – explicit regex
     2. Auto-detected regex (see :func:`_is_regex`) – compiled & searched
     3. Glob wildcards (``*`` / ``?``) – ``fnmatch``
-    4. Plain substring containment (default)
+    4. Plain substring containment
+    5. Semantic token fallback (auto, conservative)
     """
     if not pattern:
         return True
@@ -856,12 +960,15 @@ def compile_smart_pattern(pattern: str, case_sensitive: bool = False):
         pat_lower = pattern.lower()
         return lambda _text, _p=pat_lower: fnmatch.fnmatch(_text.lower(), _p)
 
-    # 4. Plain substring
+    # 4. Plain substring (+ semantic fallback)
     if case_sensitive:
         return lambda _text, _p=pattern: _p in _text
-    else:
-        pat_lower = pattern.lower()
+
+    pat_lower = pattern.lower()
+    semantic_match = _compile_semantic_matcher(pattern)
+    if semantic_match is None:
         return lambda _text, _p=pat_lower: _p in _text.lower()
+    return lambda _text, _p=pat_lower, _sem=semantic_match: (_p in _text.lower()) or _sem(_text)
 
 
 def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:

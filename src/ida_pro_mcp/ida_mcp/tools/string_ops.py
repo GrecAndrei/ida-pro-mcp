@@ -86,15 +86,19 @@ def _scope_filter(strings, addr):
 
 
 def _query_filter(strings, query):
-    """Filter strings by a text substring or regex pattern."""
+    """Filter strings by regex/glob/substring/semantic pattern."""
     if not query:
         return strings
-    try:
-        pat = re.compile(query.encode() if isinstance(query, str) else query, re.IGNORECASE)
-        return [(ea, raw, st) for ea, raw, st in strings if pat.search(raw)]
-    except re.error:
-        q = query.encode() if isinstance(query, str) else query
-        return [(ea, raw, st) for ea, raw, st in strings if q.lower() in raw.lower()]
+    matcher = compile_smart_pattern(str(query), case_sensitive=False)
+    filtered = []
+    for ea, raw, st in strings:
+        try:
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        except Exception:
+            text = repr(raw)
+        if matcher(text):
+            filtered.append((ea, raw, st))
+    return filtered
 
 
 def _match_pattern(strings, pattern, limit):
@@ -120,7 +124,7 @@ def string_ops(
                       "String operations action"],
     addr: Annotated[Optional[str], "Function or address scope"] = None,
     limit: Annotated[int, "Max results"] = 50,
-    query: Annotated[Optional[str], "Filter pattern (regex/glob/substring auto-detected)"] = None,
+    query: Annotated[Optional[str], "Filter pattern (regex/glob/substring/semantic auto-detected)"] = None,
 ) -> dict:
     """
     Deep string analysis for binary reverse engineering.
