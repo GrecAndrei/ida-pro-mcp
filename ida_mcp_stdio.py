@@ -296,6 +296,16 @@ MAX_NAME_LEN = 256
 MAX_SESSION_ID_RETRIES = 1024
 MAX_SNAPSHOT_ID_RETRIES = 128
 MAX_WIKI_RESULTS = 200
+WIKI_SEMANTIC_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("trace", "tracing", "runtime", "execution", "path", "flow", "behavior"),
+    ("debug", "debugger", "breakpoint", "register", "step", "stepping"),
+    ("decompile", "decompiler", "pseudocode", "hl", "highlevel"),
+    ("search", "find", "lookup", "query", "locate"),
+    ("rename", "naming", "symbol", "label"),
+    ("xref", "crossref", "reference", "references", "caller", "callee"),
+    ("patch", "modify", "edit", "write", "rewrite"),
+    ("vulnerability", "security", "exploit", "taint", "sink", "source"),
+)
 TOOL_ALIASES = {
     "plugins": "misc",
     "xfer_analysis": "xref_analysis",
@@ -1545,7 +1555,7 @@ TOOL_DESCRIPTIONS = {
     "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.",
     # Project and file management
     "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.",
-    "plugins": "Legacy alias for misc plugin actions. Prefer misc(action=plugin_list|plugin_run).",
+    "plugins": "Legacy compatibility plugin surface. Actions: list, run. Preferred entrypoint: misc(action=plugin_list|plugin_run).",
     # Advanced analysis
     "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions.",
@@ -1572,7 +1582,7 @@ TOOL_DESCRIPTIONS = {
     # Instrumentation
     "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     # Documentation and YARA
-    "wiki": "Built-in documentation system with ranked search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, sections, index.",
+    "wiki": "Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.",
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
     "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query. Returns compact findings + structured items with severity/confidence, pagination, and optional OSV enrichment.",
@@ -1861,7 +1871,7 @@ TOOL_ACTIONS = {
         "inline_hooks",
     ],
     # Documentation and YARA
-    "wiki": ["list_topics", "read", "search", "sections", "index"],
+    "wiki": ["list_topics", "read", "search", "semantic_search", "sections", "index"],
     "yara_hunt": ["scan", "compile", "list_rules"],
     # --- New LLM-optimized tools ---
     "vuln_scan": [
@@ -4465,6 +4475,81 @@ class IDAMCPServer:
             return []
         return re.findall(r"[a-z0-9_]+", text.lower())
 
+    def _wiki_stem_token(self, token: str) -> str:
+        t = token.strip().lower()
+        if len(t) <= 3:
+            return t
+        for suffix in ("ing", "ed", "es", "s"):
+            if t.endswith(suffix) and len(t) - len(suffix) >= 3:
+                stem = t[: -len(suffix)]
+                if suffix == "ing" and stem.endswith("c"):
+                    # tracing -> trace, mimicking simple English recovery.
+                    stem += "e"
+                return stem
+        return t
+
+    def _wiki_expand_semantic_terms(self, query_tokens: List[str]) -> set[str]:
+        raw = {self._wiki_stem_token(t) for t in query_tokens if t}
+        expanded = set(raw)
+        for group in WIKI_SEMANTIC_GROUPS:
+            stemmed_group = {self._wiki_stem_token(item) for item in group}
+            if raw.intersection(stemmed_group):
+                expanded.update(stemmed_group)
+        return expanded
+
+    def _wiki_semantic_search_pages(
+        self,
+        pages: List[dict],
+        query: str,
+        *,
+        max_results: int,
+        category_filter: Any = None,
+        include_snippets: bool = False,
+        context_lines: int = 2,
+    ) -> List[dict]:
+        query_lower = query.lower().strip()
+        query_tokens = self._wiki_tokenize(query_lower)
+        expanded_terms = self._wiki_expand_semantic_terms(query_tokens)
+        scored: List[dict] = []
+        for page in pages:
+            if not self._wiki_match_category(page["topic"], category_filter):
+                continue
+
+            base_score, reasons = self._wiki_score_page(
+                page, query_lower, query_tokens, fuzzy=True
+            )
+            page_tokens = page.get("stemmed_tokens")
+            # Defensive fallback: keeps semantic search working if an older cache entry
+            # (without stemmed_tokens) is present during rolling updates/tests.
+            if not isinstance(page_tokens, set):
+                page_tokens = {self._wiki_stem_token(t) for t in page.get("tokens", set())}
+            semantic_hits = sorted(expanded_terms.intersection(page_tokens))
+            if semantic_hits:
+                base_score += (len(semantic_hits) * 14) + 20
+                reasons.append("semantic_overlap")
+
+            if base_score <= 0:
+                continue
+
+            entry = {
+                "topic": page["topic"],
+                "title": page["title"],
+                "category": page["category"],
+                "score": base_score,
+                "matched_on": reasons[:4],
+            }
+            if semantic_hits:
+                entry["semantic_hits"] = semantic_hits[:10]
+            if include_snippets:
+                snippet_terms = " ".join(sorted(semantic_hits[:4])).strip() or query_lower
+                snippet_tokens = self._wiki_tokenize(snippet_terms)
+                entry["matches"] = self._wiki_extract_snippets(
+                    page["text"], snippet_terms, snippet_tokens, context_lines
+                )
+            scored.append(entry)
+        scored.sort(key=lambda x: (-x["score"], x["topic"]))
+        return scored[:max_results]
+
     def _wiki_get_index(self, wiki_root: str, force: bool = False) -> dict:
         now = time.time()
         cache = self._wiki_cache
@@ -4497,6 +4582,8 @@ class IDAMCPServer:
                     title = headers[0]["text"] if headers else page_name
                     header_text = " ".join(h["text"] for h in headers).lower()
                     topics.setdefault(category, []).append(page_name)
+                    text_to_tokenize = f"{topic} {title} {header_text} {text[:4000]}"
+                    raw_tokens = self._wiki_tokenize(text_to_tokenize)
                     pages.append(
                         {
                             "topic": topic,
@@ -4511,11 +4598,8 @@ class IDAMCPServer:
                             "text": text,
                             "text_lower": text.lower(),
                             "line_count": len(lines),
-                            "tokens": set(
-                                self._wiki_tokenize(
-                                    f"{topic} {title} {header_text} {text[:4000]}"
-                                )
-                            ),
+                            "tokens": set(raw_tokens),
+                            "stemmed_tokens": {self._wiki_stem_token(t) for t in raw_tokens},
                         }
                     )
 
@@ -4958,20 +5042,30 @@ class IDAMCPServer:
                 },
             }
 
-        if action == "search":
+        if action in ("search", "semantic_search"):
             query = (args.get("query") or args.get("topic") or "").strip()
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required")
             if pages:
-                matches = self._wiki_search_pages(
-                    pages,
-                    query,
-                    max_results=max_results,
-                    category_filter=category_filter,
-                    include_snippets=include_snippets,
-                    context_lines=context_lines,
-                    fuzzy=fuzzy,
-                )
+                if action == "semantic_search":
+                    matches = self._wiki_semantic_search_pages(
+                        pages,
+                        query,
+                        max_results=max_results,
+                        category_filter=category_filter,
+                        include_snippets=include_snippets,
+                        context_lines=context_lines,
+                    )
+                else:
+                    matches = self._wiki_search_pages(
+                        pages,
+                        query,
+                        max_results=max_results,
+                        category_filter=category_filter,
+                        include_snippets=include_snippets,
+                        context_lines=context_lines,
+                        fuzzy=fuzzy,
+                    )
             else:
                 matches = []
                 for tool_name in TOOLS:
@@ -4990,6 +5084,7 @@ class IDAMCPServer:
                 matches = matches[:max_results]
             response = {
                 "ok": True,
+                "action": action,
                 "query": query,
                 "matches": matches,
                 "count": len(matches),

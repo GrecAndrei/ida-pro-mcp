@@ -9,25 +9,62 @@
 Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.
 
 ## Actions
-- `decompile`
-- `disasm`
-- `xrefs_to`
-- `xrefs_from`
-- `xrefs_to_field`
-- `callees`
-- `callers`
-- `blocks`
-- `analyze`
-- `callgraph`
-- `export`
-- `find_paths`
-- `strings_in_func`
+- `decompile` (tool-specific)
+- `disasm` (tool-specific)
+- `xrefs_to` (tool-specific)
+- `xrefs_from` (tool-specific)
+- `xrefs_to_field` (tool-specific)
+- `callees` (tool-specific)
+- `callers` (tool-specific)
+- `blocks` (tool-specific)
+- `analyze` (analysis)
+- `callgraph` (tool-specific)
+- `export` (tool-specific)
+- `find_paths` (analysis)
+- `strings_in_func` (tool-specific)
 - `grep` (host wrapper): run another action, then grep its output lines.
 
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/code')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
+
 ## Parameters
-- (tool takes action-only or dynamic args)
+- `action`: `string` - allowed_count: `13`
+- `addr`: `string`
+- `addrs`: `array|string`
+- `disasm_style`: `string` - allowed: `csmini, classic, annotated`
+- `end`: `string`
+- `field_name`: `string`
+- `format`: `string`
+- `include_bytes`: `boolean`
+- `limit`: `integer`
+- `max_depth`: `integer`
+- `max_items`: `integer`
+- `target`: `string`
+
+## Minimal Call Shapes
+```json
+{
+  "name": "code",
+  "arguments": {
+    "action": "decompile"
+  }
+}
+```
+```json
+{
+  "name": "code",
+  "arguments": {
+    "action": "grep",
+    "source_action": "decompile",
+    "pattern": "<needle>"
+  }
+}
+```
 
 ## Invocation Guidance
 - Prefer compact responses first, then zoom in with narrower arguments.
 - Use `offset`/`limit` style pagination where supported.
 - If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.

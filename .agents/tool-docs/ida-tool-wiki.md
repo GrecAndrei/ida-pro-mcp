@@ -6,18 +6,24 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Built-in documentation system with ranked search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, sections, index.
+Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.
 
 ## Actions
-- `list_topics`
-- `read`
-- `search`
-- `sections`
-- `index`
+- `list_topics` (tool-specific)
+- `read` (read/discovery)
+- `search` (read/discovery)
+- `semantic_search` (read/discovery)
+- `sections` (read/discovery)
+- `index` (read/discovery)
 - `grep` (host wrapper): run another action, then grep its output lines.
 
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/wiki')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
+
 ## Parameters
-- `action`: `string` - allowed: `list_topics, read, search, sections, index`
+- `action`: `string` - allowed: `list_topics, read, search, semantic_search, sections, index`
 - `category`: `string|array`
 - `context_lines`: `integer`
 - `fuzzy`: `boolean`
@@ -35,7 +41,28 @@ Built-in documentation system with ranked search, fuzzy topic resolution, sectio
 - `topic`: `string`
 - `verbose`: `boolean` - Include full structural metadata in wiki responses.
 
+## Minimal Call Shapes
+```json
+{
+  "name": "wiki",
+  "arguments": {
+    "action": "list_topics"
+  }
+}
+```
+```json
+{
+  "name": "wiki",
+  "arguments": {
+    "action": "grep",
+    "source_action": "list_topics",
+    "pattern": "<needle>"
+  }
+}
+```
+
 ## Invocation Guidance
 - Prefer compact responses first, then zoom in with narrower arguments.
 - Use `offset`/`limit` style pagination where supported.
 - If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.
