@@ -3,6 +3,7 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+from collections import OrderedDict
 
 # ============================================================================
 # GADGETS - ROP/JOP/COP Gadget & Exploit Primitive Discovery
@@ -85,21 +86,26 @@ def _format_gadget(insns):
     }
 
 
+# Keep a small LRU cache so repeated gadget filters don't recompile patterns.
+_QUERY_MATCHER_CACHE = OrderedDict()
+_MAX_MATCHER_CACHE_SIZE = 64
+
+
 def _matches_query(insns, query):
-    """Check if any instruction matches the query pattern (regex/substring)."""
+    """Check if any instruction matches query (regex/glob/substring/semantic auto-detected)."""
     if not query:
         return True
-    import re
-    try:
-        pat = re.compile(query, re.IGNORECASE)
-        for _, mnem, disasm in insns:
-            if pat.search(mnem) or pat.search(disasm):
-                return True
-    except re.error:
-        q = query.lower()
-        for _, mnem, disasm in insns:
-            if q in mnem or q in disasm.lower():
-                return True
+    matcher = _QUERY_MATCHER_CACHE.get(query)
+    if matcher is None:
+        matcher = compile_smart_pattern(query, case_sensitive=False)
+        _QUERY_MATCHER_CACHE[query] = matcher
+        if len(_QUERY_MATCHER_CACHE) > _MAX_MATCHER_CACHE_SIZE:
+            _QUERY_MATCHER_CACHE.popitem(last=False)
+    else:
+        _QUERY_MATCHER_CACHE.move_to_end(query)
+    for _, mnem, disasm in insns:
+        if matcher(mnem) or matcher(disasm):
+            return True
     return False
 
 
@@ -834,7 +840,7 @@ def gadgets(
     addr: Annotated[Optional[str], "Segment or address to search in"] = None,
     limit: Annotated[int, "Max gadgets to return"] = 50,
     max_insns: Annotated[int, "Max instructions per gadget"] = 5,
-    query: Annotated[Optional[str], "Filter gadgets by mnemonic pattern (regex supported)"] = None,
+    query: Annotated[Optional[str], "Filter gadgets by mnemonic pattern (regex/glob/substring/semantic auto-detected)"] = None,
 ) -> dict:
     """
     LLM-optimized ROP/JOP/COP gadget and exploit primitive discovery.

@@ -15,7 +15,7 @@ def strings_xref(
     action: Annotated[Literal["analyze", "xref_chain", "detect_encoded", "find_format", "clusters"],
                       "Action: analyze|xref_chain|detect_encoded|find_format|clusters"],
     addr: Annotated[Optional[str], "String address or function address"] = None,
-    query: Annotated[Optional[str], "String pattern to search"] = None,
+    query: Annotated[Optional[str], "String pattern to search (regex/glob/substring/semantic auto-detected)"] = None,
     depth: Annotated[int, "Xref chain depth"] = 3,
     **kwargs
 ) -> dict:
@@ -182,6 +182,7 @@ def strings_xref(
         
         elif action == "find_format":
             fmt_lines = []
+            query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             
             for s in idautils.Strings():
                 try:
@@ -189,7 +190,7 @@ def strings_xref(
                     if str_val:
                         str_val = str_val.decode('utf-8', errors='replace')
                         if '%' in str_val:
-                            if query and query.lower() not in str_val.lower():
+                            if query_matcher and not query_matcher(str_val):
                                 continue
                             import re
                             specs = re.findall(r'%[-+0 #]*\d*\.?\d*[hlL]*[diouxXeEfFgGcspn%]', str_val)
