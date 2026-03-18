@@ -270,6 +270,23 @@ class TestHostHardening(unittest.TestCase):
         self.assertEqual(normalized.get("addrs"), "0x401000")
         self.assertEqual(normalized.get("max_items"), 32)
 
+    def test_normalize_code_limit_is_preserved(self):
+        normalized = self.server._normalize_tool_call_args(
+            "code",
+            {"operation": "disassemble", "limit": 160},
+        )
+        self.assertEqual(normalized.get("action"), "disasm")
+        self.assertEqual(normalized.get("limit"), 160)
+        self.assertNotIn("max_items", normalized)
+
+    def test_normalize_code_new_arg_aliases_from_schema(self):
+        normalized = self.server._normalize_tool_call_args(
+            "code",
+            {"operation": "disasm", "disasmStyle": "annotated", "end_addr": "0x12640"},
+        )
+        self.assertEqual(normalized.get("disasm_style"), "annotated")
+        self.assertEqual(normalized.get("end"), "0x12640")
+
 
 class TestResponseCompaction(unittest.TestCase):
     def setUp(self):

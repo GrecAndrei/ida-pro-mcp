@@ -2184,6 +2184,25 @@ TOOL_ARG_SCHEMAS = {
         "subaction": {"type": "string"},
         "args": {"type": "object"},
     },
+    "idb": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["idb"]},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+    },
+    "code": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["code"]},
+        "addrs": {"type": ["array", "string"], "items": {"type": "string"}},
+        "addr": {"type": "string"},
+        "max_items": {"type": "integer"},
+        "max_depth": {"type": "integer"},
+        "format": {"type": "string"},
+        "disasm_style": {"type": "string", "enum": ["csmini", "classic", "annotated"]},
+        "include_bytes": {"type": "boolean"},
+        "end": {"type": "string"},
+        "limit": {"type": "integer"},
+        "field_name": {"type": "string"},
+        "target": {"type": "string"},
+    },
     "ctree": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},
         "addr": {"type": "string"},
@@ -2337,7 +2356,7 @@ _COMMON_ARG_ALIAS_HINTS = {
 _TOOL_SPECIFIC_ARG_ALIASES = {
     "code": {
         "addrs": {"addr", "address", "addresses", "ea", "eas"},
-        "max_items": {"limit", "count", "max"},
+        "max_items": {"count", "max"},
     },
     "data": {
         "query": {"name", "symbol", "lookup"},
@@ -2385,7 +2404,7 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
         canonical_keys.add("action")
         canonical_keys.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).keys())
         alias_map: dict[str, str] = {}
-        for canonical in canonical_keys:
+        for canonical in sorted(canonical_keys):
             candidates = _snake_variants(canonical).union(_camel_variants(canonical))
             # Keep argument aliasing conservative: avoid automatic singular/plural flips,
             # because some tools intentionally use both (e.g. tag vs tags, note vs notes).
@@ -2404,6 +2423,11 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
                     alias_map.pop(key, None)
                     continue
                 alias_map[key] = canonical
+        for canonical, explicit_aliases in _TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).items():
+            for alias in explicit_aliases:
+                alias_key = str(alias).strip().lower()
+                if alias_key and alias_key != canonical.lower():
+                    alias_map[alias_key] = canonical
         for canonical in canonical_keys:
             alias_map.pop(canonical.lower(), None)
         out[tool_name] = alias_map
