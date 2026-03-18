@@ -302,6 +302,7 @@ TOOL_ALIASES = {
 }
 WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
+ACTION_STRIP_CHARS = "\"'"
 ADVERTISED_TOOLS = [
     "session",
     "truncation",
@@ -3146,7 +3147,7 @@ class IDAMCPServer:
         text = ACTION_PREFIX_RE.sub("", text)
         text = text.strip().strip(",").strip()
         # Handle malformed fragments like action\":\"lookup addr=0x...
-        text = text.strip("\"'")
+        text = text.strip(ACTION_STRIP_CHARS)
         text = ACTION_PREFIX_RE.sub("", text)
         text = text.strip().strip(",")
         return text

@@ -4,6 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+DISASM_MAX_LINES = 10_000
+
 
 def _get_prev_func(ea: int):
     getter = getattr(ida_funcs, "get_prev_func", None) or getattr(idaapi, "get_prev_func", None)
@@ -223,7 +225,8 @@ def code(
         if not addrs:
             return make_error(MCPError.INVALID_ARGS, "addrs or addr parameter required")
         if isinstance(limit, int) and limit > 0:
-            max_items = min(max(limit, 1), 10000)
+            # Keep hard cap to prevent unexpectedly huge responses in MCP context.
+            max_items = min(max(limit, 1), DISASM_MAX_LINES)
         addrs = normalize_list_input(addrs)
         results = []
         
@@ -277,7 +280,7 @@ def code(
                         results.append({"addr": addr, **end_err})
                         continue
                     if end_ea <= ea:
-                        results.append(make_error(MCPError.INVALID_ARGS, "end must be greater than start address"))
+                        results.append({"addr": addr, **make_error(MCPError.INVALID_ARGS, "end must be greater than start address")})
                         continue
                 if not func:
                     # Disassemble raw bytes even without function
