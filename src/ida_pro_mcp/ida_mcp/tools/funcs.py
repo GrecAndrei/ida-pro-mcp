@@ -50,9 +50,7 @@ def _collect_callees(func_start_ea: int) -> list[int]:
     return sorted(callees)
 
 
-@tool
-@idawrite
-def funcs(
+def _funcs_impl(
     action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info"],
                       "Action: create|delete|set_flags|set_name|rename|add_comment|list|info"],
     addr: Annotated[Optional[str], "Address"] = None,
@@ -401,6 +399,80 @@ def funcs(
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
+
+
+@idaread
+def _funcs_read_dispatch(**kwargs):
+    return _funcs_impl(**kwargs)
+
+
+@idawrite
+def _funcs_write_dispatch(**kwargs):
+    return _funcs_impl(**kwargs)
+
+
+@tool
+def funcs(
+    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info"],
+                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info"],
+    addr: Annotated[Optional[str], "Address"] = None,
+    end: Annotated[Optional[str], "Optional end address (for create)"] = None,
+    name: Annotated[Optional[str], "Function name"] = None,
+    flags: Annotated[int, "Function flags (e.g. FUNC_NORET)"] = 0,
+    force: Annotated[bool, "Force creation by deleting overlapping functions/data"] = False,
+    comment: Annotated[Optional[str], "Function comment"] = None,
+    repeatable: Annotated[bool, "Is comment repeatable?"] = False,
+    query: Annotated[Optional[str], "Filter for function names - supports regex, glob, or substring (list action)"] = None,
+    offset: Annotated[int, "Pagination offset (list action)"] = 0,
+    count: Annotated[int, "Max results (0=all) (list action)"] = 100,
+    named_only: Annotated[bool, "Only return named functions (list action)"] = False,
+    include_prototype: Annotated[bool, "Include function prototype (info/list)"] = False,
+    include_stack: Annotated[bool, "Include stack frame variables (info)"] = False,
+    include_items: Annotated[bool, "Include structured `items` list in list output (default: false for context efficiency)"] = False,
+    include_xrefs: Annotated[bool, "Include caller/callee samples in info output"] = False,
+    **kwargs
+) -> dict:
+    """
+    Create and modify function definitions.
+
+    Actions:
+    - create: Define a new function at `addr`. Automatically converts bytes to code
+      if needed. If address is inside an existing function, offers to split or
+      suggests using the existing function's start. Optionally set `end`, `name`,
+      `flags`, or `force` to delete overlapping functions/data.
+    - delete: Remove function definition at `addr`. If addr is inside a function
+      (but not at its start), the containing function is deleted.
+    - set_flags: Update function attribute flags.
+    - set_name/rename: Rename function at `addr`.
+    - add_comment: Set function-level comment.
+    - list: Paginated listing with optional name filtering.
+      Query supports regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.
+      Returns compact text: "addr  size  name [prototype]" per line.
+    - info: Detailed info about a single function.
+    """
+    call_kwargs = {
+        "action": action,
+        "addr": addr,
+        "end": end,
+        "name": name,
+        "flags": flags,
+        "force": force,
+        "comment": comment,
+        "repeatable": repeatable,
+        "query": query,
+        "offset": offset,
+        "count": count,
+        "named_only": named_only,
+        "include_prototype": include_prototype,
+        "include_stack": include_stack,
+        "include_items": include_items,
+        "include_xrefs": include_xrefs,
+        **kwargs,
+    }
+    normalized_action = "set_name" if action == "rename" else action
+    if normalized_action in ("list", "info"):
+        return _funcs_read_dispatch(**call_kwargs)
+    return _funcs_write_dispatch(**call_kwargs)
 
 
 # ============================================================================
