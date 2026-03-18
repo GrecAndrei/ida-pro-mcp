@@ -1,3 +1,5 @@
+import re
+
 try:
     from ._common import *
 except ImportError:
@@ -18,8 +20,8 @@ def protocol_resource() -> str:
 
 @tool
 def wiki(
-    action: Annotated[Literal["list_topics", "read", "search", "index", "sections"],
-                      "Action: list_topics|read|search|index|sections"],
+    action: Annotated[Literal["list_topics", "read", "search", "semantic_search", "index", "sections"],
+                      "Action: list_topics|read|search|semantic_search|index|sections"],
     topic: Annotated[Optional[str], "Topic name (e.g. 'debug', 'workflows/ForensicProtocol')"] = None,
     query: Annotated[Optional[str], "Search query (alias for topic when action=search)"] = None,
     section: Annotated[Optional[str], "Specific section or subsection to read (header text)"] = None,
@@ -37,6 +39,7 @@ def wiki(
     - list_topics: List all available categories and pages.
     - read: Read a wiki page. Use 'section' for specific parts, and 'offset'/'limit' for chunks.
     - search: Search for keywords across the entire wiki.
+    - semantic_search: Search with concept expansion (synonyms + fuzzy matching).
     - index: Structured index with doc counts and metadata.
     - sections: List headers for a specific topic with line numbers.
     """
@@ -216,11 +219,26 @@ def wiki(
             
             return result
 
-        elif action == "search":
+        elif action in ("search", "semantic_search"):
             q = (query or topic or "").strip()
             if not q:
                 return make_error(MCPError.INVALID_ARGS, "query required")
             q_lower = q.lower()
+            semantic_aliases = {
+                "runtime": "execution",
+                "flow": "trace",
+                "path": "trace",
+                "tracking": "trace",
+                "lookup": "search",
+                "find": "search",
+                "locate": "search",
+                "rewrite": "modify",
+            }
+            query_terms = {q_lower}
+            for token in re.findall(r"[a-z0-9_]+", q_lower):
+                query_terms.add(token)
+                if action == "semantic_search" and token in semantic_aliases:
+                    query_terms.add(semantic_aliases[token])
             results = []
 
             for root, _, files in os.walk(wiki_root):
@@ -230,7 +248,8 @@ def wiki(
                         rel_name = os.path.relpath(p, wiki_root).replace(".md", "").replace(os.sep, "/")
                         with open(p, 'r', encoding='utf-8') as file:
                             content = file.read()
-                            if q_lower in content.lower() or q_lower in f.lower():
+                            content_lower = content.lower()
+                            if any(t in content_lower or t in f.lower() for t in query_terms):
                                 entry = {"topic": rel_name}
                                 if include_snippets:
                                     lines = content.splitlines()

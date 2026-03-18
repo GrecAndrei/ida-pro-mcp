@@ -6,27 +6,51 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Cross-reference and callgraph analysis with compact output by default. Actions: `call_chain`, `common_callers`, `common_callees`, `hub_functions`, `leaf_functions`, `recursive`, `dominator`, `influence`, `dependency_graph`, `dead_functions`.
+Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.
 
 ## Actions
-- `call_chain`
-- `common_callers`
-- `common_callees`
-- `hub_functions`
-- `leaf_functions`
-- `recursive`
-- `dominator`
-- `influence`
-- `dependency_graph`
-- `dead_functions`
+- `call_chain` (tool-specific)
+- `common_callers` (tool-specific)
+- `common_callees` (tool-specific)
+- `hub_functions` (tool-specific)
+- `leaf_functions` (tool-specific)
+- `recursive` (tool-specific)
+- `dominator` (tool-specific)
+- `influence` (tool-specific)
+- `dependency_graph` (tool-specific)
+- `dead_functions` (tool-specific)
 - `grep` (host wrapper): run another action, then grep its output lines.
 
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/xref_analysis')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
+
 ## Parameters
-- Core: `action`, `addr`, `addr2`, `addrs`, `depth`, `limit`, `offset`.
-- Optional: `include_items=true` for structured arrays.
-- Directional actions (`influence`, `dependency_graph`): `direction=forward|backward|both`.
+- (tool takes action-only or dynamic args)
+
+## Minimal Call Shapes
+```json
+{
+  "name": "xref_analysis",
+  "arguments": {
+    "action": "call_chain"
+  }
+}
+```
+```json
+{
+  "name": "xref_analysis",
+  "arguments": {
+    "action": "grep",
+    "source_action": "call_chain",
+    "pattern": "<needle>"
+  }
+}
+```
 
 ## Invocation Guidance
-- Prefer compact responses first, then zoom in via narrower `depth`, `offset`, and `limit`.
-- Use `include_items=true` only when machine-readable arrays are needed.
-- For graph exploration, start with `dependency_graph` + low depth before deep scans.
+- Prefer compact responses first, then zoom in with narrower arguments.
+- Use `offset`/`limit` style pagination where supported.
+- If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.
