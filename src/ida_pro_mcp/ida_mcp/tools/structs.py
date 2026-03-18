@@ -20,7 +20,7 @@ def structs(
     member_name: Annotated[Optional[str], "Member name for add_member"] = None,
     member_type: Annotated[Optional[str], "Member type for add_member"] = "int",
     member_offset: Annotated[int, "Member offset for add_member"] = 0,
-    query: Annotated[Optional[str], "Filter by name"] = None,
+    query: Annotated[Optional[str], "Filter by name (regex/glob/substring/semantic auto-detected)"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max items to return"] = 100,
     **kwargs
@@ -208,12 +208,13 @@ def structs(
                 qty_func = getattr(ida_typeinf, "get_ordinal_qty", None) or getattr(ida_typeinf, "get_ordinal_count", None)
                 total_count = qty_func(til) if qty_func else 0
                 found = 0
+                matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
                 for ordinal in range(1, total_count + 1):
                     tinfo = ida_typeinf.tinfo_t()
                     if tinfo.get_numbered_type(til, ordinal):
                         if tinfo.is_struct() or tinfo.is_union():
                             type_name = tinfo.get_type_name() or f"struct_{ordinal}"
-                            if not query or query.lower() in type_name.lower():
+                            if matcher is None or matcher(type_name):
                                 found += 1
                                 if found > offset and (count == 0 or len(struct_lines) < count):
                                     kind = "union" if tinfo.is_union() else "struct"
