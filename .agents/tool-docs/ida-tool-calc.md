@@ -9,14 +9,19 @@
 Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.
 
 ## Actions
-- `eval`
-- `offset`
-- `convert`
-- `resolve`
-- `deref`
-- `chain`
-- `align`
+- `eval` (tool-specific)
+- `offset` (tool-specific)
+- `convert` (tool-specific)
+- `resolve` (tool-specific)
+- `deref` (tool-specific)
+- `chain` (tool-specific)
+- `align` (tool-specific)
 - `grep` (host wrapper): run another action, then grep its output lines.
+
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/calc')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
 - `action`: `string` - allowed: `eval, offset, convert, resolve, deref, chain, align`
@@ -28,7 +33,28 @@ Mathematical and address resolution. Actions: eval, offset, convert, resolve, de
 - `type`: `string`
 - `value`: `string|integer`
 
+## Minimal Call Shapes
+```json
+{
+  "name": "calc",
+  "arguments": {
+    "action": "eval"
+  }
+}
+```
+```json
+{
+  "name": "calc",
+  "arguments": {
+    "action": "grep",
+    "source_action": "eval",
+    "pattern": "<needle>"
+  }
+}
+```
+
 ## Invocation Guidance
 - Prefer compact responses first, then zoom in with narrower arguments.
 - Use `offset`/`limit` style pagination where supported.
 - If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.

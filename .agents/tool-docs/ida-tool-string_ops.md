@@ -9,22 +9,48 @@
 Advanced string analysis. Query supports regex. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious.
 
 ## Actions
-- `decode_all`
-- `find_urls`
-- `find_paths`
-- `find_registry`
-- `find_ips`
-- `find_emails`
-- `find_commands`
-- `encoding_stats`
-- `multilingual`
-- `suspicious`
+- `decode_all` (tool-specific)
+- `find_urls` (tool-specific)
+- `find_paths` (analysis)
+- `find_registry` (tool-specific)
+- `find_ips` (tool-specific)
+- `find_emails` (tool-specific)
+- `find_commands` (tool-specific)
+- `encoding_stats` (tool-specific)
+- `multilingual` (tool-specific)
+- `suspicious` (tool-specific)
 - `grep` (host wrapper): run another action, then grep its output lines.
+
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/string_ops')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
 - (tool takes action-only or dynamic args)
+
+## Minimal Call Shapes
+```json
+{
+  "name": "string_ops",
+  "arguments": {
+    "action": "decode_all"
+  }
+}
+```
+```json
+{
+  "name": "string_ops",
+  "arguments": {
+    "action": "grep",
+    "source_action": "decode_all",
+    "pattern": "<needle>"
+  }
+}
+```
 
 ## Invocation Guidance
 - Prefer compact responses first, then zoom in with narrower arguments.
 - Use `offset`/`limit` style pagination where supported.
 - If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.
