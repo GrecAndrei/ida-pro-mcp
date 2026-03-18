@@ -19,11 +19,10 @@ _ARCH_TOKEN_STRIP_TABLE = str.maketrans("", "", "-_ ")
 def _is_64bit_from_proc(proc):
     """Best-effort bitness inference from processor names."""
     p = proc.lower()
-    p_norm = p.translate(_ARCH_TOKEN_STRIP_TABLE)
     has_64_marker = any(marker in p for marker in (
         "64", "x64", "amd64", "x86_64", "aarch64", "arm64",
         "mips64", "ppc64", "powerpc64", "sparc64", "riscv64", "rv64",
-    )) or any(marker in p_norm for marker in ("armv8a",))
+    ))
     has_32_marker = any(marker in p for marker in (
         "32", "i386", "i486", "i586", "i686", "ia32", "arm32", "rv32", "riscv32",
     ))
@@ -58,9 +57,11 @@ def get_arch():
         return "unknown"
     proc = info.procname.lower().strip() if info.procname else ""
     normalized_proc = proc.translate(_ARCH_TOKEN_STRIP_TABLE)
-    ida_is_64 = info.is_64bit() if hasattr(info, 'is_64bit') else False
-    inferred_is_64 = _is_64bit_from_proc(proc)
-    is_64 = ida_is_64 if inferred_is_64 is None else inferred_is_64
+    if hasattr(info, 'is_64bit'):
+        is_64 = info.is_64bit()
+    else:
+        inferred_is_64 = _is_64bit_from_proc(proc)
+        is_64 = inferred_is_64 if inferred_is_64 is not None else False
 
     # x86 family
     if (
