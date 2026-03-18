@@ -25,7 +25,8 @@ try:
     from ..utils import (
         parse_address, normalize_list_input, normalize_dict_list,
         get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
+        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
+        compile_smart_pattern,
     )
     from ..error_handling import (
         MCPError, make_error, handle_error,
@@ -43,7 +44,8 @@ except (ImportError, ValueError):
     from utils import (
         parse_address, normalize_list_input, normalize_dict_list,
         get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size
+        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
+        compile_smart_pattern,
     )
     from error_handling import (
         MCPError, make_error, handle_error,
@@ -61,7 +63,7 @@ def ctree(
     action: Annotated[Literal["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow"],
                       "Action: get|traverse|find_calls|find_vars|find_strings|find_conditions|get_logic_flow"],
     addr: Annotated[str, "Address of function to analyze"],
-    query: Annotated[Optional[str], "Filter pattern (for find_* actions)"] = None,
+    query: Annotated[Optional[str], "Filter pattern (regex/glob/substring/semantic auto-detected; for find_* actions)"] = None,
     depth: Annotated[int, "Max traversal depth"] = 10,
 ) -> dict:
     """
@@ -89,12 +91,12 @@ def ctree(
             return make_error(MCPError.IDA_ERROR, "Decompiler required for CTree")
 
         func_name = idc.get_func_name(ea)
-        filter_text = (query or "").lower()
+        filter_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
 
         def match_filter(text):
-            if not filter_text:
+            if not filter_matcher:
                 return True
-            return filter_text in (text or "").lower()
+            return filter_matcher((text or ""))
 
         if action == "get_logic_flow":
             flow = []

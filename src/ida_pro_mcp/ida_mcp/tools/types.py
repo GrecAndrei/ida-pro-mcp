@@ -17,7 +17,7 @@ def types(
     name: Annotated[Optional[str], "Type name (or variable name for apply)"] = None,
     addr: Annotated[Optional[str], "Address (for set_prototype/apply/infer/read_struct)"] = None,
     decl: Annotated[Optional[str], "Type declaration string (or header content)"] = None,
-    query: Annotated[Optional[str], "Search query (for list/search_structs)"] = None,
+    query: Annotated[Optional[str], "Search query (regex/glob/substring/semantic; for list/search_structs)"] = None,
     kind: Annotated[Optional[str], "Apply kind: function, global, local, stack"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Maximum items to return"] = 100,
@@ -74,12 +74,13 @@ def types(
             total_qty = qty_func(til)
             found = 0
             
+            matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             for ordinal in range(1, total_qty + 1):
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_numbered_type(til, ordinal):
                     name = tif.get_type_name()
                     if name:
-                        if not query or query.lower() in name.lower():
+                        if matcher is None or matcher(name):
                             found += 1
                             if found > offset and (count == 0 or len(types_list) < count):
                                 types_list.append({
@@ -233,6 +234,7 @@ def types(
                 return {"error": "query required"}
             
             matches = []
+            matcher = compile_smart_pattern(query, case_sensitive=False)
             # Check if ordinal qty API exists
             qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
             if not qty_func:
@@ -242,7 +244,7 @@ def types(
                 if tif.get_numbered_type(None, ordinal) and (tif.is_struct() or tif.is_union()):
                     type_name = tif.get_type_name()
                     # Check type name
-                    if query.lower() in type_name.lower():
+                    if matcher(type_name):
                         matches.append({"name": type_name, "ordinal": ordinal, "match": "name"})
                         continue
                     
@@ -251,7 +253,7 @@ def types(
                     if tif.get_udt_details(udt):
                         for i in range(udt.size()):
                             m = udt[i]
-                            if query.lower() in m.name.lower():
+                            if matcher(m.name):
                                 matches.append({
                                     "name": type_name,
                                     "ordinal": ordinal,
