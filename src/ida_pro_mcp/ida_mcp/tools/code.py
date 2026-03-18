@@ -227,7 +227,10 @@ def code(
         if action == "disasm":
             disasm_max = limit if isinstance(limit, int) else max_items
             if not isinstance(disasm_max, int):
-                disasm_max = max_items
+                try:
+                    disasm_max = int(disasm_max)
+                except Exception:
+                    disasm_max = DISASM_MAX_LINES
             # Clamp disasm rows even when caller uses max_items directly.
             max_items = min(max(disasm_max, 1), DISASM_MAX_LINES)
         addrs = normalize_list_input(addrs)
