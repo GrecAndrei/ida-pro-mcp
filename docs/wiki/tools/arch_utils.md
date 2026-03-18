@@ -2,6 +2,7 @@
 
 ## What It Does
 Shared architecture-detection and instruction-pattern helpers used by multiple tools; this module is not directly callable as an MCP tool.
+It now normalizes a broader firmware-focused architecture set, including comprehensive RISC-V naming variants (e.g. `risc-v`, `rv32*`, `rv64*`) plus embedded targets like Xtensa, TriCore, AVR, MSP430, C-SKY, ARC, Nios II, MicroBlaze, V850, RL78, H8, 8051/MCS-51, Z80, PIC24, and PIC18.
 
 ## Actions
 - No MCP `action` interface (utility module only).
