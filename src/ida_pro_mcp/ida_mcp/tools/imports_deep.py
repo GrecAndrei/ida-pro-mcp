@@ -16,7 +16,7 @@ import ida_ida
 def imports_deep(
     action: Annotated[Literal["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
                       "Action: thunks|delay|forwarded|ordinal|api_sets|resolve"],
-    query: Annotated[Optional[str], "Import name or DLL to filter"] = None,
+    query: Annotated[Optional[str], "Import name or DLL to filter (regex/glob/substring/semantic auto-detected)"] = None,
     addr: Annotated[Optional[str], "Address for resolve action"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results"] = 100,
@@ -49,6 +49,7 @@ def imports_deep(
         Returns: {addr, dll, name, type} OR {resolved: [...]}
     """
     try:
+        query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
         if action == "thunks":
             thunk_lines = []
             
@@ -67,7 +68,7 @@ def imports_deep(
                         name = idc.get_name(ea)
                         
                         if name and target:
-                            if query and query.lower() not in name.lower():
+                            if query_matcher and not query_matcher(name):
                                 ea += 8 if is_64 else 4
                                 continue
 
@@ -143,7 +144,7 @@ def imports_deep(
             nimps = ida_nalt.get_import_module_qty()
             for i in range(nimps):
                 mod_name = ida_nalt.get_import_module_name(i)
-                if query and query.lower() not in mod_name.lower():
+                if query_matcher and not query_matcher(mod_name or ""):
                     continue
                 ida_nalt.enum_import_names(i, imp_cb)
             
@@ -177,7 +178,12 @@ def imports_deep(
                     mod_name = ida_nalt.get_import_module_name(i)
                     
                     def collect_cb(ea, name, ordinal):
-                        resolve_lines.append(f"{hex(ea)}  {mod_name}  {name or f'ordinal_{ordinal}'}")
+                        resolved_name = name or f"ordinal_{ordinal}"
+                        if query_matcher and not (
+                            query_matcher(mod_name or "") or query_matcher(resolved_name)
+                        ):
+                            return True
+                        resolve_lines.append(f"{hex(ea)}  {mod_name}  {resolved_name}")
                         return True
                         
                     ida_nalt.enum_import_names(i, collect_cb)

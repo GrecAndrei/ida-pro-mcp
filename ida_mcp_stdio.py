@@ -231,8 +231,13 @@ except ImportError:
             return None
 
         query_set = set(query_tokens)
-        # Require at least half of query concepts (rounded up) to avoid noisy matches.
-        overlap_needed = max(1, (len(query_set) + 1) // 2)
+        # For path/file-like queries with a delimiter and exactly two tokens
+        # (e.g. "test.exe"), require both tokens to reduce broad matches.
+        pathlike_query = len(query_set) == 2 and bool(re.search(r"[./\\:_-]", pattern))
+        if pathlike_query:
+            overlap_needed = 2
+        else:
+            overlap_needed = max(1, (len(query_set) + 1) // 2)
         fuzzy_tokens = [tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN]
 
         def _semantic_matches(text: str) -> bool:
