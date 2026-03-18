@@ -1555,7 +1555,7 @@ TOOL_DESCRIPTIONS = {
     "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.",
     # Project and file management
     "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.",
-    "plugins": "Legacy alias for misc plugin actions. Prefer misc(action=plugin_list|plugin_run).",
+    "plugins": "Legacy compatibility plugin surface. Actions: list, run. Preferred entrypoint: misc(action=plugin_list|plugin_run).",
     # Advanced analysis
     "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions.",
@@ -4518,7 +4518,11 @@ class IDAMCPServer:
             base_score, reasons = self._wiki_score_page(
                 page, query_lower, query_tokens, fuzzy=True
             )
-            page_tokens = {self._wiki_stem_token(t) for t in page.get("tokens", set())}
+            page_tokens = page.get("stemmed_tokens")
+            # Defensive fallback: keeps semantic search working if an older cache entry
+            # (without stemmed_tokens) is present during rolling updates/tests.
+            if not isinstance(page_tokens, set):
+                page_tokens = {self._wiki_stem_token(t) for t in page.get("tokens", set())}
             semantic_hits = sorted(expanded_terms.intersection(page_tokens))
             if semantic_hits:
                 base_score += (len(semantic_hits) * 14) + 20
@@ -4578,6 +4582,8 @@ class IDAMCPServer:
                     title = headers[0]["text"] if headers else page_name
                     header_text = " ".join(h["text"] for h in headers).lower()
                     topics.setdefault(category, []).append(page_name)
+                    text_to_tokenize = f"{topic} {title} {header_text} {text[:4000]}"
+                    raw_tokens = self._wiki_tokenize(text_to_tokenize)
                     pages.append(
                         {
                             "topic": topic,
@@ -4592,11 +4598,8 @@ class IDAMCPServer:
                             "text": text,
                             "text_lower": text.lower(),
                             "line_count": len(lines),
-                            "tokens": set(
-                                self._wiki_tokenize(
-                                    f"{topic} {title} {header_text} {text[:4000]}"
-                                )
-                            ),
+                            "tokens": set(raw_tokens),
+                            "stemmed_tokens": {self._wiki_stem_token(t) for t in raw_tokens},
                         }
                     )
 
