@@ -16,7 +16,7 @@ Pattern and reference search. Actions: bytes, string, immediate, name, insns, te
 - `insns` (tool-specific)
 - `text` (tool-specific)
 - `operand` (tool-specific)
-- `comment` (write/mutate)
+- `comment` (tool-specific)
 - `data_ref` (tool-specific)
 - `code_ref` (tool-specific)
 - `regex` (tool-specific)

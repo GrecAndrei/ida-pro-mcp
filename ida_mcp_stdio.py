@@ -4481,7 +4481,11 @@ class IDAMCPServer:
             return t
         for suffix in ("ing", "ed", "es", "s"):
             if t.endswith(suffix) and len(t) - len(suffix) >= 3:
-                return t[: -len(suffix)]
+                stem = t[: -len(suffix)]
+                if suffix == "ing" and stem.endswith("c"):
+                    # tracing -> trace, mimicking simple English recovery.
+                    stem += "e"
+                return stem
         return t
 
     def _wiki_expand_semantic_terms(self, query_tokens: List[str]) -> set[str]:
