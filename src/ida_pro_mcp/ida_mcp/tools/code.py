@@ -77,6 +77,52 @@ def _decompile_with_diagnostics(func_ea: int):
         )
 
 
+def _format_disasm_line(
+    ea: int,
+    *,
+    style: str = "csmini",
+    include_bytes: bool = False,
+    mark_all: bool = True,
+) -> str:
+    raw = idc.generate_disasm_line(ea, 0) or ""
+    text = ida_lines.tag_remove(raw) if raw else "<data>"
+    prefix = "*" if mark_all else ""
+    if style == "classic":
+        line = f"{hex_ea(ea)}  {text}"
+    elif style == "annotated":
+        line = f"{prefix}{hex_ea(ea)}: {text}"
+    else:
+        line = f"{prefix}{hex_ea(ea)}:{text}"
+    if include_bytes:
+        size = int(idc.get_item_size(ea) or 0)
+        if size > 0:
+            insn_bytes = " ".join(f"{ida_bytes.get_byte(ea + i):02x}" for i in range(min(size, 16)))
+            line = f"{line} ; bytes={insn_bytes}"
+    return line
+
+
+def _disasm_range(
+    start_ea: int,
+    stop_ea: int,
+    *,
+    max_items: int,
+    style: str,
+    include_bytes: bool,
+) -> list[str]:
+    lines = []
+    curr = start_ea
+    count = 0
+    hard_end = max(stop_ea, start_ea + 1)
+    while curr < hard_end and count < max_items:
+        lines.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
+        next_ea = idc.next_head(curr, hard_end)
+        if next_ea == idaapi.BADADDR or next_ea <= curr:
+            break
+        curr = next_ea
+        count += 1
+    return lines
+
+
 # ============================================================================
 # 2. CODE - Decompilation & Disassembly
 # ============================================================================
@@ -94,6 +140,10 @@ def code(
     max_items: Annotated[int, "Max items to return"] = 1000,
     max_depth: Annotated[int, "Max depth for callgraph/find_paths"] = 5,
     format: Annotated[Literal["json", "c_header", "prototypes"], "Export format"] = "json",
+    disasm_style: Annotated[Literal["csmini", "classic", "annotated"], "Disassembly line style"] = "csmini",
+    include_bytes: Annotated[bool, "Include instruction bytes in disassembly output"] = False,
+    end: Annotated[Optional[str], "Optional end address for disasm range"] = None,
+    limit: Annotated[Optional[int], "Alias for max_items (especially useful with disasm)"] = None,
     field_name: Annotated[Optional[str], "Struct field name (for xrefs_to_field)"] = None,
     target: Annotated[Optional[str], "Target address (for find_paths)"] = None,
     **kwargs
@@ -109,10 +159,11 @@ def code(
         Example: code(action="decompile", addrs="0x401000")
         Example: code(action="decompile", addrs=["main", "0x402000"])
         
-    disasm - Get assembly listing (compact text, one line per instruction)
-        Params: addrs (REQUIRED)
-        Returns: [{addr, name, disasm: "addr  instr\\naddr  instr\\n...", count}]
+    disasm - Get assembly listing (LLM-compact text, one line per instruction)
+        Params: addrs (REQUIRED), optional end, disasm_style (csmini|classic|annotated), include_bytes, limit
+        Returns: [{addr, name, disasm: "*addr:instr\\n*addr:instr\\n...", count, style, range}]
         Example: code(action="disasm", addrs="0x401000")
+        Example: code(action="disasm", addrs="0x125b0", end="0x12640", limit=160, disasm_style="csmini")
         
     xrefs_to - Get cross-references TO an address (compact text, includes function names)
         Params: addrs (REQUIRED)
@@ -171,6 +222,8 @@ def code(
             addrs = addr
         if not addrs:
             return make_error(MCPError.INVALID_ARGS, "addrs or addr parameter required")
+        if isinstance(limit, int) and limit > 0:
+            max_items = min(max(limit, 1), 10000)
         addrs = normalize_list_input(addrs)
         results = []
         
@@ -217,35 +270,52 @@ def code(
             
             elif action == "disasm":
                 func = idaapi.get_func(ea)
+                end_ea = None
+                if end:
+                    end_ea, end_err = validate_addr(end)
+                    if end_err:
+                        results.append({"addr": addr, **end_err})
+                        continue
+                    if end_ea <= ea:
+                        results.append(make_error(MCPError.INVALID_ARGS, "end must be greater than start address"))
+                        continue
                 if not func:
                     # Disassemble raw bytes even without function
-                    lines = []
-                    curr = ea
-                    for _ in range(50):  # Show 50 lines anyway
-                        line = idc.generate_disasm_line(curr, 0)
-                        if line:
-                            lines.append(f"{hex_ea(curr)}  {ida_lines.tag_remove(line)}")
-                        next_ea = idc.next_head(curr, ea + 0x1000)
-                        if next_ea == idaapi.BADADDR or next_ea <= curr:
-                            break
-                        curr = next_ea
+                    lines = _disasm_range(
+                        ea,
+                        end_ea if end_ea is not None else (ea + 0x1000),
+                        max_items=max_items,
+                        style=disasm_style,
+                        include_bytes=include_bytes,
+                    )
                     results.append({
                         "addr": addr, 
                         "warning": "Address is not within a defined function. Showing raw disassembly.",
                         "disasm": "\n".join(lines),
-                        "count": len(lines)
+                        "count": len(lines),
+                        "style": disasm_style,
+                        "range": f"{hex_ea(ea)}-{hex_ea((end_ea if end_ea is not None else (ea + 0x1000)))}",
                     })
                     continue
-                lines = []
-                curr = func.start_ea
-                count = 0
-                while curr < func.end_ea and count < max_items:
-                    lines.append(f"{hex_ea(curr)}  {ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))}")
-                    curr = idc.next_head(curr, func.end_ea)
-                    if curr == idaapi.BADADDR: break
-                    count += 1
+                disasm_start = ea if end_ea is not None else func.start_ea
+                disasm_end = end_ea if end_ea is not None else func.end_ea
+                lines = _disasm_range(
+                    disasm_start,
+                    disasm_end,
+                    max_items=max_items,
+                    style=disasm_style,
+                    include_bytes=include_bytes,
+                )
                 fname = ida_funcs.get_func_name(func.start_ea)
-                results.append({"ok": True, "addr": hex_ea(func.start_ea), "name": fname, "disasm": "\n".join(lines), "count": count})
+                results.append({
+                    "ok": True,
+                    "addr": hex_ea(func.start_ea),
+                    "name": fname,
+                    "disasm": "\n".join(lines),
+                    "count": len(lines),
+                    "style": disasm_style,
+                    "range": f"{hex_ea(disasm_start)}-{hex_ea(disasm_end)}",
+                })
             
             elif action == "xrefs_to":
                 xref_lines = []
