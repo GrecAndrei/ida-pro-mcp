@@ -301,6 +301,8 @@ TOOL_ALIASES = {
     "xfer_analysis": "xref_analysis",
 }
 WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
+ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
+ACTION_STRIP_CHARS = "\"'"
 ADVERTISED_TOOLS = [
     "session",
     "truncation",
@@ -1414,6 +1416,101 @@ TOOLS = [
 # Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
 HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"plugins", "xfer_analysis"})
 
+
+_EXTRA_TOOL_ALIASES = {
+    "analysis_tool": "analysis",
+    "annotate": "annotation",
+    "annotations": "annotation",
+    "assembler": "code",
+    "assembly": "code",
+    "bookmarks_tool": "bookmarks",
+    "code_tool": "code",
+    "database": "idb",
+    "decompiler": "code",
+    "decomp": "code",
+    "diag": "misc",
+    "disasm": "code",
+    "disassembly": "code",
+    "fn": "funcs",
+    "func": "funcs",
+    "function": "funcs",
+    "functions": "funcs",
+    "graphs": "graph",
+    "helper": "llm_helpers",
+    "helpers": "llm_helpers",
+    "hexrays": "code",
+    "i_db": "idb",
+    "ida": "idb",
+    "imports": "imports_deep",
+    "lookup": "data",
+    "notes": "bookmarks",
+    "plugins_tool": "misc",
+    "python": "misc",
+    "queries": "query",
+    "rename": "edit",
+    "scanner": "vuln_scan",
+    "searches": "search",
+    "segment": "segments",
+    "session_tool": "session",
+    "strings": "string_ops",
+    "symbols_tool": "symbols",
+    "trace_analyze": "trace_analysis",
+    "xref": "xref_analysis",
+    "xrefs": "xref_analysis",
+}
+
+
+def _snake_variants(value: str) -> set[str]:
+    base = str(value or "").strip().lower()
+    if not base:
+        return set()
+    out = {
+        base,
+        base.replace("-", "_"),
+        base.replace(" ", "_"),
+        base.replace("_", "-"),
+        base.replace("_", ""),
+        base.replace("_", "."),
+        base.replace("_", "/"),
+    }
+    if base.endswith("s") and len(base) > 3:
+        out.add(base[:-1])
+    else:
+        out.add(f"{base}s")
+    out.add(f"{base}_tool")
+    out.add(f"{base}_tools")
+    out.add(f"tool_{base}")
+    out.add(f"tools_{base}")
+    return {x for x in out if x}
+
+
+def _camel_variants(value: str) -> set[str]:
+    words = [w for w in str(value or "").replace("-", "_").split("_") if w]
+    if len(words) <= 1:
+        return set()
+    pascal = "".join(w.capitalize() for w in words)
+    camel = words[0].lower() + "".join(w.capitalize() for w in words[1:])
+    return {camel, pascal}
+
+
+def _build_tool_aliases(tools: list[str], explicit: dict[str, str]) -> dict[str, str]:
+    candidates: Dict[str, set[str]] = {}
+    for tool in tools:
+        for alias in _snake_variants(tool).union(_camel_variants(tool)):
+            candidates.setdefault(alias, set()).add(tool)
+    for alias, target in (explicit or {}).items():
+        candidates.setdefault(str(alias).strip().lower(), set()).add(str(target).strip().lower())
+    resolved: dict[str, str] = {}
+    for alias, targets in candidates.items():
+        if len(targets) == 1:
+            target = next(iter(targets))
+            if alias != target:
+                resolved[alias] = target
+    return resolved
+
+
+TOOL_ALIASES = _build_tool_aliases(TOOLS, {**TOOL_ALIASES, **_EXTRA_TOOL_ALIASES})
+
 TOOL_DESCRIPTIONS = {
     # Core session tools (host-side, no IDA process required)
     "session": "Session lifecycle + runtime context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
@@ -2087,6 +2184,25 @@ TOOL_ARG_SCHEMAS = {
         "subaction": {"type": "string"},
         "args": {"type": "object"},
     },
+    "idb": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["idb"]},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+    },
+    "code": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["code"]},
+        "addrs": {"type": ["array", "string"], "items": {"type": "string"}},
+        "addr": {"type": "string"},
+        "max_items": {"type": "integer"},
+        "max_depth": {"type": "integer"},
+        "format": {"type": "string"},
+        "disasm_style": {"type": "string", "enum": ["csmini", "classic", "annotated"]},
+        "include_bytes": {"type": "boolean"},
+        "end": {"type": "string"},
+        "limit": {"type": "integer"},
+        "field_name": {"type": "string"},
+        "target": {"type": "string"},
+    },
     "ctree": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},
         "addr": {"type": "string"},
@@ -2163,6 +2279,164 @@ TOOL_ARG_SCHEMAS = {
         "continue_on_error": {"type": "boolean"},
     },
 }
+
+_ACTION_ALIAS_HINTS = {
+    "add": {"append", "insert", "create"},
+    "analyze": {"analyse", "inspect"},
+    "bookmarks": {"marks"},
+    "callers": {"incoming_calls", "who_calls"},
+    "callees": {"outgoing_calls", "calls"},
+    "comment": {"set_comment", "annotate"},
+    "create": {"new", "make"},
+    "decompile": {"pseudo", "pseudocode"},
+    "decompile_func": {"decompile", "pseudo"},
+    "delete": {"remove", "rm", "del"},
+    "disasm": {"asm", "assembly", "disassemble", "listing"},
+    "entrypoints": {"entries"},
+    "export": {"dump"},
+    "find": {"search", "query", "lookup"},
+    "functions": {"funcs", "function_list"},
+    "get": {"show", "view", "read", "info"},
+    "health": {"diagnostics", "diag"},
+    "imports": {"imports_list"},
+    "info": {"details", "describe"},
+    "list": {"ls", "enumerate", "all"},
+    "lookup": {"resolve", "find_addr", "find_address"},
+    "meta": {"metadata"},
+    "name": {"symbol"},
+    "plugin_list": {"plugins", "list_plugins"},
+    "plugin_run": {"run_plugin", "exec_plugin"},
+    "read": {"load"},
+    "recent": {"latest"},
+    "regex": {"regexp"},
+    "rename": {"set_name"},
+    "run": {"execute", "exec"},
+    "scan_all": {"scan", "full_scan"},
+    "search": {"find", "query", "lookup"},
+    "set_attr": {"set_attribute"},
+    "set_flags": {"flags"},
+    "set_name": {"rename"},
+    "set_options": {"configure"},
+    "set_perms": {"permissions", "set_permissions"},
+    "status": {"state"},
+    "strings": {"strs"},
+    "summary": {"overview"},
+    "switch": {"use"},
+    "write": {"save"},
+    "xrefs_from": {"refs_from", "xrefs_out"},
+    "xrefs_to": {"refs_to", "xrefs_in"},
+}
+
+_COMMON_ARG_ALIAS_HINTS = {
+    "action": {"cmd", "command", "op", "operation", "tool_action"},
+    "addr": {"address", "ea", "va", "offset"},
+    "addrs": {"addr", "address", "addresses", "ea", "eas", "vas"},
+    "args": {"arguments", "params", "parameters"},
+    "binary_path": {"binary", "file", "path", "target"},
+    "calls": {"steps", "requests"},
+    "count": {"limit", "max", "max_items", "n"},
+    "data": {"payload", "value"},
+    "end": {"end_addr", "stop", "to"},
+    "idb": {"database"},
+    "idb_path": {"idb", "database", "database_path"},
+    "limit": {"count", "max", "max_items", "n"},
+    "max_items": {"limit", "count", "max", "n"},
+    "name": {"func_name", "symbol", "label"},
+    "notes": {"description"},
+    "offset": {"skip"},
+    "pattern": {"query", "needle", "match"},
+    "query": {"q", "search", "pattern"},
+    "session_id": {"sid", "session"},
+    "source_action": {"on", "target_action", "subaction", "source"},
+    "start": {"from", "start_addr"},
+    "target": {"to"},
+    "topic": {"doc", "page"},
+}
+
+_TOOL_SPECIFIC_ARG_ALIASES = {
+    "code": {
+        "addrs": {"addr", "address", "addresses", "ea", "eas"},
+        "max_items": {"count", "max"},
+    },
+    "data": {
+        "query": {"name", "symbol", "lookup"},
+    },
+    "search": {
+        "pattern": {"query", "needle"},
+    },
+}
+
+
+def _build_action_aliases() -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for tool_name, actions in TOOL_ACTIONS.items():
+        alias_map: dict[str, str] = {}
+        for action in actions:
+            candidates = _snake_variants(action).union(_camel_variants(action))
+            candidates.update(_ACTION_ALIAS_HINTS.get(action, set()))
+            if action.startswith("get_"):
+                candidates.add(action.replace("get_", "show_", 1))
+            if action.startswith("set_"):
+                candidates.add(action.replace("set_", "update_", 1))
+            if action.startswith("find_"):
+                candidates.add(action.replace("find_", "search_", 1))
+            if action.startswith("list_"):
+                candidates.add(action.replace("list_", "get_", 1))
+            for alias in candidates:
+                key = str(alias).strip().lower()
+                if not key:
+                    continue
+                existing = alias_map.get(key)
+                if existing and existing != action:
+                    alias_map.pop(key, None)
+                    continue
+                alias_map[key] = action
+        for action in actions:
+            alias_map.pop(action.lower(), None)
+        out[tool_name] = alias_map
+    return out
+
+
+def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for tool_name in TOOLS:
+        canonical_keys = set(TOOL_ARG_SCHEMAS.get(tool_name, {}).keys())
+        canonical_keys.add("action")
+        canonical_keys.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).keys())
+        alias_map: dict[str, str] = {}
+        # Sort for deterministic alias conflict resolution across processes/runs.
+        for canonical in sorted(canonical_keys):
+            candidates = _snake_variants(canonical).union(_camel_variants(canonical))
+            # Keep argument aliasing conservative: avoid automatic singular/plural flips,
+            # because some tools intentionally use both (e.g. tag vs tags, note vs notes).
+            if canonical.endswith("s") and len(canonical) > 3:
+                candidates.discard(canonical[:-1])
+            else:
+                candidates.discard(f"{canonical}s")
+            candidates.update(_COMMON_ARG_ALIAS_HINTS.get(canonical, set()))
+            candidates.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).get(canonical, set()))
+            for alias in candidates:
+                key = str(alias).strip().lower()
+                if not key:
+                    continue
+                existing = alias_map.get(key)
+                if existing and existing != canonical:
+                    alias_map.pop(key, None)
+                    continue
+                alias_map[key] = canonical
+        for canonical, explicit_aliases in _TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).items():
+            for alias in explicit_aliases:
+                alias_key = alias.strip().lower()
+                if alias_key and alias_key != canonical.lower():
+                    alias_map[alias_key] = canonical
+        for canonical in canonical_keys:
+            alias_map.pop(canonical.lower(), None)
+        out[tool_name] = alias_map
+    return out
+
+
+ACTION_ALIASES_BY_TOOL = _build_action_aliases()
+ARG_ALIASES_BY_TOOL = _build_tool_arg_aliases()
 
 GLOBAL_RESPONSE_CONTROLS = {
     "_response_mode": {
@@ -2891,10 +3165,33 @@ class IDAMCPServer:
             parsed.setdefault("_positional", " ".join(positional).strip())
         return parsed
 
+    def _clean_action_text(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        text = ACTION_PREFIX_RE.sub("", text)
+        text = text.strip().strip(",").strip()
+        # Handle malformed fragments like action\":\"lookup addr=0x...
+        text = text.strip(ACTION_STRIP_CHARS)
+        text = ACTION_PREFIX_RE.sub("", text)
+        text = text.strip().strip(",")
+        return text
+
     def _normalize_tool_call_args(self, tool_name: str, args: dict) -> dict:
         out = dict(args or {})
         valid_actions = TOOL_ACTIONS.get(tool_name, [])
         lower_map = {a.lower(): a for a in valid_actions}
+        lower_map.update(ACTION_ALIASES_BY_TOOL.get(tool_name, {}))
+
+        arg_aliases = ARG_ALIASES_BY_TOOL.get(tool_name, {})
+        if arg_aliases:
+            for raw_key in list(out.keys()):
+                if not isinstance(raw_key, str):
+                    continue
+                normalized_key = raw_key.strip().lower()
+                canonical_key = arg_aliases.get(normalized_key)
+                if canonical_key and canonical_key not in out:
+                    out[canonical_key] = out.pop(raw_key)
 
         action = out.get("action")
         if isinstance(action, dict):
@@ -2905,7 +3202,7 @@ class IDAMCPServer:
             action = out.get("action")
 
         if isinstance(action, str):
-            action_text = action.strip()
+            action_text = self._clean_action_text(action)
             if action_text.startswith("{") and action_text.endswith("}"):
                 try:
                     payload = json.loads(action_text)
@@ -2914,17 +3211,27 @@ class IDAMCPServer:
                 if isinstance(payload, dict):
                     for k, v in payload.items():
                         out.setdefault(k, v)
-                    action_text = str(payload.get("action", "")).strip()
+                    action_text = self._clean_action_text(payload.get("action", ""))
 
             if action_text:
                 parts = action_text.split(None, 1)
-                base = parts[0].strip()
+                base = self._clean_action_text(parts[0])
                 if base.endswith("()"):
                     base = base[:-2]
+                base = base.strip("\"',")
                 mapped = lower_map.get(base.lower(), base)
                 out["action"] = mapped
                 if len(parts) > 1:
                     parsed_tail = self._parse_action_tail_tokens(parts[1].strip())
+                    if arg_aliases:
+                        normalized_tail = {}
+                        for key, value in parsed_tail.items():
+                            if isinstance(key, str):
+                                canonical_key = arg_aliases.get(key.strip().lower(), key)
+                            else:
+                                canonical_key = key
+                            normalized_tail[canonical_key] = value
+                        parsed_tail = normalized_tail
                     for k, v in parsed_tail.items():
                         out.setdefault(k, v)
                     positional = parsed_tail.get("_positional")
@@ -2945,7 +3252,7 @@ class IDAMCPServer:
             for candidate_key in ("subaction",):
                 candidate = out.get(candidate_key)
                 if isinstance(candidate, str):
-                    mapped = lower_map.get(candidate.strip().lower())
+                    mapped = lower_map.get(self._clean_action_text(candidate).lower())
                     if mapped:
                         out["action"] = mapped
                         break

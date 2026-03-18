@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from ida_mcp_stdio import IDAMCPServer, MCPError, SessionManager  # noqa: E402
+from ida_mcp_stdio import IDAMCPServer, MCPError, SessionManager, TOOLS, TOOL_ALIASES  # noqa: E402
 
 
 class TestHostWikiTool(unittest.TestCase):
@@ -239,6 +239,53 @@ class TestHostHardening(unittest.TestCase):
         )
         self.assertTrue(res.get("ok"))
         self.assertNotIn("pattern", captured["args"])
+
+    def test_tool_alias_generation_covers_all_tools(self):
+        covered = {target for target in TOOL_ALIASES.values() if target in TOOLS}
+        missing = sorted(t for t in TOOLS if t not in covered and t not in {"plugins", "xfer_analysis"})
+        self.assertEqual(missing, [])
+
+    def test_normalize_action_handles_malformed_llm_fragment(self):
+        normalized = self.server._normalize_tool_call_args(
+            "data",
+            {"action": 'action":"lookup addr=0xb1c98'},
+        )
+        self.assertEqual(normalized.get("action"), "lookup")
+        self.assertEqual(normalized.get("addr"), "0xb1c98")
+
+    def test_normalize_tool_args_accepts_common_aliases(self):
+        normalized = self.server._normalize_tool_call_args(
+            "session",
+            {"cmd": "state", "session": "ABCD1234"},
+        )
+        self.assertEqual(normalized.get("action"), "status")
+        self.assertEqual(normalized.get("session_id"), "ABCD1234")
+
+    def test_normalize_code_addrs_aliases(self):
+        normalized = self.server._normalize_tool_call_args(
+            "code",
+            {"operation": "assembly", "address": "0x401000", "count": 32},
+        )
+        self.assertEqual(normalized.get("action"), "disasm")
+        self.assertEqual(normalized.get("addrs"), "0x401000")
+        self.assertEqual(normalized.get("max_items"), 32)
+
+    def test_normalize_code_limit_is_preserved(self):
+        normalized = self.server._normalize_tool_call_args(
+            "code",
+            {"operation": "disassemble", "limit": 160},
+        )
+        self.assertEqual(normalized.get("action"), "disasm")
+        self.assertEqual(normalized.get("limit"), 160)
+        self.assertNotIn("max_items", normalized)
+
+    def test_normalize_code_new_arg_aliases_from_schema(self):
+        normalized = self.server._normalize_tool_call_args(
+            "code",
+            {"operation": "disasm", "disasmStyle": "annotated", "end_addr": "0x12640"},
+        )
+        self.assertEqual(normalized.get("disasm_style"), "annotated")
+        self.assertEqual(normalized.get("end"), "0x12640")
 
 
 class TestResponseCompaction(unittest.TestCase):
