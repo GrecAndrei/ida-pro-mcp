@@ -9,14 +9,19 @@
 Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \w+alloc), glob (*alloc*), or plain substring.
 
 ## Actions
-- `functions`
-- `globals`
-- `strings`
-- `imports`
-- `exports`
-- `lookup`
-- `bulk_query`
+- `functions` (tool-specific)
+- `globals` (tool-specific)
+- `strings` (tool-specific)
+- `imports` (tool-specific)
+- `exports` (tool-specific)
+- `lookup` (tool-specific)
+- `bulk_query` (tool-specific)
 - `grep` (host wrapper): run another action, then grep its output lines.
+
+## LLM Fast Path
+- Canonical wiki page: `wiki(action='read', topic='tools/data')`.
+- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
+- Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
 - `action`: `string` - allowed: `functions, globals, strings, imports, exports, lookup, bulk_query`
@@ -29,7 +34,28 @@ Function listing, global variables, strings, imports, and exports. Actions: func
 - `offset`: `integer`
 - `query`: `string`
 
+## Minimal Call Shapes
+```json
+{
+  "name": "data",
+  "arguments": {
+    "action": "functions"
+  }
+}
+```
+```json
+{
+  "name": "data",
+  "arguments": {
+    "action": "grep",
+    "source_action": "functions",
+    "pattern": "<needle>"
+  }
+}
+```
+
 ## Invocation Guidance
 - Prefer compact responses first, then zoom in with narrower arguments.
 - Use `offset`/`limit` style pagination where supported.
 - If action is unclear, start with read-only/discovery actions before write actions.
+- Re-read the canonical wiki page for detailed examples and failure modes.

@@ -107,6 +107,19 @@ def _render_param(name: str, schema: dict[str, Any]) -> str:
     return " - ".join(bits)
 
 
+def _action_intent(action: str) -> str:
+    low = action.lower()
+    if low in {"list", "index", "status", "get", "info", "summary", "read", "sections", "search", "semantic_search"}:
+        return "read/discovery"
+    if low in {"create", "add", "set_name", "set_flags", "set_type", "rename", "comment", "write", "patch_asm", "apply"}:
+        return "write/mutate"
+    if low in {"delete", "clear", "close", "remove", "undefine"}:
+        return "destructive"
+    if low in {"scan", "analyze", "detect", "find_clones", "find_paths"}:
+        return "analysis"
+    return "tool-specific"
+
+
 def _render_tool_doc(
     tool_name: str,
     description: str,
@@ -126,10 +139,15 @@ def _render_tool_doc(
     lines.append("")
     lines.append("## Actions")
     if actions:
-        lines.extend([f"- `{a}`" for a in actions])
+        lines.extend([f"- `{a}` ({_action_intent(a)})" for a in actions])
     else:
         lines.append("- (none documented)")
     lines.append("- `grep` (host wrapper): run another action, then grep its output lines.")
+    lines.append("")
+    lines.append("## LLM Fast Path")
+    lines.append(f"- Canonical wiki page: `wiki(action='read', topic='tools/{tool_name}')`.")
+    lines.append("- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.")
+    lines.append("- Keep calls narrow: include only the minimum fields needed for one action.")
     lines.append("")
     lines.append("## Parameters")
     if arg_schema:
@@ -138,10 +156,26 @@ def _render_tool_doc(
     else:
         lines.append("- (tool takes action-only or dynamic args)")
     lines.append("")
+    lines.append("## Minimal Call Shapes")
+    if actions:
+        first_action = actions[0]
+        lines.append("```json")
+        lines.append(json.dumps({"name": tool_name, "arguments": {"action": first_action}}, indent=2))
+        lines.append("```")
+    lines.append("```json")
+    lines.append(
+        json.dumps(
+            {"name": tool_name, "arguments": {"action": "grep", "source_action": actions[0] if actions else "list", "pattern": "<needle>"}},
+            indent=2,
+        )
+    )
+    lines.append("```")
+    lines.append("")
     lines.append("## Invocation Guidance")
     lines.append("- Prefer compact responses first, then zoom in with narrower arguments.")
     lines.append("- Use `offset`/`limit` style pagination where supported.")
     lines.append("- If action is unclear, start with read-only/discovery actions before write actions.")
+    lines.append("- Re-read the canonical wiki page for detailed examples and failure modes.")
     lines.append("")
     return "\n".join(lines).strip() + "\n"
 
