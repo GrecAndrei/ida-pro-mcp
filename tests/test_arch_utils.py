@@ -108,13 +108,57 @@ class TestGetArch(unittest.TestCase):
         _setup_arch("sh4", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "sh")
 
-    def test_unknown(self):
+    def test_xtensa(self):
         _setup_arch("xtensa", is_64=False)
-        self.assertEqual(arch_utils.get_arch(), "unknown")
+        self.assertEqual(arch_utils.get_arch(), "xtensa")
 
     def test_80386(self):
         _setup_arch("80386", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "x86")
+
+    def test_riscv_aliases(self):
+        _setup_arch("risc-v", is_64=False)
+        self.assertEqual(arch_utils.get_arch(), "riscv")
+        _setup_arch("rv32imac", is_64=False)
+        self.assertEqual(arch_utils.get_arch(), "riscv")
+        _setup_arch("rv64gc", is_64=True)
+        self.assertEqual(arch_utils.get_arch(), "riscv64")
+
+    def test_x86_aliases(self):
+        _setup_arch("i686", is_64=False)
+        self.assertEqual(arch_utils.get_arch(), "x86")
+        _setup_arch("amd64", is_64=True)
+        self.assertEqual(arch_utils.get_arch(), "x64")
+
+    def test_arm_aliases(self):
+        _setup_arch("thumb2", is_64=False)
+        self.assertEqual(arch_utils.get_arch(), "arm")
+        _setup_arch("armv8-a", is_64=False)
+        self.assertEqual(arch_utils.get_arch(), "arm")
+        _setup_arch("armv8-a", is_64=True)
+        self.assertEqual(arch_utils.get_arch(), "arm64")
+
+    def test_embedded_arches(self):
+        for proc, expected in (
+            ("tricore", "tricore"),
+            ("avr", "avr"),
+            ("msp430", "msp430"),
+            ("csky", "csky"),
+            ("arc", "arc"),
+            ("nios2", "nios2"),
+            ("microblaze", "microblaze"),
+            ("v850", "v850"),
+            ("rl78", "rl78"),
+            ("h8sx", "h8"),
+            ("mcs51", "mcs51"),
+            ("8051", "mcs51"),
+            ("z80", "z80"),
+            ("pic24", "pic24"),
+            ("pic18", "pic18"),
+        ):
+            with self.subTest(proc=proc):
+                _setup_arch(proc, is_64=False)
+                self.assertEqual(arch_utils.get_arch(), expected)
 
 
 class TestArchFamilies(unittest.TestCase):
@@ -187,6 +231,15 @@ class TestReturnRegister(unittest.TestCase):
     def test_unknown_default(self):
         self.assertEqual(arch_utils.get_return_register("unknown"), "r0")
 
+    def test_embedded_return_registers(self):
+        self.assertEqual(arch_utils.get_return_register("xtensa"), "a2")
+        self.assertEqual(arch_utils.get_return_register("tricore"), "d2")
+        self.assertEqual(arch_utils.get_return_register("avr"), "r24")
+        self.assertEqual(arch_utils.get_return_register("msp430"), "r12")
+        self.assertEqual(arch_utils.get_return_register("nios2"), "r2")
+        self.assertEqual(arch_utils.get_return_register("microblaze"), "r3")
+        self.assertEqual(arch_utils.get_return_register("mcs51"), "dpl")
+
 
 class TestStackPointerNames(unittest.TestCase):
     """Test stack pointer register name sets."""
@@ -212,6 +265,13 @@ class TestStackPointerNames(unittest.TestCase):
         sp_names = arch_utils.get_stack_pointer_names("riscv")
         self.assertIn("sp", sp_names)
         self.assertIn("x2", sp_names)
+
+    def test_embedded_stack_pointers(self):
+        self.assertIn("a1", arch_utils.get_stack_pointer_names("xtensa"))
+        self.assertIn("a10", arch_utils.get_stack_pointer_names("tricore"))
+        self.assertIn("r1", arch_utils.get_stack_pointer_names("msp430"))
+        self.assertIn("r1", arch_utils.get_stack_pointer_names("microblaze"))
+        self.assertIn("w15", arch_utils.get_stack_pointer_names("pic24"))
 
 
 class TestCalleeSavedRegisters(unittest.TestCase):
@@ -254,6 +314,14 @@ class TestCalleeSavedRegisters(unittest.TestCase):
 
     def test_unknown_returns_empty(self):
         self.assertEqual(arch_utils.get_callee_saved_registers("unknown"), set())
+
+    def test_embedded_callee_saved_sets(self):
+        self.assertIn("a15", arch_utils.get_callee_saved_registers("xtensa"))
+        self.assertIn("d15", arch_utils.get_callee_saved_registers("tricore"))
+        self.assertIn("r16", arch_utils.get_callee_saved_registers("avr"))
+        self.assertIn("r10", arch_utils.get_callee_saved_registers("msp430"))
+        self.assertIn("r23", arch_utils.get_callee_saved_registers("nios2"))
+        self.assertIn("r31", arch_utils.get_callee_saved_registers("microblaze"))
 
 
 class TestIsReturnMnemonic(unittest.TestCase):
@@ -431,17 +499,23 @@ class TestConstantSets(unittest.TestCase):
         self.assertIn("jr", arch_utils.RETURN_MNEMONICS)
         self.assertIn("blr", arch_utils.RETURN_MNEMONICS)
         self.assertIn("rts", arch_utils.RETURN_MNEMONICS)
+        self.assertIn("retw", arch_utils.RETURN_MNEMONICS)
+        self.assertIn("reti", arch_utils.RETURN_MNEMONICS)
+        self.assertIn("retfie", arch_utils.RETURN_MNEMONICS)
 
     def test_call_mnemonics(self):
         self.assertIn("call", arch_utils.CALL_MNEMONICS)
         self.assertIn("bl", arch_utils.CALL_MNEMONICS)
         self.assertIn("jal", arch_utils.CALL_MNEMONICS)
+        self.assertIn("call0", arch_utils.CALL_MNEMONICS)
+        self.assertIn("rcall", arch_utils.CALL_MNEMONICS)
 
     def test_syscall_mnemonics(self):
         self.assertIn("syscall", arch_utils.SYSCALL_MNEMONICS)
         self.assertIn("svc", arch_utils.SYSCALL_MNEMONICS)
         self.assertIn("ecall", arch_utils.SYSCALL_MNEMONICS)
         self.assertIn("sc", arch_utils.SYSCALL_MNEMONICS)
+        self.assertIn("swi", arch_utils.SYSCALL_MNEMONICS)
 
     def test_conditional_branches(self):
         self.assertIn("je", arch_utils.CONDITIONAL_BRANCH_MNEMONICS)

@@ -3,13 +3,34 @@ Multi-architecture detection and helpers for IDA MCP tools.
 
 Provides normalized architecture detection and architecture-specific
 instruction sets for use across all tool modules. Supports:
-  x86/x64, ARM/AArch64, RISC-V, MIPS, PowerPC, SPARC, SuperH, 68k, etc.
+  x86/x64, ARM/AArch64, RISC-V, MIPS, PowerPC, SPARC, SuperH, 68k, s390,
+  Xtensa, TriCore, AVR, MSP430, C-SKY, ARC, Nios II, MicroBlaze, V850,
+  RL78, H8, 8051/MCS-51, Z80 and PIC families.
 """
 
 try:
     import idaapi
 except ImportError:
     idaapi = None  # type: ignore[assignment]
+
+_ARCH_TOKEN_STRIP_TABLE = str.maketrans("", "", "-_ ")
+
+
+def _is_64bit_from_proc(proc):
+    """Best-effort bitness inference from processor names."""
+    p = proc.lower()
+    has_64_marker = any(marker in p for marker in (
+        "64", "x64", "amd64", "x86_64", "aarch64", "arm64",
+        "mips64", "ppc64", "powerpc64", "sparc64", "riscv64", "rv64",
+    ))
+    has_32_marker = any(marker in p for marker in (
+        "32", "i386", "i486", "i586", "i686", "ia32", "arm32", "rv32", "riscv32",
+    ))
+    if has_64_marker and not has_32_marker:
+        return True
+    if has_32_marker and not has_64_marker:
+        return False
+    return None
 
 
 # ============================================================================
@@ -23,7 +44,11 @@ def get_arch():
         'x86', 'x64', 'arm', 'arm64',
         'mips', 'mips64', 'ppc', 'ppc64',
         'riscv', 'riscv64', 'sparc', 'sparc64',
-        'sh', '68k', 's390', 'unknown'
+        'sh', '68k', 's390',
+        'xtensa', 'tricore', 'avr', 'msp430', 'csky',
+        'arc', 'nios2', 'microblaze', 'v850', 'rl78',
+        'h8', 'mcs51', 'z80', 'pic24', 'pic18',
+        'unknown'
     """
     if idaapi is None:
         return "unknown"
@@ -31,16 +56,39 @@ def get_arch():
     if info is None:
         return "unknown"
     proc = info.procname.lower().strip() if info.procname else ""
-    is_64 = info.is_64bit() if hasattr(info, 'is_64bit') else False
+    normalized_proc = proc.translate(_ARCH_TOKEN_STRIP_TABLE)
+    if hasattr(info, 'is_64bit'):
+        is_64 = info.is_64bit()
+    else:
+        inferred_is_64 = _is_64bit_from_proc(proc)
+        is_64 = inferred_is_64 if inferred_is_64 is not None else False
 
     # x86 family
-    if proc.startswith("metapc") or "x86" in proc or "80386" in proc or "80486" in proc:
+    if (
+        proc.startswith("metapc")
+        or "x86" in proc
+        or "amd64" in proc
+        or "x64" in proc
+        or "x86_64" in proc
+        or "ia32" in proc
+        or "80386" in proc
+        or "80486" in proc
+        or proc.startswith("i386")
+        or proc.startswith("i486")
+        or proc.startswith("i586")
+        or proc.startswith("i686")
+    ):
         return "x64" if is_64 else "x86"
     # ARM family
-    if proc.startswith("arm") or proc.startswith("aarch"):
+    if (
+        proc.startswith("arm")
+        or proc.startswith("aarch")
+        or normalized_proc.startswith("thumb")
+        or normalized_proc.startswith("armv")
+    ):
         return "arm64" if is_64 else "arm"
     # RISC-V
-    if "riscv" in proc or proc.startswith("risc-v") or proc.startswith("riscv"):
+    if "riscv" in proc or normalized_proc.startswith("riscv") or normalized_proc.startswith("rv"):
         return "riscv64" if is_64 else "riscv"
     # MIPS
     if proc.startswith("mips") or "mips" in proc:
@@ -60,6 +108,50 @@ def get_arch():
     # IBM S/390
     if "s390" in proc or proc.startswith("s390"):
         return "s390"
+    # Xtensa (common in ESP32 and IoT firmware)
+    if "xtensa" in proc or normalized_proc.startswith("xtensa"):
+        return "xtensa"
+    # Infineon TriCore
+    if "tricore" in proc or normalized_proc.startswith("tricore") or proc.startswith("tc1"):
+        return "tricore"
+    # AVR
+    if proc.startswith("avr") or "atmega" in proc or "attiny" in proc:
+        return "avr"
+    # MSP430
+    if "msp430" in proc:
+        return "msp430"
+    # C-SKY
+    if "csky" in normalized_proc or "ckcore" in normalized_proc:
+        return "csky"
+    # ARC
+    if normalized_proc.startswith("arc") or "arcompact" in normalized_proc:
+        return "arc"
+    # Intel Nios II
+    if "nios2" in normalized_proc or "niosii" in normalized_proc:
+        return "nios2"
+    # Xilinx MicroBlaze
+    if "microblaze" in normalized_proc:
+        return "microblaze"
+    # Renesas V850
+    if normalized_proc.startswith("v850"):
+        return "v850"
+    # Renesas RL78
+    if normalized_proc.startswith("rl78"):
+        return "rl78"
+    # Renesas H8
+    if normalized_proc.startswith("h8"):
+        return "h8"
+    # 8051 / MCS-51
+    if "8051" in normalized_proc or "mcs51" in normalized_proc:
+        return "mcs51"
+    # Z80 family
+    if normalized_proc.startswith("z80"):
+        return "z80"
+    # Microchip PIC families frequently found in embedded firmware
+    if normalized_proc.startswith("pic24") or normalized_proc.startswith("dspic"):
+        return "pic24"
+    if normalized_proc.startswith("pic18"):
+        return "pic18"
     return "unknown"
 
 
@@ -131,6 +223,14 @@ RETURN_MNEMONICS = {
     "rts",
     # 68k
     "rts", "rte", "rtd",
+    # Xtensa
+    "ret", "retw", "ret.n", "retw.n",
+    # TriCore
+    "ret", "rfe",
+    # AVR/MSP430/8051/Z80/PIC
+    "reti", "retn", "return", "retfie",
+    # MicroBlaze
+    "rtsd",
 }
 
 # Unconditional branch / jump mnemonics
@@ -175,6 +275,14 @@ CALL_MNEMONICS = {
     "bsr", "jsr",
     # 68k
     "bsr", "jsr",
+    # Xtensa
+    "call0", "call4", "call8", "call12", "callx0", "callx4", "callx8", "callx12",
+    # TriCore
+    "calla", "calli",
+    # AVR
+    "rcall", "icall", "eicall",
+    # MSP430
+    "calla",
 }
 
 # Conditional branch mnemonics (x86 + ARM + MIPS + PPC + RISC-V + SPARC)
@@ -226,6 +334,12 @@ SYSCALL_MNEMONICS = {
     "trapa",
     # 68k
     "trap",
+    # TriCore
+    "syscall",
+    # Xtensa
+    "syscall",
+    # ARC
+    "swi",
 }
 
 # MOV-like data transfer mnemonics (used for stack-string detection)
@@ -240,6 +354,10 @@ MOV_MNEMONICS = {
     "li", "lis", "mr", "stb",
     # RISC-V
     "li", "lui", "mv", "sb",
+    # Xtensa
+    "movi", "movi.n", "s8i",
+    # AVR
+    "ldi", "sts", "std",
 }
 
 # Comparison / test mnemonics (used for null-check heuristics)
@@ -257,6 +375,10 @@ COMPARISON_MNEMONICS = {
     "cmpwi", "cmplwi", "cmpdi", "cmpldi",
     # RISC-V
     "beqz", "bnez",
+    # Xtensa
+    "beqz", "bnez", "bgez", "bltz",
+    # AVR
+    "cp", "cpc", "cpi", "tst",
 }
 
 # XOR-like mnemonics (used for obfuscation detection)
@@ -271,6 +393,10 @@ XOR_MNEMONICS = {
     "xor", "xori",
     # RISC-V
     "xor", "xori",
+    # Xtensa
+    "xor",
+    # AVR
+    "eor",
 }
 
 # Arithmetic mnemonics used in integer overflow heuristics
@@ -285,6 +411,10 @@ ARITHMETIC_MNEMONICS = {
     "add", "addi", "mulli", "mullw", "slwi", "srwi",
     # RISC-V
     "add", "addi", "mul", "slli", "srli",
+    # Xtensa
+    "add", "addi", "slli",
+    # AVR
+    "add", "adiw", "mul", "lsl", "lsr",
 }
 
 # Interesting instructions for triage (architecture-aware)
@@ -341,6 +471,21 @@ def get_return_register(arch=None):
         "sh": "r0",
         "68k": "d0",
         "s390": "r2",
+        "xtensa": "a2",
+        "tricore": "d2",
+        "avr": "r24",
+        "msp430": "r12",
+        "csky": "a0",
+        "arc": "r0",
+        "nios2": "r2",
+        "microblaze": "r3",
+        "v850": "r10",
+        "rl78": "ax",
+        "h8": "er0",
+        "mcs51": "dpl",
+        "z80": "a",
+        "pic24": "w0",
+        "pic18": "wreg",
     }
     return _map.get(arch, "r0")
 
@@ -364,6 +509,21 @@ def get_stack_pointer_names(arch=None):
         "sparc64": {"sp", "o6"},
         "sh": {"r15"},
         "68k": {"sp", "a7"},
+        "xtensa": {"sp", "a1"},
+        "tricore": {"sp", "a10"},
+        "avr": {"sp"},
+        "msp430": {"sp", "r1"},
+        "csky": {"sp"},
+        "arc": {"sp"},
+        "nios2": {"sp"},
+        "microblaze": {"r1", "sp"},
+        "v850": {"sp"},
+        "rl78": {"sp"},
+        "h8": {"sp", "er7"},
+        "mcs51": {"sp"},
+        "z80": {"sp"},
+        "pic24": {"w15", "sp"},
+        "pic18": {"stkptr"},
     }
     return _map.get(arch, {"sp"})
 
@@ -392,6 +552,19 @@ def get_callee_saved_registers(arch=None):
                   "s8", "s9", "s10", "s11", "ra"},
         "riscv64": {"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
                     "s8", "s9", "s10", "s11", "ra"},
+        "xtensa": {"a12", "a13", "a14", "a15"},
+        "tricore": {"a10", "a11", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15"},
+        "avr": {"r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9",
+                "r10", "r11", "r12", "r13", "r14", "r15", "r16", "r17"},
+        "msp430": {"r4", "r5", "r6", "r7", "r8", "r9", "r10"},
+        "arc": {"r13", "r14", "r15", "r16", "r17", "r18", "r19", "r20",
+                "r21", "r22", "r23", "r24", "r25"},
+        "nios2": {"r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23"},
+        "microblaze": {"r19", "r20", "r21", "r22", "r23", "r24", "r25",
+                       "r26", "r27", "r28", "r29", "r30", "r31"},
+        "v850": {"r20", "r21", "r22", "r23", "r24", "r25", "r26", "r27", "r28", "r29"},
+        "rl78": {"ax", "bc", "de", "hl"},
+        "h8": {"er4", "er5", "er6"},
     }
     return _map.get(arch, set())
 
