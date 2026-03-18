@@ -3,6 +3,7 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+from collections import OrderedDict
 
 # ============================================================================
 # GADGETS - ROP/JOP/COP Gadget & Exploit Primitive Discovery
@@ -85,7 +86,9 @@ def _format_gadget(insns):
     }
 
 
-_QUERY_MATCHER_CACHE = {}
+# Keep a small LRU cache so repeated gadget filters don't recompile patterns.
+_QUERY_MATCHER_CACHE = OrderedDict()
+_MAX_MATCHER_CACHE_SIZE = 64
 
 
 def _matches_query(insns, query):
@@ -95,9 +98,11 @@ def _matches_query(insns, query):
     matcher = _QUERY_MATCHER_CACHE.get(query)
     if matcher is None:
         matcher = compile_smart_pattern(query, case_sensitive=False)
-        if len(_QUERY_MATCHER_CACHE) >= 64:
-            _QUERY_MATCHER_CACHE.clear()
         _QUERY_MATCHER_CACHE[query] = matcher
+        if len(_QUERY_MATCHER_CACHE) > _MAX_MATCHER_CACHE_SIZE:
+            _QUERY_MATCHER_CACHE.popitem(last=False)
+    else:
+        _QUERY_MATCHER_CACHE.move_to_end(query)
     for _, mnem, disasm in insns:
         if matcher(mnem) or matcher(disasm):
             return True

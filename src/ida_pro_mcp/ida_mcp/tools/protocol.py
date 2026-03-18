@@ -214,10 +214,8 @@ def _match_query(text, matcher):
     """Check if text matches query filter (regex/glob/substring/semantic auto-detected)."""
     if not matcher:
         return True
-    try:
-        return bool(matcher(text))
-    except Exception:
-        return False
+    value = "" if text is None else str(text)
+    return bool(matcher(value))
 
 
 @tool
