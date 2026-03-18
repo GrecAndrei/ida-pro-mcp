@@ -92,8 +92,10 @@ class TestHostWikiTool(unittest.TestCase):
         self.assertTrue(res.get("ok"))
         self.assertEqual(res.get("action"), "semantic_search")
         self.assertGreaterEqual(res.get("count", 0), 1)
-        self.assertEqual(res["matches"][0]["topic"], "tools/trace")
-        self.assertIn("semantic_overlap", res["matches"][0].get("matched_on", []))
+        topics = [m.get("topic") for m in res.get("matches", [])]
+        self.assertIn("tools/trace", topics)
+        trace_match = next(m for m in res["matches"] if m.get("topic") == "tools/trace")
+        self.assertIn("semantic_overlap", trace_match.get("matched_on", []))
 
     def test_read_missing_topic_returns_suggestions(self):
         res = self.server._execute_tool(

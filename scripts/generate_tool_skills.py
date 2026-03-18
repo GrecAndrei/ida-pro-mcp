@@ -160,7 +160,7 @@ def _render_tool_doc(
     lines.append("## Description")
     lines.append(description.strip() if description else "No description available.")
     if tool_name == "plugins":
-        lines.append("- Compatibility-only alias: `plugins(action='list'|'run')` is forwarded to `misc` plugin actions.")
+        lines.append("- Compatibility-only surface: `plugins(action='list'|'run')` routes to the legacy plugins runtime tool.")
         lines.append("- Prefer `misc(action='plugin_list')` and `misc(action='plugin_run', name='...', arg=0)` for new calls.")
     lines.append("")
     lines.append("## Actions")
