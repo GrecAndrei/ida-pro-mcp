@@ -190,12 +190,16 @@ except ImportError:
         "symbol": "import",
         "extern": "import",
     }
+    # Ignore semantic fallback for very short one-word queries to reduce false positives.
+    _SEMANTIC_SINGLE_TOKEN_MIN_LEN = 5
+    # Conservative typo tolerance: catches small misspellings without broad overmatching.
+    _SEMANTIC_FUZZY_CUTOFF = 0.86
 
     def _normalize_semantic_token(token: str) -> str:
         tok = token.lower().strip()
         if not tok:
             return tok
-        for suffix in ("ing", "ers", "er", "ies", "ied", "ed", "es", "s"):
+        for suffix in ("ing", "ers", "ies", "ied", "er", "ed", "es", "s"):
             if len(tok) > 4 and tok.endswith(suffix):
                 if suffix in ("ies", "ied"):
                     tok = tok[:-3] + "y"
@@ -219,12 +223,17 @@ except ImportError:
         query_tokens = _semantic_tokenize(pattern)
         if not query_tokens:
             return None
-        if len(query_tokens) == 1 and len(query_tokens[0]) < 5 and " " not in pattern:
+        if (
+            len(query_tokens) == 1
+            and len(query_tokens[0]) < _SEMANTIC_SINGLE_TOKEN_MIN_LEN
+            and " " not in pattern
+        ):
             return None
 
         query_set = set(query_tokens)
+        # Require at least half of query concepts (rounded up) to avoid noisy matches.
         overlap_needed = max(1, (len(query_set) + 1) // 2)
-        fuzzy_tokens = [tok for tok in query_set if len(tok) >= 5]
+        fuzzy_tokens = [tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN]
 
         def _semantic_matches(text: str) -> bool:
             text_tokens = set(_semantic_tokenize(text))
@@ -237,7 +246,7 @@ except ImportError:
                 return False
             fuzzy_hits = 0
             for qtok in fuzzy_tokens:
-                if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=0.86):
+                if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=_SEMANTIC_FUZZY_CUTOFF):
                     fuzzy_hits += 1
                     if overlap + fuzzy_hits >= overlap_needed:
                         return True
