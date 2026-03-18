@@ -14,7 +14,7 @@ Function boundary management. Actions: create (auto-converts bytes to code, supp
 - `set_flags` (write/mutate)
 - `set_name` (write/mutate)
 - `rename` (write/mutate)
-- `add_comment` (tool-specific)
+- `add_comment` (write/mutate)
 - `list` (read/discovery)
 - `info` (read/discovery)
 - `grep` (host wrapper): run another action, then grep its output lines.

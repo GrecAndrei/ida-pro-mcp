@@ -10,7 +10,7 @@ Unified write/edit hub. Quick actions: rename, comment, type, patch, create_func
 
 ## Actions
 - `rename` (write/mutate)
-- `comment` (write/mutate)
+- `comment` (tool-specific)
 - `type` (tool-specific)
 - `patch` (tool-specific)
 - `create_func` (tool-specific)

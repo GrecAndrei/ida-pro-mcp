@@ -7,6 +7,8 @@
 
 ## Description
 Legacy alias for misc plugin actions. Prefer misc(action=plugin_list|plugin_run).
+- Compatibility-only alias: `plugins(action='list'|'run')` is forwarded to `misc` plugin actions.
+- Prefer `misc(action='plugin_list')` and `misc(action='plugin_run', name='...', arg=0)` for new calls.
 
 ## Actions
 - `list` (read/discovery)

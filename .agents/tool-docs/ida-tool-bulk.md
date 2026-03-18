@@ -10,7 +10,7 @@ Bulk rename/comment/type operations. Actions: rename, comment, apply_type, renam
 
 ## Actions
 - `rename` (write/mutate)
-- `comment` (write/mutate)
+- `comment` (tool-specific)
 - `apply_type` (tool-specific)
 - `rename_stack` (tool-specific)
 - `import_annotations` (tool-specific)
