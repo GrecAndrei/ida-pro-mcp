@@ -2404,6 +2404,7 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
         canonical_keys.add("action")
         canonical_keys.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).keys())
         alias_map: dict[str, str] = {}
+        # Sort for deterministic alias conflict resolution across processes/runs.
         for canonical in sorted(canonical_keys):
             candidates = _snake_variants(canonical).union(_camel_variants(canonical))
             # Keep argument aliasing conservative: avoid automatic singular/plural flips,
