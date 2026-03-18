@@ -10,7 +10,7 @@ Rename, comment, set types, and patch assembly. Actions: rename, comment (regula
 
 ## Actions
 - `rename` (write/mutate)
-- `comment` (write/mutate)
+- `comment` (tool-specific)
 - `set_type` (write/mutate)
 - `patch_asm` (write/mutate)
 - `grep` (host wrapper): run another action, then grep its output lines.

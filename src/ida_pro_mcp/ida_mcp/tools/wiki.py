@@ -6,6 +6,18 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 
+SEMANTIC_ALIASES = {
+    "runtime": "execution",
+    "flow": "trace",
+    "path": "trace",
+    "tracking": "trace",
+    "lookup": "search",
+    "find": "search",
+    "locate": "search",
+    "rewrite": "modify",
+}
+
+
 def protocol_resource() -> str:
     """The Master Forensic RE Protocol - Rules of Engagement for AI Agents."""
     _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -224,21 +236,11 @@ def wiki(
             if not q:
                 return make_error(MCPError.INVALID_ARGS, "query required")
             q_lower = q.lower()
-            semantic_aliases = {
-                "runtime": "execution",
-                "flow": "trace",
-                "path": "trace",
-                "tracking": "trace",
-                "lookup": "search",
-                "find": "search",
-                "locate": "search",
-                "rewrite": "modify",
-            }
             query_terms = {q_lower}
             for token in re.findall(r"[a-z0-9_]+", q_lower):
                 query_terms.add(token)
-                if action == "semantic_search" and token in semantic_aliases:
-                    query_terms.add(semantic_aliases[token])
+                if action == "semantic_search" and token in SEMANTIC_ALIASES:
+                    query_terms.add(SEMANTIC_ALIASES[token])
             results = []
 
             for root, _, files in os.walk(wiki_root):
