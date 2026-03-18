@@ -229,7 +229,7 @@ def code(
             if not isinstance(disasm_max, int):
                 try:
                     disasm_max = int(disasm_max)
-                except Exception:
+                except (TypeError, ValueError):
                     disasm_max = DISASM_MAX_LINES
             # Clamp disasm rows even when caller uses max_items directly.
             max_items = min(max(disasm_max, 1), DISASM_MAX_LINES)
