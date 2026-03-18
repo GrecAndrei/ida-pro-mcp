@@ -133,6 +133,8 @@ class TestGetArch(unittest.TestCase):
     def test_arm_aliases(self):
         _setup_arch("thumb2", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "arm")
+        _setup_arch("armv8-a", is_64=False)
+        self.assertEqual(arch_utils.get_arch(), "arm")
         _setup_arch("armv8-a", is_64=True)
         self.assertEqual(arch_utils.get_arch(), "arm64")
 
