@@ -23,6 +23,38 @@ SOURCE_FILE = REPO_ROOT / "ida_mcp_stdio.py"
 SKILLS_ROOT = REPO_ROOT / ".agents" / "skills"
 TOOL_DOCS_ROOT = REPO_ROOT / ".agents" / "tool-docs"
 GEN_MARKER = "<!-- GENERATED: scripts/generate_tool_skills.py -->"
+ACTION_INTENT_LABELS: dict[str, str] = {
+    "list": "read/discovery",
+    "index": "read/discovery",
+    "status": "read/discovery",
+    "get": "read/discovery",
+    "info": "read/discovery",
+    "summary": "read/discovery",
+    "read": "read/discovery",
+    "sections": "read/discovery",
+    "search": "read/discovery",
+    "semantic_search": "read/discovery",
+    "create": "write/mutate",
+    "add": "write/mutate",
+    "set_name": "write/mutate",
+    "set_flags": "write/mutate",
+    "set_type": "write/mutate",
+    "rename": "write/mutate",
+    "write": "write/mutate",
+    "patch_asm": "write/mutate",
+    "apply": "write/mutate",
+    "add_comment": "write/mutate",
+    "delete": "destructive",
+    "clear": "destructive",
+    "close": "destructive",
+    "remove": "destructive",
+    "undefine": "destructive",
+    "scan": "analysis",
+    "analyze": "analysis",
+    "detect": "analysis",
+    "find_clones": "analysis",
+    "find_paths": "analysis",
+}
 
 
 def _extract_literal_assignment(module: ast.Module, name: str) -> Any:
@@ -107,6 +139,10 @@ def _render_param(name: str, schema: dict[str, Any]) -> str:
     return " - ".join(bits)
 
 
+def _action_intent(action: str) -> str:
+    return ACTION_INTENT_LABELS.get(action.lower(), "tool-specific")
+
+
 def _render_tool_doc(
     tool_name: str,
     description: str,
@@ -123,13 +159,21 @@ def _render_tool_doc(
     lines.append("")
     lines.append("## Description")
     lines.append(description.strip() if description else "No description available.")
+    if tool_name == "plugins":
+        lines.append("- Compatibility-only surface: `plugins(action='list'|'run')` routes to the legacy plugins runtime tool.")
+        lines.append("- Prefer `misc(action='plugin_list')` and `misc(action='plugin_run', name='...', arg=0)` for new calls.")
     lines.append("")
     lines.append("## Actions")
     if actions:
-        lines.extend([f"- `{a}`" for a in actions])
+        lines.extend([f"- `{a}` ({_action_intent(a)})" for a in actions])
     else:
         lines.append("- (none documented)")
     lines.append("- `grep` (host wrapper): run another action, then grep its output lines.")
+    lines.append("")
+    lines.append("## LLM Fast Path")
+    lines.append(f"- Canonical wiki page: `wiki(action='read', topic='tools/{tool_name}')`.")
+    lines.append("- Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.")
+    lines.append("- Keep calls narrow: include only the minimum fields needed for one action.")
     lines.append("")
     lines.append("## Parameters")
     if arg_schema:
@@ -138,10 +182,26 @@ def _render_tool_doc(
     else:
         lines.append("- (tool takes action-only or dynamic args)")
     lines.append("")
+    lines.append("## Minimal Call Shapes")
+    if actions:
+        first_action = actions[0]
+        lines.append("```json")
+        lines.append(json.dumps({"name": tool_name, "arguments": {"action": first_action}}, indent=2))
+        lines.append("```")
+    lines.append("```json")
+    lines.append(
+        json.dumps(
+            {"name": tool_name, "arguments": {"action": "grep", "source_action": actions[0] if actions else "list", "pattern": "<needle>"}},
+            indent=2,
+        )
+    )
+    lines.append("```")
+    lines.append("")
     lines.append("## Invocation Guidance")
     lines.append("- Prefer compact responses first, then zoom in with narrower arguments.")
     lines.append("- Use `offset`/`limit` style pagination where supported.")
     lines.append("- If action is unclear, start with read-only/discovery actions before write actions.")
+    lines.append("- Re-read the canonical wiki page for detailed examples and failure modes.")
     lines.append("")
     return "\n".join(lines).strip() + "\n"
 

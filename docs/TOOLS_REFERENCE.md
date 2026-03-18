@@ -786,18 +786,28 @@ Auto-generated from the MCP stdio server registry. Lists every tool with actions
 - `list_topics`
 - `read`
 - `search`
+- `semantic_search`
 - `sections`
 - `index`
 
 ### Args
-- `action`: enum(list_topics, read, search, sections, index)
+- `action`: enum(list_topics, read, search, semantic_search, sections, index)
 - `topic`: string
 - `query`: string
 - `section`: string
+- `lines`: string
+- `line_start`: integer
+- `line_end`: integer
 - `offset`: integer
 - `limit`: integer
+- `max_results`: integer
+- `category`: ['string', 'array']
+- `fuzzy`: boolean
+- `strict_topic`: boolean
+- `include_related`: boolean
 - `include_snippets`: boolean
 - `context_lines`: integer
+- `verbose`: boolean
 
 ## yara_hunt
 

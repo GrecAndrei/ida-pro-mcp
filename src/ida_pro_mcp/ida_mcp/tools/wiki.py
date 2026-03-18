@@ -1,7 +1,22 @@
+import re
+import difflib
+
 try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+
+
+SEMANTIC_ALIASES = {
+    "runtime": "execution",
+    "flow": "trace",
+    "path": "trace",
+    "tracking": "trace",
+    "lookup": "search",
+    "find": "search",
+    "locate": "search",
+    "rewrite": "modify",
+}
 
 
 def protocol_resource() -> str:
@@ -18,8 +33,8 @@ def protocol_resource() -> str:
 
 @tool
 def wiki(
-    action: Annotated[Literal["list_topics", "read", "search", "index", "sections"],
-                      "Action: list_topics|read|search|index|sections"],
+    action: Annotated[Literal["list_topics", "read", "search", "semantic_search", "index", "sections"],
+                      "Action: list_topics|read|search|semantic_search|index|sections"],
     topic: Annotated[Optional[str], "Topic name (e.g. 'debug', 'workflows/ForensicProtocol')"] = None,
     query: Annotated[Optional[str], "Search query (alias for topic when action=search)"] = None,
     section: Annotated[Optional[str], "Specific section or subsection to read (header text)"] = None,
@@ -37,6 +52,7 @@ def wiki(
     - list_topics: List all available categories and pages.
     - read: Read a wiki page. Use 'section' for specific parts, and 'offset'/'limit' for chunks.
     - search: Search for keywords across the entire wiki.
+    - semantic_search: Search with concept expansion (synonyms) plus typo-tolerant ranking.
     - index: Structured index with doc counts and metadata.
     - sections: List headers for a specific topic with line numbers.
     """
@@ -216,11 +232,16 @@ def wiki(
             
             return result
 
-        elif action == "search":
+        elif action in ("search", "semantic_search"):
             q = (query or topic or "").strip()
             if not q:
                 return make_error(MCPError.INVALID_ARGS, "query required")
             q_lower = q.lower()
+            query_tokens = re.findall(r"[a-z0-9_]+", q_lower)
+            query_terms = {q_lower}.union(query_tokens)
+            for token in query_tokens:
+                if action == "semantic_search" and token in SEMANTIC_ALIASES:
+                    query_terms.add(SEMANTIC_ALIASES[token])
             results = []
 
             for root, _, files in os.walk(wiki_root):
@@ -230,13 +251,26 @@ def wiki(
                         rel_name = os.path.relpath(p, wiki_root).replace(".md", "").replace(os.sep, "/")
                         with open(p, 'r', encoding='utf-8') as file:
                             content = file.read()
-                            if q_lower in content.lower() or q_lower in f.lower():
-                                entry = {"topic": rel_name}
+                            content_lower = content.lower()
+                            if any(t in content_lower or t in f.lower() for t in query_terms):
+                                entry = {
+                                    "topic": rel_name,
+                                    "matched_on": ["semantic_overlap"] if action == "semantic_search" else ["content_contains"],
+                                }
+                                if action == "semantic_search":
+                                    rel_tokens = set(re.findall(r"[a-z0-9_]+", rel_name.lower()))
+                                    content_tokens = set(re.findall(r"[a-z0-9_]+", content_lower[:4000]))
+                                    semantic_hits = sorted(
+                                        t for t in query_terms if t in rel_tokens or t in content_tokens
+                                    )
+                                    if semantic_hits:
+                                        entry["semantic_hits"] = semantic_hits[:10]
                                 if include_snippets:
                                     lines = content.splitlines()
                                     matches = []
                                     for i, line in enumerate(lines):
-                                        if q_lower in line.lower():
+                                        line_lower = line.lower()
+                                        if any(t in line_lower for t in query_terms):
                                             start = max(0, i - context_lines)
                                             end = min(len(lines), i + context_lines + 1)
                                             snippet = "\n".join(lines[start:end])
@@ -246,7 +280,16 @@ def wiki(
                                     entry["matches"] = matches
                                 results.append(entry)
 
-            return {"ok": True, "query": q, "matches": results}
+            if action == "semantic_search":
+                def semantic_sort_key(entry: dict) -> tuple[int, int, float, str]:
+                    # Prioritize stronger semantic matches, then snippet density,
+                    # then fuzzy topic similarity, and finally stable topic ordering.
+                    sem_hits = len(entry.get("semantic_hits", []))
+                    match_hits = len(entry.get("matches", []))
+                    ratio = difflib.SequenceMatcher(None, q_lower, entry.get("topic", "").lower()).ratio()
+                    return (-sem_hits, -match_hits, -ratio, entry.get("topic", ""))
+                results.sort(key=semantic_sort_key)
+            return {"ok": True, "action": action, "query": q, "matches": results, "count": len(results)}
 
         elif action == "sections":
             if not topic:
