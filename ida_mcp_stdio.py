@@ -2426,7 +2426,7 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
                 alias_map[key] = canonical
         for canonical, explicit_aliases in _TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).items():
             for alias in explicit_aliases:
-                alias_key = str(alias).strip().lower()
+                alias_key = alias.strip().lower()
                 if alias_key and alias_key != canonical.lower():
                     alias_map[alias_key] = canonical
         for canonical in canonical_keys:
