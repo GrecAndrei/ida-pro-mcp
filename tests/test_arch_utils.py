@@ -108,7 +108,7 @@ class TestGetArch(unittest.TestCase):
         _setup_arch("sh4", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "sh")
 
-    def test_unknown(self):
+    def test_xtensa(self):
         _setup_arch("xtensa", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "xtensa")
 
@@ -121,19 +121,19 @@ class TestGetArch(unittest.TestCase):
         self.assertEqual(arch_utils.get_arch(), "riscv")
         _setup_arch("rv32imac", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "riscv")
-        _setup_arch("rv64gc", is_64=False)
+        _setup_arch("rv64gc", is_64=True)
         self.assertEqual(arch_utils.get_arch(), "riscv64")
 
     def test_x86_aliases(self):
         _setup_arch("i686", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "x86")
-        _setup_arch("amd64", is_64=False)
+        _setup_arch("amd64", is_64=True)
         self.assertEqual(arch_utils.get_arch(), "x64")
 
     def test_arm_aliases(self):
         _setup_arch("thumb2", is_64=False)
         self.assertEqual(arch_utils.get_arch(), "arm")
-        _setup_arch("armv8-a", is_64=False)
+        _setup_arch("armv8-a", is_64=True)
         self.assertEqual(arch_utils.get_arch(), "arm64")
 
     def test_embedded_arches(self):
