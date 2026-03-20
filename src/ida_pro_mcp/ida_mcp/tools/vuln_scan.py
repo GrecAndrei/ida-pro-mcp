@@ -152,12 +152,26 @@ _MAX_CHAIN_TYPES = 4
 _MAX_RECOMMENDATIONS = 6
 _ATTACK_PATH_MIN_SEVERITY_RANK = 3
 _ATTACK_PATH_MIN_AVG_RISK = 55
+_MAX_GRAPH_DEPTH = 3
+_DEFAULT_GRAPH_DEPTH = 1
+_MAX_GRAPH_NODES = 80
+_MAX_GRAPH_EDGES = 240
 
 # Risk model coefficients: impact-first (severity), then confidence quality,
 # then local exploitability signal from nearby instruction evidence.
 _RISK_SEVERITY_WEIGHT = 18
 _RISK_CONFIDENCE_WEIGHT = 11
 _RISK_SIGNAL_WEIGHT = 0.45
+
+_SOURCE_API_HINTS = {
+    "read", "recv", "recvfrom", "fread", "fgets", "gets",
+    "getenv", "scanf", "sscanf", "fscanf", "accept", "socket",
+}
+
+_SANITIZER_API_HINTS = {
+    "snprintf", "strlcpy", "strncpy", "memcpy_s", "memmove_s",
+    "sanitize", "validate", "escape", "check",
+}
 
 _CREDENTIAL_EXCLUSIONS = [
     ".h", ".c", ".dll", "usage:", "help",
@@ -559,6 +573,185 @@ def _build_recommendations(findings, attack_paths):
     if attack_paths:
         recommendations.append("Prioritize functions with multi-stage exploit paths (chained vulnerability classes).")
     return recommendations[:_MAX_RECOMMENDATIONS]
+
+
+def _extract_api_like_tokens(text):
+    """Extract API-like symbol tokens from finding pattern/description text."""
+    import re
+    raw = str(text or "").lower()
+    toks = set()
+    for t in re.findall(r"[a-z_][a-z0-9_]{2,}", raw):
+        if t in {"call", "without", "checking", "verify", "potential", "known", "vulnerable", "component"}:
+            continue
+        toks.add(t)
+    return toks
+
+
+def _classify_flow_role(finding):
+    """Classify finding role in rough exploit flow: source/sanitizer/sink/neutral."""
+    toks = _extract_api_like_tokens(finding.get("pattern", "")) | _extract_api_like_tokens(finding.get("description", ""))
+    if toks & _SANITIZER_API_HINTS:
+        return "sanitizer"
+    if toks & _SOURCE_API_HINTS:
+        return "source"
+    return "sink"
+
+
+def _finding_node_id(f):
+    return f"{f.get('type','unknown')}:{f.get('ea',0)}:{f.get('pattern','')}"
+
+
+def _build_dataflow_graph(findings, profile, max_depth=1):
+    """
+    Build a compact function-level vulnerability graph:
+    nodes are findings, edges indicate likely flow/correlation in same function.
+    """
+    if not findings:
+        return {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0}
+
+    depth = max(0, min(int(max_depth or _DEFAULT_GRAPH_DEPTH), _MAX_GRAPH_DEPTH))
+    by_func = {}
+    for f in findings:
+        fn = f.get("function") or "unknown"
+        by_func.setdefault(fn, []).append(f)
+
+    nodes = []
+    edges = []
+    node_seen = set()
+    edge_seen = set()
+    settings = _profile_settings_for(profile)
+    max_nodes = min(_MAX_GRAPH_NODES, max(24, settings["max_hotspots"] * 8))
+
+    # Add top-risk nodes first.
+    ordered = sorted(findings, key=lambda it: int(it.get("risk_score", 0)), reverse=True)
+    for f in ordered:
+        nid = _finding_node_id(f)
+        if nid in node_seen:
+            continue
+        node_seen.add(nid)
+        nodes.append(
+            {
+                "id": nid,
+                "function": f.get("function"),
+                "addr": f.get("addr"),
+                "type": f.get("type"),
+                "severity": f.get("severity"),
+                "risk_score": f.get("risk_score"),
+                "role": _classify_flow_role(f),
+            }
+        )
+        if len(nodes) >= max_nodes:
+            break
+
+    allowed_ids = {n["id"] for n in nodes}
+    for fn, items in by_func.items():
+        scoped = [it for it in items if _finding_node_id(it) in allowed_ids]
+        scoped.sort(key=lambda it: int(it.get("ea", 0)))
+        for i, src in enumerate(scoped):
+            src_id = _finding_node_id(src)
+            src_role = _classify_flow_role(src)
+            for j in range(i + 1, min(len(scoped), i + 1 + max(1, depth * 3))):
+                dst = scoped[j]
+                dst_id = _finding_node_id(dst)
+                if src_id == dst_id:
+                    continue
+                dst_role = _classify_flow_role(dst)
+                relation = "correlates"
+                if src_role == "source" and dst_role == "sink":
+                    relation = "possible_flow"
+                elif src_role == "sanitizer":
+                    relation = "sanitizes_path"
+                elif src.get("type") == dst.get("type"):
+                    relation = "same_class_cluster"
+                ekey = (src_id, dst_id, relation)
+                if ekey in edge_seen:
+                    continue
+                edge_seen.add(ekey)
+                edges.append(
+                    {
+                        "from": src_id,
+                        "to": dst_id,
+                        "function": fn,
+                        "relation": relation,
+                    }
+                )
+                if len(edges) >= _MAX_GRAPH_EDGES:
+                    break
+            if len(edges) >= _MAX_GRAPH_EDGES:
+                break
+        if len(edges) >= _MAX_GRAPH_EDGES:
+            break
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
+
+
+def _compute_coverage_metrics(findings):
+    """Estimate scanner coverage quality for triage confidence."""
+    if not findings:
+        return {
+            "functions_covered": 0,
+            "finding_density": 0.0,
+            "high_confidence_ratio": 0.0,
+            "high_critical_ratio": 0.0,
+            "avg_risk_score": 0.0,
+        }
+    funcs = {f.get("function") for f in findings if f.get("function")}
+    total = len(findings)
+    high_conf = sum(1 for f in findings if f.get("confidence") == "high")
+    high_crit = sum(1 for f in findings if f.get("severity") in ("high", "critical"))
+    avg_risk = sum(int(f.get("risk_score", 0)) for f in findings) / max(1, total)
+    return {
+        "functions_covered": len(funcs),
+        "finding_density": round(total / max(1, len(funcs)), 3),
+        "high_confidence_ratio": round(high_conf / total, 3),
+        "high_critical_ratio": round(high_crit / total, 3),
+        "avg_risk_score": round(avg_risk, 2),
+    }
+
+
+def _build_remediation_plan(findings, hotspots, attack_paths):
+    """Generate prioritized remediation plan grouped by priority bucket."""
+    plan = {"P0": [], "P1": [], "P2": [], "P3": []}
+    by_key = set()
+    top_hotspots = {h.get("function") for h in hotspots[:6]}
+    for f in findings:
+        p = f.get("priority", "P3")
+        if p not in plan:
+            p = "P3"
+        if top_hotspots and f.get("function") not in top_hotspots and p in ("P2", "P3"):
+            continue
+        key = (p, f.get("type"), f.get("function"), f.get("pattern"))
+        if key in by_key:
+            continue
+        by_key.add(key)
+        plan[p].append(
+            {
+                "type": f.get("type"),
+                "function": f.get("function"),
+                "addr": f.get("addr"),
+                "action": f"Review and remediate {f.get('type')} at {f.get('function')}:{f.get('addr')}",
+            }
+        )
+        if len(plan[p]) >= 8:
+            continue
+
+    if attack_paths:
+        top = attack_paths[0]
+        plan["P0"].insert(
+            0,
+            {
+                "type": "attack_path",
+                "function": top.get("function"),
+                "addr": top.get("top_findings", [{}])[0].get("addr"),
+                "action": f"Break exploit chain in {top.get('function')}: {top.get('chain')}",
+            },
+        )
+    return plan
 
 
 def _resolve_scope(addr):
@@ -1308,6 +1501,9 @@ def vuln_scan(
     severity: Annotated[Optional[str], "Filter by severity: critical|high|medium|low"] = None,
     include_context: Annotated[bool, "Include decompiled code context"] = False,
     scan_profile: Annotated[Literal["quick", "balanced", "deep"], "Scan depth profile controlling analysis windows and ranking rigor"] = "balanced",
+    max_graph_depth: Annotated[int, "Maximum correlation graph depth (0-3) for intelligence outputs"] = 1,
+    include_dataflow_graph: Annotated[bool, "Include compact finding correlation graph in scan_all/intelligence_report"] = True,
+    include_remediation_plan: Annotated[bool, "Include prioritized remediation plan in scan_all/intelligence_report"] = True,
     osv_coordinates: Annotated[Optional[list[str]], "OSV package coordinates (ecosystem:name@version or pkg:purl); used by osv_query and optional scan_all enrichment"] = None,
     osv_ecosystem: Annotated[Optional[str], "Default OSV ecosystem for shorthand coords like name@version"] = None,
     osv_endpoint: Annotated[str, "OSV API endpoint/base URL (default: https://api.osv.dev)"] = "https://api.osv.dev",
@@ -1330,6 +1526,7 @@ def vuln_scan(
     - classify: Classify a specific address by CWE (requires addr)
     - osv_query: Query OSV for known vulnerable package versions
     - intelligence_report: Run all scans and build a correlated triage report
+      with dataflow graph, coverage metrics, and remediation plan
 
     Each finding: {addr, function, cwe, severity, type, description, pattern}
     """
@@ -1349,6 +1546,10 @@ def vuln_scan(
             offset = max(0, int(offset))
         except Exception:
             offset = 0
+        try:
+            max_graph_depth = int(max_graph_depth)
+        except Exception:
+            max_graph_depth = _DEFAULT_GRAPH_DEPTH
 
         profile = _normalize_scan_profile(scan_profile)
         settings = _profile_settings_for(profile)
@@ -1419,6 +1620,7 @@ def vuln_scan(
                     "scan_profile": profile,
                 }
             sev_counts, type_counts = _summary_counts(classifications)
+            coverage = _compute_coverage_metrics(classifications)
             return {
                 "ok": True,
                 "classifications": "\n".join(f["line"] for f in page),
@@ -1431,6 +1633,7 @@ def vuln_scan(
                 "type_counts": type_counts,
                 "risk_histogram": _risk_histogram(classifications),
                 "hotspots": _summarize_hotspots(classifications, profile=profile),
+                "coverage_metrics": coverage,
                 "scan_profile": profile,
             }
 
@@ -1461,6 +1664,15 @@ def vuln_scan(
             hotspots = _summarize_hotspots(all_findings, profile=profile)
             attack_paths = _build_attack_paths(all_findings, profile=profile)
             recommendations = _build_recommendations(all_findings, attack_paths)
+            coverage_metrics = _compute_coverage_metrics(all_findings)
+            dataflow_graph = (
+                _build_dataflow_graph(all_findings, profile=profile, max_depth=max_graph_depth)
+                if include_dataflow_graph else None
+            )
+            remediation_plan = (
+                _build_remediation_plan(all_findings, hotspots, attack_paths)
+                if include_remediation_plan else None
+            )
 
             result = {
                 "ok": True,
@@ -1477,7 +1689,11 @@ def vuln_scan(
                 "hotspots": hotspots,
                 "attack_paths": attack_paths,
                 "recommendations": recommendations,
+                "coverage_metrics": coverage_metrics,
+                "dataflow_graph": dataflow_graph,
+                "remediation_plan": remediation_plan,
                 "scan_profile": profile,
+                "max_graph_depth": max(0, min(max_graph_depth, _MAX_GRAPH_DEPTH)),
                 "osv": osv_meta,
             }
             # Keep scan_all mostly compact by default while preserving smarter data.
@@ -1489,6 +1705,7 @@ def vuln_scan(
                            f"{len(hotspots)} hotspot function(s).",
                 "top_hotspot": hotspots[0]["function"] if hotspots else None,
                 "top_priority": page[0].get("priority") if page else None,
+                "coverage": coverage_metrics,
             }
             return result
 
@@ -1503,6 +1720,7 @@ def vuln_scan(
             findings, limit=limit, offset=offset, severity=severity
         )
         sev_counts, type_counts = _summary_counts(findings)
+        coverage = _compute_coverage_metrics(findings)
 
         return {
             "ok": True,
@@ -1518,6 +1736,7 @@ def vuln_scan(
             "type_counts": type_counts,
             "risk_histogram": _risk_histogram(findings),
             "hotspots": _summarize_hotspots(findings, profile=profile),
+            "coverage_metrics": coverage,
             "scan_profile": profile,
         }
 

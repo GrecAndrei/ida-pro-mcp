@@ -1689,7 +1689,7 @@ TOOL_DESCRIPTIONS = {
     "wiki": "Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.",
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
-    "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep) and returns ranked findings with risk scoring, hotspots, and attack-path correlation.",
+    "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep), optional dataflow graph/remediation planning, and returns ranked findings with risk scoring, hotspots, and attack-path correlation.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
@@ -2259,6 +2259,18 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "enum": ["quick", "balanced", "deep"],
             "description": "Scan depth profile controlling local evidence/ranking rigor.",
+        },
+        "max_graph_depth": {
+            "type": "integer",
+            "description": "Correlation graph depth (0-3) for intelligence outputs.",
+        },
+        "include_dataflow_graph": {
+            "type": "boolean",
+            "description": "Include compact correlation graph in scan_all/intelligence_report.",
+        },
+        "include_remediation_plan": {
+            "type": "boolean",
+            "description": "Include prioritized remediation plan in scan_all/intelligence_report.",
         },
         "osv_coordinates": {
             "type": "array",

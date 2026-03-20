@@ -27,6 +27,9 @@ Runs heuristic static vulnerability scans and emits compact CWE-tagged findings 
 - `severity`: Optional filter `critical|high|medium|low`.
 - `include_context`: Adds compact decompiled context into structured items when available.
 - `scan_profile`: Optional scan depth profile `quick|balanced|deep` controlling analysis/ranking rigor.
+- `max_graph_depth`: Optional graph correlation depth (`0..3`) for intelligence graph building.
+- `include_dataflow_graph`: Include compact finding-correlation graph output (default `true`).
+- `include_remediation_plan`: Include prioritized remediation plan output (default `true`).
 - `osv_coordinates`: List of coordinates in `ecosystem:name@version` or `pkg:purl` format.
 - `osv_ecosystem`: Default ecosystem for shorthand coordinates like `name@version`.
 - `osv_endpoint`: Optional OSV endpoint/base URL (defaults to `https://api.osv.dev`).
@@ -40,6 +43,9 @@ Runs heuristic static vulnerability scans and emits compact CWE-tagged findings 
 - `hotspots`: Top risky functions with vulnerability density.
 - `attack_paths`: Correlated multi-stage exploit chains (especially in `intelligence_report`).
 - `recommendations`: Prioritized remediation guidance based on observed findings.
+- `coverage_metrics`: Aggregate quality signals (function coverage, confidence ratio, avg risk).
+- `dataflow_graph`: Compact nodes/edges representing likely source/sink/sanitizer relationships.
+- `remediation_plan`: Priority-bucketed fix plan (`P0..P3`) with concrete action items.
 
 ## Major Improvements
 - API resolution now handles import variants (e.g. WinAPI `A/W`, decorated imports, `__imp_` prefixes) instead of exact-name only.
@@ -48,6 +54,7 @@ Runs heuristic static vulnerability scans and emits compact CWE-tagged findings 
 - Findings now include normalized `risk_score`, `priority`, and `exploitability` for better triage ordering.
 - New `scan_profile` (`quick|balanced|deep`) controls local evidence windows and scan intensity.
 - New `intelligence_report` action correlates multiple finding classes into exploit-path chains and function hotspots.
+- Correlation outputs now include compact dataflow graph and remediation planning to support end-to-end triage execution.
 - `scan_all` can optionally include OSV-enriched findings when `osv_coordinates` are provided.
 - New `osv_query` action gives direct OSV-backed findings with the same normalized ranking/pagination contract.
 - Severity filtering is now structural (not string-tag matching).
@@ -60,7 +67,7 @@ Runs heuristic static vulnerability scans and emits compact CWE-tagged findings 
 ```
 
 ```json
-{"name":"vuln_scan","arguments":{"action":"intelligence_report","scan_profile":"deep","limit":120}}
+{"name":"vuln_scan","arguments":{"action":"intelligence_report","scan_profile":"deep","max_graph_depth":3,"include_dataflow_graph":true,"include_remediation_plan":true,"limit":120}}
 ```
 
 ```json

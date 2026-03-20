@@ -36,6 +36,9 @@ class TestVulnScanAstSurface(unittest.TestCase):
         arg_names = [a.arg for a in fn.args.args]
         self.assertIn("action", arg_names)
         self.assertIn("scan_profile", arg_names)
+        self.assertIn("max_graph_depth", arg_names)
+        self.assertIn("include_dataflow_graph", arg_names)
+        self.assertIn("include_remediation_plan", arg_names)
 
         action_arg = next((a for a in fn.args.args if a.arg == "action"), None)
         self.assertIsNotNone(action_arg, "action argument missing")
@@ -62,6 +65,9 @@ class TestVulnScanAstSurface(unittest.TestCase):
             "_summarize_hotspots",
             "_build_recommendations",
             "_risk_histogram",
+            "_build_dataflow_graph",
+            "_compute_coverage_metrics",
+            "_build_remediation_plan",
         }
         found = {
             n.name for n in self.module.body if isinstance(n, ast.FunctionDef) and n.name in helper_names
@@ -76,6 +82,9 @@ class TestVulnScanAstSurface(unittest.TestCase):
         self.assertIn("\"attack_paths\": attack_paths", src)
         self.assertIn("\"hotspots\": hotspots", src)
         self.assertIn("\"recommendations\": recommendations", src)
+        self.assertIn("\"coverage_metrics\": coverage_metrics", src)
+        self.assertIn("\"dataflow_graph\": dataflow_graph", src)
+        self.assertIn("\"remediation_plan\": remediation_plan", src)
         self.assertIn("\"scan_profile\": profile", src)
 
 
