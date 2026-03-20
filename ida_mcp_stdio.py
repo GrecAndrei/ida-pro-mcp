@@ -6,6 +6,8 @@ IDA Pro MCP Server - Synchronous Robust Edition
 import json
 import sys
 import os
+import atexit
+import signal
 
 # =============================================================================
 # STREAM ISOLATION - Redirect stdout to stderr immediately
@@ -113,6 +115,10 @@ CACHE_DIR = _select_runtime_dir(_resolve_runtime_dir())
 _migrate_legacy_runtime_dir(CACHE_DIR)
 os.makedirs(CACHE_DIR, exist_ok=True)
 BRIDGE_LOG = os.path.join(CACHE_DIR, "bridge.log")
+RUNTIME_LEASE_TTL = max(15, int(os.environ.get("IDA_MCP_RUNTIME_LEASE_TTL", "75")))
+RUNTIME_LEASE_HEARTBEAT = max(
+    2, int(os.environ.get("IDA_MCP_RUNTIME_LEASE_HEARTBEAT", str(max(2, RUNTIME_LEASE_TTL // 3))))
+)
 
 
 def log_rpc(msg):
@@ -2962,9 +2968,14 @@ class IDAMCPServer:
         self.session_mgr = SessionManager(self.cache_dir)
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
         self._macro_path = os.path.join(self.cache_dir, "session_macros.json")
+        self._runtime_lease_dir = os.path.join(self.cache_dir, "runtime_leases")
+        os.makedirs(self._runtime_lease_dir, exist_ok=True)
         self._session_macros: Dict[str, Dict[str, Any]] = {}
         self.current_session = None
         self.session_runtimes = {}
+        self._shutdown = False
+        self._lease_thread_stop = threading.Event()
+        self._lease_thread: Optional[threading.Thread] = None
         self._wiki_cache: Dict[str, Any] = {
             "root": "",
             "expires": 0.0,
@@ -2972,7 +2983,156 @@ class IDAMCPServer:
             "pages": [],
         }
         self._wiki_cache_ttl = 5.0
+        self._register_lifecycle_handlers()
+        self._start_runtime_lease_heartbeat()
+        self._adopt_or_cleanup_stale_runtime_leases()
         self._load_session_macros()
+
+    def _runtime_lease_path(self, sid: str) -> str:
+        return os.path.join(self._runtime_lease_dir, f"SID_{sid}.lease.json")
+
+    def _write_runtime_lease(self, sid: str, runtime: dict) -> None:
+        proc = runtime.get("process")
+        if not proc:
+            return
+        lease = {
+            "session_id": sid,
+            "pid": int(proc.pid),
+            "port": int(runtime.get("port") or 0),
+            "idat_exe": str(self.idat_exe or ""),
+            "updated_at": time.time(),
+        }
+        path = self._runtime_lease_path(sid)
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(lease, f, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def _remove_runtime_lease(self, sid: str) -> None:
+        try:
+            os.remove(self._runtime_lease_path(sid))
+        except OSError:
+            pass
+
+    def _kill_stale_pid(self, pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except Exception:
+            return False
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return True
+        except Exception:
+            return False
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+            time.sleep(0.1)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except Exception:
+            return False
+        return True
+
+    def _adopt_or_cleanup_stale_runtime_leases(self) -> None:
+        try:
+            entries = os.listdir(self._runtime_lease_dir)
+        except Exception:
+            return
+        now = time.time()
+        for name in entries:
+            if not name.endswith(".lease.json"):
+                continue
+            path = os.path.join(self._runtime_lease_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    lease = json.load(f)
+            except Exception:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            sid = _normalize_session_id(lease.get("session_id"))
+            pid = int(lease.get("pid") or 0)
+            updated = float(lease.get("updated_at") or 0.0)
+            if sid and sid in self.session_runtimes:
+                continue
+            expired = (now - updated) > RUNTIME_LEASE_TTL
+            if expired and pid > 0:
+                self._kill_stale_pid(pid)
+            if expired or pid <= 0:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    def _lease_heartbeat_loop(self) -> None:
+        while not self._lease_thread_stop.wait(RUNTIME_LEASE_HEARTBEAT):
+            for sid, runtime in list(self.session_runtimes.items()):
+                proc = runtime.get("process")
+                if not proc:
+                    continue
+                if proc.poll() is None:
+                    self._write_runtime_lease(sid, runtime)
+                else:
+                    self._remove_runtime_lease(sid)
+
+    def _start_runtime_lease_heartbeat(self) -> None:
+        if self._lease_thread and self._lease_thread.is_alive():
+            return
+        self._lease_thread = threading.Thread(
+            target=self._lease_heartbeat_loop,
+            name="ida-mcp-runtime-lease-heartbeat",
+            daemon=True,
+        )
+        self._lease_thread.start()
+
+    def _stop_runtime_lease_heartbeat(self) -> None:
+        self._lease_thread_stop.set()
+        t = self._lease_thread
+        if t and t.is_alive():
+            t.join(timeout=1.0)
+
+    def _register_lifecycle_handlers(self) -> None:
+        atexit.register(self.shutdown)
+        for sig_name in ("SIGINT", "SIGTERM"):
+            sig = getattr(signal, sig_name, None)
+            if sig is None:
+                continue
+            try:
+                signal.signal(sig, self._handle_termination_signal)
+            except Exception:
+                pass
+
+    def _handle_termination_signal(self, signum, frame):
+        self.shutdown()
+        raise SystemExit(0)
+
+    def shutdown(self) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self._stop_runtime_lease_heartbeat()
+        self._cleanup_all_runtimes()
 
     def _ida_binary_names(self) -> List[str]:
         if sys.platform == "win32":
@@ -4206,6 +4366,7 @@ class IDAMCPServer:
                         "log_handles": [stdout_fh, stderr_fh],
                     }
                     self.session_runtimes[session.session_id] = runtime
+                    self._write_runtime_lease(session.session_id, runtime)
                     apply_res = self._apply_session_options(session, runtime)
                     if apply_res.get("error"):
                         return apply_res
@@ -4304,6 +4465,7 @@ class IDAMCPServer:
                         "log_handles": [stdout_fh, stderr_fh],
                     }
                     self.session_runtimes[session.session_id] = runtime
+                    self._write_runtime_lease(session.session_id, runtime)
                     return {"ok": True, "idb_path": session.idb_path}
             except Exception:
                 pass
@@ -4454,6 +4616,7 @@ class IDAMCPServer:
 
     def _cleanup_runtime(self, sid):
         runtime = self.session_runtimes.pop(sid, None)
+        self._remove_runtime_lease(sid)
         if not runtime:
             return
         proc = runtime.get("process")
@@ -4478,6 +4641,7 @@ class IDAMCPServer:
     def _cleanup_all_runtimes(self):
         for sid in list(self.session_runtimes.keys()):
             self._cleanup_runtime(sid)
+        self._adopt_or_cleanup_stale_runtime_leases()
 
     def _resolve_session_from_idb_ref(self, idb_ref: Any) -> Optional[Session]:
         """Resolve idb references from session id, SID_* idb id/name, path, or basename."""
@@ -6816,28 +6980,34 @@ class IDAMCPServer:
             msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
             msvcrt.setmode(_real_stdout.fileno(), os.O_BINARY)
         rs, si = _real_stdout.buffer, sys.stdin.buffer
-        while True:
-            try:
-                line = si.readline()
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
+        try:
+            while True:
+                try:
+                    line = si.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    req = json.loads(line.decode("utf-8"))
+                    resp = self.handle_request(req)
+                    if resp:
+                        output = (json.dumps(resp, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+                        rs.write(output)
+                        rs.flush()
+                except Exception:
                     continue
-                req = json.loads(line.decode("utf-8"))
-                resp = self.handle_request(req)
-                if resp:
-                    output = (json.dumps(resp, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-                    rs.write(output)
-                    rs.flush()
-            except Exception:
-                continue
+        finally:
+            self.shutdown()
 
 
 if __name__ == "__main__":
+    server = None
     try:
         server = IDAMCPServer()
         server.run()
     except Exception as e:
+        if server:
+            server.shutdown()
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
