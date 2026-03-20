@@ -163,14 +163,10 @@ _RISK_SEVERITY_WEIGHT = 18
 _RISK_CONFIDENCE_WEIGHT = 11
 _RISK_SIGNAL_WEIGHT = 0.45
 
-_SOURCE_API_HINTS = {
-    "read", "recv", "recvfrom", "fread", "fgets", "gets",
-    "getenv", "scanf", "sscanf", "fscanf", "accept", "socket",
-}
-
-_SANITIZER_API_HINTS = {
-    "snprintf", "strlcpy", "strncpy", "memcpy_s", "memmove_s",
-    "sanitize", "validate", "escape", "check",
+_SOURCE_API_HINTS = _SOURCE_TOKENS
+_SANITIZER_API_HINTS = _SANITIZER_TOKENS
+_API_TOKEN_EXCLUSIONS = {
+    "call", "without", "checking", "verify", "potential", "known", "vulnerable", "component",
 }
 
 _CREDENTIAL_EXCLUSIONS = [
@@ -581,7 +577,7 @@ def _extract_api_like_tokens(text):
     raw = str(text or "").lower()
     toks = set()
     for t in re.findall(r"[a-z_][a-z0-9_]{2,}", raw):
-        if t in {"call", "without", "checking", "verify", "potential", "known", "vulnerable", "component"}:
+        if t in _API_TOKEN_EXCLUSIONS:
             continue
         toks.add(t)
     return toks
@@ -742,12 +738,14 @@ def _build_remediation_plan(findings, hotspots, attack_paths):
 
     if attack_paths:
         top = attack_paths[0]
+        top_findings = top.get("top_findings") or []
+        top_addr = top_findings[0].get("addr") if top_findings else None
         plan["P0"].insert(
             0,
             {
                 "type": "attack_path",
                 "function": top.get("function"),
-                "addr": top.get("top_findings", [{}])[0].get("addr"),
+                "addr": top_addr,
                 "action": f"Break exploit chain in {top.get('function')}: {top.get('chain')}",
             },
         )
