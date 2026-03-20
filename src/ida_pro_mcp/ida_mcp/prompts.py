@@ -102,7 +102,7 @@ QUICKREF_TEXT = """\
 
 ## Security Analysis
 - `vuln_scan(action="scan_all", scan_profile="balanced")` - Scan for all vulnerability classes (CWE-tagged) with risk scoring
-- `vuln_scan(action="intelligence_report", scan_profile="deep")` - Correlated exploit-path report with hotspots/recommendations
+- `vuln_scan(action="intelligence_report", scan_profile="deep", max_graph_depth=3, include_dataflow_graph=True, include_remediation_plan=True)` - Correlated exploit-path report with hotspots/recommendations/graph/plan
 - `vuln_scan(action="osv_query", osv_coordinates=["PyPI:requests@2.19.0"])` - Query OSV for known vulnerable dependency versions
 - `vuln_scan(action="buffer_overflow")` - Find buffer overflow patterns
 - `gadgets(action="mitigations")` - Check ASLR/DEP/canary/CFI
