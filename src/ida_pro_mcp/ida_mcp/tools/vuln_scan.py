@@ -94,6 +94,82 @@ _AUTH_KEYWORDS = [
     "login", "auth", "backdoor", "master",
 ]
 
+# Scan profile knobs. "deep" trades speed for deeper local evidence gathering.
+_SCAN_PROFILES = {
+    "quick": {
+        "discovery_multiplier": 2,
+        "window_back": 4,
+        "window_forward": 2,
+        "context_limit": 180,
+        "max_hotspots": 8,
+    },
+    "balanced": {
+        "discovery_multiplier": 3,
+        "window_back": 8,
+        "window_forward": 3,
+        "context_limit": 240,
+        "max_hotspots": 12,
+    },
+    "deep": {
+        "discovery_multiplier": 6,
+        "window_back": 14,
+        "window_forward": 5,
+        "context_limit": 320,
+        "max_hotspots": 20,
+    },
+}
+
+_SOURCE_TOKENS = {
+    "recv", "recvfrom", "read", "fread", "fgets", "gets", "readlink",
+    "argv", "argc", "getenv", "scanf", "fscanf", "sscanf", "strtok",
+    "accept", "socket", "inet", "network", "http", "query", "header", "cookie",
+    "request", "payload", "input", "param", "body", "cmdline", "stdin",
+}
+
+_SANITIZER_TOKENS = {
+    "snprintf", "strlcpy", "strncpy", "memcpy_s", "memmove_s", "validate",
+    "sanitize", "escape", "bounded", "safe", "check", "verify", "length",
+}
+
+_SINK_TOKEN_BY_TYPE = {
+    "buffer_overflow": {"strcpy", "strcat", "memcpy", "gets", "read"},
+    "format_string": {"printf", "fprintf", "sprintf", "syslog"},
+    "integer_overflow": {"malloc", "calloc", "realloc", "memcpy", "memmove"},
+    "use_after_free": {"free", "heapfree", "delete"},
+    "command_injection": {"system", "popen", "exec", "createprocess", "shellexecute"},
+    "race_condition": {"access", "stat", "open", "rename", "unlink", "createfile"},
+    "null_deref": {"malloc", "calloc", "realloc", "new"},
+    "info_leak": {"printf", "syslog", "send", "writefile", "outputdebugstring"},
+    "auth_bypass": {"strcmp", "strncmp", "memcmp", "wcscmp"},
+    "hardcoded_creds": {"password", "passwd", "token", "apikey", "secret"},
+    "osv_known_vuln": {"dependency", "package", "version", "component"},
+}
+
+_DEFAULT_SCAN_PROFILE = "balanced"
+_MIN_SCANNER_LIMIT = 24
+_MAX_SCANNER_LIMIT = 768
+_MAX_EVIDENCE_TAGS = 4
+_MAX_CHAIN_TYPES = 4
+_MAX_RECOMMENDATIONS = 6
+_ATTACK_PATH_MIN_SEVERITY_RANK = 3
+_ATTACK_PATH_MIN_AVG_RISK = 55
+_MAX_GRAPH_DEPTH = 3
+_DEFAULT_GRAPH_DEPTH = 1
+_MAX_GRAPH_NODES = 80
+_MAX_GRAPH_EDGES = 240
+
+# Risk model coefficients: impact-first (severity), then confidence quality,
+# then local exploitability signal from nearby instruction evidence.
+_RISK_SEVERITY_WEIGHT = 18
+_RISK_CONFIDENCE_WEIGHT = 11
+_RISK_SIGNAL_WEIGHT = 0.45
+
+_SOURCE_API_HINTS = _SOURCE_TOKENS
+_SANITIZER_API_HINTS = _SANITIZER_TOKENS
+_API_TOKEN_EXCLUSIONS = {
+    "call", "without", "checking", "verify", "potential", "known", "vulnerable", "component",
+}
+
 _CREDENTIAL_EXCLUSIONS = [
     ".h", ".c", ".dll", "usage:", "help",
     "error", "warning", "invalid",
@@ -206,6 +282,484 @@ def _clip(text, max_len=180):
     return s[: max_len - 3] + "..."
 
 
+def _normalize_scan_profile(profile):
+    p = (profile or _DEFAULT_SCAN_PROFILE).strip().lower()
+    if p not in _SCAN_PROFILES:
+        return _DEFAULT_SCAN_PROFILE
+    return p
+
+
+def _profile_settings_for(profile):
+    return _SCAN_PROFILES[_normalize_scan_profile(profile)]
+
+
+def _scanner_limit(limit, profile):
+    """Return bounded scanner discovery limit for predictable runtime/memory."""
+    settings = _profile_settings_for(profile)
+    requested = max(_MIN_SCANNER_LIMIT, int(limit) * settings["discovery_multiplier"])
+    return min(_MAX_SCANNER_LIMIT, requested)
+
+
+def _iter_disasm_window(ea, backward=8, forward=3):
+    """Return a list of (ea, disasm_lower) for a small instruction window around ea."""
+    rows = []
+    curr = ea
+    for _ in range(max(0, backward)):
+        prev = idc.prev_head(curr)
+        if prev == idaapi.BADADDR:
+            break
+        curr = prev
+        try:
+            line = ida_lines.tag_remove(idc.generate_disasm_line(curr, 0)) or ""
+        except Exception:
+            line = ""
+        rows.append((curr, line.lower()))
+    rows.reverse()
+    try:
+        center = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0)) or ""
+    except Exception:
+        center = ""
+    rows.append((ea, center.lower()))
+    curr = ea
+    for _ in range(max(0, forward)):
+        nxt = idc.next_head(curr)
+        if nxt == idaapi.BADADDR:
+            break
+        curr = nxt
+        try:
+            line = ida_lines.tag_remove(idc.generate_disasm_line(curr, 0)) or ""
+        except Exception:
+            line = ""
+        rows.append((curr, line.lower()))
+    return rows
+
+
+def _score_callsite_evidence(ea, vuln_type, profile):
+    """
+    Compute compact callsite evidence for ranking.
+    Returns:
+      {
+        "signal": int score in [0, 100],
+        "has_source": bool,
+        "has_sanitizer": bool,
+        "sink_match": bool,
+        "evidence": [short strings...],
+      }
+    """
+    settings = _profile_settings_for(profile)
+    rows = _iter_disasm_window(
+        ea,
+        backward=settings["window_back"],
+        forward=settings["window_forward"],
+    )
+    evidence = []
+    score = 35
+    sink_tokens = _SINK_TOKEN_BY_TYPE.get(vuln_type, set())
+    sink_match = False
+    has_source = False
+    has_sanitizer = False
+
+    for _, line in rows:
+        if not line:
+            continue
+        if any(tok in line for tok in sink_tokens):
+            sink_match = True
+        if any(tok in line for tok in _SOURCE_TOKENS):
+            has_source = True
+        if any(tok in line for tok in _SANITIZER_TOKENS):
+            has_sanitizer = True
+
+    if sink_match:
+        score += 20
+        evidence.append("sink-call-pattern")
+    if has_source:
+        score += 25
+        evidence.append("source-propagation-signal")
+    if has_sanitizer:
+        score -= 18
+        evidence.append("sanitizer-nearby")
+
+    # Vulnerability-specific weighting
+    if vuln_type in ("command_injection", "buffer_overflow", "use_after_free"):
+        score += 8
+    elif vuln_type in ("race_condition", "null_deref", "info_leak"):
+        score += 2
+
+    score = max(0, min(100, score))
+    return {
+        "signal": score,
+        "has_source": has_source,
+        "has_sanitizer": has_sanitizer,
+        "sink_match": sink_match,
+        "evidence": evidence,
+    }
+
+
+def _severity_to_numeric(sev):
+    return _SEVERITY_RANK.get(str(sev or "").lower(), 1)
+
+
+def _confidence_to_numeric(conf):
+    return _CONFIDENCE_RANK.get(str(conf or "").lower(), 1)
+
+
+def _derive_confidence_from_signal(base_confidence, signal, has_sanitizer):
+    base = _confidence_to_numeric(base_confidence)
+    if has_sanitizer and signal < 40:
+        return "low"
+    if signal >= 75:
+        return "high"
+    if signal >= 45:
+        return "medium" if base < 3 else "high"
+    return "low" if base <= 2 else "medium"
+
+
+def _enrich_findings_with_risk(findings, profile):
+    """
+    Add normalized risk/exploitability metadata for triage.
+    This is intentionally local/heuristic (no expensive global dataflow).
+    """
+    settings = _profile_settings_for(profile)
+    enriched = []
+    for f in findings:
+        row = dict(f)
+        signal = None
+        evidence = []
+        if row.get("type") == "osv_known_vuln":
+            signal = 70
+            evidence = ["osv-vulnerability-database-match"]
+        else:
+            try:
+                ev = _score_callsite_evidence(int(row.get("ea", 0)), row.get("type"), profile)
+            except Exception:
+                ev = {"signal": 40, "has_source": False, "has_sanitizer": False, "sink_match": False, "evidence": []}
+            signal = ev["signal"]
+            evidence = ev["evidence"]
+            row["confidence"] = _derive_confidence_from_signal(
+                row.get("confidence", "medium"),
+                signal,
+                ev.get("has_sanitizer", False),
+            )
+
+        sev_num = _severity_to_numeric(row.get("severity"))
+        conf_num = _confidence_to_numeric(row.get("confidence"))
+        # Weighted risk score [1..100].
+        # Risk weighting prioritizes impact (severity), confidence quality,
+        # and local callsite exploit signal in that order.
+        risk_score = int(
+            max(
+                1,
+                min(
+                    100,
+                    (sev_num * _RISK_SEVERITY_WEIGHT)
+                    + (conf_num * _RISK_CONFIDENCE_WEIGHT)
+                    + (signal * _RISK_SIGNAL_WEIGHT),
+                ),
+            )
+        )
+        row["risk_score"] = risk_score
+        row["exploitability"] = (
+            "high" if risk_score >= 75 else "medium" if risk_score >= 45 else "low"
+        )
+        row["priority"] = (
+            "P0" if risk_score >= 88 else
+            "P1" if risk_score >= 72 else
+            "P2" if risk_score >= 55 else
+            "P3"
+        )
+        if evidence:
+            row["evidence"] = evidence[:_MAX_EVIDENCE_TAGS]
+        # Keep a richer line for compact mode while remaining backward compatible.
+        row["line"] = (
+            f"{row['addr']}  [{row['severity']}/{row['confidence']}] "
+            f"{row['cwe']} score={risk_score} {row['function']}: {row['description']}"
+        )
+        if row.get("context"):
+            row["context"] = _clip(row["context"], settings["context_limit"])
+        enriched.append(row)
+    return enriched
+
+
+def _build_attack_paths(findings, profile):
+    """Correlate findings into likely multi-stage exploit paths by function."""
+    if not findings:
+        return []
+    by_func = {}
+    for f in findings:
+        fn = f.get("function") or "unknown"
+        by_func.setdefault(fn, []).append(f)
+
+    paths = []
+    for fn, items in by_func.items():
+        types = sorted({it.get("type", "unknown") for it in items})
+        if len(types) < 2:
+            continue
+        max_score = max(int(it.get("risk_score", 1)) for it in items)
+        top = sorted(items, key=lambda it: int(it.get("risk_score", 1)), reverse=True)[:3]
+        avg_score = int(sum(int(it.get("risk_score", 1)) for it in items) / max(1, len(items)))
+        severity_peak = max((_severity_to_numeric(it.get("severity")) for it in items), default=1)
+        # Keep attack paths focused on meaningful chains:
+        # - severity rank >= 3 means at least one high/critical finding in cluster
+        # - avg risk >= 55 keeps medium/low-noise clusters out of top paths
+        if severity_peak < _ATTACK_PATH_MIN_SEVERITY_RANK and avg_score < _ATTACK_PATH_MIN_AVG_RISK:
+            continue
+        chain = " -> ".join(types[:_MAX_CHAIN_TYPES])
+        paths.append(
+            {
+                "function": fn,
+                "finding_count": len(items),
+                "types": types,
+                "chain": chain,
+                "max_risk_score": max_score,
+                "avg_risk_score": avg_score,
+                "priority": (
+                    "P0" if max_score >= 88 else
+                    "P1" if max_score >= 72 else
+                    "P2" if max_score >= 55 else
+                    "P3"
+                ),
+                "top_findings": [
+                    {
+                        "addr": it.get("addr"),
+                        "type": it.get("type"),
+                        "risk_score": it.get("risk_score"),
+                        "severity": it.get("severity"),
+                    }
+                    for it in top
+                ],
+            }
+        )
+
+    settings = _profile_settings_for(profile)
+    paths.sort(key=lambda p: (p["max_risk_score"], p["finding_count"]), reverse=True)
+    return paths[: settings["max_hotspots"]]
+
+
+def _summarize_hotspots(findings, profile):
+    by_func = {}
+    for f in findings:
+        fn = f.get("function") or "unknown"
+        bucket = by_func.setdefault(fn, {"function": fn, "count": 0, "risk_sum": 0, "highest": 0, "types": set()})
+        score = int(f.get("risk_score", 1))
+        bucket["count"] += 1
+        bucket["risk_sum"] += score
+        if score > bucket["highest"]:
+            bucket["highest"] = score
+        bucket["types"].add(f.get("type", "unknown"))
+    rows = []
+    for _, b in by_func.items():
+        avg = int(b["risk_sum"] / max(1, b["count"]))
+        rows.append(
+            {
+                "function": b["function"],
+                "count": b["count"],
+                "highest_risk_score": b["highest"],
+                "avg_risk_score": avg,
+                "type_count": len(b["types"]),
+                "types": sorted(b["types"]),
+            }
+        )
+    settings = _profile_settings_for(profile)
+    rows.sort(key=lambda r: (r["highest_risk_score"], r["count"], r["type_count"]), reverse=True)
+    return rows[: settings["max_hotspots"]]
+
+
+def _build_recommendations(findings, attack_paths):
+    recommendations = []
+    if any(f.get("type") == "buffer_overflow" for f in findings):
+        recommendations.append("Audit unbounded copy/IO call sites and migrate to bounded APIs with explicit length checks.")
+    if any(f.get("type") == "command_injection" for f in findings):
+        recommendations.append("Treat command builders as untrusted: enforce allowlists and avoid shell invocation when possible.")
+    if any(f.get("type") == "hardcoded_creds" for f in findings):
+        recommendations.append("Remove embedded secrets; load credentials from secure runtime storage and rotate exposed material.")
+    if any(f.get("type") == "race_condition" for f in findings):
+        recommendations.append("Replace check-then-use file flows with atomic open/create APIs and strict file permissions.")
+    if attack_paths:
+        recommendations.append("Prioritize functions with multi-stage exploit paths (chained vulnerability classes).")
+    return recommendations[:_MAX_RECOMMENDATIONS]
+
+
+def _extract_api_like_tokens(text):
+    """Extract API-like symbol tokens from finding pattern/description text."""
+    import re
+    raw = str(text or "").lower()
+    toks = set()
+    for t in re.findall(r"[a-z_][a-z0-9_]{2,}", raw):
+        if t in _API_TOKEN_EXCLUSIONS:
+            continue
+        toks.add(t)
+    return toks
+
+
+def _classify_flow_role(finding):
+    """Classify finding role in rough exploit flow: source/sanitizer/sink."""
+    toks = _extract_api_like_tokens(finding.get("pattern", "")) | _extract_api_like_tokens(finding.get("description", ""))
+    if toks & _SANITIZER_API_HINTS:
+        return "sanitizer"
+    if toks & _SOURCE_API_HINTS:
+        return "source"
+    return "sink"
+
+
+def _finding_node_id(f):
+    return f"{f.get('type','unknown')}:{f.get('ea',0)}:{f.get('pattern','')}"
+
+
+def _build_dataflow_graph(findings, profile, max_depth=1):
+    """
+    Build a compact function-level vulnerability graph:
+    nodes are findings, edges indicate likely flow/correlation in same function.
+    """
+    if not findings:
+        return {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0}
+
+    depth = max(0, min(int(max_depth or _DEFAULT_GRAPH_DEPTH), _MAX_GRAPH_DEPTH))
+    by_func = {}
+    for f in findings:
+        fn = f.get("function") or "unknown"
+        by_func.setdefault(fn, []).append(f)
+
+    nodes = []
+    edges = []
+    node_seen = set()
+    edge_seen = set()
+    settings = _profile_settings_for(profile)
+    max_nodes = min(_MAX_GRAPH_NODES, max(24, settings["max_hotspots"] * 8))
+
+    # Add top-risk nodes first.
+    ordered = sorted(findings, key=lambda it: int(it.get("risk_score", 0)), reverse=True)
+    for f in ordered:
+        nid = _finding_node_id(f)
+        if nid in node_seen:
+            continue
+        node_seen.add(nid)
+        nodes.append(
+            {
+                "id": nid,
+                "function": f.get("function"),
+                "addr": f.get("addr"),
+                "type": f.get("type"),
+                "severity": f.get("severity"),
+                "risk_score": f.get("risk_score"),
+                "role": _classify_flow_role(f),
+            }
+        )
+        if len(nodes) >= max_nodes:
+            break
+
+    allowed_ids = {n["id"] for n in nodes}
+    for fn, items in by_func.items():
+        scoped = [it for it in items if _finding_node_id(it) in allowed_ids]
+        scoped.sort(key=lambda it: int(it.get("ea", 0)))
+        for i, src in enumerate(scoped):
+            src_id = _finding_node_id(src)
+            src_role = _classify_flow_role(src)
+            for j in range(i + 1, min(len(scoped), i + 1 + max(1, depth * 3))):
+                dst = scoped[j]
+                dst_id = _finding_node_id(dst)
+                if src_id == dst_id:
+                    continue
+                dst_role = _classify_flow_role(dst)
+                relation = "correlates"
+                if src_role == "source" and dst_role == "sink":
+                    relation = "possible_flow"
+                elif src_role == "sanitizer":
+                    relation = "sanitizes_path"
+                elif src.get("type") == dst.get("type"):
+                    relation = "same_class_cluster"
+                ekey = (src_id, dst_id, relation)
+                if ekey in edge_seen:
+                    continue
+                edge_seen.add(ekey)
+                edges.append(
+                    {
+                        "from": src_id,
+                        "to": dst_id,
+                        "function": fn,
+                        "relation": relation,
+                    }
+                )
+                if len(edges) >= _MAX_GRAPH_EDGES:
+                    break
+            if len(edges) >= _MAX_GRAPH_EDGES:
+                break
+        if len(edges) >= _MAX_GRAPH_EDGES:
+            break
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
+
+
+def _compute_coverage_metrics(findings):
+    """Estimate scanner coverage quality for triage confidence."""
+    if not findings:
+        return {
+            "functions_covered": 0,
+            "finding_density": 0.0,
+            "high_confidence_ratio": 0.0,
+            "high_critical_ratio": 0.0,
+            "avg_risk_score": 0.0,
+        }
+    funcs = {f.get("function") for f in findings if f.get("function")}
+    total = len(findings)
+    high_conf = sum(1 for f in findings if f.get("confidence") == "high")
+    high_crit = sum(1 for f in findings if f.get("severity") in ("high", "critical"))
+    avg_risk = sum(int(f.get("risk_score", 0)) for f in findings) / max(1, total)
+    return {
+        "functions_covered": len(funcs),
+        "finding_density": round(total / max(1, len(funcs)), 3),
+        "high_confidence_ratio": round(high_conf / total, 3),
+        "high_critical_ratio": round(high_crit / total, 3),
+        "avg_risk_score": round(avg_risk, 2),
+    }
+
+
+def _build_remediation_plan(findings, hotspots, attack_paths):
+    """Generate prioritized remediation plan grouped by priority bucket."""
+    plan = {"P0": [], "P1": [], "P2": [], "P3": []}
+    by_key = set()
+    top_hotspots = {h.get("function") for h in hotspots[:6]}
+    for f in findings:
+        p = f.get("priority", "P3")
+        if p not in plan:
+            p = "P3"
+        if top_hotspots and f.get("function") not in top_hotspots and p in ("P2", "P3"):
+            continue
+        key = (p, f.get("type"), f.get("function"), f.get("pattern"))
+        if key in by_key:
+            continue
+        by_key.add(key)
+        plan[p].append(
+            {
+                "type": f.get("type"),
+                "function": f.get("function"),
+                "addr": f.get("addr"),
+                "action": f"Review and remediate {f.get('type')} at {f.get('function')}:{f.get('addr')}",
+            }
+        )
+        if len(plan[p]) >= 8:
+            continue
+
+    if attack_paths:
+        top = attack_paths[0]
+        top_findings = top.get("top_findings") or []
+        top_addr = top_findings[0].get("addr") if top_findings else None
+        plan["P0"].insert(
+            0,
+            {
+                "type": "attack_path",
+                "function": top.get("function"),
+                "addr": top_addr,
+                "action": f"Break exploit chain in {top.get('function')}: {top.get('chain')}",
+            },
+        )
+    return plan
+
+
 def _resolve_scope(addr):
     """Resolve optional function scope address once per scanner."""
     if addr is None:
@@ -280,8 +834,10 @@ def _dedupe_sort_paginate(findings, limit, offset=0, severity=None):
     if severity:
         rows = [f for f in rows if f.get("severity") == severity]
 
+    # Prefer explicit risk_score when present; otherwise fall back to legacy rank.
     rows.sort(
         key=lambda f: (
+            int(f.get("risk_score", 0)),
             _SEVERITY_RANK.get(f.get("severity", "low"), 0),
             _CONFIDENCE_RANK.get(f.get("confidence", "low"), 0),
             -int(f.get("ea", 0)),
@@ -305,6 +861,21 @@ def _summary_counts(findings):
         t = f.get("type", "unknown")
         by_type[t] = by_type.get(t, 0) + 1
     return by_severity, by_type
+
+
+def _risk_histogram(findings):
+    buckets = {"critical_90_100": 0, "high_70_89": 0, "medium_45_69": 0, "low_0_44": 0}
+    for f in findings:
+        score = int(f.get("risk_score", 0))
+        if score >= 90:
+            buckets["critical_90_100"] += 1
+        elif score >= 70:
+            buckets["high_70_89"] += 1
+        elif score >= 45:
+            buckets["medium_45_69"] += 1
+        else:
+            buckets["low_0_44"] += 1
+    return buckets
 
 
 def _normalize_osv_endpoint(endpoint):
@@ -928,13 +1499,17 @@ def vuln_scan(
     action: Annotated[Literal["buffer_overflow", "format_string", "integer_overflow",
                                "use_after_free", "command_injection", "race_condition",
                                "null_deref", "info_leak", "auth_bypass", "hardcoded_creds",
-                               "scan_all", "classify", "osv_query"],
-                      "Vulnerability scan action"],
+                               "scan_all", "classify", "osv_query", "intelligence_report"],
+                       "Vulnerability scan action"],
     addr: Annotated[Optional[str], "Address or function to scan (default: all functions)"] = None,
     limit: Annotated[int, "Max results"] = 50,
     offset: Annotated[int, "Result offset (skip first N findings)"] = 0,
     severity: Annotated[Optional[str], "Filter by severity: critical|high|medium|low"] = None,
     include_context: Annotated[bool, "Include decompiled code context"] = False,
+    scan_profile: Annotated[Literal["quick", "balanced", "deep"], "Scan depth profile controlling analysis windows and ranking rigor"] = "balanced",
+    max_graph_depth: Annotated[int, "Maximum correlation graph depth (0-3) for intelligence outputs"] = 1,
+    include_dataflow_graph: Annotated[bool, "Include compact finding correlation graph in scan_all/intelligence_report"] = True,
+    include_remediation_plan: Annotated[bool, "Include prioritized remediation plan in scan_all/intelligence_report"] = True,
     osv_coordinates: Annotated[Optional[list[str]], "OSV package coordinates (ecosystem:name@version or pkg:purl); used by osv_query and optional scan_all enrichment"] = None,
     osv_ecosystem: Annotated[Optional[str], "Default OSV ecosystem for shorthand coords like name@version"] = None,
     osv_endpoint: Annotated[str, "OSV API endpoint/base URL (default: https://api.osv.dev)"] = "https://api.osv.dev",
@@ -956,6 +1531,8 @@ def vuln_scan(
     - scan_all: Run all scans, aggregate by severity
     - classify: Classify a specific address by CWE (requires addr)
     - osv_query: Query OSV for known vulnerable package versions
+    - intelligence_report: Run all scans and build a correlated triage report
+      with dataflow graph, coverage metrics, and remediation plan
 
     Each finding: {addr, function, cwe, severity, type, description, pattern}
     """
@@ -975,6 +1552,13 @@ def vuln_scan(
             offset = max(0, int(offset))
         except Exception:
             offset = 0
+        try:
+            max_graph_depth = int(max_graph_depth)
+        except Exception:
+            max_graph_depth = _DEFAULT_GRAPH_DEPTH
+
+        profile = _normalize_scan_profile(scan_profile)
+        settings = _profile_settings_for(profile)
 
         if action == "osv_query":
             if not osv_coordinates:
@@ -986,6 +1570,7 @@ def vuln_scan(
             osv_findings, parsed_queries, parse_errors, osv_error = _scan_osv_coordinates(
                 osv_coordinates, osv_endpoint=osv_endpoint, osv_ecosystem=osv_ecosystem
             )
+            osv_findings = _enrich_findings_with_risk(osv_findings, profile=profile)
             page, total, truncated = _dedupe_sort_paginate(
                 osv_findings, limit=limit, offset=offset, severity=severity
             )
@@ -1006,6 +1591,8 @@ def vuln_scan(
                 "truncated": truncated,
                 "severity_counts": sev_counts,
                 "type_counts": type_counts,
+                "risk_histogram": _risk_histogram(osv_findings),
+                "scan_profile": profile,
             }
 
         if action == "classify":
@@ -1020,9 +1607,10 @@ def vuln_scan(
             func = idaapi.get_func(ea)
             scan_addr = hex_ea(func.start_ea) if func else hex_ea(ea)
             for scan_type, scanner in _SCANNERS.items():
-                hits = scanner(scan_addr, max(20, limit), include_context)
+                hits = scanner(scan_addr, _scanner_limit(limit, profile), include_context)
                 classifications.extend(hits)
 
+            classifications = _enrich_findings_with_risk(classifications, profile=profile)
             page, total, truncated = _dedupe_sort_paginate(
                 classifications, limit=limit, offset=offset, severity=severity
             )
@@ -1035,8 +1623,10 @@ def vuln_scan(
                     "offset": offset,
                     "truncated": truncated,
                     "items": [],
+                    "scan_profile": profile,
                 }
             sev_counts, type_counts = _summary_counts(classifications)
+            coverage = _compute_coverage_metrics(classifications)
             return {
                 "ok": True,
                 "classifications": "\n".join(f["line"] for f in page),
@@ -1047,11 +1637,15 @@ def vuln_scan(
                 "items": page,
                 "severity_counts": sev_counts,
                 "type_counts": type_counts,
+                "risk_histogram": _risk_histogram(classifications),
+                "hotspots": _summarize_hotspots(classifications, profile=profile),
+                "coverage_metrics": coverage,
+                "scan_profile": profile,
             }
 
-        if action == "scan_all":
+        if action in ("scan_all", "intelligence_report"):
             all_findings = []
-            per_scanner_limit = max(64, limit * 2)
+            per_scanner_limit = _scanner_limit(limit, profile)
             for scan_type, scanner in _SCANNERS.items():
                 hits = scanner(addr, per_scanner_limit, include_context)
                 all_findings.extend(hits)
@@ -1068,13 +1662,27 @@ def vuln_scan(
                     "osv_error": osv_error,
                 }
 
+            all_findings = _enrich_findings_with_risk(all_findings, profile=profile)
             page, total, truncated = _dedupe_sort_paginate(
                 all_findings, limit=limit, offset=offset, severity=severity
             )
             sev_counts, type_counts = _summary_counts(all_findings)
+            hotspots = _summarize_hotspots(all_findings, profile=profile)
+            attack_paths = _build_attack_paths(all_findings, profile=profile)
+            recommendations = _build_recommendations(all_findings, attack_paths)
+            coverage_metrics = _compute_coverage_metrics(all_findings)
+            dataflow_graph = (
+                _build_dataflow_graph(all_findings, profile=profile, max_depth=max_graph_depth)
+                if include_dataflow_graph else None
+            )
+            remediation_plan = (
+                _build_remediation_plan(all_findings, hotspots, attack_paths)
+                if include_remediation_plan else None
+            )
 
-            return {
+            result = {
                 "ok": True,
+                "action": action,
                 "total": total,
                 "offset": offset,
                 "count": len(page),
@@ -1083,19 +1691,42 @@ def vuln_scan(
                 "items": page,
                 "severity_counts": sev_counts,
                 "type_counts": type_counts,
+                "risk_histogram": _risk_histogram(all_findings),
+                "hotspots": hotspots,
+                "attack_paths": attack_paths,
+                "recommendations": recommendations,
+                "coverage_metrics": coverage_metrics,
+                "dataflow_graph": dataflow_graph,
+                "remediation_plan": remediation_plan,
+                "scan_profile": profile,
+                "max_graph_depth": max(0, min(max_graph_depth, _MAX_GRAPH_DEPTH)),
                 "osv": osv_meta,
             }
+            # Keep scan_all mostly compact by default while preserving smarter data.
+            if action == "scan_all":
+                return result
+            result["report"] = {
+                "summary": f"{len(page)} findings returned ({total} total), "
+                           f"{len(attack_paths)} correlated attack path(s), "
+                           f"{len(hotspots)} hotspot function(s).",
+                "top_hotspot": hotspots[0]["function"] if hotspots else None,
+                "top_priority": page[0].get("priority") if page else None,
+                "coverage": coverage_metrics,
+            }
+            return result
 
         # Single scanner action
         scanner = _SCANNERS.get(action)
         if not scanner:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
-        findings = scanner(addr, max(20, limit * 2), include_context)
+        findings = scanner(addr, _scanner_limit(limit, profile), include_context)
+        findings = _enrich_findings_with_risk(findings, profile=profile)
         page, total, truncated = _dedupe_sort_paginate(
             findings, limit=limit, offset=offset, severity=severity
         )
         sev_counts, type_counts = _summary_counts(findings)
+        coverage = _compute_coverage_metrics(findings)
 
         return {
             "ok": True,
@@ -1109,6 +1740,10 @@ def vuln_scan(
             "truncated": truncated,
             "severity_counts": sev_counts,
             "type_counts": type_counts,
+            "risk_histogram": _risk_histogram(findings),
+            "hotspots": _summarize_hotspots(findings, profile=profile),
+            "coverage_metrics": coverage,
+            "scan_profile": profile,
         }
 
     except Exception as e:
