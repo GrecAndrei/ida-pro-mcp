@@ -147,6 +147,7 @@ _SINK_TOKEN_BY_TYPE = {
 
 _DEFAULT_SCAN_PROFILE = "balanced"
 _MIN_SCANNER_LIMIT = 24
+_MAX_SCANNER_LIMIT = 768
 _MAX_EVIDENCE_TAGS = 4
 _MAX_CHAIN_TYPES = 4
 _MAX_RECOMMENDATIONS = 6
@@ -292,8 +293,15 @@ def _profile_settings_for(profile):
     return _SCAN_PROFILES[_normalize_scan_profile(profile)]
 
 
+def _scanner_limit(limit, profile):
+    """Return bounded scanner discovery limit for predictable runtime/memory."""
+    settings = _profile_settings_for(profile)
+    requested = max(_MIN_SCANNER_LIMIT, int(limit) * settings["discovery_multiplier"])
+    return min(_MAX_SCANNER_LIMIT, requested)
+
+
 def _iter_disasm_window(ea, backward=8, forward=3):
-    """Yield (ea, disasm_lower) for a small instruction window around ea."""
+    """Return a list of (ea, disasm_lower) for a small instruction window around ea."""
     rows = []
     curr = ea
     for _ in range(max(0, backward)):
@@ -584,7 +592,7 @@ def _extract_api_like_tokens(text):
 
 
 def _classify_flow_role(finding):
-    """Classify finding role in rough exploit flow: source/sanitizer/sink/neutral."""
+    """Classify finding role in rough exploit flow: source/sanitizer/sink."""
     toks = _extract_api_like_tokens(finding.get("pattern", "")) | _extract_api_like_tokens(finding.get("description", ""))
     if toks & _SANITIZER_API_HINTS:
         return "sanitizer"
@@ -1599,7 +1607,7 @@ def vuln_scan(
             func = idaapi.get_func(ea)
             scan_addr = hex_ea(func.start_ea) if func else hex_ea(ea)
             for scan_type, scanner in _SCANNERS.items():
-                hits = scanner(scan_addr, max(_MIN_SCANNER_LIMIT, limit * settings["discovery_multiplier"]), include_context)
+                hits = scanner(scan_addr, _scanner_limit(limit, profile), include_context)
                 classifications.extend(hits)
 
             classifications = _enrich_findings_with_risk(classifications, profile=profile)
@@ -1637,7 +1645,7 @@ def vuln_scan(
 
         if action in ("scan_all", "intelligence_report"):
             all_findings = []
-            per_scanner_limit = max(64, limit * settings["discovery_multiplier"])
+            per_scanner_limit = max(64, _scanner_limit(limit, profile))
             for scan_type, scanner in _SCANNERS.items():
                 hits = scanner(addr, per_scanner_limit, include_context)
                 all_findings.extend(hits)
@@ -1712,7 +1720,7 @@ def vuln_scan(
         if not scanner:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
-        findings = scanner(addr, max(_MIN_SCANNER_LIMIT, limit * settings["discovery_multiplier"]), include_context)
+        findings = scanner(addr, _scanner_limit(limit, profile), include_context)
         findings = _enrich_findings_with_risk(findings, profile=profile)
         page, total, truncated = _dedupe_sort_paginate(
             findings, limit=limit, offset=offset, severity=severity
