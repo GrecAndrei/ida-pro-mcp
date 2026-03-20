@@ -168,6 +168,8 @@ except ImportError:
         "decompiler": "decompile",
         "decompiled": "decompile",
         "pseudocode": "decompile",
+        "pseudo": "decompile",
+        "pcode": "decompile",
         "hexrays": "decompile",
         "ctree": "decompile",
         "routine": "function",
@@ -194,6 +196,8 @@ except ImportError:
     _SEMANTIC_SINGLE_TOKEN_MIN_LEN = 5
     # Conservative typo tolerance: catches small misspellings without broad overmatching.
     _SEMANTIC_FUZZY_CUTOFF = 0.86
+    _SEMANTIC_CAMEL_BOUNDARY_1 = re.compile(r"([a-z])([A-Z])")
+    _SEMANTIC_CAMEL_BOUNDARY_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
 
     def _normalize_semantic_token(token: str) -> str:
         tok = token.lower().strip()
@@ -212,8 +216,10 @@ except ImportError:
         if not text:
             return []
         tokens = []
-        for raw in re.findall(r"[a-z0-9_]+", text.lower()):
-            for part in raw.split("_"):
+        for raw in re.findall(r"[A-Za-z0-9_]+", text):
+            expanded = _SEMANTIC_CAMEL_BOUNDARY_2.sub(r"\1 \2", raw)
+            expanded = _SEMANTIC_CAMEL_BOUNDARY_1.sub(r"\1 \2", expanded)
+            for part in expanded.replace("_", " ").split():
                 tok = _normalize_semantic_token(part)
                 if len(tok) >= 2:
                     tokens.append(tok)
