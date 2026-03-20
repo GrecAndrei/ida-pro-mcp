@@ -101,7 +101,8 @@ QUICKREF_TEXT = """\
 - `entropy(action="packed_detect")` - Detect packed/encrypted sections
 
 ## Security Analysis
-- `vuln_scan(action="scan_all")` - Scan for all vulnerability classes (CWE-tagged)
+- `vuln_scan(action="scan_all", scan_profile="balanced")` - Scan for all vulnerability classes (CWE-tagged) with risk scoring
+- `vuln_scan(action="intelligence_report", scan_profile="deep", max_graph_depth=3, include_dataflow_graph=True, include_remediation_plan=True)` - Correlated exploit-path report with hotspots/recommendations/graph/plan
 - `vuln_scan(action="osv_query", osv_coordinates=["PyPI:requests@2.19.0"])` - Query OSV for known vulnerable dependency versions
 - `vuln_scan(action="buffer_overflow")` - Find buffer overflow patterns
 - `gadgets(action="mitigations")` - Check ASLR/DEP/canary/CFI
@@ -146,7 +147,7 @@ WORKFLOW_TRIAGE = """\
 WORKFLOW_VULN = """\
 # Vulnerability Hunting Workflow
 
-1. **Full Scan**: `vuln_scan(action="scan_all")` → all vulnerability classes with CWE tags
+1. **Full Scan**: `vuln_scan(action="scan_all", scan_profile="balanced")` → all vulnerability classes with CWE tags + risk ranking
 2. **Buffer Overflows**: `vuln_scan(action="buffer_overflow")` → strcpy, gets, memcpy without bounds
 3. **Format Strings**: `vuln_scan(action="format_string")` → printf family with non-const format
 4. **Command Injection**: `vuln_scan(action="command_injection")` → system, popen, exec calls
@@ -232,7 +233,7 @@ WORKFLOW_PROTOCOL = """\
 WORKFLOW_EXPLOIT = """\
 # Exploit Development Workflow
 
-1. **Scan Vulnerabilities**: `vuln_scan(action="scan_all")` → find all vulnerability classes
+1. **Scan Vulnerabilities**: `vuln_scan(action="scan_all", scan_profile="balanced")` → find all vulnerability classes
 2. **Check Mitigations**: `gadgets(action="mitigations")` → ASLR, DEP, stack cookies, CFI
 3. **Find ROP Gadgets**: `gadgets(action="rop", limit=100)` → ret-terminated sequences
 4. **Stack Pivots**: `gadgets(action="stack_pivot")` → xchg rsp/mov sp gadgets
