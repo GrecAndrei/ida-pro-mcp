@@ -51,6 +51,8 @@ _SEMANTIC_CANONICALS = {
     "decompiler": "decompile",
     "decompiled": "decompile",
     "pseudocode": "decompile",
+    "pseudo": "decompile",
+    "pcode": "decompile",
     "hexrays": "decompile",
     "ctree": "decompile",
     "routine": "function",
@@ -96,9 +98,13 @@ def _normalize_semantic_token(token: str) -> str:
 def _semantic_tokenize(text: str):
     if not text:
         return []
+    camel_boundary_1 = re.compile(r"([a-z])([A-Z])")
+    camel_boundary_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
     tokens = []
-    for raw in re.findall(r"[a-z0-9_]+", text.lower()):
-        for part in raw.split("_"):
+    for raw in re.findall(r"[A-Za-z0-9_]+", text):
+        expanded = camel_boundary_2.sub(r"\1 \2", raw)
+        expanded = camel_boundary_1.sub(r"\1 \2", expanded)
+        for part in expanded.replace("_", " ").split():
             tok = _normalize_semantic_token(part)
             if len(tok) >= 2:
                 tokens.append(tok)
@@ -308,6 +314,12 @@ class TestSmartMatch(unittest.TestCase):
 
     def test_semantic_typo_tolerance(self):
         self.assertTrue(smart_match("decompyle trace", "decompile reference flow"))
+
+    def test_semantic_camelcase_decompile(self):
+        self.assertTrue(smart_match("decompiled code", "DecompilerOutput line from function"))
+
+    def test_semantic_pseudo_alias(self):
+        self.assertTrue(smart_match("pseudo flow", "decompile execution flow"))
 
 
 class TestCompileSmartPattern(unittest.TestCase):
