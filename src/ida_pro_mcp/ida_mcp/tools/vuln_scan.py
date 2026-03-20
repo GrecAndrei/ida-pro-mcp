@@ -1645,7 +1645,7 @@ def vuln_scan(
 
         if action in ("scan_all", "intelligence_report"):
             all_findings = []
-            per_scanner_limit = max(64, _scanner_limit(limit, profile))
+            per_scanner_limit = _scanner_limit(limit, profile)
             for scan_type, scanner in _SCANNERS.items():
                 hits = scanner(addr, per_scanner_limit, include_context)
                 all_findings.extend(hits)
