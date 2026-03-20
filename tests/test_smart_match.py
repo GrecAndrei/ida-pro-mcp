@@ -79,6 +79,8 @@ _SEMANTIC_CANONICALS = {
 _SEMANTIC_SINGLE_TOKEN_MIN_LEN = 5
 # Conservative typo tolerance: catches small misspellings without broad overmatching.
 _SEMANTIC_FUZZY_CUTOFF = 0.86
+_SEMANTIC_CAMEL_BOUNDARY_1 = re.compile(r"([a-z])([A-Z])")
+_SEMANTIC_CAMEL_BOUNDARY_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
 
 
 def _normalize_semantic_token(token: str) -> str:
@@ -98,12 +100,10 @@ def _normalize_semantic_token(token: str) -> str:
 def _semantic_tokenize(text: str):
     if not text:
         return []
-    camel_boundary_1 = re.compile(r"([a-z])([A-Z])")
-    camel_boundary_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
     tokens = []
     for raw in re.findall(r"[A-Za-z0-9_]+", text):
-        expanded = camel_boundary_2.sub(r"\1 \2", raw)
-        expanded = camel_boundary_1.sub(r"\1 \2", expanded)
+        expanded = _SEMANTIC_CAMEL_BOUNDARY_2.sub(r"\1 \2", raw)
+        expanded = _SEMANTIC_CAMEL_BOUNDARY_1.sub(r"\1 \2", expanded)
         for part in expanded.replace("_", " ").split():
             tok = _normalize_semantic_token(part)
             if len(tok) >= 2:
