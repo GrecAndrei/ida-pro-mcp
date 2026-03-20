@@ -9,7 +9,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from ida_mcp_stdio import IDAMCPServer
 import install
@@ -129,6 +129,68 @@ class TestInstallerRepairBehavior(unittest.TestCase):
             repaired = json.loads(cfg.read_text(encoding="utf-8"))
             self.assertIn("ida-pro-mcp", repaired.get("mcp", {}))
             self.assertNotIn("github.com/mrexodia/ida-pro-mcp", repaired.get("mcp", {}))
+
+
+class TestRuntimeLeaseCleanup(unittest.TestCase):
+    def test_adopt_cleanup_kills_expired_lease_pid(self):
+        with tempfile.TemporaryDirectory() as td:
+            server = IDAMCPServer.__new__(IDAMCPServer)
+            server._runtime_lease_dir = td
+            server.session_runtimes = {}
+            server._kill_stale_pid = Mock(return_value=True)
+            lease_path = os.path.join(td, "SID_DEADBEEF.lease.json")
+            with open(lease_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "session_id": "DEADBEEF",
+                        "pid": 4242,
+                        "port": 31337,
+                        "updated_at": 1.0,
+                    },
+                    f,
+                )
+
+            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+                server._adopt_or_cleanup_stale_runtime_leases()
+
+            server._kill_stale_pid.assert_called_once_with(4242)
+            self.assertFalse(os.path.exists(lease_path))
+
+    def test_adopt_cleanup_keeps_fresh_lease(self):
+        with tempfile.TemporaryDirectory() as td:
+            server = IDAMCPServer.__new__(IDAMCPServer)
+            server._runtime_lease_dir = td
+            server.session_runtimes = {}
+            server._kill_stale_pid = Mock(return_value=True)
+            lease_path = os.path.join(td, "SID_CAFEBABE.lease.json")
+            with open(lease_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "session_id": "CAFEBABE",
+                        "pid": 5252,
+                        "port": 12345,
+                        "updated_at": 995.0,
+                    },
+                    f,
+                )
+
+            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+                server._adopt_or_cleanup_stale_runtime_leases()
+
+            server._kill_stale_pid.assert_not_called()
+            self.assertTrue(os.path.exists(lease_path))
+
+    def test_shutdown_is_idempotent(self):
+        server = IDAMCPServer.__new__(IDAMCPServer)
+        server._shutdown = False
+        server._stop_runtime_lease_heartbeat = Mock()
+        server._cleanup_all_runtimes = Mock()
+
+        server.shutdown()
+        server.shutdown()
+
+        server._stop_runtime_lease_heartbeat.assert_called_once()
+        server._cleanup_all_runtimes.assert_called_once()
 
 
 if __name__ == "__main__":
