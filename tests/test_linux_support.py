@@ -13,6 +13,7 @@ from unittest.mock import patch, Mock
 
 from ida_mcp_stdio import IDAMCPServer
 import install
+import threading
 
 
 class TestLinuxIdaDetection(unittest.TestCase):
@@ -132,11 +133,17 @@ class TestInstallerRepairBehavior(unittest.TestCase):
 
 
 class TestRuntimeLeaseCleanup(unittest.TestCase):
+    @staticmethod
+    def _lease_test_server(lease_dir: str) -> IDAMCPServer:
+        server = IDAMCPServer.__new__(IDAMCPServer)
+        server._runtime_lease_dir = lease_dir
+        server.session_runtimes = {}
+        server._runtime_lock = threading.RLock()
+        return server
+
     def test_adopt_cleanup_kills_expired_lease_pid(self):
         with tempfile.TemporaryDirectory() as td:
-            server = IDAMCPServer.__new__(IDAMCPServer)
-            server._runtime_lease_dir = td
-            server.session_runtimes = {}
+            server = self._lease_test_server(td)
             server._kill_stale_pid = Mock(return_value=True)
             lease_path = os.path.join(td, "SID_DEADBEEF.lease.json")
             with open(lease_path, "w", encoding="utf-8") as f:
@@ -158,9 +165,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
 
     def test_adopt_cleanup_keeps_fresh_lease(self):
         with tempfile.TemporaryDirectory() as td:
-            server = IDAMCPServer.__new__(IDAMCPServer)
-            server._runtime_lease_dir = td
-            server.session_runtimes = {}
+            server = self._lease_test_server(td)
             server._kill_stale_pid = Mock(return_value=True)
             lease_path = os.path.join(td, "SID_CAFEBABE.lease.json")
             with open(lease_path, "w", encoding="utf-8") as f:
@@ -183,6 +188,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
     def test_shutdown_is_idempotent(self):
         server = IDAMCPServer.__new__(IDAMCPServer)
         server._shutdown = False
+        server._shutdown_requested = False
         server._stop_runtime_lease_heartbeat = Mock()
         server._cleanup_all_runtimes = Mock()
 

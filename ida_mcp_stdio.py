@@ -116,8 +116,18 @@ _migrate_legacy_runtime_dir(CACHE_DIR)
 os.makedirs(CACHE_DIR, exist_ok=True)
 BRIDGE_LOG = os.path.join(CACHE_DIR, "bridge.log")
 RUNTIME_LEASE_TTL = max(15, int(os.environ.get("IDA_MCP_RUNTIME_LEASE_TTL", "75")))
-RUNTIME_LEASE_HEARTBEAT = max(
-    2, int(os.environ.get("IDA_MCP_RUNTIME_LEASE_HEARTBEAT", str(max(2, RUNTIME_LEASE_TTL // 3))))
+_DEFAULT_RUNTIME_LEASE_HEARTBEAT_SECONDS = max(2, RUNTIME_LEASE_TTL // 3)
+RUNTIME_LEASE_HEARTBEAT_SECONDS = max(
+    2,
+    int(
+        os.environ.get(
+            "IDA_MCP_RUNTIME_LEASE_HEARTBEAT",
+            str(_DEFAULT_RUNTIME_LEASE_HEARTBEAT_SECONDS),
+        )
+    ),
+)
+PROCESS_TERMINATION_TIMEOUT_SECONDS = max(
+    1.0, float(os.environ.get("IDA_MCP_PROCESS_TERMINATION_TIMEOUT", "2.0"))
 )
 
 
@@ -2973,7 +2983,9 @@ class IDAMCPServer:
         self._session_macros: Dict[str, Dict[str, Any]] = {}
         self.current_session = None
         self.session_runtimes = {}
+        self._runtime_lock = threading.RLock()
         self._shutdown = False
+        self._shutdown_requested = False
         self._lease_thread_stop = threading.Event()
         self._lease_thread: Optional[threading.Thread] = None
         self._wiki_cache: Dict[str, Any] = {
@@ -3021,6 +3033,11 @@ class IDAMCPServer:
             pass
 
     def _kill_stale_pid(self, pid: int) -> bool:
+        """Best-effort terminate a stale PID.
+
+        Returns True when PID is already absent or was terminated.
+        Returns False when the process state cannot be verified or terminated.
+        """
         if pid <= 0:
             return False
         try:
@@ -3035,7 +3052,7 @@ class IDAMCPServer:
             return True
         except Exception:
             return False
-        deadline = time.time() + 2.0
+        deadline = time.time() + PROCESS_TERMINATION_TIMEOUT_SECONDS
         while time.time() < deadline:
             try:
                 os.kill(pid, 0)
@@ -3050,7 +3067,13 @@ class IDAMCPServer:
             return True
         except Exception:
             return False
-        return True
+        try:
+            os.kill(pid, 0)
+            return False
+        except ProcessLookupError:
+            return True
+        except Exception:
+            return False
 
     def _adopt_or_cleanup_stale_runtime_leases(self) -> None:
         try:
@@ -3074,9 +3097,15 @@ class IDAMCPServer:
             sid = _normalize_session_id(lease.get("session_id"))
             pid = int(lease.get("pid") or 0)
             updated = float(lease.get("updated_at") or 0.0)
-            if sid and sid in self.session_runtimes:
+            with self._runtime_lock:
+                tracked = bool(sid and sid in self.session_runtimes)
+            if tracked:
                 continue
             expired = (now - updated) > RUNTIME_LEASE_TTL
+            with self._runtime_lock:
+                tracked_after = bool(sid and sid in self.session_runtimes)
+            if tracked_after:
+                continue
             if expired and pid > 0:
                 self._kill_stale_pid(pid)
             if expired or pid <= 0:
@@ -3086,8 +3115,19 @@ class IDAMCPServer:
                     pass
 
     def _lease_heartbeat_loop(self) -> None:
-        while not self._lease_thread_stop.wait(RUNTIME_LEASE_HEARTBEAT):
-            for sid, runtime in list(self.session_runtimes.items()):
+        while True:
+            if self._lease_thread_stop.wait(RUNTIME_LEASE_HEARTBEAT_SECONDS):
+                break
+            if self._shutdown_requested:
+                break
+            with self._runtime_lock:
+                runtime_items = list(self.session_runtimes.items())
+            for sid, runtime in runtime_items:
+                if self._shutdown_requested:
+                    break
+                with self._runtime_lock:
+                    if self.session_runtimes.get(sid) is not runtime:
+                        continue
                 proc = runtime.get("process")
                 if not proc:
                     continue
@@ -3120,17 +3160,20 @@ class IDAMCPServer:
                 continue
             try:
                 signal.signal(sig, self._handle_termination_signal)
-            except Exception:
-                pass
+            except Exception as e:
+                log_rpc(f"Failed to register handler for {sig_name}: {e}")
 
     def _handle_termination_signal(self, signum, frame):
-        self.shutdown()
-        raise SystemExit(0)
+        self._shutdown_requested = True
+        self._lease_thread_stop.set()
+        # Let run() finally and atexit perform full cleanup outside signal context.
+        return
 
     def shutdown(self) -> None:
         if self._shutdown:
             return
         self._shutdown = True
+        self._shutdown_requested = True
         self._stop_runtime_lease_heartbeat()
         self._cleanup_all_runtimes()
 
@@ -4365,7 +4408,8 @@ class IDAMCPServer:
                         "stderr_log": stderr_log,
                         "log_handles": [stdout_fh, stderr_fh],
                     }
-                    self.session_runtimes[session.session_id] = runtime
+                    with self._runtime_lock:
+                        self.session_runtimes[session.session_id] = runtime
                     self._write_runtime_lease(session.session_id, runtime)
                     apply_res = self._apply_session_options(session, runtime)
                     if apply_res.get("error"):
@@ -4464,7 +4508,8 @@ class IDAMCPServer:
                         "stderr_log": stderr_log,
                         "log_handles": [stdout_fh, stderr_fh],
                     }
-                    self.session_runtimes[session.session_id] = runtime
+                    with self._runtime_lock:
+                        self.session_runtimes[session.session_id] = runtime
                     self._write_runtime_lease(session.session_id, runtime)
                     return {"ok": True, "idb_path": session.idb_path}
             except Exception:
@@ -4615,7 +4660,8 @@ class IDAMCPServer:
         return {"ok": True}
 
     def _cleanup_runtime(self, sid):
-        runtime = self.session_runtimes.pop(sid, None)
+        with self._runtime_lock:
+            runtime = self.session_runtimes.pop(sid, None)
         self._remove_runtime_lease(sid)
         if not runtime:
             return
@@ -4639,7 +4685,9 @@ class IDAMCPServer:
                 pass
 
     def _cleanup_all_runtimes(self):
-        for sid in list(self.session_runtimes.keys()):
+        with self._runtime_lock:
+            runtime_sids = list(self.session_runtimes.keys())
+        for sid in runtime_sids:
             self._cleanup_runtime(sid)
         self._adopt_or_cleanup_stale_runtime_leases()
 
@@ -6982,6 +7030,8 @@ class IDAMCPServer:
         rs, si = _real_stdout.buffer, sys.stdin.buffer
         try:
             while True:
+                if self._shutdown_requested:
+                    break
                 try:
                     line = si.readline()
                     if not line:
@@ -6996,18 +7046,17 @@ class IDAMCPServer:
                         rs.write(output)
                         rs.flush()
                 except Exception:
+                    if self._shutdown_requested:
+                        break
                     continue
         finally:
             self.shutdown()
 
 
 if __name__ == "__main__":
-    server = None
     try:
         server = IDAMCPServer()
         server.run()
     except Exception as e:
-        if server:
-            server.shutdown()
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
