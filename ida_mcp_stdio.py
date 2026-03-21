@@ -129,6 +129,7 @@ RUNTIME_LEASE_HEARTBEAT_SECONDS = max(
 PROCESS_TERMINATION_TIMEOUT_SECONDS = max(
     1.0, float(os.environ.get("IDA_MCP_PROCESS_TERMINATION_TIMEOUT", "2.0"))
 )
+_RUNTIME_LEASE_RE = re.compile(r"^SID_([A-Za-z0-9]{8})\.lease\.json$")
 
 
 def log_rpc(msg):
@@ -3003,6 +3004,18 @@ class IDAMCPServer:
     def _runtime_lease_path(self, sid: str) -> str:
         return os.path.join(self._runtime_lease_dir, f"SID_{sid}.lease.json")
 
+    def _write_runtime_lease_record(self, path: str, lease: dict) -> None:
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(lease, f, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
     def _write_runtime_lease(self, sid: str, runtime: dict) -> None:
         proc = runtime.get("process")
         if not proc:
@@ -3015,16 +3028,7 @@ class IDAMCPServer:
             "updated_at": time.time(),
         }
         path = self._runtime_lease_path(sid)
-        tmp = path + ".tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(lease, f, indent=2)
-            os.replace(tmp, path)
-        except Exception:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        self._write_runtime_lease_record(path, lease)
 
     def _remove_runtime_lease(self, sid: str) -> None:
         try:
@@ -3075,14 +3079,57 @@ class IDAMCPServer:
         except Exception:
             return False
 
-    def _adopt_or_cleanup_stale_runtime_leases(self) -> None:
+    def _is_expected_ida_process(self, pid: int, lease: dict) -> bool:
+        if pid <= 0:
+            return False
+        if sys.platform != "linux":
+            return True
+        expected_path = str(lease.get("idat_exe") or getattr(self, "idat_exe", "") or "").strip()
+        proc_exe = f"/proc/{pid}/exe"
+        proc_cmdline = f"/proc/{pid}/cmdline"
+        expected_names = {n.lower() for n in self._ida_binary_names()}
+        if expected_path:
+            expected_path = os.path.realpath(os.path.expanduser(expected_path))
+            expected_names.add(os.path.basename(expected_path).lower())
+        try:
+            actual_exe = os.path.realpath(proc_exe)
+        except Exception:
+            actual_exe = ""
+        if actual_exe:
+            base = os.path.basename(actual_exe).lower()
+            if base in expected_names:
+                return True
+            if expected_path:
+                try:
+                    if os.path.exists(expected_path) and os.path.exists(actual_exe) and os.path.samefile(expected_path, actual_exe):
+                        return True
+                except Exception:
+                    pass
+        try:
+            with open(proc_cmdline, "rb") as f:
+                cmdline = f.read().decode("utf-8", errors="ignore")
+        except Exception:
+            return False
+        parts = [p for p in cmdline.split("\x00") if p]
+        if not parts:
+            return False
+        first = os.path.basename(parts[0]).lower()
+        if first in expected_names:
+            return True
+        for part in parts:
+            if os.path.basename(part).lower() in expected_names:
+                return True
+        return False
+
+    def _cleanup_stale_runtime_leases(self) -> None:
         try:
             entries = os.listdir(self._runtime_lease_dir)
         except Exception:
             return
         now = time.time()
         for name in entries:
-            if not name.endswith(".lease.json"):
+            m = _RUNTIME_LEASE_RE.fullmatch(name)
+            if not m:
                 continue
             path = os.path.join(self._runtime_lease_dir, name)
             try:
@@ -3095,8 +3142,22 @@ class IDAMCPServer:
                     pass
                 continue
             sid = _normalize_session_id(lease.get("session_id"))
-            pid = int(lease.get("pid") or 0)
-            updated = float(lease.get("updated_at") or 0.0)
+            sid_from_name = m.group(1)
+            if not sid or sid != sid_from_name:
+                # Malformed/mismatched lease metadata: drop it and do not signal any PID.
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            try:
+                pid = int(lease.get("pid") or 0)
+            except Exception:
+                pid = 0
+            try:
+                updated = float(lease.get("updated_at") or 0.0)
+            except Exception:
+                updated = 0.0
             with self._runtime_lock:
                 tracked = bool(sid and sid in self.session_runtimes)
             if tracked:
@@ -3106,13 +3167,32 @@ class IDAMCPServer:
                 tracked_after = bool(sid and sid in self.session_runtimes)
             if tracked_after:
                 continue
-            if expired and pid > 0:
-                self._kill_stale_pid(pid)
-            if expired or pid <= 0:
+            if not expired:
+                continue
+            if pid <= 0:
                 try:
                     os.remove(path)
                 except OSError:
                     pass
+                continue
+            if not self._is_expected_ida_process(pid, lease):
+                log_rpc(f"Skipping stale lease cleanup for non-IDA pid={pid} sid={sid}")
+                continue
+            killed = self._kill_stale_pid(pid)
+            if killed:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            else:
+                # Keep lease for retry, but back off immediate repeated kill attempts.
+                lease["updated_at"] = now
+                lease["last_error"] = "terminate_failed"
+                self._write_runtime_lease_record(path, lease)
+
+    def _adopt_or_cleanup_stale_runtime_leases(self) -> None:
+        # Backward-compatible alias; method now only performs cleanup.
+        self._cleanup_stale_runtime_leases()
 
     def _lease_heartbeat_loop(self) -> None:
         while True:
@@ -3166,8 +3246,10 @@ class IDAMCPServer:
     def _handle_termination_signal(self, signum, frame):
         self._shutdown_requested = True
         self._lease_thread_stop.set()
-        # Let run() finally and atexit perform full cleanup outside signal context.
-        return
+        # Interrupt blocked stdin reads so run() can unwind through finally.
+        if signum == getattr(signal, "SIGINT", None):
+            raise KeyboardInterrupt()
+        raise SystemExit(0)
 
     def shutdown(self) -> None:
         if self._shutdown:
