@@ -332,6 +332,14 @@ class TestHostHardening(unittest.TestCase):
         self.assertEqual(normalized.get("disasm_style"), "annotated")
         self.assertEqual(normalized.get("end"), "0x12640")
 
+    def test_normalize_top_level_noisy_arg_key(self):
+        normalized = self.server._normalize_tool_call_args(
+            "code",
+            {"action": "disasm", "[address]": "0x401000"},
+        )
+        self.assertEqual(normalized.get("addrs"), "0x401000")
+        self.assertNotIn("[address]", normalized)
+
     def test_alias_inventory_exceeds_5000(self):
         total_aliases = (
             len(TOOL_ALIASES)
@@ -362,6 +370,14 @@ class TestHostHardening(unittest.TestCase):
         self.assertEqual(payload.get("summary", {}).get("errors"), 0)
         first = payload.get("results", [{}])[0].get("data", {})
         self.assertIn("total_sessions", first)
+
+    def test_batch_rejects_nested_noisy_batch_alias(self):
+        for noisy in ("[batch]", "[ BATCH ]", "BATCH"):
+            res = self.server._handle_batch({"calls": [{"name": noisy, "arguments": {}}]})
+            self.assertTrue(res.get("ok"))
+            row = (res.get("results") or [{}])[0].get("result", {})
+            self.assertTrue(row.get("error"))
+            self.assertIn("Nested batch", row.get("message", ""))
 
 
 class TestResponseCompaction(unittest.TestCase):
