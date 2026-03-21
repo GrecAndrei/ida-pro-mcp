@@ -3406,7 +3406,7 @@ class IDAMCPServer:
             for raw_key in list(out.keys()):
                 if not isinstance(raw_key, str):
                     continue
-                normalized_key = raw_key.strip().lower()
+                normalized_key = _normalize_alias_lookup_key(raw_key)
                 canonical_key = arg_aliases.get(normalized_key)
                 if canonical_key and canonical_key not in out:
                     out[canonical_key] = out.pop(raw_key)
@@ -6786,7 +6786,7 @@ class IDAMCPServer:
                                 hint="Each batch call must have a name field specifying the tool.")
             elif not isinstance(name, str):
                 res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-string name")
-            elif name == "batch":
+            elif resolved_name == "batch":
                 res = make_error(MCPError.INVALID_ARGS, "Nested batch calls are not allowed")
             elif resolved_name not in TOOLS:
                 res = make_error(MCPError.INVALID_ARGS, f"Unknown tool {name} in batch call at index {idx}",
