@@ -145,6 +145,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             server = self._lease_test_server(td)
             server._kill_stale_pid = Mock(return_value=True)
+            server._is_expected_ida_process = Mock(return_value=True)
             lease_path = os.path.join(td, "SID_DEADBEEF.lease.json")
             with open(lease_path, "w", encoding="utf-8") as f:
                 json.dump(
@@ -197,6 +198,74 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
 
         server._stop_runtime_lease_heartbeat.assert_called_once()
         server._cleanup_all_runtimes.assert_called_once()
+
+    def test_cleanup_skips_mismatched_session_id_and_filename(self):
+        with tempfile.TemporaryDirectory() as td:
+            server = self._lease_test_server(td)
+            server._kill_stale_pid = Mock(return_value=True)
+            lease_path = os.path.join(td, "SID_DEADBEEF.lease.json")
+            with open(lease_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "session_id": "CAFEBABE",
+                        "pid": 3333,
+                        "updated_at": 1.0,
+                    },
+                    f,
+                )
+
+            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+                server._cleanup_stale_runtime_leases()
+
+            server._kill_stale_pid.assert_not_called()
+            self.assertFalse(os.path.exists(lease_path))
+
+    def test_cleanup_keeps_lease_when_kill_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            server = self._lease_test_server(td)
+            server._kill_stale_pid = Mock(return_value=False)
+            server._is_expected_ida_process = Mock(return_value=True)
+            lease_path = os.path.join(td, "SID_DEADBEEF.lease.json")
+            with open(lease_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "session_id": "DEADBEEF",
+                        "pid": 4444,
+                        "updated_at": 1.0,
+                    },
+                    f,
+                )
+
+            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+                server._cleanup_stale_runtime_leases()
+
+            self.assertTrue(os.path.exists(lease_path))
+            with open(lease_path, "r", encoding="utf-8") as f:
+                lease = json.load(f)
+            self.assertEqual(lease["updated_at"], 1000.0)
+            self.assertEqual(lease["last_error"], "terminate_failed")
+
+    def test_cleanup_skips_non_ida_process(self):
+        with tempfile.TemporaryDirectory() as td:
+            server = self._lease_test_server(td)
+            server._kill_stale_pid = Mock(return_value=True)
+            server._is_expected_ida_process = Mock(return_value=False)
+            lease_path = os.path.join(td, "SID_DEADBEEF.lease.json")
+            with open(lease_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "session_id": "DEADBEEF",
+                        "pid": 5555,
+                        "updated_at": 1.0,
+                    },
+                    f,
+                )
+
+            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+                server._cleanup_stale_runtime_leases()
+
+            server._kill_stale_pid.assert_not_called()
+            self.assertTrue(os.path.exists(lease_path))
 
 
 if __name__ == "__main__":
