@@ -1618,7 +1618,7 @@ def _strip_balanced_wrappers(value: str, rounds: int = 3) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    for _ in range(max(rounds, 1)):
+    for _ in range(rounds):
         changed = False
         text = text.strip().strip(",;")
         stripped_quotes = text.strip(ACTION_STRIP_CHARS + "`")
@@ -1655,9 +1655,9 @@ def _noisy_alias_variants(value: str) -> set[str]:
 
 
 def _normalize_alias_lookup_key(value: Any) -> str:
-    text = _strip_balanced_wrappers(str(value or ""))
-    text = ACTION_PREFIX_RE.sub("", text)
-    return text.strip().strip(",;").lower()
+    stripped = _strip_balanced_wrappers(str(value or ""))
+    without_prefix = ACTION_PREFIX_RE.sub("", stripped)
+    return without_prefix.strip().strip(",;").lower()
 
 
 def _resolve_tool_alias(name: Any) -> Any:
@@ -1666,7 +1666,13 @@ def _resolve_tool_alias(name: Any) -> Any:
     normalized = _normalize_alias_lookup_key(name)
     if not normalized:
         return name
-    return TOOL_ALIASES.get(normalized, TOOL_ALIASES.get(name, normalized))
+    resolved = TOOL_ALIASES.get(normalized)
+    if resolved:
+        return resolved
+    if normalized in TOOLS:
+        return normalized
+    # Fallback for callers that already pass clean aliases/canonical names.
+    return TOOL_ALIASES.get(name, name)
 
 
 def _build_tool_aliases(tools: list[str], explicit: dict[str, str]) -> dict[str, str]:
@@ -3383,6 +3389,8 @@ class IDAMCPServer:
         text = text.strip(ACTION_STRIP_CHARS)
         text = ACTION_PREFIX_RE.sub("", text)
         text = text.strip().strip(",")
+        # Keep multi-token action strings intact here so key=value tails survive tokenization;
+        # individual tokens are cleaned in _parse_action_tail_tokens().
         if re.search(r"\s", text):
             return text
         return _strip_balanced_wrappers(text)
@@ -3446,15 +3454,18 @@ class IDAMCPServer:
                         out.setdefault(k, v)
                     positional = parsed_tail.get("_positional")
                     if isinstance(positional, str) and positional:
+                        schema = TOOL_ARG_SCHEMAS.get(tool_name, {})
                         if mapped in ("read", "sections") and tool_name == "wiki":
                             out.setdefault("topic", positional)
                         elif mapped == "search":
                             out.setdefault("query", positional)
-                        elif "addrs" in TOOL_ARG_SCHEMAS.get(tool_name, {}):
+                        # setdefault preserves any explicit addr/addrs supplied by the caller
+                        # and only fills the positional fallback when those keys are absent.
+                        elif "addrs" in schema:
                             out.setdefault("addrs", positional)
-                        elif "addr" in TOOL_ARG_SCHEMAS.get(tool_name, {}):
+                        elif "addr" in schema:
                             out.setdefault("addr", positional)
-                        elif "pattern" in TOOL_ARG_SCHEMAS.get(tool_name, {}):
+                        elif "pattern" in schema:
                             out.setdefault("pattern", positional)
                     out.pop("_positional", None)
             else:
