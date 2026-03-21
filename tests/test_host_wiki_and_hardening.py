@@ -20,6 +20,9 @@ from ida_mcp_stdio import (  # noqa: E402
     TOOL_ALIASES,
 )
 
+# Regression guard for the "5000+ aliases accepted" behavior target.
+MIN_EXPECTED_ALIAS_COUNT = 5000
+
 
 class TestHostWikiTool(unittest.TestCase):
     def setUp(self):
@@ -335,7 +338,11 @@ class TestHostHardening(unittest.TestCase):
             + sum(len(v) for v in ACTION_ALIASES_BY_TOOL.values())
             + sum(len(v) for v in ARG_ALIASES_BY_TOOL.values())
         )
-        self.assertGreaterEqual(total_aliases, 5000)
+        self.assertGreaterEqual(total_aliases, MIN_EXPECTED_ALIAS_COUNT)
+
+    def test_noisy_alias_spot_checks_resolve(self):
+        self.assertEqual(ACTION_ALIASES_BY_TOOL["code"].get("assembly"), "disasm")
+        self.assertEqual(ARG_ALIASES_BY_TOOL["code"].get("address"), "addrs")
 
     def test_execute_tool_accepts_noisy_tool_alias(self):
         res = self.server._execute_tool("[session]", {"action": "status"})
