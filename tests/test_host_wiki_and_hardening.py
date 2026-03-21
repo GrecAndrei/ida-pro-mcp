@@ -10,7 +10,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from ida_mcp_stdio import IDAMCPServer, MCPError, SessionManager, TOOLS, TOOL_ALIASES  # noqa: E402
+from ida_mcp_stdio import (  # noqa: E402
+    ACTION_ALIASES_BY_TOOL,
+    ARG_ALIASES_BY_TOOL,
+    IDAMCPServer,
+    MCPError,
+    SessionManager,
+    TOOLS,
+    TOOL_ALIASES,
+)
 
 
 class TestHostWikiTool(unittest.TestCase):
@@ -271,6 +279,22 @@ class TestHostHardening(unittest.TestCase):
         self.assertEqual(normalized.get("action"), "lookup")
         self.assertEqual(normalized.get("addr"), "0xb1c98")
 
+    def test_normalize_action_handles_bracketed_fragment(self):
+        normalized = self.server._normalize_tool_call_args(
+            "data",
+            {"action": "[lookup] [addr]=[0xb1c98]"},
+        )
+        self.assertEqual(normalized.get("action"), "lookup")
+        self.assertEqual(normalized.get("addr"), "0xb1c98")
+
+    def test_normalize_action_parses_positional_bracketed_address(self):
+        normalized = self.server._normalize_tool_call_args(
+            "code",
+            {"action": "[decompile] [main]"},
+        )
+        self.assertEqual(normalized.get("action"), "decompile")
+        self.assertEqual(normalized.get("addrs"), "main")
+
     def test_normalize_tool_args_accepts_common_aliases(self):
         normalized = self.server._normalize_tool_call_args(
             "session",
@@ -304,6 +328,33 @@ class TestHostHardening(unittest.TestCase):
         )
         self.assertEqual(normalized.get("disasm_style"), "annotated")
         self.assertEqual(normalized.get("end"), "0x12640")
+
+    def test_alias_inventory_exceeds_5000(self):
+        total_aliases = (
+            len(TOOL_ALIASES)
+            + sum(len(v) for v in ACTION_ALIASES_BY_TOOL.values())
+            + sum(len(v) for v in ARG_ALIASES_BY_TOOL.values())
+        )
+        self.assertGreaterEqual(total_aliases, 5000)
+
+    def test_execute_tool_accepts_noisy_tool_alias(self):
+        res = self.server._execute_tool("[session]", {"action": "status"})
+        self.assertFalse(res.get("error"))
+        self.assertIn("total_sessions", res)
+
+    def test_tools_call_accepts_noisy_batch_alias(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "[batch]", "arguments": {"calls": ["[session]:[status]"]}},
+        }
+        resp = self.server.handle_request(req)
+        payload = json.loads(resp["result"]["content"][0]["text"])
+        self.assertEqual(payload.get("summary", {}).get("total"), 1)
+        self.assertEqual(payload.get("summary", {}).get("errors"), 0)
+        first = payload.get("results", [{}])[0].get("data", {})
+        self.assertIn("total_sessions", first)
 
 
 class TestResponseCompaction(unittest.TestCase):

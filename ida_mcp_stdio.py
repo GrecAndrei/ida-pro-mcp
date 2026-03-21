@@ -423,6 +423,7 @@ TOOL_ALIASES = {
 WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
+_WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
 ADVERTISED_TOOLS = [
     "session",
     "truncation",
@@ -1613,13 +1614,76 @@ def _camel_variants(value: str) -> set[str]:
     return {camel, pascal}
 
 
+def _strip_balanced_wrappers(value: str, rounds: int = 3) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for _ in range(max(rounds, 1)):
+        changed = False
+        text = text.strip().strip(",;")
+        stripped_quotes = text.strip(ACTION_STRIP_CHARS + "`")
+        if stripped_quotes != text:
+            text = stripped_quotes
+            changed = True
+        for left, right in _WRAPPER_PAIRS:
+            if len(text) >= 2 and text.startswith(left) and text.endswith(right):
+                text = text[1:-1].strip()
+                changed = True
+        if not changed:
+            break
+    return text
+
+
+def _noisy_alias_variants(value: str) -> set[str]:
+    base = str(value or "").strip().lower()
+    if not base:
+        return set()
+    return {
+        f"[{base}]",
+        f"({base})",
+        f"{{{base}}}",
+        f"<{base}>",
+        f"\"{base}\"",
+        f"'{base}'",
+        f"`{base}`",
+        f"{base}()",
+        f"{base}:",
+        f"{base}=",
+        f"tool:{base}",
+        f"{base}.tool",
+    }
+
+
+def _normalize_alias_lookup_key(value: Any) -> str:
+    text = _strip_balanced_wrappers(str(value or ""))
+    text = ACTION_PREFIX_RE.sub("", text)
+    return text.strip().strip(",;").lower()
+
+
+def _resolve_tool_alias(name: Any) -> Any:
+    if not isinstance(name, str):
+        return name
+    normalized = _normalize_alias_lookup_key(name)
+    if not normalized:
+        return name
+    return TOOL_ALIASES.get(normalized, TOOL_ALIASES.get(name, normalized))
+
+
 def _build_tool_aliases(tools: list[str], explicit: dict[str, str]) -> dict[str, str]:
     candidates: Dict[str, set[str]] = {}
     for tool in tools:
-        for alias in _snake_variants(tool).union(_camel_variants(tool)):
-            candidates.setdefault(alias, set()).add(tool)
+        variants = _snake_variants(tool).union(_camel_variants(tool))
+        for alias in list(variants):
+            variants.update(_noisy_alias_variants(alias))
+        for alias in variants:
+            key = _normalize_alias_lookup_key(alias)
+            if key:
+                candidates.setdefault(key, set()).add(tool)
     for alias, target in (explicit or {}).items():
-        candidates.setdefault(str(alias).strip().lower(), set()).add(str(target).strip().lower())
+        key = _normalize_alias_lookup_key(alias)
+        target_key = _normalize_alias_lookup_key(target)
+        if key and target_key:
+            candidates.setdefault(key, set()).add(target_key)
     resolved: dict[str, str] = {}
     for alias, targets in candidates.items():
         if len(targets) == 1:
@@ -2520,8 +2584,10 @@ def _build_action_aliases() -> dict[str, dict[str, str]]:
                 candidates.add(action.replace("find_", "search_", 1))
             if action.startswith("list_"):
                 candidates.add(action.replace("list_", "get_", 1))
+            for alias in list(candidates):
+                candidates.update(_noisy_alias_variants(alias))
             for alias in candidates:
-                key = str(alias).strip().lower()
+                key = _normalize_alias_lookup_key(alias)
                 if not key:
                     continue
                 existing = alias_map.get(key)
@@ -2553,8 +2619,10 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
                 candidates.discard(f"{canonical}s")
             candidates.update(_COMMON_ARG_ALIAS_HINTS.get(canonical, set()))
             candidates.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).get(canonical, set()))
+            for alias in list(candidates):
+                candidates.update(_noisy_alias_variants(alias))
             for alias in candidates:
-                key = str(alias).strip().lower()
+                key = _normalize_alias_lookup_key(alias)
                 if not key:
                     continue
                 existing = alias_map.get(key)
@@ -2564,7 +2632,7 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
                 alias_map[key] = canonical
         for canonical, explicit_aliases in _TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).items():
             for alias in explicit_aliases:
-                alias_key = alias.strip().lower()
+                alias_key = _normalize_alias_lookup_key(alias)
                 if alias_key and alias_key != canonical.lower():
                     alias_map[alias_key] = canonical
         for canonical in canonical_keys:
@@ -3293,12 +3361,14 @@ class IDAMCPServer:
         for token in tokens:
             if "=" in token:
                 k, v = token.split("=", 1)
-                key = str(k).strip()
-                val = str(v).strip()
+                key = _normalize_alias_lookup_key(k)
+                val = _strip_balanced_wrappers(v)
                 if key and key not in parsed:
                     parsed[key] = val
             else:
-                positional.append(token)
+                cleaned = _strip_balanced_wrappers(token)
+                if cleaned:
+                    positional.append(cleaned)
         if positional:
             parsed.setdefault("_positional", " ".join(positional).strip())
         return parsed
@@ -3313,7 +3383,9 @@ class IDAMCPServer:
         text = text.strip(ACTION_STRIP_CHARS)
         text = ACTION_PREFIX_RE.sub("", text)
         text = text.strip().strip(",")
-        return text
+        if re.search(r"\s", text):
+            return text
+        return _strip_balanced_wrappers(text)
 
     def _normalize_tool_call_args(self, tool_name: str, args: dict) -> dict:
         out = dict(args or {})
@@ -3356,7 +3428,7 @@ class IDAMCPServer:
                 base = self._clean_action_text(parts[0])
                 if base.endswith("()"):
                     base = base[:-2]
-                base = base.strip("\"',")
+                base = _strip_balanced_wrappers(base)
                 mapped = lower_map.get(base.lower(), base)
                 out["action"] = mapped
                 if len(parts) > 1:
@@ -3365,7 +3437,7 @@ class IDAMCPServer:
                         normalized_tail = {}
                         for key, value in parsed_tail.items():
                             if isinstance(key, str):
-                                canonical_key = arg_aliases.get(key.strip().lower(), key)
+                                canonical_key = arg_aliases.get(_normalize_alias_lookup_key(key), key)
                             else:
                                 canonical_key = key
                             normalized_tail[canonical_key] = value
@@ -3378,6 +3450,10 @@ class IDAMCPServer:
                             out.setdefault("topic", positional)
                         elif mapped == "search":
                             out.setdefault("query", positional)
+                        elif "addrs" in TOOL_ARG_SCHEMAS.get(tool_name, {}):
+                            out.setdefault("addrs", positional)
+                        elif "addr" in TOOL_ARG_SCHEMAS.get(tool_name, {}):
+                            out.setdefault("addr", positional)
                         elif "pattern" in TOOL_ARG_SCHEMAS.get(tool_name, {}):
                             out.setdefault("pattern", positional)
                     out.pop("_positional", None)
@@ -5806,7 +5882,7 @@ class IDAMCPServer:
 
     def _execute_tool(self, tool_name, args):
         original_tool_name = tool_name
-        tool_name = TOOL_ALIASES.get(tool_name, tool_name)
+        tool_name = _resolve_tool_alias(tool_name)
         if tool_name not in TOOLS:
             return make_error(
                 MCPError.INVALID_ARGS,
@@ -6687,7 +6763,7 @@ class IDAMCPServer:
             name, call_args, normalize_err = self._normalize_batch_call(call, idx)
             if normalize_err:
                 res = normalize_err
-            resolved_name = TOOL_ALIASES.get(name, name) if isinstance(name, str) else name
+            resolved_name = _resolve_tool_alias(name)
 
             if normalize_err:
                 results.append({"index": idx, "name": name, "result": res})
@@ -6777,12 +6853,13 @@ class IDAMCPServer:
             return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools, "mode": mode}}
         if m == "tools/call":
             tn, args = p.get("name"), p.get("arguments", {})
+            resolved_tn = _resolve_tool_alias(tn)
             if isinstance(args, dict):
                 call_args, response_opts = self._extract_response_options(args)
             else:
                 call_args = args
                 response_opts = self._default_response_options()
-            if tn == "batch":
+            if resolved_tn == "batch":
                 if not isinstance(call_args, dict):
                     res = make_error(MCPError.INVALID_ARGS, "arguments must be an object")
                 else:
@@ -6790,7 +6867,6 @@ class IDAMCPServer:
             else:
                 res = self._execute_tool(tn, call_args)
                 if isinstance(call_args, dict):
-                    resolved_tn = TOOL_ALIASES.get(tn, tn) if isinstance(tn, str) else tn
                     res = self._cache_next_page(resolved_tn or "", call_args, res)
                     self._record_activity(resolved_tn or "", call_args, res)
             res = self._prepare_response_payload(res, response_opts)
