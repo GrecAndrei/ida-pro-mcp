@@ -472,6 +472,7 @@ ADVERTISED_TOOLS = [
     "classify",
     "compare",
     "vuln_scan",
+    "threat_hunt",
 ]
 HIDDEN_TOOLS_IN_LIST = {"plugins", "xfer_analysis"}
 _COMPACT_DROP = object()
@@ -1520,6 +1521,7 @@ TOOLS = [
     # --- New LLM-optimized tools ---
     # Security & vulnerability analysis
     "vuln_scan",
+    "threat_hunt",
     "gadgets",
     "c2_detect",
     # Deobfuscation & crypto
@@ -1587,6 +1589,10 @@ _EXTRA_TOOL_ALIASES = {
     "queries": "query",
     "rename": "edit",
     "scanner": "vuln_scan",
+    "threat": "threat_hunt",
+    "threat_hunt_tool": "threat_hunt",
+    "malware": "threat_hunt",
+    "security": "threat_hunt",
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",
@@ -1783,6 +1789,7 @@ TOOL_DESCRIPTIONS = {
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
     "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep), optional dataflow graph/remediation planning, and returns ranked findings with risk scoring, hotspots, and attack-path correlation.",
+    "threat_hunt": "Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malware, vuln, tracing, quick, deep. Executes real end-to-end pipelines across existing tools (vuln_scan, c2_detect, deobfuscate, crypto_id, trace_analysis, coverage, taint) and returns step-by-step status with deduplicated findings.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
@@ -2077,6 +2084,7 @@ TOOL_ACTIONS = {
         "auth_bypass", "hardcoded_creds", "scan_all", "classify", "osv_query",
         "intelligence_report",
     ],
+    "threat_hunt": ["run", "malware", "vuln", "tracing", "quick", "deep"],
     "deobfuscate": [
         "detect_encoding", "xor_scan", "stack_strings", "opaque_predicates",
         "control_flow_flatten", "dead_code", "api_hashing", "dynamic_dispatch",
@@ -2375,6 +2383,32 @@ TOOL_ARG_SCHEMAS = {
         "osv_endpoint": {
             "type": "string",
             "description": "OSV endpoint/base URL (default: https://api.osv.dev).",
+        },
+    },
+    "threat_hunt": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},
+        "profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Pipeline depth profile.",
+        },
+        "query": {"type": "string", "description": "Optional focus query for post-filtering and relevance scoring."},
+        "addr": {"type": "string", "description": "Optional address focus for underlying scanners where supported."},
+        "include_tracing": {"type": "boolean", "description": "Include trace/coverage analysis steps."},
+        "include_malware": {"type": "boolean", "description": "Include malware-behavior analysis steps."},
+        "include_vuln": {"type": "boolean", "description": "Include vulnerability analysis steps."},
+        "include_evidence": {"type": "boolean", "description": "Include compact raw per-step payloads for auditability."},
+        "limit": {"type": "integer", "description": "Global max findings to return after dedupe/ranking."},
+        "max_steps": {"type": "integer", "description": "Safety cap for total orchestrated tool calls."},
+        "scan_profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Forwarded depth profile to vuln_scan.",
+        },
+        "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "Optional severity filter for vulnerability findings.",
         },
     },
     "segments": {
@@ -6183,6 +6217,209 @@ class IDAMCPServer:
             out["payload"] = source_payload
         return out
 
+    def _threat_hunt_step(self, ip: str, tool: str, action: str, step_args: Optional[dict] = None) -> dict:
+        payload_args = dict(step_args or {})
+        payload_args["action"] = action
+        payload_args["idb"] = ip
+        try:
+            result = self.call_tool(tool, ip, **payload_args)
+        except Exception as e:
+            return {
+                "ok": False,
+                "tool": tool,
+                "action": action,
+                "error": str(e),
+            }
+        if isinstance(result, dict) and result.get("error"):
+            return {
+                "ok": False,
+                "tool": tool,
+                "action": action,
+                "error": result.get("message") or result.get("error") or "unknown error",
+                "code": result.get("code"),
+                "payload": result,
+            }
+        return {
+            "ok": True,
+            "tool": tool,
+            "action": action,
+            "payload": result,
+        }
+
+    def _threat_hunt_extract_findings(self, step: dict) -> list[dict]:
+        payload = step.get("payload")
+        if not isinstance(payload, dict):
+            return []
+        out: list[dict] = []
+        tool = str(step.get("tool", ""))
+        action = str(step.get("action", ""))
+
+        for key in ("findings", "items", "matches", "results", "indicators", "iocs", "apis", "loops"):
+            val = payload.get(key)
+            if isinstance(val, list):
+                for entry in val:
+                    if isinstance(entry, dict):
+                        e = dict(entry)
+                    else:
+                        e = {"value": entry}
+                    e.setdefault("tool", tool)
+                    e.setdefault("action", action)
+                    out.append(e)
+
+        if not out and any(k in payload for k in ("summary", "count", "total")):
+            out.append(
+                {
+                    "tool": tool,
+                    "action": action,
+                    "summary": payload.get("summary"),
+                    "count": payload.get("count", payload.get("total", 0)),
+                }
+            )
+        return out
+
+    def _handle_threat_hunt(self, args: dict) -> dict:
+        action = str(args.get("action") or "run").strip().lower()
+        profile = str(args.get("profile") or args.get("scan_profile") or "balanced").strip().lower()
+        if action in {"quick", "deep"} and "profile" not in args and "scan_profile" not in args:
+            profile = action
+            action = "run"
+        if profile not in {"quick", "balanced", "deep"}:
+            profile = "balanced"
+
+        include_vuln = _coerce_bool(args.get("include_vuln"), action in {"run", "vuln"})
+        include_malware = _coerce_bool(args.get("include_malware"), action in {"run", "malware"})
+        include_tracing = _coerce_bool(args.get("include_tracing"), action in {"run", "tracing"})
+        if action == "vuln":
+            include_vuln, include_malware, include_tracing = True, False, False
+        elif action == "malware":
+            include_vuln, include_malware, include_tracing = False, True, False
+        elif action == "tracing":
+            include_vuln, include_malware, include_tracing = False, False, True
+
+        if not (include_vuln or include_malware or include_tracing):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "No threat_hunt modules enabled",
+                hint="Enable at least one of include_vuln/include_malware/include_tracing or use action run|vuln|malware|tracing.",
+            )
+
+        ip = args.get("idb", self.current_session.idb_path if self.current_session else None)
+        if not ip:
+            return make_error(
+                MCPError.SESSION_REQUIRED,
+                "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+            )
+
+        limit = _bounded_int(args.get("limit", 120), 120, min_value=1, max_value=1000)
+        max_steps = _bounded_int(args.get("max_steps", 24), 24, min_value=1, max_value=128)
+        include_evidence = _coerce_bool(args.get("include_evidence"), False)
+
+        step_plan: list[tuple[str, str, dict]] = []
+        if include_vuln:
+            vuln_args = {
+                "scan_profile": profile,
+                "include_dataflow_graph": profile == "deep",
+                "include_remediation_plan": profile != "quick",
+            }
+            if "severity" in args:
+                vuln_args["severity"] = args.get("severity")
+            if "addr" in args:
+                vuln_args["addr"] = args.get("addr")
+            step_plan.extend(
+                [
+                    ("vuln_scan", "scan_all", vuln_args),
+                    ("vuln_scan", "intelligence_report", vuln_args if profile != "quick" else {"scan_profile": profile}),
+                ]
+            )
+
+        if include_malware:
+            step_plan.extend(
+                [
+                    ("c2_detect", "indicators", {}),
+                    ("c2_detect", "ioc_extract", {}),
+                    ("deobfuscate", "stack_strings", {}),
+                    ("deobfuscate", "api_hashing", {}),
+                    ("crypto_id", "identify", {}),
+                    ("yara_hunt", "list_rules", {}),
+                ]
+            )
+
+        if include_tracing:
+            step_plan.extend(
+                [
+                    ("trace", "get", {}),
+                    ("trace_analysis", "analyze_coverage", {}),
+                    ("trace_analysis", "find_loops", {}),
+                    ("coverage", "report", {}),
+                    ("taint", "find_sinks", {"depth": 3 if profile == "quick" else 6}),
+                ]
+            )
+
+        step_plan = step_plan[:max_steps]
+        steps: list[dict] = []
+        raw_findings: list[dict] = []
+        for tool, step_action, step_args in step_plan:
+            st = self._threat_hunt_step(ip, tool, step_action, step_args)
+            steps.append(
+                {
+                    "tool": tool,
+                    "action": step_action,
+                    "ok": bool(st.get("ok")),
+                    "error": st.get("error"),
+                }
+            )
+            if st.get("ok"):
+                raw_findings.extend(self._threat_hunt_extract_findings(st))
+            elif include_evidence:
+                raw_findings.append(
+                    {
+                        "tool": tool,
+                        "action": step_action,
+                        "error": st.get("error"),
+                        "code": st.get("code"),
+                    }
+                )
+
+        dedup: dict[str, dict] = {}
+        for f in raw_findings:
+            if not isinstance(f, dict):
+                continue
+            addr = str(f.get("addr") or f.get("address") or f.get("ea") or "")
+            kind = str(f.get("type") or f.get("kind") or f.get("action") or "")
+            text = str(f.get("name") or f.get("title") or f.get("summary") or f.get("value") or "")
+            key = f"{f.get('tool','')}|{kind}|{addr}|{text}".strip().lower()
+            if not key:
+                continue
+            if key not in dedup:
+                dedup[key] = f
+
+        findings = list(dedup.values())[:limit]
+        ok_steps = sum(1 for s in steps if s.get("ok"))
+        failed_steps = len(steps) - ok_steps
+        out = {
+            "ok": True,
+            "action": "run",
+            "profile": profile,
+            "pipeline": {
+                "modules": {
+                    "vuln": include_vuln,
+                    "malware": include_malware,
+                    "tracing": include_tracing,
+                },
+                "steps_total": len(steps),
+                "steps_ok": ok_steps,
+                "steps_failed": failed_steps,
+            },
+            "steps": steps,
+            "findings": findings,
+            "count": len(findings),
+            "total_raw_findings": len(raw_findings),
+            "deduped": max(0, len(raw_findings) - len(findings)),
+        }
+        if include_evidence:
+            out["evidence"] = {"raw_findings": raw_findings[: min(300, len(raw_findings))]}
+        return out
+
     def _execute_tool(self, tool_name, args):
         original_tool_name = tool_name
         tool_name = _resolve_tool_alias(tool_name)
@@ -6967,6 +7204,40 @@ class IDAMCPServer:
                 MCPError.ACTION_NOT_FOUND, f"Unsupported bookmark action: '{action}'",
                 hint=f"Valid bookmark actions: {', '.join(TOOL_ACTIONS['bookmarks'])}",
             )
+
+        if tool_name == "threat_hunt":
+            return self._handle_threat_hunt(args)
+
+        legacy_threat_tools = {
+            "vuln_scan",
+            "c2_detect",
+            "deobfuscate",
+            "crypto_id",
+            "trace",
+            "trace_analysis",
+            "coverage",
+            "taint",
+            "yara_hunt",
+            "gadgets",
+        }
+        if tool_name in legacy_threat_tools:
+            bridged = dict(args or {})
+            legacy_action = str(bridged.get("action") or "").strip()
+            if tool_name in {"trace", "trace_analysis", "coverage"}:
+                bridged.setdefault("action", "tracing")
+            elif tool_name in {"vuln_scan", "taint", "gadgets"}:
+                bridged.setdefault("action", "vuln")
+            else:
+                bridged.setdefault("action", "malware")
+            bridged.setdefault("include_evidence", False)
+            bridged.setdefault("profile", "balanced")
+            result = self._handle_threat_hunt(bridged)
+            if isinstance(result, dict) and result.get("ok"):
+                result = dict(result)
+                result["legacy_tool"] = tool_name
+                if legacy_action:
+                    result["legacy_action"] = legacy_action
+            return result
 
         ip = args.pop(
             "idb", self.current_session.idb_path if self.current_session else None
