@@ -4,8 +4,8 @@ Generated from `ida_mcp_stdio.py` (`TOOLS`, `TOOL_ACTIONS`, `build_input_schema`
 
 Notes:
 - `session(action="create")` requires `binary_path` and does not accept `idb_path`/`use_existing`.
-- `threat_hunt` is the consolidated malware/vulnerability/tracing orchestration tool.
-- Legacy threat tools are compatibility surfaces and may route through `threat_hunt`.
+- `threat_hunt` is the consolidated malware/vulnerability/tracing orchestration tool and supports legacy inheritance routing.
+- Archived threat-family tools may be hidden from tools/list while remaining compatibility-callable.
 
 ## session
 
@@ -60,7 +60,7 @@ Notes:
 - `_response_mode`: string (enum: compact, full) — Output mode. compact is default and reduces token usage.
 - `_response_omit`: ['array', 'string'] — Optional top-level field omission list.
 - `_response_table`: boolean — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: string (enum_count: 42)
+- `action`: string (enum: discover, create, get, list, switch, close, status, rebuild, update, rename, duplicate, export_session, import_session, archive, unarchive, tag, untag, find_by_tag, add_note, clear_notes...)
 - `aggressive_cleanup`: boolean
 - `analysis_actions`: array
 - `analysis_options`: object — Advanced analysis options payload
@@ -592,7 +592,7 @@ Notes:
 - `_response_mode`: string (enum: compact, full) — Output mode. compact is default and reduces token usage.
 - `_response_omit`: ['array', 'string'] — Optional top-level field omission list.
 - `_response_table`: boolean — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: string (enum_count: 25)
+- `action`: string (enum: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled, grep...)
 - `addr`: string
 - `case_sensitive`: boolean
 - `cursor`: string
@@ -1169,7 +1169,7 @@ Notes:
 - `_response_mode`: string (enum: compact, full) — Output mode. compact is default and reduces token usage.
 - `_response_omit`: ['array', 'string'] — Optional top-level field omission list.
 - `_response_table`: boolean — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: string (enum_count: 24)
+- `action`: string (enum: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem, grep, pick...)
 - `cursor`: string
 - `grep`: string — Grep pattern (substring by default; regex if grep_regex=true).
 - `grep_case_sensitive`: boolean
@@ -2495,8 +2495,10 @@ Notes:
 - `malware`
 - `vuln`
 - `tracing`
+- `findings`
 - `quick`
 - `deep`
+- `legacy`
 
 ### Args
 - `_compact`: boolean — Shortcut for compact/full mode toggle.
@@ -2510,7 +2512,7 @@ Notes:
 - `_response_mode`: string (enum: compact, full) — Output mode. compact is default and reduces token usage.
 - `_response_omit`: ['array', 'string'] — Optional top-level field omission list.
 - `_response_table`: boolean — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: string (enum: run, malware, vuln, tracing, quick, deep, grep, pick, head, tail, next, stats)
+- `action`: string (enum: run, malware, vuln, tracing, findings, quick, deep, legacy, grep, pick, head, tail, next, stats)
 - `addr`: string — Optional address focus for underlying scanners where supported.
 - `cursor`: string
 - `grep`: string — Grep pattern (substring by default; regex if grep_regex=true).
@@ -2527,6 +2529,9 @@ Notes:
 - `include_malware`: boolean — Include malware-behavior analysis steps.
 - `include_tracing`: boolean — Include trace/coverage analysis steps.
 - `include_vuln`: boolean — Include vulnerability analysis steps.
+- `legacy_action`: string — Legacy action to inherit/route (for action='legacy').
+- `legacy_passthrough`: boolean — For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.
+- `legacy_tool`: string — Legacy tool name to emulate (for action='legacy').
 - `limit`: integer — Global max findings to return after dedupe/ranking.
 - `max_steps`: integer — Safety cap for total orchestrated tool calls.
 - `next_token`: string
