@@ -454,6 +454,9 @@ ADVERTISED_TOOLS = [
     "code",
     "data",
     "search",
+    "imports_deep",
+    "symbols",
+    "patterns",
     "types",
     "memory",
     "modify",
@@ -465,14 +468,14 @@ ADVERTISED_TOOLS = [
     "nav",
     "project",
     "debug",
-    "trace",
-    "coverage",
-    "agent",
-    "summarize",
-    "classify",
-    "compare",
-    "vuln_scan",
+    "graph",
+    "ctree",
+    "export",
+    "history",
+    "annotation",
+    "binary_info",
     "threat_hunt",
+    "compare",
 ]
 HIDDEN_TOOLS_IN_LIST = {"plugins", "xfer_analysis"}
 _COMPACT_DROP = object()
@@ -1589,10 +1592,23 @@ _EXTRA_TOOL_ALIASES = {
     "queries": "query",
     "rename": "edit",
     "scanner": "vuln_scan",
+    "vuln": "threat_hunt",
+    "vulnerability": "threat_hunt",
+    "vulnerabilities": "threat_hunt",
     "threat": "threat_hunt",
     "threat_hunt_tool": "threat_hunt",
     "malware": "threat_hunt",
     "security": "threat_hunt",
+    "trace": "threat_hunt",
+    "tracing": "threat_hunt",
+    "coverage": "threat_hunt",
+    "taint": "threat_hunt",
+    "c2": "threat_hunt",
+    "deobfuscation": "threat_hunt",
+    "crypto": "threat_hunt",
+    "yara": "threat_hunt",
+    "hunt": "threat_hunt",
+    "automated_findings": "threat_hunt",
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",
@@ -1789,7 +1805,7 @@ TOOL_DESCRIPTIONS = {
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
     "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep), optional dataflow graph/remediation planning, and returns ranked findings with risk scoring, hotspots, and attack-path correlation.",
-    "threat_hunt": "Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malware, vuln, tracing, quick, deep. Executes real end-to-end pipelines across existing tools (vuln_scan, c2_detect, deobfuscate, crypto_id, trace_analysis, coverage, taint) and returns step-by-step status with deduplicated findings.",
+    "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
@@ -2084,7 +2100,7 @@ TOOL_ACTIONS = {
         "auth_bypass", "hardcoded_creds", "scan_all", "classify", "osv_query",
         "intelligence_report",
     ],
-    "threat_hunt": ["run", "malware", "vuln", "tracing", "quick", "deep"],
+    "threat_hunt": ["run", "malware", "vuln", "tracing", "findings", "quick", "deep", "legacy"],
     "deobfuscate": [
         "detect_encoding", "xor_scan", "stack_strings", "opaque_predicates",
         "control_flow_flatten", "dead_code", "api_hashing", "dynamic_dispatch",
@@ -2387,6 +2403,8 @@ TOOL_ARG_SCHEMAS = {
     },
     "threat_hunt": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},
+        "legacy_tool": {"type": "string", "description": "Legacy tool name to emulate (for action='legacy')."},
+        "legacy_action": {"type": "string", "description": "Legacy action to inherit/route (for action='legacy')."},
         "profile": {
             "type": "string",
             "enum": ["quick", "balanced", "deep"],
@@ -2409,6 +2427,10 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "enum": ["critical", "high", "medium", "low"],
             "description": "Optional severity filter for vulnerability findings.",
+        },
+        "legacy_passthrough": {
+            "type": "boolean",
+            "description": "For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.",
         },
     },
     "segments": {
@@ -6277,18 +6299,91 @@ class IDAMCPServer:
             )
         return out
 
+    def _threat_hunt_legacy_route(self, legacy_tool: str, legacy_action: str, args: dict) -> tuple[str, list[tuple[str, str, dict]], dict]:
+        tool = str(legacy_tool or "").strip().lower()
+        action = str(legacy_action or "").strip().lower()
+        profile = str(args.get("profile") or args.get("scan_profile") or "balanced").strip().lower()
+        if profile not in {"quick", "balanced", "deep"}:
+            profile = "balanced"
+
+        mapped_module = "findings"
+        steps: list[tuple[str, str, dict]] = []
+        if tool in {"trace", "trace_analysis", "coverage"}:
+            mapped_module = "tracing"
+            trace_map = {
+                "get": [("trace", "get", {})],
+                "clear": [("trace", "clear", {})],
+                "set_options": [("trace", "set_options", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "import_trace": [("trace_analysis", "import_trace", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "analyze_coverage": [("trace_analysis", "analyze_coverage", {})],
+                "find_loops": [("trace_analysis", "find_loops", {})],
+                "extract_api_calls": [("trace_analysis", "extract_api_calls", {})],
+                "basic_blocks_hit": [("trace_analysis", "basic_blocks_hit", {})],
+                "import_drcov": [("coverage", "import_drcov", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "import_lighthouse": [("coverage", "import_lighthouse", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "highlight": [("coverage", "highlight", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "report": [("coverage", "report", {})],
+                "uncovered": [("coverage", "uncovered", {})],
+                "filter": [("coverage", "filter", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+            }
+            steps = trace_map.get(action, [("trace", "get", {}), ("trace_analysis", "analyze_coverage", {}), ("coverage", "report", {})])
+        elif tool in {"vuln_scan", "taint", "gadgets", "search"}:
+            mapped_module = "vuln"
+            if tool == "vuln_scan" and action:
+                steps = [("vuln_scan", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "taint" and action:
+                steps = [("taint", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "gadgets" and action:
+                steps = [("gadgets", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "search" and action in {"vulnerable", "constants", "api", "find", "regex"}:
+                passthrough = {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}}
+                steps = [("search", action, passthrough)]
+            else:
+                steps = [
+                    ("vuln_scan", "scan_all", {"scan_profile": profile}),
+                    ("vuln_scan", "intelligence_report", {"scan_profile": profile}),
+                    ("taint", "find_sinks", {"depth": 3 if profile == "quick" else 6}),
+                ]
+        else:
+            mapped_module = "malware"
+            if tool in {"c2_detect", "deobfuscate", "crypto_id", "yara_hunt"} and action:
+                steps = [(tool, action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "classify" and action:
+                steps = [("classify", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "summarize" and action in {"security_posture", "statistics", "binary", "function"}:
+                steps = [("summarize", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "agent" and action in {"search_all", "find_references"}:
+                steps = [("agent", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "protocol" and action:
+                steps = [("protocol", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "xref_analysis" and action:
+                steps = [("xref_analysis", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "string_ops" and action:
+                steps = [("string_ops", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            else:
+                steps = [
+                    ("c2_detect", "indicators", {}),
+                    ("c2_detect", "ioc_extract", {}),
+                    ("deobfuscate", "stack_strings", {}),
+                    ("crypto_id", "identify", {}),
+                ]
+
+        return mapped_module, steps, {"legacy_tool": tool or None, "legacy_action": action or None}
+
     def _handle_threat_hunt(self, args: dict) -> dict:
         action = str(args.get("action") or "run").strip().lower()
         profile = str(args.get("profile") or args.get("scan_profile") or "balanced").strip().lower()
         if action in {"quick", "deep"} and "profile" not in args and "scan_profile" not in args:
             profile = action
             action = "run"
+        if action == "findings":
+            action = "run"
         if profile not in {"quick", "balanced", "deep"}:
             profile = "balanced"
 
-        include_vuln = _coerce_bool(args.get("include_vuln"), action in {"run", "vuln"})
-        include_malware = _coerce_bool(args.get("include_malware"), action in {"run", "malware"})
-        include_tracing = _coerce_bool(args.get("include_tracing"), action in {"run", "tracing"})
+        include_vuln = _coerce_bool(args.get("include_vuln"), action in {"run", "vuln", "legacy"})
+        include_malware = _coerce_bool(args.get("include_malware"), action in {"run", "malware", "legacy"})
+        include_tracing = _coerce_bool(args.get("include_tracing"), action in {"run", "tracing", "legacy"})
         if action == "vuln":
             include_vuln, include_malware, include_tracing = True, False, False
         elif action == "malware":
@@ -6315,7 +6410,19 @@ class IDAMCPServer:
         include_evidence = _coerce_bool(args.get("include_evidence"), False)
 
         step_plan: list[tuple[str, str, dict]] = []
-        if include_vuln:
+        legacy_meta: dict = {}
+        if action == "legacy":
+            module, legacy_steps, legacy_meta = self._threat_hunt_legacy_route(
+                str(args.get("legacy_tool") or args.get("tool") or ""),
+                str(args.get("legacy_action") or args.get("source_action") or ""),
+                args,
+            )
+            include_vuln = module == "vuln"
+            include_malware = module == "malware"
+            include_tracing = module == "tracing"
+            step_plan.extend(legacy_steps)
+
+        if include_vuln and not step_plan:
             vuln_args = {
                 "scan_profile": profile,
                 "include_dataflow_graph": profile == "deep",
@@ -6332,7 +6439,7 @@ class IDAMCPServer:
                 ]
             )
 
-        if include_malware:
+        if include_malware and not step_plan:
             step_plan.extend(
                 [
                     ("c2_detect", "indicators", {}),
@@ -6344,7 +6451,7 @@ class IDAMCPServer:
                 ]
             )
 
-        if include_tracing:
+        if include_tracing and not step_plan:
             step_plan.extend(
                 [
                     ("trace", "get", {}),
@@ -6398,7 +6505,7 @@ class IDAMCPServer:
         failed_steps = len(steps) - ok_steps
         out = {
             "ok": True,
-            "action": "run",
+            "action": "legacy" if action == "legacy" else "run",
             "profile": profile,
             "pipeline": {
                 "modules": {
@@ -6416,6 +6523,8 @@ class IDAMCPServer:
             "total_raw_findings": len(raw_findings),
             "deduped": max(0, len(raw_findings) - len(findings)),
         }
+        if legacy_meta:
+            out["legacy"] = legacy_meta
         if include_evidence:
             out["evidence"] = {"raw_findings": raw_findings[: min(300, len(raw_findings))]}
         return out
@@ -7219,16 +7328,22 @@ class IDAMCPServer:
             "taint",
             "yara_hunt",
             "gadgets",
+            "search",
+            "agent",
+            "summarize",
+            "classify",
+            "protocol",
+            "xref_analysis",
+            "string_ops",
         }
         if tool_name in legacy_threat_tools:
             bridged = dict(args or {})
             legacy_action = str(bridged.get("action") or "").strip()
-            if tool_name in {"trace", "trace_analysis", "coverage"}:
-                bridged.setdefault("action", "tracing")
-            elif tool_name in {"vuln_scan", "taint", "gadgets"}:
-                bridged.setdefault("action", "vuln")
-            else:
-                bridged.setdefault("action", "malware")
+            bridged["action"] = "legacy"
+            bridged["legacy_tool"] = tool_name
+            if legacy_action:
+                bridged["legacy_action"] = legacy_action
+            bridged.setdefault("legacy_passthrough", True)
             bridged.setdefault("include_evidence", False)
             bridged.setdefault("profile", "balanced")
             result = self._handle_threat_hunt(bridged)
