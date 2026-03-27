@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Generate and verify 10k+ noisy-but-plausible action/arg variations that MCP should accept.
+Generate and verify 10k+ (typically 20k with defaults used in CI/task flow)
+noisy-but-plausible action/arg variations that MCP should accept.
 
 This script emits a JSON artifact with accepted/rejected variants by tool and target field.
 """

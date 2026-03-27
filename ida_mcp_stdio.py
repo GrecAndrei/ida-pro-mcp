@@ -442,7 +442,7 @@ ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
 _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
 LLM_POINTER_SAFETY_NOTE = (
-    "DO NOT CALCULATE POINTERS OR ADDRESSES IN YOUR HEAD; ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING."
+    "DO NOT CALCULATE POINTERS OR ADDRESSES MENTALLY; ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING."
 )
 ADVERTISED_TOOLS = [
     "session",
@@ -1808,7 +1808,7 @@ TOOL_DESCRIPTIONS = {
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
     "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep), optional dataflow graph/remediation planning, and returns ranked findings with risk scoring, hotspots, and attack-path correlation.",
-    "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
+    "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Execute real end-to-end pipelines across existing tools and route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
