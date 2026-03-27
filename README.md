@@ -394,6 +394,16 @@ At call time:
 5. Host truncation and response compaction.
 6. Final MCP response serialization.
 
+Normalization hardening (host-side) now aggressively tolerates noisy LLM call formats for
+`threat_hunt`, `search`, `session`, and `code`:
+
+- wrappered/malformed action tokens (for example `[disasm]`, `"compatibility"`, `action:regexp`)
+- noisy argument keys (for example `[address]`, `targets`, `id`, `source_tool`)
+- bracketed/scalar/list-like values (for example `[0x401000]`, `[0x401000,0x401010]`)
+
+Canonical action/argument names are still preferred, but these variants are now normalized
+before routing whenever unambiguous.
+
 ### 5) Context-optimized response pipeline
 
 As of current implementation, compact mode is default.
@@ -409,6 +419,11 @@ Host now performs global compaction before sending content:
 - Uses minified JSON serialization by default
 
 Full verbose shape is still available via explicit `response_mode=full`.
+
+Every tool response now also carries:
+
+- `llm_pointer_note` (ALL CAPS): reminder to avoid mental pointer/address arithmetic and use
+  `calc` / `memory` tooling instead.
 
 ### 6) Wiki subsystem
 
@@ -537,6 +552,15 @@ Run targeted tests:
 python -m unittest tests.test_host_wiki_and_hardening
 python -m unittest tests.test_linux_support
 python -m unittest tests.test_session_features
+```
+
+Generate noisy-argument/action acceptance corpus (10k+ cases; current default flow emits 20k):
+
+```bash
+python scripts/generate_arg_action_variations.py \
+  --max-cases-per-tool 5000 \
+  --min-total-cases 10000 \
+  --output tests/artifacts/arg_action_variations.json
 ```
 
 Manual client probing:

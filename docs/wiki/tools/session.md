@@ -91,6 +91,7 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `n`: `integer` — Count for recent/oldest/recent_workset actions.
 - `name`: `string` — Name for macro_* actions or rename action.
 - `next_token`: `string`
+- `note`: `string` — Single note payload for add_note action.
 - `notes`: `string` — Free-form notes for the session (create action).
 - `offset`: `integer` — Skip first N sessions (list action)
 - `on`: `string`
@@ -127,6 +128,10 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 
 ## Notes
 - `create` requires `binary_path` and rejects `idb_path`/`use_existing`.
+- High-noise action aliases are normalized (examples: `metrics` -> `stats`, `new` -> `create`, `clone` -> `duplicate`).
+- High-noise argument aliases are normalized (examples: `id` -> `session_id`, `binary` -> `binary_path`, `label` -> `tag`, `save_macro` -> `macro_set` action alias route).
+- Noisy wrapper payloads such as `[ABCD1234]` for `session_id` are tolerated where unambiguous.
+- All responses include `llm_pointer_note` in ALL CAPS to reinforce calc/memory usage for address math.
 
 ---
 Doc status: Auto-generated from live tool metadata.

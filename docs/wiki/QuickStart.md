@@ -26,6 +26,8 @@ Use `session(action="create")` with a binary path.
 - `session(action="create")` does not accept `idb_path` or `use_existing`.
 - `idb` argument is optional for most tools once a session is active.
 - `tools/list` defaults to full descriptions and full schemas.
+- Host normalization now tolerates noisy LLM call forms for `threat_hunt`, `search`, `session`, and `code` (wrappered action names, noisy arg keys, bracketed address/list values) when mapping is unambiguous.
+- Every tool response includes `llm_pointer_note` in ALL CAPS, reminding agents to use `calc`/`memory` for pointer/address arithmetic.
 
 ---
 Doc status: Updated to current host/runtime behavior.
