@@ -55,7 +55,7 @@ ACTION_INTENT_LABELS: dict[str, str] = {
     "find_clones": "analysis",
     "find_paths": "analysis",
 }
-HOST_WRAPPER_ACTIONS = ("grep", "head", "tail", "pick", "next", "stats")
+HOST_WRAPPER_ACTION_NAMES = ("grep", "head", "tail", "pick", "next", "stats")
 
 
 def _extract_literal_assignment(module: ast.Module, name: str) -> Any:
@@ -188,8 +188,8 @@ def _render_tool_doc(
         for key in sorted(arg_schema.keys()):
             lines.append(_render_param(key, arg_schema[key]))
         if "action" in arg_schema:
-            lines.append(
-                f"- `action` wrappers accepted by host: `{', '.join(HOST_WRAPPER_ACTIONS)}` (in addition to tool-specific enum values above)."
+                lines.append(
+                f"- `action` wrappers accepted by host: `{', '.join(HOST_WRAPPER_ACTION_NAMES)}` (in addition to tool-specific enum values above)."
             )
     else:
         lines.append("- (tool takes action-only or dynamic args)")
