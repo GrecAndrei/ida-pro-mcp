@@ -441,6 +441,9 @@ WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
 _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
+LLM_POINTER_SAFETY_NOTE = (
+    "DO NOT CALCULATE POINTERS OR ADDRESSES IN YOUR HEAD; ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING."
+)
 ADVERTISED_TOOLS = [
     "session",
     "truncation",
@@ -2225,6 +2228,7 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "description": "Free-form notes for the session (create action).",
         },
+        "note": {"type": "string", "description": "Single note payload for add_note action."},
         "name": {"type": "string", "description": "Name for macro_* actions or rename action."},
         "macro": {"type": "string", "description": "Alias for macro name in macro_* actions."},
         "data": {"type": "object", "description": "Macro payload for macro_set."},
@@ -2645,6 +2649,213 @@ _TOOL_SPECIFIC_ARG_ALIASES = {
     },
 }
 
+# Broad malformed/variant aliases accepted for high-noise LLM tool calls.
+_TOOL_ACTION_EXTRA_ALIASES = {
+    "threat_hunt": {
+        "run": {
+            "default",
+            "all",
+            "full",
+            "hunt",
+            "triage",
+            "investigate",
+            "orchestrate",
+            "pipeline",
+            "execute_all",
+            "end_to_end",
+            "go",
+        },
+        "legacy": {
+            "compat",
+            "compatibility",
+            "legacy_route",
+            "legacy_mode",
+            "bridge",
+            "fallback",
+            "inherit",
+        },
+        "vuln": {
+            "vulnerability",
+            "vulnerabilities",
+            "security",
+            "security_scan",
+            "vuln_scan",
+            "vulnscan",
+            "cve",
+        },
+        "malware": {
+            "mal",
+            "mal_scan",
+            "malware_scan",
+            "malware_hunt",
+            "ioc",
+            "iocs",
+            "threats",
+        },
+        "tracing": {
+            "trace",
+            "trace_analysis",
+            "runtime",
+            "coverage",
+            "flow",
+            "behavior",
+        },
+        "findings": {
+            "finds",
+            "results",
+            "report",
+            "summary",
+            "alerts",
+        },
+        "quick": {"fast", "lite", "quick_scan", "quickly"},
+        "deep": {"thorough", "intensive", "deep_scan", "full_depth"},
+    },
+    "search": {
+        "bytes": {"byte", "opcode_bytes", "hex_bytes"},
+        "string": {"strings", "str", "text_string"},
+        "immediate": {"imm", "immediates", "literal", "number"},
+        "name": {"symbol", "symbol_name", "func_name", "named"},
+        "insns": {"insn", "instruction", "instructions", "asm"},
+        "text": {"full_text", "plaintext"},
+        "operand": {"operands", "opnd", "arg_text"},
+        "comment": {"comments", "cmt", "annotation", "notes"},
+        "data_ref": {"data_refs", "dref", "drefs"},
+        "code_ref": {"code_refs", "cref", "crefs", "xref"},
+        "regex": {"regexp", "re", "pattern_regex"},
+        "func_by_sig": {"signature", "sig", "func_signature", "signature_search"},
+        "find": {"search", "lookup", "query", "locate", "discover"},
+        "callers": {"incoming", "inbound_calls", "who_calls"},
+        "callees": {"outgoing", "outbound_calls", "calls_from"},
+        "api": {"apis", "import_api", "api_calls"},
+        "vulnerable": {"vuln", "vulnerabilities", "risky"},
+        "constants": {"const", "literals", "magic"},
+        "decompiled": {"decompile", "pseudo", "pseudocode", "hl"},
+    },
+    "session": {
+        "discover": {"scan", "discover_sessions", "find_sessions"},
+        "create": {"new", "open", "start", "init", "spawn"},
+        "get": {"show", "read", "info", "details"},
+        "list": {"ls", "all", "enumerate"},
+        "switch": {"use", "activate", "focus"},
+        "close": {"delete", "remove", "terminate", "stop"},
+        "status": {"state", "current", "active"},
+        "rebuild": {"refresh", "recreate", "reanalyze"},
+        "update": {"edit", "set"},
+        "rename": {"set_name", "retitle"},
+        "duplicate": {"clone", "copy"},
+        "export_session": {"export", "dump"},
+        "import_session": {"import", "load"},
+        "archive": {"stash"},
+        "unarchive": {"unstash"},
+        "tag": {"add_tag", "label"},
+        "untag": {"remove_tag", "del_tag"},
+        "find_by_tag": {"search_tag", "tag_search"},
+        "add_note": {"note", "append_note"},
+        "clear_notes": {"wipe_notes", "reset_notes"},
+        "cleanup_stale": {"cleanup", "gc", "prune"},
+        "stats": {"statistics", "metrics"},
+        "validate": {"check", "verify"},
+        "bulk_delete": {"delete_many", "mass_delete"},
+        "bulk_tag": {"tag_many", "mass_tag"},
+        "search_notes": {"find_notes", "notes_search"},
+        "recent": {"latest", "newest"},
+        "oldest": {"old"},
+        "snapshot": {"savepoint", "checkpoint"},
+        "restore_snapshot": {"rollback", "restore"},
+        "merge": {"combine", "join"},
+        "macro_set": {"save_macro", "macro_save"},
+        "macro_get": {"load_macro", "macro_read"},
+        "macro_list": {"list_macros", "macros"},
+        "macro_delete": {"remove_macro", "delete_macro"},
+        "macro_run": {"run_macro", "execute_macro"},
+        "recent_workset": {"workset", "active_workset"},
+    },
+    "code": {
+        "decompile": {"decompiled", "pseudo", "pseudocode", "hl"},
+        "disasm": {"disassemble", "asm", "assembly", "listing"},
+        "xrefs_to": {"xref_to", "refs_to", "incoming_refs"},
+        "xrefs_from": {"xref_from", "refs_from", "outgoing_refs"},
+        "xrefs_to_field": {"field_xrefs", "xrefs_field"},
+        "callees": {"calls", "called_functions", "outgoing_calls"},
+        "callers": {"who_calls", "incoming_calls"},
+        "blocks": {"basic_blocks", "bb"},
+        "analyze": {"analysis", "inspect"},
+        "callgraph": {"cg", "graph_calls"},
+        "export": {"dump", "save"},
+        "find_paths": {"paths", "path_search", "reachability"},
+        "strings_in_func": {"func_strings", "strings"},
+    },
+}
+
+_TOOL_ARG_EXTRA_ALIASES = {
+    "threat_hunt": {
+        "legacy_tool": {"source_tool", "tool_name", "legacyTool", "tool"},
+        "legacy_action": {"source_action", "action_name", "legacyAction", "on"},
+        "profile": {"mode", "depth", "scan_mode"},
+        "query": {"q", "needle", "search"},
+        "addr": {"address", "ea", "va"},
+        "include_tracing": {"tracing", "with_tracing", "trace"},
+        "include_malware": {"malware", "with_malware"},
+        "include_vuln": {"vuln", "with_vuln", "security"},
+        "include_evidence": {"evidence", "with_evidence", "proof"},
+        "limit": {"max", "max_items", "count", "n"},
+        "max_steps": {"steps", "max_calls", "pipeline_steps"},
+        "scan_profile": {"vuln_profile", "scanner_profile"},
+        "severity": {"risk", "level"},
+        "legacy_passthrough": {"passthrough", "exact_legacy", "strict_legacy"},
+    },
+    "search": {
+        "pattern": {"needle", "text", "query_text"},
+        "query": {"q", "search", "find"},
+        "addr": {"address", "ea"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "start": {"from", "start_addr"},
+        "end": {"to", "end_addr"},
+        "case_sensitive": {"case", "match_case"},
+        "include_context": {"context", "with_context"},
+        "include_items": {"items", "with_items"},
+        "include_breakdown": {"breakdown", "stats"},
+        "timeout_ms": {"timeout", "timeout_millis"},
+        "max_functions": {"max_funcs", "function_cap"},
+        "sample": {"sample_mode", "sampling"},
+        "sample_max_funcs": {"sample_limit", "sample_cap"},
+    },
+    "session": {
+        "binary_path": {"binary", "path", "target", "input"},
+        "session_id": {"sid", "session", "id"},
+        "force_new": {"new", "create_new", "fresh"},
+        "analysis_options": {"analysis", "options"},
+        "ida_args": {"idat_args", "args"},
+        "tags": {"labels", "tag_list"},
+        "notes": {"description"},
+        "query": {"q", "search"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "name": {"title", "session_name"},
+        "data": {"payload"},
+        "session_ids": {"sids", "sessions"},
+        "tag": {"label"},
+        "snapshot_id": {"snapshot", "snap_id"},
+        "source_id": {"from_sid", "source"},
+        "target_id": {"to_sid", "target"},
+        "run_action": {"macro_action", "action_to_run"},
+    },
+    "code": {
+        "addrs": {"addr", "address", "ea", "vas", "targets"},
+        "addr": {"address", "ea", "va"},
+        "max_items": {"max", "count", "n"},
+        "max_depth": {"depth", "levels"},
+        "format": {"fmt"},
+        "disasm_style": {"style", "disasmStyle"},
+        "include_bytes": {"bytes", "with_bytes"},
+        "end": {"end_addr", "to"},
+        "limit": {"max", "count"},
+        "field_name": {"field", "member"},
+        "target": {"to", "destination"},
+    },
+}
+
 
 def _build_action_aliases() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
@@ -2653,6 +2864,7 @@ def _build_action_aliases() -> dict[str, dict[str, str]]:
         for action in actions:
             candidates = _snake_variants(action).union(_camel_variants(action))
             candidates.update(_ACTION_ALIAS_HINTS.get(action, set()))
+            candidates.update(_TOOL_ACTION_EXTRA_ALIASES.get(tool_name, {}).get(action, set()))
             if action.startswith("get_"):
                 candidates.add(action.replace("get_", "show_", 1))
             if action.startswith("set_"):
@@ -2696,6 +2908,7 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
                 candidates.discard(f"{canonical}s")
             candidates.update(_COMMON_ARG_ALIAS_HINTS.get(canonical, set()))
             candidates.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).get(canonical, set()))
+            candidates.update(_TOOL_ARG_EXTRA_ALIASES.get(tool_name, {}).get(canonical, set()))
             for alias in list(candidates):
                 candidates.update(_noisy_alias_variants(alias))
             for alias in candidates:
@@ -3734,6 +3947,74 @@ class IDAMCPServer:
             return text
         return _strip_balanced_wrappers(text)
 
+    def _normalize_field_variants(self, tool_name: str, out: dict) -> dict:
+        """Accept high-noise LLM value wrappers for known fields without changing caller intent."""
+        if not isinstance(out, dict):
+            return out
+        normalized = dict(out)
+        wrapper_fields = {
+            "action",
+            "legacy_tool",
+            "legacy_action",
+            "profile",
+            "scan_profile",
+            "query",
+            "pattern",
+            "addr",
+            "addrs",
+            "session_id",
+            "binary_path",
+            "name",
+            "tag",
+            "snapshot_id",
+            "source_id",
+            "target_id",
+            "field_name",
+            "target",
+        }
+        schema = TOOL_ARG_SCHEMAS.get(tool_name, {})
+        wrapper_fields.update(str(k) for k in schema.keys())
+        for key, value in list(normalized.items()):
+            if key not in wrapper_fields:
+                continue
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            if not text:
+                continue
+            cleaned = _strip_balanced_wrappers(text)
+            if cleaned and cleaned != text:
+                normalized[key] = cleaned
+                value = cleaned
+            # Accept bracketed list-like singletons such as "[0x401000]" as scalar.
+            if key in {"addr", "pattern", "query", "session_id", "binary_path"}:
+                if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
+                    inner = value[1:-1].strip()
+                    if inner and "," not in inner:
+                        normalized[key] = _strip_balanced_wrappers(inner)
+        # For array-like address fields, gracefully normalize common malformed scalar wrappers.
+        if "addrs" in normalized and isinstance(normalized["addrs"], str):
+            text = normalized["addrs"].strip()
+            if "," in text and not (text.startswith("{") and text.endswith("}")):
+                normalized["addrs"] = [
+                    _strip_balanced_wrappers(part.strip())
+                    for part in text.split(",")
+                    if part.strip()
+                ]
+                return normalized
+            if text.startswith("[") and text.endswith("]"):
+                inner = text[1:-1].strip()
+                if inner:
+                    if "," in inner:
+                        normalized["addrs"] = [
+                            _strip_balanced_wrappers(part.strip())
+                            for part in inner.split(",")
+                            if part.strip()
+                        ]
+                    else:
+                        normalized["addrs"] = _strip_balanced_wrappers(inner)
+        return normalized
+
     def _normalize_tool_call_args(self, tool_name: str, args: dict) -> dict:
         out = dict(args or {})
         valid_actions = TOOL_ACTIONS.get(tool_name, [])
@@ -3820,7 +4101,7 @@ class IDAMCPServer:
                     if mapped:
                         out["action"] = mapped
                         break
-        return out
+        return self._normalize_field_variants(tool_name, out)
 
     def _wrapper_source_action(self, tool_name: str, args: dict, wrapper_action: str) -> tuple[Optional[str], Optional[dict]]:
         native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
@@ -4439,6 +4720,9 @@ class IDAMCPServer:
 
     def _prepare_response_payload(self, payload: Any, opts: dict) -> Any:
         if opts.get("mode") == "full":
+            if isinstance(payload, dict):
+                payload = dict(payload)
+                payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
             return payload
         projected = self._project_top_level_fields(payload, opts)
         compacted = self._compact_value(projected, opts)
@@ -4448,6 +4732,9 @@ class IDAMCPServer:
         budget = int(opts.get("char_budget", 0) or 0)
         if budget > 0 and isinstance(compacted, dict):
             compacted = truncate_response(compacted, max_tokens=budget)
+        if isinstance(compacted, dict):
+            compacted = dict(compacted)
+            compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
         return compacted
 
     def _serialize_payload(self, payload: Any, opts: dict) -> str:
