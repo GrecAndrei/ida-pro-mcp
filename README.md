@@ -69,7 +69,7 @@ Installer behavior:
 4. Configures supported MCP clients.
 5. Installs Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`) with `router` mode by default (single skill, minimal context).
 6. Sets wiki path automatically when available.
-7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=0` in client config for lean `tools/list` metadata by default.
+7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1` and `IDA_MCP_TOOLS_LIST_MODE=full` so MCP clients receive full tool descriptions and schemas directly.
 
 Default install directory:
 
@@ -472,7 +472,7 @@ Environment defaults:
 
 - `IDA_MCP_RESPONSE_MODE`
 - `IDA_MCP_QOL_MODE` (`balanced` default)
-- `IDA_MCP_TOOLS_LIST_MODE` (`ultra` default)
+- `IDA_MCP_TOOLS_LIST_MODE` (`full` default)
 - `IDA_MCP_ERROR_DETAIL_LEVEL`
 - `IDA_MCP_BATCH_COMPACT`
 - `IDA_MCP_TABLE_COMPACT`
@@ -481,17 +481,18 @@ Environment defaults:
 - `IDA_MCP_COMPACT_CHAR_BUDGET`
 - `IDA_MCP_TRUNCATE_TOKENS`
 - `IDA_MCP_WIKI_DEFAULT_LIMIT`
-- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`0` default lean, `1` full verbose tool metadata)
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`1` default full verbose tool metadata)
 
 `tools/list` mode behavior:
-- `ultra` (default): tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
+- `ultra`: tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
 - `lean`: shortened per-tool descriptions + compact parameter typing.
-- `full`: full descriptions and full input schema.
+- `full` (default): full descriptions and full input schema.
 
-Installer defaults now bias for low-context operation:
+Installer defaults now bias for direct schema-rich tool loading:
 - `IDA_MCP_RESPONSE_MODE=compact`
 - `IDA_MCP_QOL_MODE=balanced`
-- `IDA_MCP_TOOLS_LIST_MODE=ultra`
+- `IDA_MCP_TOOLS_LIST_MODE=full`
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1`
 - `IDA_MCP_BATCH_COMPACT=1`
 - `IDA_MCP_COMPACT_MAX_ITEMS=48`
 - `IDA_MCP_COMPACT_MAX_STRING=1400`

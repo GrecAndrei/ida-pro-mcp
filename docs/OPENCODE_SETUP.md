@@ -48,6 +48,17 @@ OpenCode uses a different MCP schema than other clients. The installer creates a
 }
 ```
 
+### Default environment injected by installer
+
+The installer sets these defaults to maximize direct LLM usability:
+
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1`
+- `IDA_MCP_TOOLS_LIST_MODE=full`
+- `IDA_MCP_RESPONSE_MODE=compact`
+- `IDA_MCP_QOL_MODE=balanced`
+
+This means OpenCode receives full per-tool descriptions and full input schemas from `tools/list` by default.
+
 ### Key Differences from Other MCP Clients
 
 - **Format**: OpenCode uses a `command` array (not separate `command` and `args`)

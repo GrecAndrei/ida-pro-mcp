@@ -1,34 +1,71 @@
 # EMULATE Tool Manual
 
 ## What It Does
-Offers static tracing and light execution helpers: control-flow walk, debugger `Appcall`, decryption-call heuristics, and expression/value evaluation.
+Static tracing and emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr.
 
 ## Actions
-- `static_trace`: BFS-style static walk from an address with optional call following.
-- `appcall`: Invoke function via debugger Appcall API.
-- `decrypt_strings`: Heuristically find string arguments near calls to a target routine.
-- `eval_expr`: Evaluate IDC expression or read typed values at an address.
+- `static_trace`
+- `appcall`
+- `decrypt_strings`
+- `eval_expr`
 
-## Key Parameters
-- `action`: One of `static_trace|appcall|decrypt_strings|eval_expr`.
-- `addr`: Required for `static_trace` and `decrypt_strings`; optional fallback target for `appcall`; optional for `eval_expr`.
-- `func_name`: Preferred named target for `appcall`.
-- `args`: Positional argument list for `appcall`.
-- `max_steps`, `follow_calls`, `max_depth`, `include_blocks`: `static_trace` behavior controls.
-- `expr`: Required for expression mode in `eval_expr` when `addr` is not provided.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `static_trace, appcall, decrypt_strings, eval_expr, grep, pick, head, tail, next, stats`
+- `addr`: `string`
+- `args`: `array`
+- `cursor`: `string`
+- `expr`: `string`
+- `follow_calls`: `boolean`
+- `func_name`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `include_blocks`: `boolean`
+- `max_depth`: `integer`
+- `max_steps`: `integer`
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-emulate(action="static_trace", addr="0x401000", max_steps=300, follow_calls=True, max_depth=2)
-emulate(action="appcall", func_name="decrypt_buffer", args=[0x500000, 64])
-emulate(action="decrypt_strings", addr="0x402000")
-emulate(action="eval_expr", expr="get_wide_dword(0x401000)")
-emulate(action="eval_expr", addr="0x401000")
+## Example
+```json
+{
+  "name": "emulate",
+  "arguments": {
+    "action": "static_trace"
+  }
+}
 ```
 
-## Failure Modes
-- Missing `addr`/`func_name`/`expr` where required.
-- `appcall` unavailable in current IDA build.
-- Debugger not running for `appcall`.
-- Function lookup failure for `appcall` target.
-- Evaluation/decode errors surfaced as IDA error payloads.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

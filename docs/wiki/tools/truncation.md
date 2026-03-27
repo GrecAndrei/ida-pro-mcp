@@ -1,19 +1,10 @@
-# TYPES Tool Manual
+# TRUNCATION Tool Manual
 
 ## What It Does
-Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.
+Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).
 
 ## Actions
-- `list`
-- `get`
-- `set_prototype`
-- `parse_decl`
-- `declare`
-- `apply`
-- `search_structs`
-- `infer`
-- `read_struct`
-- `import_header`
+- `continue`
 
 ## Parameters
 - `_compact`: `boolean` — Shortcut for compact/full mode toggle.
@@ -27,8 +18,10 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 - `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
 - `_response_omit`: `array | string` — Optional top-level field omission list.
 - `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
+- `action`: `string`; allowed: `continue, grep, pick, head, tail, next, stats`
+- `count`: `integer`
 - `cursor`: `string`
+- `field`: `string`
 - `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
 - `grep_case_sensitive`: `boolean`
 - `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
@@ -40,6 +33,7 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 - `head_n`: `integer`
 - `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
 - `next_token`: `string`
+- `offset`: `integer`
 - `on`: `string`
 - `pick_fields`: `array | string` — For action='pick': top-level fields to include.
 - `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
@@ -54,9 +48,9 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 ## Example
 ```json
 {
-  "name": "types",
+  "name": "truncation",
   "arguments": {
-    "action": "list"
+    "action": "continue"
   }
 }
 ```

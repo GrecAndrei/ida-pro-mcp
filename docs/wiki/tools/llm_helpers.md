@@ -1,44 +1,69 @@
 # LLM_HELPERS Tool Manual
 
 ## What It Does
-Builds compact, analysis-oriented summaries and guidance for LLM workflows: context windows, digests, progress tracking, next-step suggestions, and question routing.
+LLM workflow helpers. Actions: context_window (token-budgeted context), function_digest, binary_digest, explain_address, suggest_next, progress_report, focus_area, question_answer, guided_analysis, cheatsheet.
 
 ## Actions
-- `context_window`: Build token-budgeted context for one function.
-- `function_digest`: One-line function summary (size/APIs/strings/prototype).
-- `binary_digest`: Compact high-level binary overview.
-- `explain_address`: Human-readable explanation of what lives at an address.
-- `suggest_next`: Suggest next analysis targets from optional history.
-- `progress_report`: Estimate analysis coverage from history list.
-- `focus_area`: Score and rank high-value functions to inspect.
-- `question_answer`: Keyword-routed binary Q/A from available DB facts.
-- `guided_analysis`: Return suggested step-by-step analysis workflow.
-- `cheatsheet`: Return command cheat sheet tailored by file type.
+- `context_window`
+- `function_digest`
+- `binary_digest`
+- `explain_address`
+- `suggest_next`
+- `progress_report`
+- `focus_area`
+- `question_answer`
+- `guided_analysis`
+- `cheatsheet`
 
-## Key Parameters
-- `action`: One of the ten actions above.
-- `addr`: Required for `context_window`, `function_digest`, `explain_address`.
-- `query`: Required for `question_answer`; optional context topic elsewhere.
-- `max_tokens`: Budget target for `context_window` (character budget derived from it).
-- `limit`: Result cap for ranked/suggestion outputs.
-- `history`: Comma-separated analyzed addresses used by `suggest_next` and `progress_report`.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-llm_helpers(action="binary_digest")
-llm_helpers(action="function_digest", addr="0x401000")
-llm_helpers(action="context_window", addr="0x401000", max_tokens=3000)
-llm_helpers(action="explain_address", addr="0x401123")
-llm_helpers(action="suggest_next", history="0x401000,0x402100", limit=8)
-llm_helpers(action="progress_report", history="0x401000,0x402100")
-llm_helpers(action="focus_area", limit=10)
-llm_helpers(action="question_answer", query="what network imports are present?")
-llm_helpers(action="guided_analysis")
-llm_helpers(action="cheatsheet")
+## Example
+```json
+{
+  "name": "llm_helpers",
+  "arguments": {
+    "action": "context_window"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required `addr`/`query` per action.
-- Invalid addresses in `history` are skipped silently.
-- Heuristic scoring/routing can be incomplete for stripped or unusual binaries.
-- Some suggested downstream steps may depend on optional tools/actions in your environment.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

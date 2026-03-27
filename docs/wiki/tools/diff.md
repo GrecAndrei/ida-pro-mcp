@@ -1,36 +1,64 @@
 # DIFF Tool Manual
 
 ## What It Does
-Performs in-database binary comparison tasks: function pseudocode diffs, byte-range diffs, fuzzy signature matching, and BinExport triggering.
+Binary differential analysis. Actions: functions, bytes, signatures, summary, export_binexport.
 
 ## Actions
-- `functions`: Decompile two functions and return similarity plus unified diff lines.
-- `bytes`: Compare two ranges (`start:end` format) byte-by-byte.
-- `signatures`: Find similar functions to a target using fuzzy byte matching.
-- `summary`: Return coarse DB metrics (`funcs`, `names`, `segs`).
-- `export_binexport`: Trigger BinExport plugin workflow.
+- `functions`
+- `bytes`
+- `signatures`
+- `summary`
+- `export_binexport`
 
-## Key Parameters
-- `action`: One of `functions|bytes|signatures|summary|export_binexport`.
-- `addr1`, `addr2`:
-  - `functions`: function addresses.
-  - `bytes`: range strings like `0x401000:0x401100`.
-  - `signatures`: `addr1` is required target function.
-- `threshold`: Similarity cutoff for `signatures` (default `0.8`).
-- `path`: Required by `export_binexport`; validated as safe path.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `functions, bytes, signatures, summary, export_binexport, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-diff(action="functions", addr1="0x401000", addr2="0x402000")
-diff(action="bytes", addr1="0x401000:0x401080", addr2="0x501000:0x501080")
-diff(action="signatures", addr1="0x401000", threshold=0.9)
-diff(action="summary")
-diff(action="export_binexport", path="/tmp/sample.BinExport")
+## Example
+```json
+{
+  "name": "diff",
+  "arguments": {
+    "action": "functions"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required addresses (`addr1`, `addr2`) for comparison actions.
-- Invalid `start:end` range syntax for `bytes`.
-- Address not a function when `require_func=True` is enforced.
-- BinExport plugin unavailable (`NOT_IMPLEMENTED`).
-- Decompilation/read failures return IDA error payloads.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

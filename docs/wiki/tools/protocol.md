@@ -1,38 +1,69 @@
 # PROTOCOL Tool Manual
 
 ## What It Does
-Performs protocol-focused reverse-engineering heuristics: protocol fingerprinting, parser/serializer discovery, endpoint extraction, TLS setup hints, packet-structure inference, and state-machine detection.
+Network protocol analysis. Query supports regex. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine.
 
 ## Actions
-- `detect`: Detect probable protocols from strings and network API usage.
-- `parsers`: Find parser-like functions (byte-order + buffer-read heuristics).
-- `serializers`: Find serializer-like functions (packing + write/send heuristics).
-- `handlers`: Find command/message handler dispatch functions.
-- `endpoints`: Extract URLs, IPs, hostnames, and ports.
-- `tls_config`: Identify TLS API callsites and related cipher/cert strings.
-- `socket_flow`: Map socket lifecycle phases in functions.
-- `packet_struct`: Infer packet fields/size hints from one function.
-- `magic_numbers`: Find known protocol/file magic constants and version IDs.
-- `state_machine`: Find state-machine-like protocol control logic.
+- `detect`
+- `parsers`
+- `serializers`
+- `handlers`
+- `endpoints`
+- `tls_config`
+- `socket_flow`
+- `packet_struct`
+- `magic_numbers`
+- `state_machine`
 
-## Key Parameters
-- `action`: One of `detect|parsers|serializers|handlers|endpoints|tls_config|socket_flow|packet_struct|magic_numbers|state_machine`.
-- `addr`: Optional function scope for many actions; required for `packet_struct`.
-- `limit`: Max returned findings per action.
-- `query`: Optional regex/substring filter applied in several actions.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-protocol(action="detect", limit=25)
-protocol(action="parsers", query="packet", limit=20)
-protocol(action="endpoints", query="api", limit=50)
-protocol(action="tls_config", addr="0x401A20", limit=20)
-protocol(action="packet_struct", addr="0x402100", limit=40)
-protocol(action="state_machine", limit=20)
+## Example
+```json
+{
+  "name": "protocol",
+  "arguments": {
+    "action": "detect"
+  }
+}
 ```
 
-## Failure Modes
-- Missing `addr` for `packet_struct`.
-- Invalid `addr` when function scoping is requested.
-- Heuristic output quality depends on symbol quality/import resolution.
-- Decompiled field extraction in `packet_struct` can degrade if Hex-Rays is unavailable.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

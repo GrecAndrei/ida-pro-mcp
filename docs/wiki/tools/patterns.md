@@ -1,37 +1,65 @@
 # PATTERNS Tool Manual
 
 ## What It Does
-Generates and matches FLIRT-like byte signatures, enumerates available `.sig` files, and reports likely signature-matched functions.
+Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, create_sig.
 
 ## Actions
-- `generate`: Build a wildcarded pattern from a function.
-- `match`: Match a hex pattern across functions.
-- `list_sigs`: Enumerate available signature files.
-- `apply_sig`: Queue a named signature for application.
-- `create_sig`: Create compact signature metadata from a function.
-- `matched`: List likely library/signature-identified functions.
+- `generate`
+- `match`
+- `list_sigs`
+- `apply_sig`
+- `create_sig`
+- `matched`
 
-## Key Parameters
-- `action`: One of `generate|match|list_sigs|apply_sig|create_sig|matched`.
-- `addr`: Required for `generate` and `create_sig`.
-- `pattern`: Required for `match` (hex bytes with `??` wildcards).
-- `name`: Signature name (required for `apply_sig`; optional for `create_sig`).
-- `length`: Max bytes for generated pattern (default `32`).
-- `offset`: Pagination offset for list-style actions.
-- `count`: Max returned results (`0` means unbounded in supported actions).
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `generate, match, list_sigs, apply_sig, create_sig, matched, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-patterns(action="generate", addr="0x401000", length=64)
-patterns(action="match", pattern="55 8B EC ?? ??", count=25)
-patterns(action="list_sigs", offset=0, count=50)
-patterns(action="apply_sig", name="vc32rtf")
-patterns(action="create_sig", addr="0x401000", name="parse_header_sig")
-patterns(action="matched", offset=0, count=100)
+## Example
+```json
+{
+  "name": "patterns",
+  "arguments": {
+    "action": "generate"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required `addr`, `pattern`, or `name` per action.
-- Invalid hex in `match` pattern.
-- Address not inside a function for function-bound actions.
-- Signature application only queued; final naming depends on auto-analysis.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

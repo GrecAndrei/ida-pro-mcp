@@ -1,32 +1,66 @@
 # MEMORY Tool Manual
 
 ## What It Does
-Reads typed values/byte blocks and patches bytes at addresses, plus formatted hexdump output.
+Direct database memory access. Actions: read, write, hexdump.
 
 ## Actions
-- `read`: Read at `addr` using scalar/float/pointer/string/bytes types.
-- `write`: Patch bytes from hex string.
-- `hexdump`: Return xxd-style formatted dump.
+- `read`
+- `write`
+- `hexdump`
 
-## Key Parameters
-- `action`: One of `read|write|hexdump`.
-- `addr`: Required target address.
-- `type`: For `read`; supports `bytes|u8|u16|u32|u64|s8|s16|s32|s64|f32|f64|ptr|string`.
-- `size`: Used by `read(type="bytes")` and `hexdump`.
-- `data`: Required for `write`; hex string (spaces allowed).
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `read, write, hexdump, grep, pick, head, tail, next, stats`
+- `addr`: `string`
+- `cursor`: `string`
+- `data`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `size`: `integer`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
+- `type`: `string`; allowed: `bytes, u8, u16, u32, u64, s8, s16, s32, s64, f32, f64, ptr, string`
 
-## Examples
-```python
-memory(action="read", addr="0x401000", type="u32")
-memory(action="read", addr="0x401000", type="bytes", size=32)
-memory(action="read", addr="0x500000", type="string")
-memory(action="write", addr="0x401234", data="90 90 90")
-memory(action="hexdump", addr="0x401000", size=128)
+## Example
+```json
+{
+  "name": "memory",
+  "arguments": {
+    "action": "read"
+  }
+}
 ```
 
-## Failure Modes
-- Invalid/missing address.
-- Read size too large (`>1MB`) for `read` bytes mode.
-- Hexdump size exceeds hard cap (`4096`).
-- Invalid hex in `write` data.
-- Read failures for unmapped/unreadable locations.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

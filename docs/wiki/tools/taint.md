@@ -1,39 +1,69 @@
 # TAINT Tool Manual
 
 ## What It Does
-Performs static, heuristic data-flow triage for arguments, return usage, dangerous sinks, and nearby instruction history.
+Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice.
 
 ## Actions
-- `find_arg_usage`: Uses decompiler locals/ctree to find uses of argument `arg_num` in a function.
-- `trace_return`: Finds call sites and immediate post-call instructions that consume a function return value.
-- `find_sinks`: Walks calls from a start address (BFS by `depth`) and flags dangerous API patterns.
-- `data_flow`: Summarizes prototype, args, callees, and sink hits for one function.
-- `backward_trace`: Linear instruction walk backward from an address.
-- `slice`: Heuristic decompiler-text slice from one argument to sink-like lines.
+- `find_arg_usage`
+- `trace_return`
+- `find_sinks`
+- `data_flow`
+- `backward_trace`
+- `slice`
 
-## Key Parameters
-- `action`: One of `find_arg_usage|trace_return|find_sinks|data_flow|backward_trace|slice`.
-- `addr`: Required for every action.
-- `arg_num`: 0-based argument index for `find_arg_usage` and `slice`.
-- `depth`: Search depth for `find_sinks` and instruction budget multiplier for `backward_trace`.
-- `max_hits`: Caps returned lines/matches.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice, grep, pick, head, tail, next, stats`
+- `addr`: `string`
+- `arg_num`: `integer`
+- `cursor`: `string`
+- `depth`: `integer`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `max_hits`: `integer`
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
+## Example
 ```json
-{"name":"taint","arguments":{"action":"find_arg_usage","addr":"0x401000","arg_num":1,"max_hits":25}}
+{
+  "name": "taint",
+  "arguments": {
+    "action": "find_arg_usage"
+  }
+}
 ```
 
-```json
-{"name":"taint","arguments":{"action":"find_sinks","addr":"0x401000","depth":4,"max_hits":50}}
-```
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
 
-```json
-{"name":"taint","arguments":{"action":"slice","addr":"0x401000","arg_num":0}}
-```
-
-## Failure Modes
-- Missing or invalid `addr`; non-function `addr` where function context is required.
-- `arg_num` out of range for function arguments.
-- Hex-Rays unavailable or decompilation fails (`find_arg_usage`, `slice`, parts of `data_flow`).
-- Unknown action returns invalid-args error.
-- Output is heuristic; sink matches are name-based and should be manually confirmed.
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27
