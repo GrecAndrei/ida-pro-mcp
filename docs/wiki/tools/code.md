@@ -77,6 +77,10 @@ Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_
 
 ## Notes
 - `idb` is optional for most tools and resolves from active session when omitted.
+- High-noise action aliases are normalized (examples: `assembly` -> `disasm`, `decompiled` -> `decompile`, `paths` -> `find_paths`).
+- High-noise argument aliases are normalized (examples: `targets` -> `addrs`, `style` -> `disasm_style`, `address` -> `addr/addrs`).
+- Wrappered and malformed address list values are tolerated where unambiguous (example: `[0x401000,0x401010]`).
+- All responses include `llm_pointer_note` in ALL CAPS to reinforce calc/memory usage for address math.
 
 ---
 Doc status: Auto-generated from live tool metadata.

@@ -87,6 +87,10 @@ Pattern and reference search. Actions: bytes, string, immediate, name, insns, te
 
 ## Notes
 - `idb` is optional for most tools and resolves from active session when omitted.
+- High-noise action aliases are normalized (examples: `regexp` -> `regex`, `signature` -> `func_by_sig`, `lookup` -> `find`, `vuln` -> `vulnerable`).
+- High-noise argument aliases are normalized (examples: `needle` -> `pattern`, `case` -> `case_sensitive`, `max` -> `limit`, `timeout` -> `timeout_ms`).
+- Noisy wrapper payloads such as bracketed keys/values are tolerated where unambiguous.
+- All responses include `llm_pointer_note` in ALL CAPS to reinforce calc/memory usage for address math.
 
 ---
 Doc status: Auto-generated from live tool metadata.
