@@ -55,6 +55,7 @@ ACTION_INTENT_LABELS: dict[str, str] = {
     "find_clones": "analysis",
     "find_paths": "analysis",
 }
+HOST_WRAPPER_ACTIONS = ("grep", "head", "tail", "pick", "next", "stats")
 
 
 def _extract_literal_assignment(module: ast.Module, name: str) -> Any:
@@ -168,7 +169,14 @@ def _render_tool_doc(
         lines.extend([f"- `{a}` ({_action_intent(a)})" for a in actions])
     else:
         lines.append("- (none documented)")
-    lines.append("- `grep` (host wrapper): run another action, then grep its output lines.")
+    lines.append("")
+    lines.append("### Host wrapper actions (accepted by host dispatcher)")
+    lines.append("- `grep`: run another action, then grep output lines.")
+    lines.append("- `head`: run another action, then keep first N items.")
+    lines.append("- `tail`: run another action, then keep last N items.")
+    lines.append("- `pick`: run another action, then project top-level fields.")
+    lines.append("- `next`: continue paginated output with next token/cursor.")
+    lines.append("- `stats`: run another action, then return payload statistics.")
     lines.append("")
     lines.append("## LLM Fast Path")
     lines.append(f"- Canonical wiki page: `wiki(action='read', topic='tools/{tool_name}')`.")
@@ -179,6 +187,10 @@ def _render_tool_doc(
     if arg_schema:
         for key in sorted(arg_schema.keys()):
             lines.append(_render_param(key, arg_schema[key]))
+        if "action" in arg_schema:
+            lines.append(
+                f"- `action` wrappers accepted by host: `{', '.join(HOST_WRAPPER_ACTIONS)}` (in addition to tool-specific enum values above)."
+            )
     else:
         lines.append("- (tool takes action-only or dynamic args)")
     lines.append("")

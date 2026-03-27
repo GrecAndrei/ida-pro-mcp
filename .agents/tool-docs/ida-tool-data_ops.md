@@ -14,7 +14,14 @@ Data type conversion. Actions: make_data, make_array, make_string, undefine, mak
 - `make_string` (tool-specific)
 - `undefine` (destructive)
 - `make_code` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/data_ops')`.

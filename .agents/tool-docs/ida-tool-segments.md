@@ -16,7 +16,14 @@ Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.
 - `set_perms` (tool-specific)
 - `move` (tool-specific)
 - `info` (read/discovery)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/segments')`.
@@ -33,6 +40,7 @@ Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.
 - `sclass`: `string`
 - `start`: `string`
 - `value`: `string|integer`
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

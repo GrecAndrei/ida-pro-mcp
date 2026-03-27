@@ -15,7 +15,14 @@ Built-in documentation system with ranked and semantic search, fuzzy topic resol
 - `semantic_search` (read/discovery)
 - `sections` (read/discovery)
 - `index` (read/discovery)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/wiki')`.
@@ -40,6 +47,7 @@ Built-in documentation system with ranked and semantic search, fuzzy topic resol
 - `strict_topic`: `boolean`
 - `topic`: `string`
 - `verbose`: `boolean` - Include full structural metadata in wiki responses.
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

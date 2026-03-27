@@ -16,7 +16,14 @@ Structure recovery and reconstruction. Actions: recover, analyze_usage, list, cr
 - `add_member` (tool-specific)
 - `apply` (write/mutate)
 - `reconstruct_vtable` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/structs')`.
