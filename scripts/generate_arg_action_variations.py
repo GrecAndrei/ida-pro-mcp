@@ -173,11 +173,31 @@ def generate_variants(seed: int, max_cases: int) -> dict[str, Any]:
     return out
 
 
+def compact_payload(payload: dict[str, Any], max_rows_per_tool: int) -> dict[str, Any]:
+    compacted = {
+        "seed": payload.get("seed"),
+        "totals": payload.get("totals", {}),
+        "tools": {},
+    }
+    for tool, data in (payload.get("tools") or {}).items():
+        rows = list(data.get("rows") or [])
+        accepted_rows = [r for r in rows if r.get("accepted")][: max_rows_per_tool // 2]
+        rejected_rows = [r for r in rows if not r.get("accepted")][: max_rows_per_tool // 2]
+        compacted["tools"][tool] = {
+            "count": data.get("count", len(rows)),
+            "accepted": data.get("accepted", 0),
+            "rejected": data.get("rejected", 0),
+            "sample_rows": accepted_rows + rejected_rows,
+        }
+    return compacted
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--max-cases-per-tool", type=int, default=4000)
     parser.add_argument("--min-total-cases", type=int, default=10000)
+    parser.add_argument("--max-rows-per-tool", type=int, default=40)
     parser.add_argument("--output", default="tests/artifacts/arg_action_variations.json")
     args = parser.parse_args()
 
@@ -185,6 +205,7 @@ def main() -> int:
     total = int(payload["totals"]["cases"])
     if total < args.min_total_cases:
         raise SystemExit(f"Generated only {total} cases, expected at least {args.min_total_cases}")
+    payload = compact_payload(payload, max_rows_per_tool=max(2, args.max_rows_per_tool))
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
