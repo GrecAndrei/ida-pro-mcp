@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.
+Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Execute real end-to-end pipelines across existing tools and route legacy actions from archived tools, returning step-by-step status with deduplicated findings.
 
 ## Actions
 - `run` (tool-specific)
@@ -17,7 +17,14 @@ Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Act
 - `quick` (tool-specific)
 - `deep` (tool-specific)
 - `legacy` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/threat_hunt')`.
@@ -40,6 +47,7 @@ Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Act
 - `query`: `string` - Optional focus query for post-filtering and relevance scoring.
 - `scan_profile`: `string` - allowed: `quick, balanced, deep` - Forwarded depth profile to vuln_scan.
 - `severity`: `string` - allowed: `critical, high, medium, low` - Optional severity filter for vulnerability findings.
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

@@ -16,7 +16,14 @@ Mathematical and address resolution. Actions: eval, offset, convert, resolve, de
 - `deref` (tool-specific)
 - `chain` (tool-specific)
 - `align` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/calc')`.
@@ -32,6 +39,7 @@ Mathematical and address resolution. Actions: eval, offset, convert, resolve, de
 - `target`: `string`
 - `type`: `string`
 - `value`: `string|integer`
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

@@ -23,7 +23,14 @@ Automated vulnerability scanner. Actions: buffer_overflow, format_string, intege
 - `classify` (tool-specific)
 - `osv_query` (tool-specific)
 - `intelligence_report` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/vuln_scan')`.
@@ -44,6 +51,7 @@ Automated vulnerability scanner. Actions: buffer_overflow, format_string, intege
 - `osv_endpoint`: `string` - OSV endpoint/base URL (default: https://api.osv.dev).
 - `scan_profile`: `string` - allowed: `quick, balanced, deep` - Scan depth profile controlling local evidence/ranking rigor.
 - `severity`: `string` - allowed: `critical, high, medium, low` - Optional severity filter.
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

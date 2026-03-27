@@ -15,7 +15,14 @@ Analysis configuration and reanalysis. Actions: get_options, set_options, set_pr
 - `set_loader_options` (tool-specific)
 - `set_architecture` (tool-specific)
 - `reanalyze` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/analysis')`.
@@ -33,6 +40,7 @@ Analysis configuration and reanalysis. Actions: get_options, set_options, set_pr
 - `processor`: `string`
 - `start`: `string`
 - `value`: `string|object`
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json
