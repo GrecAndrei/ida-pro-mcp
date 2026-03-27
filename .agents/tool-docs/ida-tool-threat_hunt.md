@@ -6,15 +6,17 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malware, vuln, tracing, quick, deep. Executes real end-to-end pipelines across existing tools (vuln_scan, c2_detect, deobfuscate, crypto_id, trace_analysis, coverage, taint) and returns step-by-step status with deduplicated findings.
+Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.
 
 ## Actions
 - `run` (tool-specific)
 - `malware` (tool-specific)
 - `vuln` (tool-specific)
 - `tracing` (tool-specific)
+- `findings` (tool-specific)
 - `quick` (tool-specific)
 - `deep` (tool-specific)
+- `legacy` (tool-specific)
 - `grep` (host wrapper): run another action, then grep its output lines.
 
 ## LLM Fast Path
@@ -23,12 +25,15 @@ Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malw
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `run, malware, vuln, tracing, quick, deep`
+- `action`: `string` - allowed: `run, malware, vuln, tracing, findings, quick, deep, legacy`
 - `addr`: `string` - Optional address focus for underlying scanners where supported.
 - `include_evidence`: `boolean` - Include compact raw per-step payloads for auditability.
 - `include_malware`: `boolean` - Include malware-behavior analysis steps.
 - `include_tracing`: `boolean` - Include trace/coverage analysis steps.
 - `include_vuln`: `boolean` - Include vulnerability analysis steps.
+- `legacy_action`: `string` - Legacy action to inherit/route (for action='legacy').
+- `legacy_passthrough`: `boolean` - For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.
+- `legacy_tool`: `string` - Legacy tool name to emulate (for action='legacy').
 - `limit`: `integer` - Global max findings to return after dedupe/ranking.
 - `max_steps`: `integer` - Safety cap for total orchestrated tool calls.
 - `profile`: `string` - allowed: `quick, balanced, deep` - Pipeline depth profile.
