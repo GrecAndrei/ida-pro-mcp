@@ -397,7 +397,7 @@ At call time:
 Normalization hardening (host-side) now aggressively tolerates noisy LLM call formats for
 `threat_hunt`, `search`, `session`, and `code`:
 
-- wrappered/malformed action tokens (for example `[disasm]`, `"compatibility"`, `action:regexp`)
+- wrapped or malformed action tokens (for example `[disasm]`, `"compatibility"`, `action:regexp`)
 - noisy argument keys (for example `[address]`, `targets`, `id`, `source_tool`)
 - bracketed/scalar/list-like values (for example `[0x401000]`, `[0x401000,0x401010]`)
 
