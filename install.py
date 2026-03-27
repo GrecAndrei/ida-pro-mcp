@@ -500,13 +500,12 @@ def get_mcp_server_config(install_path: Path):
     wiki_dir = install_path / "docs" / "wiki"
     if wiki_dir.exists():
         env["IDA_MCP_WIKI_DIR"] = str(wiki_dir)
-    # Keep tool metadata lean by default; full monolithic schemas/descriptions
-    # can be re-enabled by setting this to "1".
-    env["IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS"] = "0"
+    # Provide full tool descriptions and schemas directly to the LLM at load time.
+    env["IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS"] = "1"
     # Aggressive context defaults for LLM clients (can be overridden per-call/env).
     env["IDA_MCP_RESPONSE_MODE"] = "compact"
     env["IDA_MCP_QOL_MODE"] = "balanced"
-    env["IDA_MCP_TOOLS_LIST_MODE"] = "ultra"
+    env["IDA_MCP_TOOLS_LIST_MODE"] = "full"
     env["IDA_MCP_BATCH_COMPACT"] = "1"
     env["IDA_MCP_COMPACT_MAX_ITEMS"] = "48"
     env["IDA_MCP_COMPACT_MAX_STRING"] = "1400"

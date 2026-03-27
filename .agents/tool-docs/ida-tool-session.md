@@ -69,7 +69,6 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `flags`: `integer`
 - `force_new`: `boolean` - Force creation of a new session even if one exists
 - `ida_args`: `string|array`
-- `idb_path`: `string` - Existing IDB path (alias of use_existing)
 - `include_bookmarks`: `boolean` - Include bookmark entries in recent_workset.
 - `include_items`: `boolean` - Include structured items in recent_workset response.
 - `limit`: `integer` - Max sessions to return (list action)
@@ -93,7 +92,6 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `start`: `string|integer`
 - `start_ea`: `string|integer`
 - `tags`: `array|string` - Tags for the session (create action). Comma-separated string or array.
-- `use_existing`: `string` - Existing IDB path to reuse
 - `value`: `string|object`
 
 ## Minimal Call Shapes
