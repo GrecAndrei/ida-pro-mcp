@@ -70,6 +70,7 @@
 - tools/summarize.md - # SUMMARIZE Tool Manual
 - tools/symbols.md - # SYMBOLS Tool Manual
 - tools/taint.md - # TAINT Tool Manual
+- tools/threat_hunt.md - # THREAT_HUNT Tool Manual
 - tools/trace.md - # TRACE Tool Manual
 - tools/trace_analysis.md - # TRACE_ANALYSIS Tool Manual
 - tools/truncation.md - # TRUNCATION Tool Manual
