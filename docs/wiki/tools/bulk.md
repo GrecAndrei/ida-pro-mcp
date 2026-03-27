@@ -1,53 +1,68 @@
 # BULK Tool Manual
 
 ## What It Does
-Bulk operations for efficient multi-target modifications.
+Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.
 
 ## Actions
-- `rename`: Apply many renames in one operation.
-- `comment`: Apply many comments in one operation.
-- `apply_type`: Apply type information across multiple targets.
-- `rename_stack`: Rename stack variables in bulk.
-- `import_annotations`: Import saved annotations from a file.
-- `export_annotations`: Export annotations to a file.
+- `rename`
+- `comment`
+- `apply_type`
+- `rename_stack`
+- `import_annotations`
+- `export_annotations`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `items` (default `None`): Structured list payload for bulk operations.
-- `path` (default `None`): Filesystem path for import/export input.
-- `continue_on_error` (default `True`): Continue processing remaining bulk items after failures.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `rename, comment, apply_type, rename_stack, import_annotations, export_annotations, grep, pick, head, tail, next, stats`
+- `continue_on_error`: `boolean`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `items`: `array`
+- `next_token`: `string`
+- `on`: `string`
+- `path`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "bulk",
-  "args": {
-    "action": "rename",
-    "items": [
-      {
-        "addr": "0x401000",
-        "name": "init_ctx"
-      },
-      {
-        "addr": "0x401040",
-        "name": "parse_cfg"
-      }
-    ]
+  "name": "bulk",
+  "arguments": {
+    "action": "rename"
   }
 }
 ```
-```json
-{
-  "tool": "bulk",
-  "args": {
-    "action": "import_annotations",
-    "path": "./annotations.json",
-    "continue_on_error": true
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `items required`
-- `INVALID_ARGS`: `path required`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

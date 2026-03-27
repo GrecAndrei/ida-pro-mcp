@@ -1,39 +1,69 @@
 # SUMMARIZE Tool Manual
 
 ## What It Does
-Builds LLM-friendly summaries at binary/function/segment level and provides derived analytics for imports, strings, complexity, call hierarchy, data flow, security posture, and global statistics.
+LLM-friendly summarization with compact output. Actions: binary, function, segment, imports_by_category, strings_by_category, complexity, call_hierarchy, data_flow, security_posture, statistics.
 
 ## Actions
-- `binary`: High-level binary overview.
-- `function`: Function-level behavior summary.
-- `segment`: Segment-level summary.
-- `imports_by_category`: Functional categorization of imports.
-- `strings_by_category`: Pattern-based string categorization.
-- `complexity`: CFG/instruction complexity metrics.
-- `call_hierarchy`: Recursive call tree from a root function.
-- `data_flow`: Input/transform/output heuristic summary.
-- `security_posture`: Dangerous API and mitigation signal assessment.
-- `statistics`: Aggregate binary metrics.
+- `binary`
+- `function`
+- `segment`
+- `imports_by_category`
+- `strings_by_category`
+- `complexity`
+- `call_hierarchy`
+- `data_flow`
+- `security_posture`
+- `statistics`
 
-## Key Parameters
-- `action`: One of `binary|function|segment|imports_by_category|strings_by_category|complexity|call_hierarchy|data_flow|security_posture|statistics`.
-- `addr`: Required for `function`, `segment`, `complexity`, `call_hierarchy`, `data_flow`.
-- `depth`: Traversal depth for `call_hierarchy`.
-- `max_items`: Per-list cap in output summaries.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-summarize(action="binary", max_items=25)
-summarize(action="function", addr="0x401000", max_items=20)
-summarize(action="segment", addr="0x400000")
-summarize(action="complexity", addr="0x401000")
-summarize(action="call_hierarchy", addr="0x401000", depth=2, max_items=10)
-summarize(action="security_posture", max_items=50)
-summarize(action="statistics")
+## Example
+```json
+{
+  "name": "summarize",
+  "arguments": {
+    "action": "binary"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required `addr` for function-scoped actions.
-- Invalid/non-function addresses on function-only actions.
-- Complexity/call/data-flow quality depends on analysis completeness and symbol recovery.
-- Decompilation preview may be unavailable when Hex-Rays is not initialized.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

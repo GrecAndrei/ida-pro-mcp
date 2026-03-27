@@ -1,49 +1,69 @@
 # ANNOTATION Tool Manual
 
 ## What It Does
-Intelligent bulk annotation tool optimized for LLMs.
+Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.
 
 ## Actions
-- `auto_comment`: Execute `auto_comment` workflow.
-- `label_loops`: Execute `label_loops` workflow.
-- `label_branches`: Execute `label_branches` workflow.
-- `mark_dangerous`: Execute `mark_dangerous` workflow.
-- `annotate_constants`: Execute `annotate_constants` workflow.
-- `tag_functions`: Execute `tag_functions` workflow.
-- `document_args`: Execute `document_args` workflow.
-- `mark_error_paths`: Execute `mark_error_paths` workflow.
-- `propagate_names`: Execute `propagate_names` workflow.
-- `cleanup`: Execute `cleanup` workflow.
+- `auto_comment`
+- `label_loops`
+- `label_branches`
+- `mark_dangerous`
+- `annotate_constants`
+- `tag_functions`
+- `document_args`
+- `mark_error_paths`
+- `propagate_names`
+- `cleanup`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addr` (default `None`): Target address or function start (hex string).
-- `limit` (default `100`): Maximum result count.
-- `prefix` (default `'[MCP] '`): Prefix used when writing generated comments/tags.
-- `dry_run` (default `False`): Preview actions without committing changes.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "annotation",
-  "args": {
-    "action": "auto_comment",
-    "addr": "0x401000",
-    "prefix": "[MCP] "
+  "name": "annotation",
+  "arguments": {
+    "action": "auto_comment"
   }
 }
 ```
-```json
-{
-  "tool": "annotation",
-  "args": {
-    "action": "cleanup",
-    "prefix": "[MCP] "
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `addr required`
-- `INVALID_ARGS`: `source function has default name (sub_) -`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

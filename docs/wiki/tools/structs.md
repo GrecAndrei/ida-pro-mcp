@@ -1,38 +1,66 @@
 # STRUCTS Tool Manual
 
 ## What It Does
-Supports structure recovery and lifecycle tasks: infer usage, list/create/update structs, apply struct types to addresses, and reconstruct vtable-like layouts.
+Structure recovery and reconstruction. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.
 
 ## Actions
-- `recover`: Heuristic struct-candidate extraction from one function.
-- `analyze_usage`: Show xref-based usage from an address.
-- `list`: List struct/union types with optional filter/pagination.
-- `create`: Parse C declaration and create type.
-- `add_member`: Append a member to an existing struct.
-- `apply`: Apply named struct type at an address.
-- `reconstruct_vtable`: Build a vtable struct from pointer table data.
+- `recover`
+- `analyze_usage`
+- `list`
+- `create`
+- `add_member`
+- `apply`
+- `reconstruct_vtable`
 
-## Key Parameters
-- `action`: One of `recover|analyze_usage|list|create|add_member|apply|reconstruct_vtable`.
-- `addr`: Required for `recover`, `analyze_usage`, `apply`, `reconstruct_vtable`.
-- `name`: Struct name (required for `add_member` and `apply`; optional class/vtable name for `reconstruct_vtable`).
-- `decl`: Required C declaration for `create`.
-- `member_name`, `member_type`, `member_offset`: Member fields for `add_member`.
-- `query`, `offset`, `count`: Listing filters/pagination.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-structs(action="list", query="net", count=50)
-structs(action="create", decl="struct Header { int magic; short ver; };")
-structs(action="add_member", name="Header", member_name="flags", member_type="int", member_offset=8)
-structs(action="apply", addr="0x404000", name="Header")
-structs(action="recover", addr="0x401250")
-structs(action="reconstruct_vtable", addr="0x500000", name="ClientVTable")
+## Example
+```json
+{
+  "name": "structs",
+  "arguments": {
+    "action": "recover"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required fields by action.
-- Type parse failure (`create`, `add_member`).
-- Named struct not found (`add_member`, `apply`).
-- `recover` depends on successful Hex-Rays decompilation.
-- `reconstruct_vtable` fails if pointer table does not resolve to plausible code pointers.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

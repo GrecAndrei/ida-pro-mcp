@@ -1,19 +1,19 @@
-# TYPES Tool Manual
+# XFER_ANALYSIS Tool Manual
 
 ## What It Does
-Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.
+Alias of xref_analysis (compatibility typo, not advertised in tools/list).
 
 ## Actions
-- `list`
-- `get`
-- `set_prototype`
-- `parse_decl`
-- `declare`
-- `apply`
-- `search_structs`
-- `infer`
-- `read_struct`
-- `import_header`
+- `call_chain`
+- `common_callers`
+- `common_callees`
+- `hub_functions`
+- `leaf_functions`
+- `recursive`
+- `dominator`
+- `influence`
+- `dependency_graph`
+- `dead_functions`
 
 ## Parameters
 - `_compact`: `boolean` — Shortcut for compact/full mode toggle.
@@ -54,9 +54,9 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 ## Example
 ```json
 {
-  "name": "types",
+  "name": "xfer_analysis",
   "arguments": {
-    "action": "list"
+    "action": "call_chain"
   }
 }
 ```

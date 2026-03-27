@@ -1,51 +1,69 @@
 # COMPARE Tool Manual
 
 ## What It Does
-Compare functions for similarity, structural differences, and clone detection.
+Function comparison and similarity. Actions: functions (side-by-side diff), blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.
 
 ## Actions
-- `functions`: Compare two functions at a high level.
-- `blocks`: Compare basic-block structure.
-- `apis`: Compare API usage overlap.
-- `strings`: Compare referenced strings.
-- `constants`: Compare constant/immediate usage.
-- `structure`: Compare CFG/shape-level structure.
-- `semantics`: Compare semantic signals heuristically.
-- `batch_compare`: Run pairwise comparisons for multiple functions.
-- `find_clones`: Search for clone-like functions by similarity threshold.
-- `changelog`: Summarize notable differences between two functions.
+- `functions`
+- `blocks`
+- `apis`
+- `strings`
+- `constants`
+- `structure`
+- `semantics`
+- `batch_compare`
+- `find_clones`
+- `changelog`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addr` (default `None`): Target address or function start (hex string).
-- `addr2` (default `None`): Second address for pairwise comparisons.
-- `addrs` (default `None`): Comma-separated addresses or address list, action-dependent.
-- `threshold` (default `0.7`): Similarity threshold in [0,1].
-- `limit` (default `30`): Maximum result count.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "compare",
-  "args": {
-    "action": "functions",
-    "addr": "0x401000",
-    "addr2": "0x402000"
+  "name": "compare",
+  "arguments": {
+    "action": "functions"
   }
 }
 ```
-```json
-{
-  "tool": "compare",
-  "args": {
-    "action": "find_clones",
-    "threshold": 0.85,
-    "limit": 20
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `{label} required`
-- `INVALID_ARGS`: `addrs (comma-separated) required`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

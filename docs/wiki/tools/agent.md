@@ -1,54 +1,75 @@
 # AGENT Tool Manual
 
 ## What It Does
-High-level agent helpers for efficient binary analysis.
+High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.
 
 ## Actions
-- `analyze_function`: Build a compact function summary with related context.
-- `explore_address`: Expand context around an address (calls, xrefs, nearby symbols).
-- `find_references`: Collect references to a target address or symbol.
-- `search_all`: Search names, strings, imports, and symbols with one query.
-- `search_structs`: Search structures and fields by query.
-- `context_pack`: Return a bundled context payload for an address/function.
-- `quick`: Fast lightweight overview for a location.
-- `rename_suggestions`: Generate candidate symbol names from behavior/context.
-- `batch_context`: Build context for multiple addresses in one request.
-- `similar`: Find similar functions around the target.
+- `analyze_function`
+- `explore_address`
+- `find_references`
+- `search_all`
+- `search_structs`
+- `context_pack`
+- `quick`
+- `rename_suggestions`
+- `batch_context`
+- `similar`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addr` (default `None`): Target address or function start (hex string).
-- `query` (default `None`): Search query string or query payload.
-- `depth` (default `1`): Traversal/path depth bound.
-- `include_pseudocode` (default `False`): Include decompiled pseudocode in agent output.
-- `max_items` (default `25`): Maximum returned items.
-- `use_cache` (default `True`): Use cached intermediate context when available.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `addr`: `string`
+- `cursor`: `string`
+- `depth`: `integer`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `include_pseudocode`: `boolean`
+- `max_items`: `integer`
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `query`: `string`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
+- `use_cache`: `boolean`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "agent",
-  "args": {
-    "action": "analyze_function",
-    "addr": "0x401000",
-    "include_pseudocode": true
+  "name": "agent",
+  "arguments": {
+    "action": "analyze_function"
   }
 }
 ```
-```json
-{
-  "tool": "agent",
-  "args": {
-    "action": "search_all",
-    "query": "credential",
-    "max_items": 20
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `addr required`
-- `INVALID_ARGS`: `query required`
-- `FUNCTION_NOT_FOUND`: `No function at {hex(ea)}`
-- `INVALID_ARGS`: `query required (comma-separated addresses)`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

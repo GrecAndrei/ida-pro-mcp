@@ -1,57 +1,82 @@
 # FUNCS Tool Manual
 
 ## What It Does
-Creates, removes, inspects, and updates function definitions, including naming, comments, and filtered/paginated listings.
+Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force deletion of overlaps), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).
 
 ## Actions
-- `create`: Define function at address (optional explicit end, flags, name).
-- `delete`: Delete function containing/addressed by `addr`.
-- `set_flags`: Replace function flags.
-- `set_name`: Rename function (alias: `rename`).
-- `add_comment`: Set function comment.
-- `list`: Filtered/paginated function list.
-- `info`: Detailed metadata for one function.
+- `create`
+- `delete`
+- `set_flags`
+- `set_name`
+- `rename`
+- `add_comment`
+- `list`
+- `info`
 
-## Key Parameters
-- `action`: One of `create|delete|set_flags|set_name|rename|add_comment|list|info`.
-- `addr`: Required for all except pure listing operations.
-- `end`: Optional explicit end for `create`.
-- `name`: Used by `set_name`/`rename`; optional on `create`.
-- `flags`: Used by `set_flags`; optional add-on when creating.
-- `force`: For `create`, allows deleting overlaps/containing function conflicts.
-- `comment`, `repeatable`: For `add_comment`.
-- `query`, `named_only`, `offset`, `count`: `list` controls.
-- `include_prototype`, `include_stack`: richer output for `list`/`info`.
-- `include_items`: include structured list objects for `list` (default false to save context).
-- `include_xrefs`: include caller/callee sample arrays for `info`.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `create, delete, set_flags, set_name, rename, add_comment, list, info, grep, pick, head, tail, next, stats`
+- `addr`: `string`
+- `comment`: `string`
+- `count`: `integer`
+- `cursor`: `string`
+- `end`: `string`
+- `flags`: `integer`
+- `force`: `boolean`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `include_items`: `boolean`
+- `include_prototype`: `boolean`
+- `include_stack`: `boolean`
+- `include_xrefs`: `boolean`
+- `name`: `string`
+- `named_only`: `boolean`
+- `next_token`: `string`
+- `offset`: `integer`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `query`: `string`
+- `repeatable`: `boolean`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Output Notes
-- `list` returns both:
-  - `functions`: compact text lines (default, context-efficient).
-  - `items`: structured entries (`addr`, `end`, `size`, `name`, optional `prototype`) only when `include_items=true`.
-  - pagination fields: `total`, `offset`, `count`, `requested_count`, `has_more`.
-- `info` now includes call graph hints:
-  - `caller_count`, `callee_count`
-  - `callers_sample`, `callees_sample` only when `include_xrefs=true`
-  - optional comments when present.
-- `create(force=True, end=...)` now removes overlapping functions in range safely before creation and reports them in `removed_overlaps`.
-
-## Examples
-```python
-funcs(action="create", addr="0x401000", end="0x401120", name="init", force=True)
-funcs(action="delete", addr="0x401050")
-funcs(action="set_name", addr="0x401000", name="process_packet")
-funcs(action="add_comment", addr="0x401000", comment="decrypt stage", repeatable=True)
-funcs(action="list", query="*crypto*", named_only=True, offset=0, count=50, include_prototype=True)
-funcs(action="list", query="*crypto*", include_items=True, count=20)
-funcs(action="info", addr="0x401000", include_prototype=True, include_stack=True)
-funcs(action="info", addr="0x401000", include_xrefs=True)
+## Example
+```json
+{
+  "name": "funcs",
+  "arguments": {
+    "action": "create"
+  }
+}
 ```
 
-## Failure Modes
-- Invalid/missing addresses.
-- Create conflicts inside existing function when `force=False`.
-- Address cannot be converted into code for creation.
-- Function not found for delete/flag/info paths.
-- Rename rejected due naming constraints.
-- Invalid `list` query regex/glob pattern.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27
