@@ -6303,8 +6303,8 @@ class IDAMCPServer:
                 hint="Enable at least one of include_vuln/include_malware/include_tracing or use action run|vuln|malware|tracing.",
             )
 
-        ip = args.get("idb", self.current_session.idb_path if self.current_session else None)
-        if not ip:
+        idb_path = args.get("idb", self.current_session.idb_path if self.current_session else None)
+        if not idb_path:
             return make_error(
                 MCPError.SESSION_REQUIRED,
                 "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
@@ -6359,7 +6359,7 @@ class IDAMCPServer:
         steps: list[dict] = []
         raw_findings: list[dict] = []
         for tool, step_action, step_args in step_plan:
-            st = self._threat_hunt_step(ip, tool, step_action, step_args)
+            st = self._threat_hunt_step(idb_path, tool, step_action, step_args)
             steps.append(
                 {
                     "tool": tool,
@@ -6531,8 +6531,8 @@ class IDAMCPServer:
                 if "idb_path" in args or "use_existing" in args:
                     return make_error(
                         MCPError.INVALID_ARGS,
-                        "session create no longer accepts idb_path/use_existing",
-                        details={"hint": "Use binary_path and let the session manage IDB creation/reuse automatically."},
+                        "The idb_path and use_existing parameters were removed from session create",
+                        details={"hint": "Use binary_path instead; the session now manages IDB creation and reuse automatically."},
                     )
                 force_new = bool(args.get("force_new"))
 
