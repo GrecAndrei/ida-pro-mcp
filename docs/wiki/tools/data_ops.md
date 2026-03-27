@@ -1,50 +1,64 @@
 # DATA_OPS Tool Manual
 
 ## What It Does
-Data creation: make_data, make_array, make_string, undefine, make_code
+Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.
 
 ## Actions
-- `make_data`: Create typed data item at an address.
-- `make_array`: Create an array data item.
-- `make_string`: Create a string item.
-- `undefine`: Undefine item(s) at an address.
-- `make_code`: Convert bytes to instruction(s).
+- `make_data`
+- `make_array`
+- `make_string`
+- `undefine`
+- `make_code`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addr` (required): Target address or function start (hex string).
-- `size` (default `None`): Byte size / read length / data width, action-dependent.
-- `count` (default `None`): Item count or array length.
-- `str_type` (default `0`): IDA string type selector.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `make_data, make_array, make_string, undefine, make_code, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "data_ops",
-  "args": {
-    "action": "make_data",
-    "addr": "0x404000",
-    "size": 4
+  "name": "data_ops",
+  "arguments": {
+    "action": "make_data"
   }
 }
 ```
-```json
-{
-  "tool": "data_ops",
-  "args": {
-    "action": "make_array",
-    "addr": "0x404100",
-    "size": 1,
-    "count": 64
-  }
-}
-```
 
-## Failure Modes
-- `IDA_ERROR`: `Failed to create data`
-- `INVALID_ARGS`: `count required`
-- `IDA_ERROR`: `Failed to create array`
-- `IDA_ERROR`: `Failed to create string`
-- `IDA_ERROR`: `Failed to undefine`
-- `IDA_ERROR`: `Failed to create instruction`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

@@ -1,39 +1,74 @@
 # SEGMENTS Tool Manual
 
 ## What It Does
-Creates, inspects, and edits segment layout/metadata, including permissions and rebasing operations.
+Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.
 
 ## Actions
-- `list`: Enumerate segments with pagination.
-- `info`: Detailed segment metadata and item counts.
-- `add`: Create a segment.
-- `delete`: Remove a segment.
-- `set_attr`: Set segment attribute field.
-- `set_perms`: Set permissions by `rwx` string or integer.
-- `move`: Relocate a segment start.
+- `list`
+- `add`
+- `delete`
+- `set_attr`
+- `set_perms`
+- `move`
+- `info`
 
-## Key Parameters
-- `action`: One of `list|add|delete|set_attr|set_perms|move|info`.
-- `start`: Segment address (source for `move`; lookup for `info`/`delete`/edits).
-- `end`: Segment end (`add`) or new start (`move`).
-- `name`: Segment name (`add` or `info` lookup).
-- `sclass`: Segment class for `add` (default `DATA`).
-- `attr`, `value`: Attribute key/value for `set_attr`.
-- `offset`, `count`: Pagination for `list`.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `list, add, delete, set_attr, set_perms, move, info, grep, pick, head, tail, next, stats`
+- `attr`: `string`
+- `count`: `integer`
+- `cursor`: `string`
+- `end`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `name`: `string`
+- `next_token`: `string`
+- `offset`: `integer`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `sclass`: `string`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `start`: `string`
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
+- `value`: `string | integer`
 
-## Examples
-```python
-segments(action="list", offset=0, count=20)
-segments(action="info", name=".text")
-segments(action="add", start="0x700000", end="0x701000", name="blob", sclass="DATA")
-segments(action="set_perms", start="0x700000", value="rw")
-segments(action="move", start="0x700000", end="0x710000")
-segments(action="delete", start="0x710000")
+## Example
+```json
+{
+  "name": "segments",
+  "arguments": {
+    "action": "list"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required fields for mutating actions.
-- Invalid address parsing.
-- Segment lookup failure (`SEGMENT_NOT_FOUND`).
-- Invalid attribute name in `set_attr`.
-- Segment move may fail with IDA-specific move error codes (room/loader/chunk/orphan).
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

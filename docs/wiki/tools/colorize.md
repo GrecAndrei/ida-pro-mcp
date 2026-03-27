@@ -1,50 +1,66 @@
 # COLORIZE Tool Manual
 
 ## What It Does
-Apply visual coloring to the database.
+Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.
 
 ## Actions
-- `set_func`: Apply a color to a function.
-- `set_range`: Apply a color to an address range.
-- `set_insn`: Apply a color to one instruction.
-- `get`: Read color state at an address.
-- `clear`: Clear color at an address/range/function.
-- `palette`: Return known color names/palette mapping.
-- `highlight_pattern`: Color all matches for a byte/text pattern.
+- `set_func`
+- `set_range`
+- `set_insn`
+- `get`
+- `clear`
+- `palette`
+- `highlight_pattern`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addr` (default `None`): Target address or function start (hex string).
-- `end_addr` (default `None`): Range end address for color operations.
-- `color` (default `None`): Color name/value used by coloring or highlighting actions.
-- `pattern` (default `None`): Byte/text pattern for `highlight_pattern`.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `set_func, set_range, set_insn, get, clear, palette, highlight_pattern, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "colorize",
-  "args": {
-    "action": "set_range",
-    "addr": "0x401000",
-    "end_addr": "0x401080",
-    "color": "orange"
+  "name": "colorize",
+  "arguments": {
+    "action": "set_func"
   }
 }
 ```
-```json
-{
-  "tool": "colorize",
-  "args": {
-    "action": "highlight_pattern",
-    "pattern": "55 8B EC",
-    "color": "cyan"
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `addr required`
-- `INVALID_ARGS`: `addr and end_addr required`
-- `INVALID_ARGS`: `pattern required`
-- `INVALID_ARGS`: `Invalid pattern`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

@@ -1,19 +1,16 @@
-# TYPES Tool Manual
+# BOOKMARKS Tool Manual
 
 ## What It Does
-Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.
+Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.
 
 ## Actions
+- `add`
 - `list`
-- `get`
-- `set_prototype`
-- `parse_decl`
-- `declare`
-- `apply`
-- `search_structs`
-- `infer`
-- `read_struct`
-- `import_header`
+- `delete`
+- `update`
+- `clear`
+- `find`
+- `export`
 
 ## Parameters
 - `_compact`: `boolean` — Shortcut for compact/full mode toggle.
@@ -27,7 +24,9 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 - `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
 - `_response_omit`: `array | string` — Optional top-level field omission list.
 - `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
+- `action`: `string`; allowed: `add, list, delete, update, clear, find, export, grep, pick, head, tail, next, stats`
+- `addr`: `string`
+- `category`: `string`
 - `cursor`: `string`
 - `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
 - `grep_case_sensitive`: `boolean`
@@ -38,15 +37,20 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 - `grep_pattern`: `string`
 - `grep_regex`: `boolean`
 - `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `id`: `integer`
+- `name`: `string`
 - `next_token`: `string`
+- `notes`: `string`
 - `on`: `string`
 - `pick_fields`: `array | string` — For action='pick': top-level fields to include.
 - `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `priority`: `integer`
 - `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `query`: `string`
 - `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
 - `stats_include_payload`: `boolean`
 - `subaction`: `string`
+- `tags`: `array | string`
 - `tail_n`: `integer`
 - `target_action`: `string`
 - `token`: `string`
@@ -54,9 +58,9 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 ## Example
 ```json
 {
-  "name": "types",
+  "name": "bookmarks",
   "arguments": {
-    "action": "list"
+    "action": "add"
   }
 }
 ```

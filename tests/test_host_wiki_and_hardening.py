@@ -189,7 +189,7 @@ class TestHostHardening(unittest.TestCase):
         self.assertIn("next_token", funcs_props)
 
         wiki_tool = next(t for t in tools_payload if t["name"] == "wiki")
-        self.assertIn("Wiki", wiki_tool["description"])
+        self.assertIn("documentation", wiki_tool["description"].lower())
 
     def test_misc_health_requires_no_session(self):
         res = self.server._execute_tool("misc", {"action": "health"})

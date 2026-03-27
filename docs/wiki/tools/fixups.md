@@ -1,32 +1,63 @@
 # FIXUPS Tool Manual
 
 ## What It Does
-Lists and manipulates relocation/fixup entries stored in the IDA database.
+Relocation/fixup management. Actions: list, get, add, delete.
 
 ## Actions
-- `list`: Enumerate fixups in a range (or whole database).
-- `get`: Read fixup details at one address.
-- `add`: Create/set fixup at address with optional target.
-- `delete`: Remove fixup at address.
+- `list`
+- `get`
+- `add`
+- `delete`
 
-## Key Parameters
-- `action`: One of `list|get|add|delete`.
-- `addr`: Required for `get`, `add`, `delete`.
-- `target`: Optional target address for `add`.
-- `fixup_type`: Integer fixup type for `add`.
-- `start`, `end`: Optional listing bounds.
-- `offset`, `count`: Pagination controls (`count=0` means unlimited scan).
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `list, get, add, delete, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-fixups(action="list", start="0x400000", end="0x500000", offset=0, count=200)
-fixups(action="get", addr="0x401234")
-fixups(action="add", addr="0x401234", target="0x500000", fixup_type=0)
-fixups(action="delete", addr="0x401234")
+## Example
+```json
+{
+  "name": "fixups",
+  "arguments": {
+    "action": "list"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required `addr`.
-- Invalid range/address parsing.
-- No fixup at requested address for `get`.
-- IDA API-level failures when setting/deleting entries.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

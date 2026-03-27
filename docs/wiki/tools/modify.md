@@ -1,35 +1,63 @@
 # MODIFY Tool Manual
 
 ## What It Does
-Applies direct database edits at a target address: rename symbols, add comments, apply types, and patch assembled instructions.
+Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set_type, patch_asm (assembles instruction(s) and patches bytes, supports multi-line separated by semicolons).
 
 ## Actions
-- `rename`: Rename the item at `addr`.
-- `comment`: Add comment text at `addr` (`regular`, `repeatable`, `anterior`, `posterior`).
-- `set_type`: Parse and apply a C type declaration at `addr`.
-- `patch_asm`: Assemble and patch one or more instructions at `addr` (semicolon-separated allowed).
+- `rename`
+- `comment`
+- `set_type`
+- `patch_asm`
 
-## Key Parameters
-- `action`: One of `rename|comment|set_type|patch_asm`.
-- `addr`: Target address.
-- `value`: Main payload (new name/comment/type/instruction text).
-- `name`: Alias for `value` when `action=rename`.
-- `text`: Alias for `value` when `action=comment`.
-- `type_str`: Alias for `value` when `action=set_type`.
-- `asm`: Alias for `value` when `action=patch_asm`.
-- `comment_type`: `regular|repeatable|anterior|posterior` for comment writes.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `rename, comment, set_type, patch_asm, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-modify(action="rename", addr="0x401000", value="init_config")
-modify(action="comment", addr="0x401023", text="auth gate", comment_type="repeatable")
-modify(action="set_type", addr="0x401080", type_str="int __cdecl parse(char *buf);")
-modify(action="patch_asm", addr="0x401120", asm="nop; nop; nop")
+## Example
+```json
+{
+  "name": "modify",
+  "arguments": {
+    "action": "rename"
+  }
+}
 ```
 
-## Failure Modes
-- Missing `value` (or missing alias for the selected action).
-- Invalid `addr`.
-- Invalid symbol name during `rename`.
-- Type parse/apply failure during `set_type`.
-- Assembly failure in `patch_asm` (partial patching may already be applied before failure).
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27
