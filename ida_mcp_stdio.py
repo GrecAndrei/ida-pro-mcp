@@ -2156,8 +2156,6 @@ TOOL_ARG_SCHEMAS = {
     "session": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["session"]},
         "binary_path": {"type": "string", "description": "Path to target binary"},
-        "use_existing": {"type": "string", "description": "Existing IDB path to reuse"},
-        "idb_path": {"type": "string", "description": "Existing IDB path (alias of use_existing)"},
         "force_new": {"type": "boolean", "description": "Force creation of a new session even if one exists"},
         "analysis_options": {"type": "object", "description": "Advanced analysis options payload"},
         "ida_args": {"type": ["string", "array"], "items": {"type": "string"}},
@@ -2944,9 +2942,9 @@ class IDAMCPServer:
         qol_mode = str(os.environ.get("IDA_MCP_QOL_MODE", "balanced")).strip().lower()
         if qol_mode not in {"tiny", "balanced", "debug"}:
             qol_mode = "balanced"
-        tools_list_mode = str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "ultra")).strip().lower()
+        tools_list_mode = str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "full")).strip().lower()
         if tools_list_mode not in {"ultra", "lean", "full"}:
-            tools_list_mode = "ultra"
+            tools_list_mode = "full"
         detail_level = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
         if detail_level not in {"none", "basic", "full"}:
             detail_level = "basic"
@@ -6293,9 +6291,12 @@ class IDAMCPServer:
 
             if action == "create":
                 binary_path = args.get("binary_path")
-                idb_path = args.get("idb_path") or args.get("use_existing")
-                if idb_path == "":
-                    idb_path = None
+                if "idb_path" in args or "use_existing" in args:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "session create no longer accepts idb_path/use_existing",
+                        details={"hint": "Use binary_path and let the session manage IDB creation/reuse automatically."},
+                    )
                 force_new = bool(args.get("force_new"))
 
                 analysis_options = {}
@@ -6338,44 +6339,26 @@ class IDAMCPServer:
                         binary_path = os.path.abspath(binary_path)
                     args["binary_path"] = binary_path
                     if not os.path.exists(binary_path):
-                        if not idb_path or not os.path.exists(idb_path):
-                            return make_error(
-                                MCPError.FILE_NOT_FOUND,
-                                f"Binary not found: {binary_path}",
-                                details={
-                                    "binary_path": binary_path,
-                                    "hint": "Provide an absolute path to an existing binary file or an existing idb_path.",
-                                },
-                            )
-
-                if idb_path:
-                    if not os.path.isabs(idb_path):
-                        idb_path = os.path.abspath(idb_path)
-                    ext = os.path.splitext(idb_path)[1].lower()
-                    if ext and ext not in (".i64", ".idb"):
                         return make_error(
-                            MCPError.INVALID_ARGS,
-                            "idb_path must point to a .i64 or .idb file",
-                            details={"idb_path": idb_path},
+                            MCPError.FILE_NOT_FOUND,
+                            f"Binary not found: {binary_path}",
+                            details={
+                                "binary_path": binary_path,
+                                "hint": "Provide an absolute path to an existing binary file.",
+                            },
                         )
 
-                if not binary_path and not idb_path:
+                if not binary_path:
                     return make_error(
                         MCPError.INVALID_ARGS,
-                        "binary_path or idb_path is required",
-                        details={"hint": "Provide a binary path for new analysis or an existing IDB to recover."},
+                        "binary_path is required",
+                        details={"hint": "Provide a binary path for new analysis."},
                     )
 
                 existing = None
                 if binary_path:
                     existing = self.session_mgr.find_session_by_path(binary_path)
-                if not existing and idb_path:
-                    existing = self.session_mgr.find_session_by_path(idb_path)
-                if (
-                    existing
-                    and not force_new
-                    and (not idb_path or os.path.normpath(existing.idb_path) == os.path.normpath(idb_path))
-                ):
+                if existing and not force_new:
                     self.current_session = existing
                     existing.update_access()
                     if analysis_options:
@@ -6401,7 +6384,6 @@ class IDAMCPServer:
 
                 self.current_session = self.session_mgr.create_session(
                     binary_path or "",
-                    use_existing=idb_path,
                     analysis_options=analysis_options,
                     ida_args=ida_args,
                     tags=tags,
