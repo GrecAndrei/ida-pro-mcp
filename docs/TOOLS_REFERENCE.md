@@ -6,6 +6,8 @@ Notes:
 - `session(action="create")` requires `binary_path` and does not accept `idb_path`/`use_existing`.
 - `threat_hunt` is the consolidated malware/vulnerability/tracing orchestration tool and supports legacy inheritance routing.
 - Archived threat-family tools may be hidden from tools/list while remaining compatibility-callable.
+- Host normalization is intentionally permissive for noisy LLM calls on `threat_hunt`, `search`, `session`, and `code` (wrappered action names, noisy arg keys, bracketed address/list values) when mapping is unambiguous.
+- All tool responses include `llm_pointer_note` (ALL CAPS) reminding agents to use `calc`/`memory` for pointer/address arithmetic instead of mental math.
 
 ## session
 

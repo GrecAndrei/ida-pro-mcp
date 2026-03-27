@@ -1,15 +1,17 @@
 # THREAT_HUNT Tool Manual
 
 ## What It Does
-Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malware, vuln, tracing, quick, deep. Executes real end-to-end pipelines across existing tools (vuln_scan, c2_detect, deobfuscate, crypto_id, trace_analysis, coverage, taint) and returns step-by-step status with deduplicated findings.
+Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools (vuln_scan, c2_detect, deobfuscate, crypto_id, trace_analysis, coverage, taint) and returns step-by-step status with deduplicated findings.
 
 ## Actions
 - `run`
 - `malware`
 - `vuln`
 - `tracing`
+- `findings`
 - `quick`
 - `deep`
+- `legacy`
 
 ## Parameters
 - `_compact`: `boolean` — Shortcut for compact/full mode toggle.
@@ -23,7 +25,7 @@ Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malw
 - `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
 - `_response_omit`: `array | string` — Optional top-level field omission list.
 - `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `run, malware, vuln, tracing, quick, deep, grep, pick, head, tail, next, stats`
+- `action`: `string`; allowed: `run, malware, vuln, tracing, findings, quick, deep, legacy, grep, pick, head, tail, next, stats`
 - `addr`: `string` — Optional address focus for underlying scanners where supported.
 - `cursor`: `string`
 - `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
@@ -40,6 +42,9 @@ Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malw
 - `include_malware`: `boolean` — Include malware-behavior analysis steps.
 - `include_tracing`: `boolean` — Include trace/coverage analysis steps.
 - `include_vuln`: `boolean` — Include vulnerability analysis steps.
+- `legacy_action`: `string` — Legacy action to inherit/route (for action='legacy').
+- `legacy_passthrough`: `boolean` — For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.
+- `legacy_tool`: `string` — Legacy tool name to emulate (for action='legacy').
 - `limit`: `integer` — Global max findings to return after dedupe/ranking.
 - `max_steps`: `integer` — Safety cap for total orchestrated tool calls.
 - `next_token`: `string`
@@ -71,6 +76,9 @@ Consolidated malware/vulnerability/tracing orchestration hub. Actions: run, malw
 ## Notes
 - Consolidated end-to-end orchestration tool for malware/vulnerability/tracing workflows.
 - Legacy threat tools may be routed through this tool for compatibility.
+- High-noise aliases are normalized before routing (examples: `compatibility` -> `legacy`, `security_scan` -> `vuln`, `trace_analysis` -> `tracing`).
+- Noisy argument aliases are accepted for key fields (examples: `source_tool` -> `legacy_tool`, `source_action` -> `legacy_action`, `with_evidence` -> `include_evidence`).
+- All responses include `llm_pointer_note` in ALL CAPS to reinforce calc/memory usage for address math.
 
 ---
 Doc status: Auto-generated from live tool metadata.
