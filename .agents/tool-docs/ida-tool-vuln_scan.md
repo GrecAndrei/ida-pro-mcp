@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query. Returns compact findings + structured items with severity/confidence, pagination, and optional OSV enrichment.
+Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep), optional dataflow graph/remediation planning, and returns ranked findings with risk scoring, hotspots, and attack-path correlation.
 
 ## Actions
 - `buffer_overflow` (tool-specific)
@@ -22,6 +22,7 @@ Automated vulnerability scanner. Actions: buffer_overflow, format_string, intege
 - `scan_all` (tool-specific)
 - `classify` (tool-specific)
 - `osv_query` (tool-specific)
+- `intelligence_report` (tool-specific)
 - `grep` (host wrapper): run another action, then grep its output lines.
 
 ## LLM Fast Path
@@ -30,14 +31,18 @@ Automated vulnerability scanner. Actions: buffer_overflow, format_string, intege
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `13`
+- `action`: `string` - allowed_count: `14`
 - `addr`: `string` - Address or function scope for scanning.
 - `include_context`: `boolean` - Include compact decompiled context when available.
+- `include_dataflow_graph`: `boolean` - Include compact correlation graph in scan_all/intelligence_report.
+- `include_remediation_plan`: `boolean` - Include prioritized remediation plan in scan_all/intelligence_report.
 - `limit`: `integer` - Max findings to return (capped for context safety).
+- `max_graph_depth`: `integer` - Correlation graph depth (0-3) for intelligence outputs.
 - `offset`: `integer` - Skip first N ranked findings.
 - `osv_coordinates`: `array` - OSV package coordinates (ecosystem:name@version or pkg:purl). Used by osv_query and optional scan_all enrichment.
 - `osv_ecosystem`: `string` - Default OSV ecosystem for shorthand coordinates like name@version.
 - `osv_endpoint`: `string` - OSV endpoint/base URL (default: https://api.osv.dev).
+- `scan_profile`: `string` - allowed: `quick, balanced, deep` - Scan depth profile controlling local evidence/ranking rigor.
 - `severity`: `string` - allowed: `critical, high, medium, low` - Optional severity filter.
 
 ## Minimal Call Shapes
