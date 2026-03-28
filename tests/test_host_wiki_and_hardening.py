@@ -193,7 +193,7 @@ class TestHostHardening(unittest.TestCase):
         wiki_tool = next(t for t in tools_payload if t["name"] == "wiki")
         self.assertIn("documentation", wiki_tool["description"].lower())
 
-    def test_tools_list_has_no_empty_descriptions(self):
+    def test_tools_list_catalog_has_no_empty_descriptions(self):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 11, "method": "tools/list"})
         tools_payload = res["result"]["tools"]
         tools_with_empty_descriptions = [t["name"] for t in tools_payload if not (t.get("description") or "").strip()]
@@ -246,6 +246,11 @@ class TestHostHardening(unittest.TestCase):
         first = self.server._build_tools_list_catalog("full")
         second = self.server._build_tools_list_catalog("full")
         self.assertIs(first, second)
+
+    def test_tools_list_catalog_cache_is_mode_specific(self):
+        full = self.server._build_tools_list_catalog("full")
+        lean = self.server._build_tools_list_catalog("lean")
+        self.assertIsNot(full, lean)
 
     def test_misc_health_requires_no_session(self):
         res = self.server._execute_tool("misc", {"action": "health"})
