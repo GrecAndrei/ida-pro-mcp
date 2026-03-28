@@ -29,6 +29,7 @@ import shlex
 import copy
 import shutil
 import tempfile
+from functools import lru_cache
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -215,6 +216,18 @@ except ImportError:
     _SEMANTIC_FUZZY_CUTOFF = 0.86
     _SEMANTIC_CAMEL_BOUNDARY_1 = re.compile(r"([a-z])([A-Z])")
     _SEMANTIC_CAMEL_BOUNDARY_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
+    _SMART_MATCH_MODE = str(os.environ.get("IDA_MCP_SMART_MATCH_MODE", "balanced")).strip().lower()
+    if _SMART_MATCH_MODE not in {"off", "conservative", "balanced", "aggressive"}:
+        _SMART_MATCH_MODE = "balanced"
+    _SMART_MATCH_MODE_DEFAULTS = {
+        "off": {"semantic_enabled": False, "fuzzy_cutoff": 1.0},
+        "conservative": {"semantic_enabled": True, "fuzzy_cutoff": 0.92},
+        "balanced": {"semantic_enabled": True, "fuzzy_cutoff": _SEMANTIC_FUZZY_CUTOFF},
+        "aggressive": {"semantic_enabled": True, "fuzzy_cutoff": 0.80},
+    }
+
+    def _resolve_optional_param(provided, default):
+        return default if provided is None else provided
 
     def _normalize_semantic_token(token: str) -> str:
         tok = token.lower().strip()
@@ -242,7 +255,7 @@ except ImportError:
                     tokens.append(tok)
         return tokens
 
-    def _compile_semantic_matcher(pattern: str):
+    def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_FUZZY_CUTOFF):
         query_tokens = _semantic_tokenize(pattern)
         if not query_tokens:
             return None
@@ -274,7 +287,7 @@ except ImportError:
                 return False
             fuzzy_hits = 0
             for qtok in fuzzy_tokens:
-                if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=_SEMANTIC_FUZZY_CUTOFF):
+                if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=fuzzy_cutoff):
                     fuzzy_hits += 1
                     if overlap + fuzzy_hits >= overlap_needed:
                         return True
@@ -298,7 +311,22 @@ except ImportError:
             return True
         return False
 
-    def compile_smart_pattern(pattern, case_sensitive=False):
+    @lru_cache(maxsize=1024)
+    def _compile_smart_pattern_cached(pattern, case_sensitive, semantic_enabled, fuzzy_cutoff):
+        return _compile_smart_pattern_uncached(
+            pattern,
+            case_sensitive=case_sensitive,
+            semantic_enabled=semantic_enabled,
+            fuzzy_cutoff=fuzzy_cutoff,
+        )
+
+    def _compile_smart_pattern_uncached(
+        pattern,
+        *,
+        case_sensitive=False,
+        semantic_enabled=True,
+        fuzzy_cutoff=_SEMANTIC_FUZZY_CUTOFF,
+    ):
         if not pattern:
             return lambda _t: True
         regex = None
@@ -327,10 +355,25 @@ except ImportError:
         if case_sensitive:
             return lambda _t, _p=pattern: _p in _t
         pl = pattern.lower()
-        semantic_match = _compile_semantic_matcher(pattern)
+        if not semantic_enabled:
+            return lambda _t, _p=pl: _p in _t.lower()
+        semantic_match = _compile_semantic_matcher(pattern, fuzzy_cutoff=fuzzy_cutoff)
         if semantic_match is None:
             return lambda _t, _p=pl: _p in _t.lower()
         return lambda _t, _p=pl, _sem=semantic_match: (_p in _t.lower()) or _sem(_t)
+
+    def compile_smart_pattern(
+        pattern,
+        case_sensitive=False,
+        *,
+        semantic_enabled=None,
+        fuzzy_cutoff=None,
+    ):
+        defaults = _SMART_MATCH_MODE_DEFAULTS[_SMART_MATCH_MODE]
+        use_semantic = bool(_resolve_optional_param(semantic_enabled, defaults["semantic_enabled"]))
+        use_cutoff = float(_resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"]))
+        use_cutoff = max(0.0, min(1.0, use_cutoff))
+        return _compile_smart_pattern_cached(pattern, case_sensitive, use_semantic, use_cutoff)
 
     def smart_match(pattern, text, case_sensitive=False):
         return compile_smart_pattern(pattern, case_sensitive)(text)
@@ -3198,6 +3241,44 @@ def build_tool_description_lean(tool_name: str) -> str:
     return full + "."
 
 
+_TOOL_CATEGORY_CORE = {"session", "truncation", "bookmarks", "batch", "wiki"}
+_TOOL_CATEGORY_ANALYSIS = {
+    "analysis", "query", "edit", "idb", "code", "data", "search", "types", "memory",
+    "modify", "funcs", "segments", "bulk", "calc", "nav",
+}
+_TOOL_CATEGORY_DEBUG = {"debug", "trace", "coverage", "trace_analysis"}
+_TOOL_CATEGORY_PROJECT = {"project", "misc"}
+_TOOL_CATEGORY_ADVANCED = {
+    "agent", "microcode", "graph", "ctree", "taint", "emulate", "entropy", "structs",
+    "imports_deep", "patterns", "symbols", "diff", "lumina", "export", "history",
+    "comments_ai", "colorize", "data_ops", "fixups", "hooks",
+}
+_TOOL_CATEGORY_SECURITY = {
+    "vuln_scan", "threat_hunt", "deobfuscate", "crypto_id", "c2_detect", "protocol",
+    "gadgets", "annotation", "xref_analysis", "string_ops", "cfg_analysis",
+    "binary_info", "abi", "stack_analysis", "compare", "classify", "summarize", "yara_hunt",
+}
+_TOOL_CATEGORY_COMPAT = {"plugins", "xfer_analysis"}
+
+
+def classify_tool_category(tool_name: str) -> str:
+    if tool_name in _TOOL_CATEGORY_CORE:
+        return "core"
+    if tool_name in _TOOL_CATEGORY_ANALYSIS:
+        return "analysis"
+    if tool_name in _TOOL_CATEGORY_DEBUG:
+        return "debug"
+    if tool_name in _TOOL_CATEGORY_PROJECT:
+        return "project"
+    if tool_name in _TOOL_CATEGORY_ADVANCED:
+        return "advanced"
+    if tool_name in _TOOL_CATEGORY_SECURITY:
+        return "security"
+    if tool_name in _TOOL_CATEGORY_COMPAT:
+        return "compat"
+    return "other"
+
+
 # =============================================================================
 # MCP SERVER
 # =============================================================================
@@ -3337,6 +3418,7 @@ class IDAMCPServer:
             "pages": [],
         }
         self._wiki_cache_ttl = 5.0
+        self._tools_list_cache: Dict[str, tuple] = {}
         self._register_lifecycle_handlers()
         self._start_runtime_lease_heartbeat()
         self._adopt_or_cleanup_stale_runtime_leases()
@@ -6928,9 +7010,18 @@ class IDAMCPServer:
                     return make_error(
                         MCPError.INVALID_ARGS,
                         "The idb_path and use_existing parameters were removed from session create",
-                        details={"hint": "Use binary_path instead; the session now manages IDB creation and reuse automatically."},
+                        details={
+                            "hint": "Use session(action='create', binary_path='...') instead; IDB creation/reuse is automatic."
+                        },
                     )
                 force_new = bool(args.get("force_new"))
+
+                if binary_path is not None and not isinstance(binary_path, str):
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "binary_path must be a string",
+                        details={"hint": "Provide a path string, e.g. session(action='create', binary_path='/abs/path/to/binary')."},
+                    )
 
                 analysis_options = {}
                 if isinstance(args.get("analysis_options"), dict):
@@ -6985,7 +7076,7 @@ class IDAMCPServer:
                     return make_error(
                         MCPError.INVALID_ARGS,
                         "binary_path is required",
-                        details={"hint": "Provide a binary path for new analysis."},
+                        details={"hint": "Provide a binary path, e.g. session(action='create', binary_path='/abs/path/to/binary')."},
                     )
 
                 existing = None
@@ -7767,6 +7858,54 @@ class IDAMCPServer:
             },
         }
 
+    def _build_tools_list_catalog(self, mode: str) -> list[dict]:
+        cache_key = (mode,)
+        cached = self._tools_list_cache.get(cache_key)
+        if cached and cached[0] == cache_key:
+            return cached[1]
+
+        def _tool_description(tool_name: str, tool_mode: str) -> str:
+            if tool_mode == "full":
+                desc = TOOL_DESCRIPTIONS.get(tool_name, "")
+            elif tool_mode == "lean":
+                desc = build_tool_description_lean(tool_name)
+            else:
+                desc = build_tool_description_ultra(tool_name)
+            desc_text = str(desc or "").strip()
+            if desc_text:
+                return desc_text
+            fallback = desc if tool_mode == "full" else TOOL_DESCRIPTIONS.get(tool_name, "")
+            fallback_text = str(fallback or "").strip()
+            if fallback_text:
+                return fallback_text
+            return f"Use wiki(topic='tools/{tool_name}') for usage."
+
+        catalog: list[dict] = []
+        for t in TOOLS:
+            if t in HIDDEN_TOOLS_IN_LIST:
+                continue
+            if mode == "full":
+                schema = build_input_schema(t)
+            elif mode == "lean":
+                schema = build_input_schema_lean(t)
+            else:
+                schema = build_input_schema_ultra(t)
+            schema = dict(schema) if isinstance(schema, dict) else {}
+            schema.setdefault("type", "object")
+            schema.setdefault("properties", {})
+            schema.setdefault("required", [])
+            catalog.append(
+                {
+                    "name": t,
+                    "description": _tool_description(t, mode),
+                    "inputSchema": schema,
+                    "category": classify_tool_category(t),
+                }
+            )
+
+        self._tools_list_cache[cache_key] = (cache_key, catalog)
+        return catalog
+
     def handle_request(self, req):
         m, rid, p = req.get("method"), req.get("id"), req.get("params", {})
         if m == "initialize":
@@ -7785,32 +7924,52 @@ class IDAMCPServer:
             mode = self.default_tools_list_mode
             if self.monolithic_tool_descriptions:
                 mode = "full"
-            tools = [
-                {
-                    "name": t,
-                    "description": (
-                        TOOL_DESCRIPTIONS.get(t, "")
-                        if mode == "full"
-                        else (
-                            build_tool_description_lean(t)
-                            if mode == "lean"
-                            else build_tool_description_ultra(t)
-                        )
-                    ),
-                    "inputSchema": (
-                        build_input_schema(t)
-                        if mode == "full"
-                        else (
-                            build_input_schema_lean(t)
-                            if mode == "lean"
-                            else build_input_schema_ultra(t)
-                        )
-                    ),
-                }
-                for t in TOOLS
-                if t not in HIDDEN_TOOLS_IN_LIST
-            ]
-            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools, "mode": mode}}
+            tool_name_prefix = str(p.get("prefix", "") or "").strip().lower()
+            tool_name_contains = str(p.get("contains", "") or "").strip().lower()
+            tool_category = str(p.get("category", "") or "").strip().lower()
+            sort_by = str(p.get("sort", "name") or "name").strip().lower()
+            if sort_by not in {"name", "category"}:
+                sort_by = "name"
+            descending = _coerce_bool(p.get("descending"), False)
+            limit = _bounded_int(p.get("limit", 0), 0, min_value=0, max_value=5000)
+            offset = _bounded_int(p.get("offset", 0), 0, min_value=0, max_value=500000)
+
+            tools = self._build_tools_list_catalog(mode)
+            if tool_name_prefix:
+                tools = [t for t in tools if str(t.get("name", "")).lower().startswith(tool_name_prefix)]
+            if tool_name_contains:
+                tools = [t for t in tools if tool_name_contains in str(t.get("name", "")).lower()]
+            if tool_category:
+                tools = [t for t in tools if str(t.get("category", "")).lower() == tool_category]
+
+            if sort_by == "category":
+                tools = sorted(
+                    tools,
+                    key=lambda t: (str(t.get("category", "")), str(t.get("name", ""))),
+                    reverse=descending,
+                )
+            else:
+                tools = sorted(tools, key=lambda t: str(t.get("name", "")), reverse=descending)
+
+            total = len(tools)
+            if limit > 0:
+                tools_page = tools[offset : offset + limit]
+                next_offset = (offset + len(tools_page)) if (offset + len(tools_page)) < total else None
+            else:
+                tools_page = tools[offset:]
+                next_offset = None
+            return {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "result": {
+                    "tools": tools_page,
+                    "mode": mode,
+                    "total": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "next_offset": next_offset,
+                },
+            }
         if m == "tools/call":
             tn, args = p.get("name"), p.get("arguments", {})
             resolved_tn = _resolve_tool_alias(tn)

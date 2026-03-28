@@ -503,11 +503,17 @@ Environment defaults:
 - `lean`: shortened per-tool descriptions + compact parameter typing.
 - `full` (default): full descriptions and full input schema.
 
+`tools/list` also supports metadata shaping params:
+- `prefix`, `contains`, `category` filters
+- `sort` (`name` or `category`) and `descending`
+- `offset` + `limit` pagination (`next_offset` returned when more results exist)
+
 Installer defaults now bias for direct schema-rich tool loading:
 - `IDA_MCP_RESPONSE_MODE=compact`
 - `IDA_MCP_QOL_MODE=balanced`
 - `IDA_MCP_TOOLS_LIST_MODE=full`
 - `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1`
+- `IDA_MCP_SMART_MATCH_MODE=balanced` (`off|conservative|balanced|aggressive`)
 - `IDA_MCP_BATCH_COMPACT=1`
 - `IDA_MCP_COMPACT_MAX_ITEMS=48`
 - `IDA_MCP_COMPACT_MAX_STRING=1400`
