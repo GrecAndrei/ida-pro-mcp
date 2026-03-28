@@ -226,6 +226,9 @@ except ImportError:
         "aggressive": {"semantic_enabled": True, "fuzzy_cutoff": 0.80},
     }
 
+    def _resolve_optional_param(provided, default):
+        return default if provided is None else provided
+
     def _normalize_semantic_token(token: str) -> str:
         tok = token.lower().strip()
         if not tok:
@@ -367,8 +370,8 @@ except ImportError:
         fuzzy_cutoff=None,
     ):
         defaults = _SMART_MATCH_MODE_DEFAULTS[_SMART_MATCH_MODE]
-        use_semantic = defaults["semantic_enabled"] if semantic_enabled is None else bool(semantic_enabled)
-        use_cutoff = defaults["fuzzy_cutoff"] if fuzzy_cutoff is None else float(fuzzy_cutoff)
+        use_semantic = bool(_resolve_optional_param(semantic_enabled, defaults["semantic_enabled"]))
+        use_cutoff = float(_resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"]))
         use_cutoff = max(0.0, min(1.0, use_cutoff))
         return _compile_smart_pattern_cached(pattern, case_sensitive, use_semantic, use_cutoff)
 
@@ -3238,27 +3241,40 @@ def build_tool_description_lean(tool_name: str) -> str:
     return full + "."
 
 
+_TOOL_CATEGORY_CORE = {"session", "truncation", "bookmarks", "batch", "wiki"}
+_TOOL_CATEGORY_ANALYSIS = {
+    "analysis", "query", "edit", "idb", "code", "data", "search", "types", "memory",
+    "modify", "funcs", "segments", "bulk", "calc", "nav",
+}
+_TOOL_CATEGORY_DEBUG = {"debug", "trace", "coverage", "trace_analysis"}
+_TOOL_CATEGORY_PROJECT = {"project", "misc"}
+_TOOL_CATEGORY_ADVANCED = {
+    "agent", "microcode", "graph", "ctree", "taint", "emulate", "entropy", "structs",
+    "imports_deep", "patterns", "symbols", "diff", "lumina", "export", "history",
+    "comments_ai", "colorize", "data_ops", "fixups", "hooks",
+}
+_TOOL_CATEGORY_SECURITY = {
+    "vuln_scan", "threat_hunt", "deobfuscate", "crypto_id", "c2_detect", "protocol",
+    "gadgets", "annotation", "xref_analysis", "string_ops", "cfg_analysis",
+    "binary_info", "abi", "stack_analysis", "compare", "classify", "summarize", "yara_hunt",
+}
+_TOOL_CATEGORY_COMPAT = {"plugins", "xfer_analysis"}
+
+
 def classify_tool_category(tool_name: str) -> str:
-    core = {"session", "truncation", "bookmarks", "batch", "wiki"}
-    analysis = {"analysis", "query", "edit", "idb", "code", "data", "search", "types", "memory", "modify", "funcs", "segments", "bulk", "calc", "nav"}
-    debug = {"debug", "trace", "coverage", "trace_analysis"}
-    project = {"project", "misc"}
-    advanced = {"agent", "microcode", "graph", "ctree", "taint", "emulate", "entropy", "structs", "imports_deep", "patterns", "symbols", "diff", "lumina", "export", "history", "comments_ai", "colorize", "data_ops", "fixups", "hooks"}
-    security = {"vuln_scan", "threat_hunt", "deobfuscate", "crypto_id", "c2_detect", "protocol", "gadgets", "annotation", "xref_analysis", "string_ops", "cfg_analysis", "binary_info", "abi", "stack_analysis", "compare", "classify", "summarize", "yara_hunt"}
-    compat = {"plugins", "xfer_analysis"}
-    if tool_name in core:
+    if tool_name in _TOOL_CATEGORY_CORE:
         return "core"
-    if tool_name in analysis:
+    if tool_name in _TOOL_CATEGORY_ANALYSIS:
         return "analysis"
-    if tool_name in debug:
+    if tool_name in _TOOL_CATEGORY_DEBUG:
         return "debug"
-    if tool_name in project:
+    if tool_name in _TOOL_CATEGORY_PROJECT:
         return "project"
-    if tool_name in advanced:
+    if tool_name in _TOOL_CATEGORY_ADVANCED:
         return "advanced"
-    if tool_name in security:
+    if tool_name in _TOOL_CATEGORY_SECURITY:
         return "security"
-    if tool_name in compat:
+    if tool_name in _TOOL_CATEGORY_COMPAT:
         return "compat"
     return "other"
 
@@ -7844,7 +7860,7 @@ class IDAMCPServer:
 
     def _build_tools_list_catalog(self, mode: str) -> list[dict]:
         cache_key = (mode,)
-        cached = self._tools_list_cache.get("catalog")
+        cached = self._tools_list_cache.get(cache_key)
         if cached and cached[0] == cache_key:
             return cached[1]
 
@@ -7858,7 +7874,7 @@ class IDAMCPServer:
             desc_text = str(desc or "").strip()
             if desc_text:
                 return desc_text
-            fallback = TOOL_DESCRIPTIONS.get(tool_name, "")
+            fallback = desc if tool_mode == "full" else TOOL_DESCRIPTIONS.get(tool_name, "")
             fallback_text = str(fallback or "").strip()
             if fallback_text:
                 return fallback_text
@@ -7874,8 +7890,7 @@ class IDAMCPServer:
                 schema = build_input_schema_lean(t)
             else:
                 schema = build_input_schema_ultra(t)
-            if not isinstance(schema, dict):
-                schema = {"type": "object", "properties": {}, "required": []}
+            schema = dict(schema) if isinstance(schema, dict) else {}
             schema.setdefault("type", "object")
             schema.setdefault("properties", {})
             schema.setdefault("required", [])
@@ -7888,7 +7903,7 @@ class IDAMCPServer:
                 }
             )
 
-        self._tools_list_cache["catalog"] = (cache_key, catalog)
+        self._tools_list_cache[cache_key] = (cache_key, catalog)
         return catalog
 
     def handle_request(self, req):
