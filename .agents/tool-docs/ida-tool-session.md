@@ -46,7 +46,14 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `macro_delete` (tool-specific)
 - `macro_run` (tool-specific)
 - `recent_workset` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/session')`.
@@ -69,7 +76,6 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `flags`: `integer`
 - `force_new`: `boolean` - Force creation of a new session even if one exists
 - `ida_args`: `string|array`
-- `idb_path`: `string` - Existing IDB path (alias of use_existing)
 - `include_bookmarks`: `boolean` - Include bookmark entries in recent_workset.
 - `include_items`: `boolean` - Include structured items in recent_workset response.
 - `limit`: `integer` - Max sessions to return (list action)
@@ -81,6 +87,7 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `min_ea`: `string|integer`
 - `n`: `integer` - Count for recent/oldest/recent_workset actions.
 - `name`: `string` - Name for macro_* actions or rename action.
+- `note`: `string` - Single note payload for add_note action.
 - `notes`: `string` - Free-form notes for the session (create action).
 - `offset`: `integer` - Skip first N sessions (list action)
 - `options`: `object`
@@ -93,8 +100,8 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `start`: `string|integer`
 - `start_ea`: `string|integer`
 - `tags`: `array|string` - Tags for the session (create action). Comma-separated string or array.
-- `use_existing`: `string` - Existing IDB path to reuse
 - `value`: `string|object`
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

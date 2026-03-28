@@ -1,41 +1,68 @@
 # PROJECT Tool Manual
 
 ## What It Does
-Handles IDB/project lifecycle and filesystem operations exposed through the MCP tool layer.
+Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.
 
 ## Actions
-- `save`: Save current database.
-- `close`: Close current database (headless-only support).
-- `open`: Open database/binary path (headless-only support path).
-- `load_binary`: Load additional binary data at an optional base address.
-- `list_recent`: Return recent files list.
-- `get_cwd`: Return current working directory.
-- `set_cwd`: Change working directory.
-- `list_dir`: List directory entries.
-- `exists`: Check path existence/type.
-- Legacy compatibility:
-  - `read`/`write` are routed to `misc(read_file/write_file)`.
-  - `sessions` is deprecated; use `session` tool.
-  - `batch` remains host-level (use `batch` + `session` tools).
+- `save`
+- `close`
+- `open`
+- `load_binary`
+- `list_recent`
+- `get_cwd`
+- `set_cwd`
+- `list_dir`
+- `exists`
 
-## Key Parameters
-- `action`: One of `save|close|open|load_binary|list_recent|get_cwd|set_cwd|list_dir|exists`.
-- `path`: File/directory path (required by path-based actions).
-- `base_addr`: Optional base address for `load_binary`.
-- `content`: File content for `write`; optional mode payload for `open`.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-project(action="save")
-project(action="open", path="/samples/dropper.exe")
-project(action="load_binary", path="/tmp/blob.bin", base_addr="0x500000")
-project(action="list_dir", path="/samples")
-misc(action="read_file", path="/tmp/notes.txt")
-misc(action="write_file", path="/tmp/notes.txt", content="triage complete")
+## Example
+```json
+{
+  "name": "project",
+  "arguments": {
+    "action": "save"
+  }
+}
 ```
 
-## Failure Modes
-- Path validation failure (`validate_path_safe`).
-- Missing required `path` values.
-- `open`/`close` may return `NOT_IMPLEMENTED` outside headless capabilities.
-- Legacy `sessions`/`batch` return guidance errors.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

@@ -1,49 +1,76 @@
 # MISC Tool Manual
 
 ## What It Does
-Hosts utility operations: execute Python/IDC snippets, schedule FLIRT signature load, inspect cache stats, perform local file read/write, and run host health diagnostics.
+Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. plugin_* manages IDA plugins. health runs host diagnostics without requiring a session.
 
 ## Actions
-- `python`: Execute Python expression/script in IDA context.
-- `idc`: Evaluate IDC expression/script.
-- `load_sig`: Plan FLIRT signature application by name.
-- `cache_stats`: Return read-only cache statistics if cache module exists.
-- `read_file`: Read host file as text or hex-encoded binary.
-- `write_file`: Write host file as text or from hex-encoded binary.
-- `plugin_list`: Enumerate available plugins (filesystem-backed where runtime APIs are limited).
-- `plugin_run`: Execute a plugin by `name` with optional integer `arg`.
-- `health`: Run host/runtime diagnostics (cache dir, IDA path, session/runtime status, wiki availability). Does not require an active session.
+- `python`
+- `idc`
+- `load_sig`
+- `cache_stats`
+- `read_file`
+- `write_file`
+- `plugin_list`
+- `plugin_run`
+- `health`
 
-## Key Parameters
-- `action`: One of `python|idc|load_sig|cache_stats|read_file|write_file|plugin_list|plugin_run|health`.
-- `expr` / `code`: Script input for `python` and `idc` (either accepted).
-- `name`: Required by `load_sig`.
-- `name`: Required by `plugin_run` (plugin name).
-- `arg`: Optional integer argument for `plugin_run`.
-- `path`: Required by `read_file` and `write_file`.
-- `content`: Required by `write_file`.
-- `encoding`: Optional text encoding; use `binary` for hex mode.
-- `verbose`: Optional boolean for `health`; includes per-runtime detail when true.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health, grep, pick, head, tail, next, stats`
+- `arg`: `integer` — Plugin argument for plugin_run
+- `code`: `string` — Multi-line Python code to execute
+- `content`: `string` — Content to write for write_file
+- `cursor`: `string`
+- `encoding`: `string` — File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.
+- `expr`: `string` — Python expression or IDC script to evaluate
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `name`: `string` — Signature name for load_sig
+- `next_token`: `string`
+- `on`: `string`
+- `path`: `string` — File path for read_file/write_file
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
+- `verbose`: `boolean` — Include per-runtime details for health action.
 
-## Examples
-```python
-misc(action="python", expr="idc.get_func_name(here())")
-misc(action="idc", expr="GetDisasm(here())")
-misc(action="load_sig", name="vc32")
-misc(action="cache_stats")
-misc(action="read_file", path="/tmp/report.txt")
-misc(action="read_file", path="/tmp/blob.bin", encoding="binary")
-misc(action="write_file", path="/tmp/out.txt", content="hello")
-misc(action="write_file", path="/tmp/out.bin", content="9090", encoding="binary")
-misc(action="plugin_list")
-misc(action="plugin_run", name="Hex-Rays Decompiler", arg=0)
-misc(action="health")
-misc(action="health", verbose=True)
+## Example
+```json
+{
+  "name": "misc",
+  "arguments": {
+    "action": "python"
+  }
+}
 ```
 
-## Failure Modes
-- Missing required `expr/code`, `name`, `path`, or `content`.
-- Syntax/runtime exceptions from executed Python/IDC code.
-- Invalid binary hex input for `write_file`.
-- File not found/not-file for `read_file`.
-- Unknown action returns error payload.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27
