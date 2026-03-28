@@ -7792,12 +7792,14 @@ class IDAMCPServer:
                     desc = build_tool_description_lean(tool_name)
                 else:
                     desc = build_tool_description_ultra(tool_name)
-                if isinstance(desc, str) and desc.strip():
-                    return desc
+                desc_text = str(desc or "").strip()
+                if desc_text:
+                    return desc_text
                 if tool_mode != "full":
                     fallback = TOOL_DESCRIPTIONS.get(tool_name, "")
-                    if isinstance(fallback, str) and fallback.strip():
-                        return fallback
+                    fallback_text = str(fallback or "").strip()
+                    if fallback_text:
+                        return fallback_text
                 return f"Use wiki(topic='tools/{tool_name}') for usage."
             tools = [
                 {
