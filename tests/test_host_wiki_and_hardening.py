@@ -195,8 +195,8 @@ class TestHostHardening(unittest.TestCase):
     def test_tools_list_has_no_empty_tooltips(self):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 11, "method": "tools/list"})
         tools_payload = res["result"]["tools"]
-        empty = [t["name"] for t in tools_payload if not (t.get("description") or "").strip()]
-        self.assertEqual(empty, [])
+        tools_with_empty_descriptions = [t["name"] for t in tools_payload if not (t.get("description") or "").strip()]
+        self.assertEqual(tools_with_empty_descriptions, [])
 
     def test_tools_list_count_matches_advertised_tools(self):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 12, "method": "tools/list"})
