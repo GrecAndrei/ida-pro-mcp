@@ -19,6 +19,7 @@ from ida_mcp_stdio import (  # noqa: E402
     SessionManager,
     TOOLS,
     TOOL_ALIASES,
+    compile_smart_pattern,
 )
 
 # Regression guard for the "5000+ aliases accepted" behavior target.
@@ -202,12 +203,81 @@ class TestHostHardening(unittest.TestCase):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 12, "method": "tools/list"})
         self.assertEqual(len(res["result"]["tools"]), len(ADVERTISED_TOOLS))
 
+    def test_tools_list_supports_prefix_contains_category_sort_and_pagination(self):
+        res = self.server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 13,
+                "method": "tools/list",
+                "params": {
+                    "prefix": "c",
+                    "contains": "o",
+                    "category": "security",
+                    "sort": "name",
+                    "descending": False,
+                    "offset": 0,
+                    "limit": 2,
+                },
+            }
+        )
+        self.assertEqual(res["result"]["mode"], "full")
+        self.assertLessEqual(len(res["result"]["tools"]), 2)
+        self.assertGreaterEqual(res["result"]["total"], len(res["result"]["tools"]))
+        for tool in res["result"]["tools"]:
+            self.assertTrue(tool["name"].startswith("c"))
+            self.assertIn("o", tool["name"])
+            self.assertEqual(tool["category"], "security")
+        names = [t["name"] for t in res["result"]["tools"]]
+        self.assertEqual(names, sorted(names))
+
+    def test_tools_list_invalid_sort_falls_back_to_name(self):
+        res = self.server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 14,
+                "method": "tools/list",
+                "params": {"sort": "invalid", "limit": 5},
+            }
+        )
+        names = [t["name"] for t in res["result"]["tools"]]
+        self.assertEqual(names, sorted(names))
+
+    def test_tools_list_catalog_is_cached(self):
+        first = self.server._build_tools_list_catalog("full")
+        second = self.server._build_tools_list_catalog("full")
+        self.assertIs(first, second)
+
     def test_misc_health_requires_no_session(self):
         res = self.server._execute_tool("misc", {"action": "health"})
         self.assertTrue(res.get("ok"))
         self.assertEqual(res.get("action"), "health")
         self.assertIn("runtime", res)
         self.assertIn("ida", res)
+
+    def test_session_create_requires_string_binary_path(self):
+        res = self.server._execute_tool("session", {"action": "create", "binary_path": 123})
+        self.assertTrue(res.get("error"))
+        self.assertEqual(res.get("code"), MCPError.INVALID_ARGS)
+        self.assertIn("binary_path must be a string", res.get("message", ""))
+
+    def test_session_create_rejects_removed_params_with_actionable_hint(self):
+        res = self.server._execute_tool("session", {"action": "create", "idb_path": "/tmp/a.i64"})
+        self.assertTrue(res.get("error"))
+        self.assertEqual(res.get("code"), MCPError.INVALID_ARGS)
+        hint = ((res.get("details") or {}).get("hint") or "")
+        self.assertIn("session(action='create', binary_path='...')", hint)
+
+    def test_compile_smart_pattern_allows_explicit_semantic_toggle(self):
+        off = compile_smart_pattern("find api", semantic_enabled=False)
+        on = compile_smart_pattern("find api", semantic_enabled=True)
+        self.assertFalse(off("search import usage"))
+        self.assertTrue(on("search import usage"))
+
+    def test_compile_smart_pattern_allows_fuzzy_cutoff_tuning(self):
+        strict = compile_smart_pattern("decompyle trace", semantic_enabled=True, fuzzy_cutoff=0.95)
+        relaxed = compile_smart_pattern("decompyle trace", semantic_enabled=True, fuzzy_cutoff=0.80)
+        self.assertFalse(strict("decompile reference flow"))
+        self.assertTrue(relaxed("decompile reference flow"))
 
     def test_batch_allows_legacy_plugins_alias_resolution(self):
         res = self.server._handle_batch(
