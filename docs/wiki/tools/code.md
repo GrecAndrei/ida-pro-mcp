@@ -1,62 +1,87 @@
 # CODE Tool Manual
 
 ## What It Does
-Perform code analysis, decompilation, and graph traversal.
+Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.
 
 ## Actions
-- `decompile`: Return Hex-Rays pseudocode for a function.
-- `disasm`: Return disassembly for a function/range.
-- `xrefs_to`: List references to a target address.
-- `xrefs_from`: List outgoing references from an address/function.
-- `xrefs_to_field`: Find references to a named structure field.
-- `callees`: List functions called by a function.
-- `callers`: List functions that call a function.
-- `blocks`: Return basic block information.
-- `analyze`: Return compact multi-signal function analysis.
-- `callgraph`: Build callgraph neighborhood with depth limits.
-- `export`: Export code-centric analysis data.
-- `find_paths`: Search paths between addresses/functions.
-- `strings_in_func`: List strings referenced by a function.
-- `diff_functions`: Diff two functions structurally/semantically.
+- `decompile`
+- `disasm`
+- `xrefs_to`
+- `xrefs_from`
+- `xrefs_to_field`
+- `callees`
+- `callers`
+- `blocks`
+- `analyze`
+- `callgraph`
+- `export`
+- `find_paths`
+- `strings_in_func`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addrs` (default `None`): Comma-separated addresses or address list, action-dependent.
-- `addr` (default `None`): Target address or function start (hex string).
-- `max_items` (default `1000`): Maximum returned items.
-- `max_depth` (default `5`): Maximum graph/path depth.
-- `format` (default `'json'`): Output/input format (`json`, `plain`, `md`, etc. as supported).
-- `field_name` (default `None`): Structure field name for field-reference queries.
-- `target` (default `None`): Target address/symbol for resolve/xref/path actions.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `19`
+- `addr`: `string`
+- `addrs`: `array | string`
+- `cursor`: `string`
+- `disasm_style`: `string`; allowed: `csmini, classic, annotated`
+- `end`: `string`
+- `field_name`: `string`
+- `format`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `include_bytes`: `boolean`
+- `limit`: `integer`
+- `max_depth`: `integer`
+- `max_items`: `integer`
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target`: `string`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "code",
-  "args": {
-    "action": "decompile",
-    "addr": "0x401000"
+  "name": "code",
+  "arguments": {
+    "action": "decompile"
   }
 }
 ```
-```json
-{
-  "tool": "code",
-  "args": {
-    "action": "callgraph",
-    "addr": "0x401000",
-    "max_depth": 3,
-    "max_items": 200
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `addrs or addr parameter required`
-- `FUNCTION_NOT_FOUND`: `No function at {hex_ea(ea)}`
-- `INVALID_ARGS`: `field_name required`
-- `IDA_ERROR`: `Error searching for field: {str(e)}`
-- `INVALID_ARGS`: `target required`
-- `FUNCTION_NOT_FOUND`: `No function at {hex(ea)}`
-- `INVALID_ARGS`: `diff_functions requires exactly 2 addresses`
-- `IDA_ERROR`: `Decompilation failed: {e}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+- High-noise action aliases are normalized (examples: `assembly` -> `disasm`, `decompiled` -> `decompile`, `paths` -> `find_paths`).
+- High-noise argument aliases are normalized (examples: `targets` -> `addrs`, `style` -> `disasm_style`, `address` -> `addr/addrs`).
+- Wrapped and malformed address list values are tolerated where unambiguous (example: `[0x401000,0x401010]`).
+- All responses include `llm_pointer_note` in ALL CAPS to reinforce calc/memory usage for address math.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

@@ -1,86 +1,138 @@
 # SESSION Tool Manual
 
 ## What It Does
-Manages host-side multi-session lifecycle (create/reuse/switch/rebuild/delete), tracks metadata, and defines the active context used by other tools.
+Session lifecycle + runtime context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.
 
 ## Actions
-- `discover`: Reload/discover recoverable sessions.
-- `create`: Create new session or reuse existing matching binary/IDB unless `force_new=true`.
-- `get`: Get one session by `session_id` (includes runtime status).
-- `list`: List sessions with optional query + pagination.
-- `switch`: Set active session by `session_id` or `binary_path`.
-- `close`: Permanently delete session artifacts and stop runtime.
-- `status`: Show active session and total session count.
-- `rebuild`: Delete/recreate session IDB with updated analysis options.
-- `update`, `rename`, `duplicate`
-- `export_session`, `import_session`
-- `archive`, `unarchive`
-- `tag`, `untag`, `find_by_tag`
-- `add_note`, `clear_notes`, `search_notes`
-- `cleanup_stale`, `stats`, `validate`
-- `bulk_delete`, `bulk_tag`
-- `recent`, `oldest`
-- `snapshot`, `restore_snapshot`
+- `discover`
+- `create`
+- `get`
+- `list`
+- `switch`
+- `close`
+- `status`
+- `rebuild`
+- `update`
+- `rename`
+- `duplicate`
+- `export_session`
+- `import_session`
+- `archive`
+- `unarchive`
+- `tag`
+- `untag`
+- `find_by_tag`
+- `add_note`
+- `clear_notes`
+- `cleanup_stale`
+- `stats`
+- `validate`
+- `bulk_delete`
+- `bulk_tag`
+- `search_notes`
+- `recent`
+- `oldest`
+- `snapshot`
+- `restore_snapshot`
 - `merge`
-- `macro_set`, `macro_get`, `macro_list`, `macro_delete`, `macro_run`
-- `recent_workset` (activity + bookmarks quick resume context)
+- `macro_set`
+- `macro_get`
+- `macro_list`
+- `macro_delete`
+- `macro_run`
+- `recent_workset`
 
-Host-side companion tools in the same stdio server:
-- `bookmarks` actions: `add`, `list`, `delete`, `update`, `clear`, `find`, `export` (requires an active session).
-- `truncation` action: `continue` (resume fields from `_continue.token` in truncated responses).
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `42`
+- `aggressive_cleanup`: `boolean`
+- `analysis_actions`: `array`
+- `analysis_options`: `object` — Advanced analysis options payload
+- `apply_once`: `boolean`
+- `backup_on_recover`: `boolean`
+- `baseaddr`: `string | integer`
+- `binary_path`: `string` — Path to target binary
+- `bitness`: `integer`
+- `cursor`: `string`
+- `data`: `object` — Macro payload for macro_set.
+- `end`: `string | integer`
+- `endian`: `string`
+- `flags`: `integer`
+- `force_new`: `boolean` — Force creation of a new session even if one exists
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `ida_args`: `string | array`
+- `include_bookmarks`: `boolean` — Include bookmark entries in recent_workset.
+- `include_items`: `boolean` — Include structured items in recent_workset response.
+- `limit`: `integer` — Max sessions to return (list action)
+- `loader`: `string`
+- `loader_options`: `string | object`
+- `macro`: `string` — Alias for macro name in macro_* actions.
+- `macro_data`: `object` — Alias for macro payload in macro_set.
+- `max_ea`: `string | integer`
+- `min_ea`: `string | integer`
+- `n`: `integer` — Count for recent/oldest/recent_workset actions.
+- `name`: `string` — Name for macro_* actions or rename action.
+- `next_token`: `string`
+- `note`: `string` — Single note payload for add_note action.
+- `notes`: `string` — Free-form notes for the session (create action).
+- `offset`: `integer` — Skip first N sessions (list action)
+- `on`: `string`
+- `options`: `object`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `processor`: `string`
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `query`: `string` — Filter sessions by name/path (supports regex, glob, substring)
+- `reanalyze`: `boolean`
+- `recover`: `boolean`
+- `run_action`: `string` — Session action to execute for macro_run (default from macro or create).
+- `session_id`: `string` — Session ID for switch/close
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `start`: `string | integer`
+- `start_ea`: `string | integer`
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tags`: `array | string` — Tags for the session (create action). Comma-separated string or array.
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
+- `value`: `string | object`
 
-## Key Parameters
-- `action`: One of session actions above.
-- `binary_path`, `idb_path`/`use_existing`: Inputs for `create`.
-- `force_new`: Force new session even when matching session exists.
-- `analysis_options` and related create/rebuild keys (`processor`, `loader`, `bitness`, `endian`, etc.).
-- `ida_args`: String or array of strings passed to IDA runtime.
-- `session_id`: Required by many session-targeted actions.
-- `name`/`macro`: Macro identifier for `macro_*` actions.
-- `data`/`macro_data`: Macro payload object (usually saved session arguments).
-- `run_action`: Override action used by `macro_run` (defaults to macro payload action or `create`).
-- `include_bookmarks`, `include_items`: `recent_workset` output shaping.
-- `query`, `limit`, `offset`: Filters/pagination for listing/search.
-- `bookmarks` common args: `addr`, `id`, `name`, `notes`, `category`, `priority`, `tags`, `query`.
-- `truncation` args: `token` (required), plus optional `field`, `offset`, `count`.
-
-## Examples
+## Example
 ```json
-{"name":"session","arguments":{"action":"create","binary_path":"/samples/a.out","tags":["triage"],"notes":"initial pass"}}
+{
+  "name": "session",
+  "arguments": {
+    "action": "discover"
+  }
+}
 ```
 
-```json
-{"name":"session","arguments":{"action":"list","query":"triage","limit":20,"offset":0}}
-```
+## Notes
+- `create` requires `binary_path` and rejects `idb_path`/`use_existing`.
+- High-noise action aliases are normalized (examples: `metrics` -> `stats`, `new` -> `create`, `clone` -> `duplicate`).
+- High-noise argument aliases are normalized (examples: `id` -> `session_id`, `binary` -> `binary_path`, `label` -> `tag`, `save_macro` -> `macro_set` action alias route).
+- Noisy wrapper payloads such as `[ABCD1234]` for `session_id` are tolerated where unambiguous.
+- All responses include `llm_pointer_note` in ALL CAPS to reinforce calc/memory usage for address math.
 
-```json
-{"name":"session","arguments":{"action":"switch","session_id":"A1B2C3D4"}}
-```
-
-```json
-{"name":"session","arguments":{"action":"macro_set","name":"quick_linux","data":{"action":"create","binary_path":"/samples/a.out","processor":"metapc","bitness":64}}}
-```
-
-```json
-{"name":"session","arguments":{"action":"macro_run","name":"quick_linux","binary_path":"/samples/b.out"}}
-```
-
-```json
-{"name":"session","arguments":{"action":"recent_workset","n":25,"include_bookmarks":true}}
-```
-
-```json
-{"name":"bookmarks","arguments":{"action":"add","addr":"0x401000","name":"entry-check","tags":["triage","input"]}}
-```
-
-```json
-{"name":"truncation","arguments":{"action":"continue","token":"AB12CD34","field":"results","offset":100,"count":50}}
-```
-
-## Failure Modes
-- `create` requires `binary_path` or `idb_path`; invalid paths are rejected.
-- `close` is destructive (session files and logs are removed).
-- Many actions require `session_id` when there is no active session.
-- Nonexistent `session_id` returns session-not-found.
-- `rebuild` can fail if IDB deletion is blocked/locked.
-- `restore_snapshot` fails if snapshot id is unknown (snapshots are in-memory, process-lifetime only).
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

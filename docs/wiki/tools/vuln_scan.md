@@ -1,91 +1,85 @@
 # VULN_SCAN Tool Manual
 
 ## What It Does
-Runs heuristic static vulnerability scans and emits compact CWE-tagged findings suitable for triage.
+Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep), optional dataflow graph/remediation planning, and returns ranked findings with risk scoring, hotspots, and attack-path correlation.
 
 ## Actions
-- `buffer_overflow` (CWE-120)
-- `format_string` (CWE-134)
-- `integer_overflow` (CWE-190)
-- `use_after_free` (CWE-416)
-- `command_injection` (CWE-78)
-- `race_condition` (CWE-362)
-- `null_deref` (CWE-476)
-- `info_leak` (CWE-200)
-- `auth_bypass` (CWE-287)
-- `hardcoded_creds` (CWE-798)
-- `scan_all`: runs all scanners and aggregates
-- `classify`: runs all scanners around one address/function context
-- `osv_query`: queries OSV (`api.osv.dev`) for known vulnerable package versions
-- `intelligence_report`: scan-all + smarter risk scoring, hotspot clustering, and attack-path correlation
+- `buffer_overflow`
+- `format_string`
+- `integer_overflow`
+- `use_after_free`
+- `command_injection`
+- `race_condition`
+- `null_deref`
+- `info_leak`
+- `auth_bypass`
+- `hardcoded_creds`
+- `scan_all`
+- `classify`
+- `osv_query`
+- `intelligence_report`
 
-## Key Parameters
-- `action`: One of the actions above.
-- `addr`: Optional function/address scope for scans; required for `classify`.
-- `limit`: Max returned findings.
-- `offset`: Skip first N ranked findings.
-- `severity`: Optional filter `critical|high|medium|low`.
-- `include_context`: Adds compact decompiled context into structured items when available.
-- `scan_profile`: Optional scan depth profile `quick|balanced|deep` controlling analysis/ranking rigor.
-- `max_graph_depth`: Optional graph correlation depth (`0..3`) for intelligence graph building.
-- `include_dataflow_graph`: Include compact finding-correlation graph output (default `true`).
-- `include_remediation_plan`: Include prioritized remediation plan output (default `true`).
-- `osv_coordinates`: List of coordinates in `ecosystem:name@version` or `pkg:purl` format.
-- `osv_ecosystem`: Default ecosystem for shorthand coordinates like `name@version`.
-- `osv_endpoint`: Optional OSV endpoint/base URL (defaults to `https://api.osv.dev`).
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `20`
+- `addr`: `string` — Address or function scope for scanning.
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `include_context`: `boolean` — Include compact decompiled context when available.
+- `include_dataflow_graph`: `boolean` — Include compact correlation graph in scan_all/intelligence_report.
+- `include_remediation_plan`: `boolean` — Include prioritized remediation plan in scan_all/intelligence_report.
+- `limit`: `integer` — Max findings to return (capped for context safety).
+- `max_graph_depth`: `integer` — Correlation graph depth (0-3) for intelligence outputs.
+- `next_token`: `string`
+- `offset`: `integer` — Skip first N ranked findings.
+- `on`: `string`
+- `osv_coordinates`: `array` — OSV package coordinates (ecosystem:name@version or pkg:purl). Used by osv_query and optional scan_all enrichment.
+- `osv_ecosystem`: `string` — Default OSV ecosystem for shorthand coordinates like name@version.
+- `osv_endpoint`: `string` — OSV endpoint/base URL (default: https://api.osv.dev).
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `scan_profile`: `string`; allowed: `quick, balanced, deep` — Scan depth profile controlling local evidence/ranking rigor.
+- `severity`: `string`; allowed: `critical, high, medium, low` — Optional severity filter.
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Response Contract
-- `findings`: Backward-compatible compact newline output.
-- `items`: Structured findings with fields such as `addr`, `function`, `type`, `cwe`, `severity`, `confidence`, `description`, `pattern`, optional `context`.
-- `count`, `total`, `offset`, `truncated`: Stable pagination metadata.
-- `severity_counts`, `type_counts`: Aggregated triage summaries.
-- `risk_histogram`: Distribution buckets for normalized risk scores.
-- `hotspots`: Top risky functions with vulnerability density.
-- `attack_paths`: Correlated multi-stage exploit chains (especially in `intelligence_report`).
-- `recommendations`: Prioritized remediation guidance based on observed findings.
-- `coverage_metrics`: Aggregate quality signals (function coverage, confidence ratio, avg risk).
-- `dataflow_graph`: Compact nodes/edges representing likely source/sink/sanitizer relationships.
-- `remediation_plan`: Priority-bucketed fix plan (`P0..P3`) with concrete action items.
-
-## Major Improvements
-- API resolution now handles import variants (e.g. WinAPI `A/W`, decorated imports, `__imp_` prefixes) instead of exact-name only.
-- Findings are now deduplicated and ranked by `severity` then `confidence` for more useful top results.
-- `scan_all` gathers deeper candidate sets per scanner, then globally normalizes/ranks instead of naive concatenation.
-- Findings now include normalized `risk_score`, `priority`, and `exploitability` for better triage ordering.
-- New `scan_profile` (`quick|balanced|deep`) controls local evidence windows and scan intensity.
-- New `intelligence_report` action correlates multiple finding classes into exploit-path chains and function hotspots.
-- Correlation outputs now include compact dataflow graph and remediation planning to support end-to-end triage execution.
-- `scan_all` can optionally include OSV-enriched findings when `osv_coordinates` are provided.
-- New `osv_query` action gives direct OSV-backed findings with the same normalized ranking/pagination contract.
-- Severity filtering is now structural (not string-tag matching).
-- `hardcoded_creds` now prefers assignment-style credential patterns (`key=value`, `key: value`) to reduce false positives.
-- Several scanner loops were hardened for scope correctness and noise reduction.
-
-## Examples
+## Example
 ```json
-{"name":"vuln_scan","arguments":{"action":"scan_all","limit":80,"severity":"high"}}
+{
+  "name": "vuln_scan",
+  "arguments": {
+    "action": "buffer_overflow"
+  }
+}
 ```
 
-```json
-{"name":"vuln_scan","arguments":{"action":"intelligence_report","scan_profile":"deep","max_graph_depth":3,"include_dataflow_graph":true,"include_remediation_plan":true,"limit":120}}
-```
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
 
-```json
-{"name":"vuln_scan","arguments":{"action":"command_injection","addr":"0x401000","limit":25}}
-```
-
-```json
-{"name":"vuln_scan","arguments":{"action":"classify","addr":"0x402120"}}
-```
-
-```json
-{"name":"vuln_scan","arguments":{"action":"osv_query","osv_coordinates":["PyPI:requests@2.19.0","npm:lodash@4.17.20"]}}
-```
-
-## Failure Modes
-- Invalid `severity` values are rejected.
-- `classify` without `addr` is rejected.
-- Unknown action returns invalid-args error.
-- Pattern-based heuristics can produce false positives/negatives; always validate manually in disassembly/decompilation.
-- `osv_query` requires valid package coordinates; malformed coordinates are returned in `parse_errors`.
-- OSV network/API failures are reported in `osv_error` while preserving local scan results (for `scan_all`).
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

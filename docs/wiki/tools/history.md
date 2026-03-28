@@ -1,33 +1,65 @@
 # HISTORY Tool Manual
 
 ## What It Does
-Wraps IDA undo/redo and snapshot-related capabilities, with lightweight snapshot lookup and a heuristic change report.
+Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff.
 
 ## Actions
-- `undo`: Perform up to `count` undo steps.
-- `redo`: Perform up to `count` redo steps.
-- `list`: Check undo/redo availability and descriptions (if supported).
-- `snapshot`: Create named snapshot (native if available, else save DB copy).
-- `restore`: Look up snapshot metadata by name.
-- `diff`: Heuristic list of non-default function names (not full DB diff).
+- `undo`
+- `redo`
+- `list`
+- `snapshot`
+- `restore`
+- `diff`
 
-## Key Parameters
-- `action`: One of `undo|redo|list|snapshot|restore|diff`.
-- `count`: Undo/redo step count.
-- `name`: Snapshot identifier for `snapshot` and required for `restore`.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `undo, redo, list, snapshot, restore, diff, grep, pick, head, tail, next, stats`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples
-```python
-history(action="undo", count=3)
-history(action="redo", count=1)
-history(action="list")
-history(action="snapshot", name="pre_patch")
-history(action="restore", name="pre_patch")
-history(action="diff")
+## Example
+```json
+{
+  "name": "history",
+  "arguments": {
+    "action": "undo"
+  }
+}
 ```
 
-## Failure Modes
-- `restore` with missing `name` or unknown snapshot metadata file.
-- Snapshot creation failure when native and copy fallback both fail.
-- `diff` is intentionally limited and not authoritative.
-- API differences across IDA versions reduce detail in `list`.
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

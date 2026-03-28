@@ -1,22 +1,32 @@
 # Documentation Map
 
-This folder contains all project documentation, split into active references and archived legacy notes.
+This folder is the canonical documentation source for `ida-pro-mcp`.
 
-## Active Docs
+## Active documentation
 
-- `TECHNICAL_REFERENCE.md`: low-level implementation reference.
-- `TOOLS_REFERENCE.md`: tool-level reference overview.
-- `OPENCODE_SETUP.md`: OpenCode-specific setup details.
-- `wiki/`: in-tool wiki content used by the `wiki` MCP tool.
+- `../README.md`: project overview, install, architecture, runtime behavior.
+- `TOOLS_REFERENCE.md`: full generated tool/action/argument reference from live schemas.
+- `TECHNICAL_REFERENCE.md`: implementation-level architecture and runtime details.
+- `OPENCODE_SETUP.md`: OpenCode-specific integration/configuration notes.
+- `wiki/`: in-tool documentation consumed by the `wiki` MCP tool.
+  - `wiki/tools/*.md`: per-tool manuals generated from live tool metadata.
+  - `wiki/QuickStart.md`: concise operational quickstart.
+  - `wiki/INDEX.md`: generated index of available wiki topics.
+  - `wiki/skills/*`, `wiki/workflows/*`, `wiki/core/*`: analyst workflows and reference content.
 
-## Legacy Docs
+## Legacy documentation
 
-- `legacy/`: historical notes, prior plans, and superseded docs kept for reference.
-- `legacy/root-notes/`: files moved from repository root during cleanup.
+- `legacy/`: archived historical notes and superseded docs.
+- `legacy/root-notes/`: archived root-level planning/reference notes.
 
-## Recommended Reading Order
+## Regeneration model
+
+- Tool reference and wiki tool manuals are generated from `ida_mcp_stdio.py` metadata and schema builders.
+- If tool actions/args change, regenerate docs before publishing changes.
+
+## Recommended reading order
 
 1. `../README.md`
 2. `wiki/QuickStart.md`
-3. `TECHNICAL_REFERENCE.md`
-4. `TOOLS_REFERENCE.md`
+3. `TOOLS_REFERENCE.md`
+4. `TECHNICAL_REFERENCE.md`

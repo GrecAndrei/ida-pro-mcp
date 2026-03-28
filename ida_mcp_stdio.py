@@ -441,6 +441,9 @@ WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
 _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
+LLM_POINTER_SAFETY_NOTE = (
+    "DO NOT CALCULATE POINTERS OR ADDRESSES MENTALLY; ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING."
+)
 ADVERTISED_TOOLS = [
     "session",
     "truncation",
@@ -454,6 +457,9 @@ ADVERTISED_TOOLS = [
     "code",
     "data",
     "search",
+    "imports_deep",
+    "symbols",
+    "patterns",
     "types",
     "memory",
     "modify",
@@ -465,13 +471,14 @@ ADVERTISED_TOOLS = [
     "nav",
     "project",
     "debug",
-    "trace",
-    "coverage",
-    "agent",
-    "summarize",
-    "classify",
+    "graph",
+    "ctree",
+    "export",
+    "history",
+    "annotation",
+    "binary_info",
+    "threat_hunt",
     "compare",
-    "vuln_scan",
 ]
 HIDDEN_TOOLS_IN_LIST = {"plugins", "xfer_analysis"}
 _COMPACT_DROP = object()
@@ -1520,6 +1527,7 @@ TOOLS = [
     # --- New LLM-optimized tools ---
     # Security & vulnerability analysis
     "vuln_scan",
+    "threat_hunt",
     "gadgets",
     "c2_detect",
     # Deobfuscation & crypto
@@ -1587,6 +1595,23 @@ _EXTRA_TOOL_ALIASES = {
     "queries": "query",
     "rename": "edit",
     "scanner": "vuln_scan",
+    "vuln": "threat_hunt",
+    "vulnerability": "threat_hunt",
+    "vulnerabilities": "threat_hunt",
+    "threat": "threat_hunt",
+    "threat_hunt_tool": "threat_hunt",
+    "malware": "threat_hunt",
+    "security": "threat_hunt",
+    "trace": "threat_hunt",
+    "tracing": "threat_hunt",
+    "coverage": "threat_hunt",
+    "taint": "threat_hunt",
+    "c2": "threat_hunt",
+    "deobfuscation": "threat_hunt",
+    "crypto": "threat_hunt",
+    "yara": "threat_hunt",
+    "hunt": "threat_hunt",
+    "automated_findings": "threat_hunt",
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",
@@ -1783,6 +1808,7 @@ TOOL_DESCRIPTIONS = {
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
     "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, scan_all, classify, osv_query, intelligence_report. Supports scan_profile (quick|balanced|deep), optional dataflow graph/remediation planning, and returns ranked findings with risk scoring, hotspots, and attack-path correlation.",
+    "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
@@ -2077,6 +2103,7 @@ TOOL_ACTIONS = {
         "auth_bypass", "hardcoded_creds", "scan_all", "classify", "osv_query",
         "intelligence_report",
     ],
+    "threat_hunt": ["run", "malware", "vuln", "tracing", "findings", "quick", "deep", "legacy"],
     "deobfuscate": [
         "detect_encoding", "xor_scan", "stack_strings", "opaque_predicates",
         "control_flow_flatten", "dead_code", "api_hashing", "dynamic_dispatch",
@@ -2156,8 +2183,6 @@ TOOL_ARG_SCHEMAS = {
     "session": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["session"]},
         "binary_path": {"type": "string", "description": "Path to target binary"},
-        "use_existing": {"type": "string", "description": "Existing IDB path to reuse"},
-        "idb_path": {"type": "string", "description": "Existing IDB path (alias of use_existing)"},
         "force_new": {"type": "boolean", "description": "Force creation of a new session even if one exists"},
         "analysis_options": {"type": "object", "description": "Advanced analysis options payload"},
         "ida_args": {"type": ["string", "array"], "items": {"type": "string"}},
@@ -2203,6 +2228,7 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "description": "Free-form notes for the session (create action).",
         },
+        "note": {"type": "string", "description": "Single note payload for add_note action."},
         "name": {"type": "string", "description": "Name for macro_* actions or rename action."},
         "macro": {"type": "string", "description": "Alias for macro name in macro_* actions."},
         "data": {"type": "object", "description": "Macro payload for macro_set."},
@@ -2377,6 +2403,38 @@ TOOL_ARG_SCHEMAS = {
         "osv_endpoint": {
             "type": "string",
             "description": "OSV endpoint/base URL (default: https://api.osv.dev).",
+        },
+    },
+    "threat_hunt": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},
+        "legacy_tool": {"type": "string", "description": "Legacy tool name to emulate (for action='legacy')."},
+        "legacy_action": {"type": "string", "description": "Legacy action to inherit/route (for action='legacy')."},
+        "profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Pipeline depth profile.",
+        },
+        "query": {"type": "string", "description": "Optional focus query for post-filtering and relevance scoring."},
+        "addr": {"type": "string", "description": "Optional address focus for underlying scanners where supported."},
+        "include_tracing": {"type": "boolean", "description": "Include trace/coverage analysis steps."},
+        "include_malware": {"type": "boolean", "description": "Include malware-behavior analysis steps."},
+        "include_vuln": {"type": "boolean", "description": "Include vulnerability analysis steps."},
+        "include_evidence": {"type": "boolean", "description": "Include compact raw per-step payloads for auditability."},
+        "limit": {"type": "integer", "description": "Global max findings to return after dedupe/ranking."},
+        "max_steps": {"type": "integer", "description": "Safety cap for total orchestrated tool calls."},
+        "scan_profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Forwarded depth profile to vuln_scan.",
+        },
+        "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "Optional severity filter for vulnerability findings.",
+        },
+        "legacy_passthrough": {
+            "type": "boolean",
+            "description": "For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.",
         },
     },
     "segments": {
@@ -2591,6 +2649,213 @@ _TOOL_SPECIFIC_ARG_ALIASES = {
     },
 }
 
+# Broad malformed/variant aliases accepted for high-noise LLM tool calls.
+_TOOL_ACTION_EXTRA_ALIASES = {
+    "threat_hunt": {
+        "run": {
+            "default",
+            "all",
+            "full",
+            "hunt",
+            "triage",
+            "investigate",
+            "orchestrate",
+            "pipeline",
+            "execute_all",
+            "end_to_end",
+            "go",
+        },
+        "legacy": {
+            "compat",
+            "compatibility",
+            "legacy_route",
+            "legacy_mode",
+            "bridge",
+            "fallback",
+            "inherit",
+        },
+        "vuln": {
+            "vulnerability",
+            "vulnerabilities",
+            "security",
+            "security_scan",
+            "vuln_scan",
+            "vulnscan",
+            "cve",
+        },
+        "malware": {
+            "mal",
+            "mal_scan",
+            "malware_scan",
+            "malware_hunt",
+            "ioc",
+            "iocs",
+            "threats",
+        },
+        "tracing": {
+            "trace",
+            "trace_analysis",
+            "runtime",
+            "coverage",
+            "flow",
+            "behavior",
+        },
+        "findings": {
+            "finds",
+            "results",
+            "report",
+            "summary",
+            "alerts",
+        },
+        "quick": {"fast", "lite", "quick_scan", "quickly"},
+        "deep": {"thorough", "intensive", "deep_scan", "full_depth"},
+    },
+    "search": {
+        "bytes": {"byte", "opcode_bytes", "hex_bytes"},
+        "string": {"strings", "str", "text_string"},
+        "immediate": {"imm", "immediates", "literal", "number"},
+        "name": {"symbol", "symbol_name", "func_name", "named"},
+        "insns": {"insn", "instruction", "instructions", "asm"},
+        "text": {"full_text", "plaintext"},
+        "operand": {"operands", "opnd", "arg_text"},
+        "comment": {"comments", "cmt", "annotation", "notes"},
+        "data_ref": {"data_refs", "dref", "drefs"},
+        "code_ref": {"code_refs", "cref", "crefs", "xref"},
+        "regex": {"regexp", "re", "pattern_regex"},
+        "func_by_sig": {"signature", "sig", "func_signature", "signature_search"},
+        "find": {"search", "lookup", "query", "locate", "discover"},
+        "callers": {"incoming", "inbound_calls", "who_calls"},
+        "callees": {"outgoing", "outbound_calls", "calls_from"},
+        "api": {"apis", "import_api", "api_calls"},
+        "vulnerable": {"vuln", "vulnerabilities", "risky"},
+        "constants": {"const", "literals", "magic"},
+        "decompiled": {"decompile", "pseudo", "pseudocode", "hl"},
+    },
+    "session": {
+        "discover": {"scan", "discover_sessions", "find_sessions"},
+        "create": {"new", "open", "start", "init", "spawn"},
+        "get": {"show", "read", "info", "details"},
+        "list": {"ls", "all", "enumerate"},
+        "switch": {"use", "activate", "focus"},
+        "close": {"delete", "remove", "terminate", "stop"},
+        "status": {"state", "current", "active"},
+        "rebuild": {"refresh", "recreate", "reanalyze"},
+        "update": {"edit", "set"},
+        "rename": {"set_name", "retitle"},
+        "duplicate": {"clone", "copy"},
+        "export_session": {"export", "dump"},
+        "import_session": {"import", "load"},
+        "archive": {"stash"},
+        "unarchive": {"unstash"},
+        "tag": {"add_tag", "label"},
+        "untag": {"remove_tag", "del_tag"},
+        "find_by_tag": {"search_tag", "tag_search"},
+        "add_note": {"note", "append_note"},
+        "clear_notes": {"wipe_notes", "reset_notes"},
+        "cleanup_stale": {"cleanup", "gc", "prune"},
+        "stats": {"statistics", "metrics"},
+        "validate": {"check", "verify"},
+        "bulk_delete": {"delete_many", "mass_delete"},
+        "bulk_tag": {"tag_many", "mass_tag"},
+        "search_notes": {"find_notes", "notes_search"},
+        "recent": {"latest", "newest"},
+        "oldest": {"old"},
+        "snapshot": {"savepoint", "checkpoint"},
+        "restore_snapshot": {"rollback", "restore"},
+        "merge": {"combine", "join"},
+        "macro_set": {"save_macro", "macro_save"},
+        "macro_get": {"load_macro", "macro_read"},
+        "macro_list": {"list_macros", "macros"},
+        "macro_delete": {"remove_macro", "delete_macro"},
+        "macro_run": {"run_macro", "execute_macro"},
+        "recent_workset": {"workset", "active_workset"},
+    },
+    "code": {
+        "decompile": {"decompiled", "pseudo", "pseudocode", "hl"},
+        "disasm": {"disassemble", "asm", "assembly", "listing"},
+        "xrefs_to": {"xref_to", "refs_to", "incoming_refs"},
+        "xrefs_from": {"xref_from", "refs_from", "outgoing_refs"},
+        "xrefs_to_field": {"field_xrefs", "xrefs_field"},
+        "callees": {"calls", "called_functions", "outgoing_calls"},
+        "callers": {"who_calls", "incoming_calls"},
+        "blocks": {"basic_blocks", "bb"},
+        "analyze": {"analysis", "inspect"},
+        "callgraph": {"cg", "graph_calls"},
+        "export": {"dump", "save"},
+        "find_paths": {"paths", "path_search", "reachability"},
+        "strings_in_func": {"func_strings", "strings"},
+    },
+}
+
+_TOOL_ARG_EXTRA_ALIASES = {
+    "threat_hunt": {
+        "legacy_tool": {"source_tool", "tool_name", "legacyTool", "tool"},
+        "legacy_action": {"source_action", "action_name", "legacyAction", "on"},
+        "profile": {"mode", "depth", "scan_mode"},
+        "query": {"q", "needle", "search"},
+        "addr": {"address", "ea", "va"},
+        "include_tracing": {"tracing", "with_tracing", "trace"},
+        "include_malware": {"malware", "with_malware"},
+        "include_vuln": {"vuln", "with_vuln", "security"},
+        "include_evidence": {"evidence", "with_evidence", "proof"},
+        "limit": {"max", "max_items", "count", "n"},
+        "max_steps": {"steps", "max_calls", "pipeline_steps"},
+        "scan_profile": {"vuln_profile", "scanner_profile"},
+        "severity": {"risk", "level"},
+        "legacy_passthrough": {"passthrough", "exact_legacy", "strict_legacy"},
+    },
+    "search": {
+        "pattern": {"needle", "text", "query_text"},
+        "query": {"q", "search", "find"},
+        "addr": {"address", "ea"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "start": {"from", "start_addr"},
+        "end": {"to", "end_addr"},
+        "case_sensitive": {"case", "match_case"},
+        "include_context": {"context", "with_context"},
+        "include_items": {"items", "with_items"},
+        "include_breakdown": {"breakdown", "stats"},
+        "timeout_ms": {"timeout", "timeout_millis"},
+        "max_functions": {"max_funcs", "function_cap"},
+        "sample": {"sample_mode", "sampling"},
+        "sample_max_funcs": {"sample_limit", "sample_cap"},
+    },
+    "session": {
+        "binary_path": {"binary", "path", "target", "input"},
+        "session_id": {"sid", "session", "id"},
+        "force_new": {"new", "create_new", "fresh"},
+        "analysis_options": {"analysis", "options"},
+        "ida_args": {"idat_args", "args"},
+        "tags": {"labels", "tag_list"},
+        "notes": {"description"},
+        "query": {"q", "search"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "name": {"title", "session_name"},
+        "data": {"payload"},
+        "session_ids": {"sids", "sessions"},
+        "tag": {"label"},
+        "snapshot_id": {"snapshot", "snap_id"},
+        "source_id": {"from_sid", "source"},
+        "target_id": {"to_sid", "target"},
+        "run_action": {"macro_action", "action_to_run"},
+    },
+    "code": {
+        "addrs": {"addr", "address", "ea", "vas", "targets"},
+        "addr": {"address", "ea", "va"},
+        "max_items": {"max", "count", "n"},
+        "max_depth": {"depth", "levels"},
+        "format": {"fmt"},
+        "disasm_style": {"style", "disasmStyle"},
+        "include_bytes": {"bytes", "with_bytes"},
+        "end": {"end_addr", "to"},
+        "limit": {"max", "count"},
+        "field_name": {"field", "member"},
+        "target": {"to", "destination"},
+    },
+}
+
 
 def _build_action_aliases() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
@@ -2599,6 +2864,7 @@ def _build_action_aliases() -> dict[str, dict[str, str]]:
         for action in actions:
             candidates = _snake_variants(action).union(_camel_variants(action))
             candidates.update(_ACTION_ALIAS_HINTS.get(action, set()))
+            candidates.update(_TOOL_ACTION_EXTRA_ALIASES.get(tool_name, {}).get(action, set()))
             if action.startswith("get_"):
                 candidates.add(action.replace("get_", "show_", 1))
             if action.startswith("set_"):
@@ -2642,6 +2908,7 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
                 candidates.discard(f"{canonical}s")
             candidates.update(_COMMON_ARG_ALIAS_HINTS.get(canonical, set()))
             candidates.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).get(canonical, set()))
+            candidates.update(_TOOL_ARG_EXTRA_ALIASES.get(tool_name, {}).get(canonical, set()))
             for alias in list(candidates):
                 candidates.update(_noisy_alias_variants(alias))
             for alias in candidates:
@@ -2944,9 +3211,9 @@ class IDAMCPServer:
         qol_mode = str(os.environ.get("IDA_MCP_QOL_MODE", "balanced")).strip().lower()
         if qol_mode not in {"tiny", "balanced", "debug"}:
             qol_mode = "balanced"
-        tools_list_mode = str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "ultra")).strip().lower()
+        tools_list_mode = str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "full")).strip().lower()
         if tools_list_mode not in {"ultra", "lean", "full"}:
-            tools_list_mode = "ultra"
+            tools_list_mode = "full"
         detail_level = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
         if detail_level not in {"none", "basic", "full"}:
             detail_level = "basic"
@@ -3680,6 +3947,74 @@ class IDAMCPServer:
             return text
         return _strip_balanced_wrappers(text)
 
+    def _normalize_field_variants(self, tool_name: str, out: dict) -> dict:
+        """Accept high-noise LLM value wrappers for known fields without changing caller intent."""
+        if not isinstance(out, dict):
+            return out
+        normalized = dict(out)
+        wrapper_fields = {
+            "action",
+            "legacy_tool",
+            "legacy_action",
+            "profile",
+            "scan_profile",
+            "query",
+            "pattern",
+            "addr",
+            "addrs",
+            "session_id",
+            "binary_path",
+            "name",
+            "tag",
+            "snapshot_id",
+            "source_id",
+            "target_id",
+            "field_name",
+            "target",
+        }
+        schema = TOOL_ARG_SCHEMAS.get(tool_name, {})
+        wrapper_fields.update(str(k) for k in schema.keys())
+        for key, value in list(normalized.items()):
+            if key not in wrapper_fields:
+                continue
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            if not text:
+                continue
+            cleaned = _strip_balanced_wrappers(text)
+            if cleaned and cleaned != text:
+                normalized[key] = cleaned
+                value = cleaned
+            # Accept bracketed list-like singletons such as "[0x401000]" as scalar.
+            if key in {"addr", "pattern", "query", "session_id", "binary_path"}:
+                if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
+                    inner = value[1:-1].strip()
+                    if inner and "," not in inner:
+                        normalized[key] = _strip_balanced_wrappers(inner)
+        # For array-like address fields, gracefully normalize common malformed scalar wrappers.
+        if "addrs" in normalized and isinstance(normalized["addrs"], str):
+            text = normalized["addrs"].strip()
+            if "," in text and not (text.startswith("{") and text.endswith("}")):
+                normalized["addrs"] = [
+                    _strip_balanced_wrappers(part.strip())
+                    for part in text.split(",")
+                    if part.strip()
+                ]
+                return normalized
+            if text.startswith("[") and text.endswith("]"):
+                inner = text[1:-1].strip()
+                if inner:
+                    if "," in inner:
+                        normalized["addrs"] = [
+                            _strip_balanced_wrappers(part.strip())
+                            for part in inner.split(",")
+                            if part.strip()
+                        ]
+                    else:
+                        normalized["addrs"] = _strip_balanced_wrappers(inner)
+        return normalized
+
     def _normalize_tool_call_args(self, tool_name: str, args: dict) -> dict:
         out = dict(args or {})
         valid_actions = TOOL_ACTIONS.get(tool_name, [])
@@ -3766,7 +4101,7 @@ class IDAMCPServer:
                     if mapped:
                         out["action"] = mapped
                         break
-        return out
+        return self._normalize_field_variants(tool_name, out)
 
     def _wrapper_source_action(self, tool_name: str, args: dict, wrapper_action: str) -> tuple[Optional[str], Optional[dict]]:
         native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
@@ -4385,6 +4720,9 @@ class IDAMCPServer:
 
     def _prepare_response_payload(self, payload: Any, opts: dict) -> Any:
         if opts.get("mode") == "full":
+            if isinstance(payload, dict):
+                payload = dict(payload)
+                payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
             return payload
         projected = self._project_top_level_fields(payload, opts)
         compacted = self._compact_value(projected, opts)
@@ -4394,6 +4732,9 @@ class IDAMCPServer:
         budget = int(opts.get("char_budget", 0) or 0)
         if budget > 0 and isinstance(compacted, dict):
             compacted = truncate_response(compacted, max_tokens=budget)
+        if isinstance(compacted, dict):
+            compacted = dict(compacted)
+            compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
         return compacted
 
     def _serialize_payload(self, payload: Any, opts: dict) -> str:
@@ -6185,6 +6526,296 @@ class IDAMCPServer:
             out["payload"] = source_payload
         return out
 
+    def _threat_hunt_step(self, ip: str, tool: str, action: str, step_args: Optional[dict] = None) -> dict:
+        payload_args = dict(step_args or {})
+        payload_args["action"] = action
+        payload_args["idb"] = ip
+        try:
+            result = self.call_tool(tool, ip, **payload_args)
+        except Exception as e:
+            return {
+                "ok": False,
+                "tool": tool,
+                "action": action,
+                "error": str(e),
+            }
+        if isinstance(result, dict) and result.get("error"):
+            return {
+                "ok": False,
+                "tool": tool,
+                "action": action,
+                "error": result.get("message") or result.get("error") or "unknown error",
+                "code": result.get("code"),
+                "payload": result,
+            }
+        return {
+            "ok": True,
+            "tool": tool,
+            "action": action,
+            "payload": result,
+        }
+
+    def _threat_hunt_extract_findings(self, step: dict) -> list[dict]:
+        payload = step.get("payload")
+        if not isinstance(payload, dict):
+            return []
+        out: list[dict] = []
+        tool = str(step.get("tool", ""))
+        action = str(step.get("action", ""))
+
+        for key in ("findings", "items", "matches", "results", "indicators", "iocs", "apis", "loops"):
+            val = payload.get(key)
+            if isinstance(val, list):
+                for entry in val:
+                    if isinstance(entry, dict):
+                        e = dict(entry)
+                    else:
+                        e = {"value": entry}
+                    e.setdefault("tool", tool)
+                    e.setdefault("action", action)
+                    out.append(e)
+
+        if not out and any(k in payload for k in ("summary", "count", "total")):
+            out.append(
+                {
+                    "tool": tool,
+                    "action": action,
+                    "summary": payload.get("summary"),
+                    "count": payload.get("count", payload.get("total", 0)),
+                }
+            )
+        return out
+
+    def _threat_hunt_legacy_route(self, legacy_tool: str, legacy_action: str, args: dict) -> tuple[str, list[tuple[str, str, dict]], dict]:
+        tool = str(legacy_tool or "").strip().lower()
+        action = str(legacy_action or "").strip().lower()
+        profile = str(args.get("profile") or args.get("scan_profile") or "balanced").strip().lower()
+        if profile not in {"quick", "balanced", "deep"}:
+            profile = "balanced"
+
+        mapped_module = "findings"
+        steps: list[tuple[str, str, dict]] = []
+        if tool in {"trace", "trace_analysis", "coverage"}:
+            mapped_module = "tracing"
+            trace_map = {
+                "get": [("trace", "get", {})],
+                "clear": [("trace", "clear", {})],
+                "set_options": [("trace", "set_options", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "import_trace": [("trace_analysis", "import_trace", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "analyze_coverage": [("trace_analysis", "analyze_coverage", {})],
+                "find_loops": [("trace_analysis", "find_loops", {})],
+                "extract_api_calls": [("trace_analysis", "extract_api_calls", {})],
+                "basic_blocks_hit": [("trace_analysis", "basic_blocks_hit", {})],
+                "import_drcov": [("coverage", "import_drcov", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "import_lighthouse": [("coverage", "import_lighthouse", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "highlight": [("coverage", "highlight", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "report": [("coverage", "report", {})],
+                "uncovered": [("coverage", "uncovered", {})],
+                "filter": [("coverage", "filter", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+            }
+            steps = trace_map.get(action, [("trace", "get", {}), ("trace_analysis", "analyze_coverage", {}), ("coverage", "report", {})])
+        elif tool in {"vuln_scan", "taint", "gadgets", "search"}:
+            mapped_module = "vuln"
+            if tool == "vuln_scan" and action:
+                steps = [("vuln_scan", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "taint" and action:
+                steps = [("taint", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "gadgets" and action:
+                steps = [("gadgets", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "search" and action in {"vulnerable", "constants", "api", "find", "regex"}:
+                passthrough = {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}}
+                steps = [("search", action, passthrough)]
+            else:
+                steps = [
+                    ("vuln_scan", "scan_all", {"scan_profile": profile}),
+                    ("vuln_scan", "intelligence_report", {"scan_profile": profile}),
+                    ("taint", "find_sinks", {"depth": 3 if profile == "quick" else 6}),
+                ]
+        else:
+            mapped_module = "malware"
+            if tool in {"c2_detect", "deobfuscate", "crypto_id", "yara_hunt"} and action:
+                steps = [(tool, action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "classify" and action:
+                steps = [("classify", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "summarize" and action in {"security_posture", "statistics", "binary", "function"}:
+                steps = [("summarize", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "agent" and action in {"search_all", "find_references"}:
+                steps = [("agent", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "protocol" and action:
+                steps = [("protocol", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "xref_analysis" and action:
+                steps = [("xref_analysis", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            elif tool == "string_ops" and action:
+                steps = [("string_ops", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            else:
+                steps = [
+                    ("c2_detect", "indicators", {}),
+                    ("c2_detect", "ioc_extract", {}),
+                    ("deobfuscate", "stack_strings", {}),
+                    ("crypto_id", "identify", {}),
+                ]
+
+        return mapped_module, steps, {"legacy_tool": tool or None, "legacy_action": action or None}
+
+    def _handle_threat_hunt(self, args: dict) -> dict:
+        action = str(args.get("action") or "run").strip().lower()
+        profile = str(args.get("profile") or args.get("scan_profile") or "balanced").strip().lower()
+        if action in {"quick", "deep"} and "profile" not in args and "scan_profile" not in args:
+            profile = action
+            action = "run"
+        if action == "findings":
+            action = "run"
+        if profile not in {"quick", "balanced", "deep"}:
+            profile = "balanced"
+
+        include_vuln = _coerce_bool(args.get("include_vuln"), action in {"run", "vuln", "legacy"})
+        include_malware = _coerce_bool(args.get("include_malware"), action in {"run", "malware", "legacy"})
+        include_tracing = _coerce_bool(args.get("include_tracing"), action in {"run", "tracing", "legacy"})
+        if action == "vuln":
+            include_vuln, include_malware, include_tracing = True, False, False
+        elif action == "malware":
+            include_vuln, include_malware, include_tracing = False, True, False
+        elif action == "tracing":
+            include_vuln, include_malware, include_tracing = False, False, True
+
+        if not (include_vuln or include_malware or include_tracing):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "No threat_hunt modules enabled",
+                hint="Enable at least one of include_vuln/include_malware/include_tracing or use action run|vuln|malware|tracing.",
+            )
+
+        idb_path = args.get("idb", self.current_session.idb_path if self.current_session else None)
+        if not idb_path:
+            return make_error(
+                MCPError.SESSION_REQUIRED,
+                "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+            )
+
+        limit = _bounded_int(args.get("limit", 120), 120, min_value=1, max_value=1000)
+        max_steps = _bounded_int(args.get("max_steps", 24), 24, min_value=1, max_value=128)
+        include_evidence = _coerce_bool(args.get("include_evidence"), False)
+
+        step_plan: list[tuple[str, str, dict]] = []
+        legacy_meta: dict = {}
+        if action == "legacy":
+            module, legacy_steps, legacy_meta = self._threat_hunt_legacy_route(
+                str(args.get("legacy_tool") or args.get("tool") or ""),
+                str(args.get("legacy_action") or args.get("source_action") or ""),
+                args,
+            )
+            include_vuln = module == "vuln"
+            include_malware = module == "malware"
+            include_tracing = module == "tracing"
+            step_plan.extend(legacy_steps)
+
+        if include_vuln and not step_plan:
+            vuln_args = {
+                "scan_profile": profile,
+                "include_dataflow_graph": profile == "deep",
+                "include_remediation_plan": profile != "quick",
+            }
+            if "severity" in args:
+                vuln_args["severity"] = args.get("severity")
+            if "addr" in args:
+                vuln_args["addr"] = args.get("addr")
+            step_plan.extend(
+                [
+                    ("vuln_scan", "scan_all", vuln_args),
+                    ("vuln_scan", "intelligence_report", vuln_args if profile != "quick" else {"scan_profile": profile}),
+                ]
+            )
+
+        if include_malware and not step_plan:
+            step_plan.extend(
+                [
+                    ("c2_detect", "indicators", {}),
+                    ("c2_detect", "ioc_extract", {}),
+                    ("deobfuscate", "stack_strings", {}),
+                    ("deobfuscate", "api_hashing", {}),
+                    ("crypto_id", "identify", {}),
+                    ("yara_hunt", "list_rules", {}),
+                ]
+            )
+
+        if include_tracing and not step_plan:
+            step_plan.extend(
+                [
+                    ("trace", "get", {}),
+                    ("trace_analysis", "analyze_coverage", {}),
+                    ("trace_analysis", "find_loops", {}),
+                    ("coverage", "report", {}),
+                    ("taint", "find_sinks", {"depth": 3 if profile == "quick" else 6}),
+                ]
+            )
+
+        step_plan = step_plan[:max_steps]
+        steps: list[dict] = []
+        raw_findings: list[dict] = []
+        for tool, step_action, step_args in step_plan:
+            st = self._threat_hunt_step(idb_path, tool, step_action, step_args)
+            steps.append(
+                {
+                    "tool": tool,
+                    "action": step_action,
+                    "ok": bool(st.get("ok")),
+                    "error": st.get("error"),
+                }
+            )
+            if st.get("ok"):
+                raw_findings.extend(self._threat_hunt_extract_findings(st))
+            elif include_evidence:
+                raw_findings.append(
+                    {
+                        "tool": tool,
+                        "action": step_action,
+                        "error": st.get("error"),
+                        "code": st.get("code"),
+                    }
+                )
+
+        dedup: dict[str, dict] = {}
+        for f in raw_findings:
+            if not isinstance(f, dict):
+                continue
+            addr = str(f.get("addr") or f.get("address") or f.get("ea") or "")
+            kind = str(f.get("type") or f.get("kind") or f.get("action") or "")
+            text = str(f.get("name") or f.get("title") or f.get("summary") or f.get("value") or "")
+            key = f"{f.get('tool','')}|{kind}|{addr}|{text}".strip().lower()
+            if not key:
+                continue
+            if key not in dedup:
+                dedup[key] = f
+
+        findings = list(dedup.values())[:limit]
+        ok_steps = sum(1 for s in steps if s.get("ok"))
+        failed_steps = len(steps) - ok_steps
+        out = {
+            "ok": True,
+            "action": "legacy" if action == "legacy" else "run",
+            "profile": profile,
+            "pipeline": {
+                "modules": {
+                    "vuln": include_vuln,
+                    "malware": include_malware,
+                    "tracing": include_tracing,
+                },
+                "steps_total": len(steps),
+                "steps_ok": ok_steps,
+                "steps_failed": failed_steps,
+            },
+            "steps": steps,
+            "findings": findings,
+            "count": len(findings),
+            "total_raw_findings": len(raw_findings),
+            "deduped": max(0, len(raw_findings) - len(findings)),
+        }
+        if legacy_meta:
+            out["legacy"] = legacy_meta
+        if include_evidence:
+            out["evidence"] = {"raw_findings": raw_findings[: min(300, len(raw_findings))]}
+        return out
+
     def _execute_tool(self, tool_name, args):
         original_tool_name = tool_name
         tool_name = _resolve_tool_alias(tool_name)
@@ -6293,9 +6924,12 @@ class IDAMCPServer:
 
             if action == "create":
                 binary_path = args.get("binary_path")
-                idb_path = args.get("idb_path") or args.get("use_existing")
-                if idb_path == "":
-                    idb_path = None
+                if "idb_path" in args or "use_existing" in args:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "The idb_path and use_existing parameters were removed from session create",
+                        details={"hint": "Use binary_path instead; the session now manages IDB creation and reuse automatically."},
+                    )
                 force_new = bool(args.get("force_new"))
 
                 analysis_options = {}
@@ -6338,44 +6972,26 @@ class IDAMCPServer:
                         binary_path = os.path.abspath(binary_path)
                     args["binary_path"] = binary_path
                     if not os.path.exists(binary_path):
-                        if not idb_path or not os.path.exists(idb_path):
-                            return make_error(
-                                MCPError.FILE_NOT_FOUND,
-                                f"Binary not found: {binary_path}",
-                                details={
-                                    "binary_path": binary_path,
-                                    "hint": "Provide an absolute path to an existing binary file or an existing idb_path.",
-                                },
-                            )
-
-                if idb_path:
-                    if not os.path.isabs(idb_path):
-                        idb_path = os.path.abspath(idb_path)
-                    ext = os.path.splitext(idb_path)[1].lower()
-                    if ext and ext not in (".i64", ".idb"):
                         return make_error(
-                            MCPError.INVALID_ARGS,
-                            "idb_path must point to a .i64 or .idb file",
-                            details={"idb_path": idb_path},
+                            MCPError.FILE_NOT_FOUND,
+                            f"Binary not found: {binary_path}",
+                            details={
+                                "binary_path": binary_path,
+                                "hint": "Provide an absolute path to an existing binary file.",
+                            },
                         )
 
-                if not binary_path and not idb_path:
+                if not binary_path:
                     return make_error(
                         MCPError.INVALID_ARGS,
-                        "binary_path or idb_path is required",
-                        details={"hint": "Provide a binary path for new analysis or an existing IDB to recover."},
+                        "binary_path is required",
+                        details={"hint": "Provide a binary path for new analysis."},
                     )
 
                 existing = None
                 if binary_path:
                     existing = self.session_mgr.find_session_by_path(binary_path)
-                if not existing and idb_path:
-                    existing = self.session_mgr.find_session_by_path(idb_path)
-                if (
-                    existing
-                    and not force_new
-                    and (not idb_path or os.path.normpath(existing.idb_path) == os.path.normpath(idb_path))
-                ):
+                if existing and not force_new:
                     self.current_session = existing
                     existing.update_access()
                     if analysis_options:
@@ -6401,7 +7017,6 @@ class IDAMCPServer:
 
                 self.current_session = self.session_mgr.create_session(
                     binary_path or "",
-                    use_existing=idb_path,
                     analysis_options=analysis_options,
                     ida_args=ida_args,
                     tags=tags,
@@ -6985,6 +7600,46 @@ class IDAMCPServer:
                 MCPError.ACTION_NOT_FOUND, f"Unsupported bookmark action: '{action}'",
                 hint=f"Valid bookmark actions: {', '.join(TOOL_ACTIONS['bookmarks'])}",
             )
+
+        if tool_name == "threat_hunt":
+            return self._handle_threat_hunt(args)
+
+        legacy_threat_tools = {
+            "vuln_scan",
+            "c2_detect",
+            "deobfuscate",
+            "crypto_id",
+            "trace",
+            "trace_analysis",
+            "coverage",
+            "taint",
+            "yara_hunt",
+            "gadgets",
+            "search",
+            "agent",
+            "summarize",
+            "classify",
+            "protocol",
+            "xref_analysis",
+            "string_ops",
+        }
+        if tool_name in legacy_threat_tools:
+            bridged = dict(args or {})
+            legacy_action = str(bridged.get("action") or "").strip()
+            bridged["action"] = "legacy"
+            bridged["legacy_tool"] = tool_name
+            if legacy_action:
+                bridged["legacy_action"] = legacy_action
+            bridged.setdefault("legacy_passthrough", True)
+            bridged.setdefault("include_evidence", False)
+            bridged.setdefault("profile", "balanced")
+            result = self._handle_threat_hunt(bridged)
+            if isinstance(result, dict) and result.get("ok"):
+                result = dict(result)
+                result["legacy_tool"] = tool_name
+                if legacy_action:
+                    result["legacy_action"] = legacy_action
+            return result
 
         ip = args.pop(
             "idb", self.current_session.idb_path if self.current_session else None

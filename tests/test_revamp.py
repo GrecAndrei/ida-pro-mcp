@@ -194,7 +194,7 @@ class TestSessionExecuteTool(unittest.TestCase):
         self.assertTrue(r2.get("ok"))
         self.assertNotEqual(r2["session"]["session_id"], r1["session"]["session_id"])
 
-    def test_create_session_with_idb_path_only(self):
+    def test_create_session_rejects_idb_path_arg(self):
         idb_path = os.path.join(self.tmpdir, "existing.i64")
         with open(idb_path, "wb") as f:
             f.write(b"")
@@ -202,10 +202,8 @@ class TestSessionExecuteTool(unittest.TestCase):
             "action": "create",
             "idb_path": idb_path
         })
-        self.assertTrue(result.get("ok"))
-        self.assertEqual(result["session"]["idb_path"], idb_path)
-        self.assertFalse(result["session"]["binary_exists"])
-        self.assertTrue(result["session"]["idb_exists"])
+        self.assertTrue(result.get("error"))
+        self.assertEqual(result.get("code"), MCPError.INVALID_ARGS)
 
     def test_create_session_with_ida_args(self):
         result = self.server._execute_tool("session", {

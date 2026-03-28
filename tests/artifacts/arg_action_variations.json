@@ -1,0 +1,2114 @@
+{
+  "seed": 1337,
+  "totals": {
+    "cases": 20000,
+    "accepted": 13787,
+    "rejected": 6213
+  },
+  "tools": {
+    "threat_hunt": {
+      "count": 5000,
+      "accepted": 3522,
+      "rejected": 1478,
+      "sample_rows": [
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "max_steps",
+          "variant": {
+            "key": "[steps:]",
+            "value": "(16)"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "max_steps",
+          "variant": {
+            "key": "PIPELINE_STEPS:",
+            "value": "16="
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "profile",
+          "variant": {
+            "key": "\"tool:profile\"",
+            "value": "\"balanced\""
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_malware",
+          "variant": {
+            "key": "MALWARE.TOOL",
+            "value": "x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "query",
+          "variant": {
+            "key": "[search=]",
+            "value": "[main]"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_evidence",
+          "variant": {
+            "key": "\"include/evidence=\"",
+            "value": "<ABCD1234>"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "max_steps",
+          "variant": {
+            "key": "STEPS()",
+            "value": "tool:16"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_vuln",
+          "variant": {
+            "key": "INCLUDE.VULN",
+            "value": "tool:x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_vuln",
+          "variant": {
+            "key": "[include.vuln:]",
+            "value": "x()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_action",
+          "variant": {
+            "key": "[tool_legacy_action:]",
+            "value": "x="
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "severity",
+          "variant": {
+            "key": "(severity=)",
+            "value": "tool:high"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_tool",
+          "variant": {
+            "key": "[tool:legacy/tool]",
+            "value": "'x'"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_passthrough",
+          "variant": {
+            "key": "strict_legacy:",
+            "value": "[x]"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_tool",
+          "variant": {
+            "key": "[legacy_tool_tool:]",
+            "value": "'x'"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_action",
+          "variant": {
+            "key": "action_name()",
+            "value": "x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "limit",
+          "variant": {
+            "key": "\"n()\"",
+            "value": "tool:16"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "action",
+          "tool": "threat_hunt",
+          "target": "malware",
+          "variant": "'tools_malware:'",
+          "accepted": true,
+          "normalized": "malware"
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "max_steps",
+          "variant": {
+            "key": "\"tool:max_calls\"",
+            "value": "16()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_vuln",
+          "variant": {
+            "key": "(include_vuln_tool())",
+            "value": "x()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "addr",
+          "variant": {
+            "key": "VA",
+            "value": "[0x401000]"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_vuln",
+          "variant": {
+            "key": "security",
+            "value": "<x>"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "max_steps",
+          "variant": {
+            "key": "TOOL_MAX_STEPS.TOOL",
+            "value": "{16}"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_malware",
+          "variant": {
+            "key": "\"includemalware=\"",
+            "value": "tool:x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_passthrough",
+          "variant": {
+            "key": "legacy.passthrough.tool",
+            "value": "x.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "addr",
+          "variant": {
+            "key": "tool:ea:",
+            "value": "tool:0x401000"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_malware",
+          "variant": {
+            "key": "includemalware.tool:",
+            "value": "x"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_tool",
+          "variant": {
+            "key": "legacy_tool::",
+            "value": " action:x "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_action",
+          "variant": {
+            "key": "legacy.action():",
+            "value": "x="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_tool",
+          "variant": {
+            "key": "tool:legacy-tool-tool",
+            "value": "`x`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "scan_profile",
+          "variant": {
+            "key": "tool-scan-profile:",
+            "value": "{balanced}"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "limit",
+          "variant": {
+            "key": "toolslimit=",
+            "value": "16"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "query",
+          "variant": {
+            "key": "querytool:",
+            "value": "main"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "profile",
+          "variant": {
+            "key": "scan_mode=:",
+            "value": "`balanced`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "profile",
+          "variant": {
+            "key": "[profile]",
+            "value": "BALANCED"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_passthrough",
+          "variant": {
+            "key": "tools_legacy_passthrough()=",
+            "value": "`x`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "max_steps",
+          "variant": {
+            "key": "max_steps=:",
+            "value": "[16]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_passthrough",
+          "variant": {
+            "key": "strict_legacy:=",
+            "value": "x()"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_passthrough",
+          "variant": {
+            "key": "tool:legacy/passthrough:",
+            "value": "<x>"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "profile",
+          "variant": {
+            "key": "profiletools=",
+            "value": "balanced.tool"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_passthrough",
+          "variant": {
+            "key": "legacy-passthrough-tool:",
+            "value": "\"x\""
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "query",
+          "variant": {
+            "key": "search==",
+            "value": "main()"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "profile",
+          "variant": {
+            "key": "profile-tool.tool",
+            "value": "`balanced`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "scan_profile",
+          "variant": {
+            "key": "scan_profile():",
+            "value": "`balanced`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "scan_profile",
+          "variant": {
+            "key": "vuln_profile()=",
+            "value": " action:balanced "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "legacy_tool",
+          "variant": {
+            "key": "tool_legacy_tool()=",
+            "value": "x"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "addr",
+          "variant": {
+            "key": "tools-addr.tool",
+            "value": "0x401000="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "profile",
+          "variant": {
+            "key": "scanmode()",
+            "value": "balanced"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "threat_hunt",
+          "target": "include_evidence",
+          "variant": {
+            "key": "tool:include/evidence:",
+            "value": "`ABCD1234`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        }
+      ]
+    },
+    "search": {
+      "count": 5000,
+      "accepted": 3446,
+      "rejected": 1554,
+      "sample_rows": [
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "pattern",
+          "variant": {
+            "key": "(tool:tools_pattern)",
+            "value": "{main}"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "addr",
+          "variant": {
+            "key": "'tool:ea'",
+            "value": "{0x401000}"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "sample",
+          "variant": {
+            "key": "(tool:sample_mode)",
+            "value": "x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "include_context",
+          "variant": {
+            "key": "\"tool:with_context\"",
+            "value": "x()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "action",
+          "tool": "search",
+          "target": "immediate",
+          "variant": "[immediate.tool]",
+          "accepted": true,
+          "normalized": "immediate"
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "sample_max_funcs",
+          "variant": {
+            "key": "tool:sample-max-funcs",
+            "value": "'16'"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "addr",
+          "variant": {
+            "key": "(ea:)",
+            "value": "<0x401000>"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "sample_max_funcs",
+          "variant": {
+            "key": "[sample_max_funcs_tools=]",
+            "value": "'16'"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "addr",
+          "variant": {
+            "key": "'tool:ea'",
+            "value": " action:0x401000 "
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "include_breakdown",
+          "variant": {
+            "key": "\"includebreakdown()\"",
+            "value": "x.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "action",
+          "tool": "search",
+          "target": "operand",
+          "variant": "<tool_operand:>",
+          "accepted": true,
+          "normalized": "operand"
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "timeout_ms",
+          "variant": {
+            "key": "(tools_timeout_ms())",
+            "value": "(x)"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "limit",
+          "variant": {
+            "key": "'tool_limit.tool'",
+            "value": "<16>"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "end",
+          "variant": {
+            "key": "(tool:to)",
+            "value": "\"0x401000\""
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "max_functions",
+          "variant": {
+            "key": "\"function_cap=\"",
+            "value": "16="
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "max_functions",
+          "variant": {
+            "key": "'max.functions()'",
+            "value": "{16}"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "include_context",
+          "variant": {
+            "key": "\"tools_include_context:\"",
+            "value": "tool:x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "end",
+          "variant": {
+            "key": "(tools_end())",
+            "value": "'0x401000'"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "addr",
+          "variant": {
+            "key": "[tool_addr.tool]",
+            "value": "0x401000.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "query",
+          "variant": {
+            "key": "(query_tools())",
+            "value": "MAIN"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "include_items",
+          "variant": {
+            "key": "(include_items.tool)",
+            "value": "x.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "max_functions",
+          "variant": {
+            "key": "TOOL_MAX_FUNCTIONS.TOOL",
+            "value": "tool:16"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "pattern",
+          "variant": {
+            "key": "needle()",
+            "value": "'main'"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "action",
+          "tool": "search",
+          "target": "string",
+          "variant": "(tool:tool_string)",
+          "accepted": true,
+          "normalized": "string"
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "timeout_ms",
+          "variant": {
+            "key": "timeout_ms_tool.tool=",
+            "value": "'x'"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "query",
+          "variant": {
+            "key": "tool_query::",
+            "value": "main"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "start",
+          "variant": {
+            "key": "tool_start=:",
+            "value": " action:0x401000 "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "include_breakdown",
+          "variant": {
+            "key": "tool:include-breakdown=",
+            "value": "x"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "timeout_ms",
+          "variant": {
+            "key": "timeout.ms.tool:",
+            "value": "{x}"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "query",
+          "variant": {
+            "key": "query_tool():",
+            "value": "main.tool"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "limit",
+          "variant": {
+            "key": "n:=",
+            "value": "16"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "timeout_ms",
+          "variant": {
+            "key": "timeout_ms:=",
+            "value": "{x}"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "case_sensitive",
+          "variant": {
+            "key": "tool:tool_case_sensitive=",
+            "value": "\"x\""
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "pattern",
+          "variant": {
+            "key": "text::",
+            "value": "main.tool"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "end",
+          "variant": {
+            "key": "toolsend",
+            "value": "0x401000"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "sample",
+          "variant": {
+            "key": "sample-tool=",
+            "value": "`x`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "addr",
+          "variant": {
+            "key": "tool:ea:",
+            "value": "\"0x401000\""
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "limit",
+          "variant": {
+            "key": "tool:limit=",
+            "value": "16:"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "action",
+          "tool": "search",
+          "target": "insns",
+          "variant": "tool_insns==",
+          "accepted": false,
+          "normalized": "tool_insns=="
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "sample",
+          "variant": {
+            "key": "tools-sample.tool",
+            "value": "(x)"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "case_sensitive",
+          "variant": {
+            "key": "tools_case_sensitive.tool:",
+            "value": "x="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "action",
+          "tool": "search",
+          "target": "insns",
+          "variant": "instructions.tool:",
+          "accepted": false,
+          "normalized": "instructions.tool:"
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "limit",
+          "variant": {
+            "key": "limit=:",
+            "value": "[16]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "include_items",
+          "variant": {
+            "key": "include-items():",
+            "value": "x="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "include_breakdown",
+          "variant": {
+            "key": "tool-include-breakdown=",
+            "value": " action:x "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "end",
+          "variant": {
+            "key": "to:=",
+            "value": "0x401000()"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "case_sensitive",
+          "variant": {
+            "key": "tool_case_sensitive==",
+            "value": "x"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "search",
+          "target": "case_sensitive",
+          "variant": {
+            "key": "'case_sensitive'",
+            "value": "x.tool"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        }
+      ]
+    },
+    "session": {
+      "count": 5000,
+      "accepted": 3422,
+      "rejected": 1578,
+      "sample_rows": [
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "loader_options",
+          "variant": {
+            "key": "\"loader_options.tool\"",
+            "value": "tool:x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "name",
+          "variant": {
+            "key": "\"name_tools=\"",
+            "value": "main.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "max_ea",
+          "variant": {
+            "key": "\"max_ea:\"",
+            "value": "`16`"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "start_ea",
+          "variant": {
+            "key": "[start_ea_tools.tool]",
+            "value": "(x)"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "recover",
+          "variant": {
+            "key": "[recover_tools.tool]",
+            "value": "'x'"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "backup_on_recover",
+          "variant": {
+            "key": "TOOL_BACKUP_ON_RECOVER:",
+            "value": "{x}"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "apply_once",
+          "variant": {
+            "key": "APPLY/ONCE()",
+            "value": "x="
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "start_ea",
+          "variant": {
+            "key": "'startea:'",
+            "value": "<x>"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "start_ea",
+          "variant": {
+            "key": "[start_ea_tool.tool]",
+            "value": "[x]"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "binary_path",
+          "variant": {
+            "key": "\"binary-path=\"",
+            "value": "(/tmp/test.bin)"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "apply_once",
+          "variant": {
+            "key": "'tool:apply_once_tool'",
+            "value": "X"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "name",
+          "variant": {
+            "key": "tool_name",
+            "value": "tool:main"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "endian",
+          "variant": {
+            "key": "[endian_tools:]",
+            "value": "`x`"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "start",
+          "variant": {
+            "key": "\"tool_start=\"",
+            "value": "0x401000"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "analysis_options",
+          "variant": {
+            "key": "analysis_options_tool",
+            "value": "X"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "endian",
+          "variant": {
+            "key": "[endian:]",
+            "value": "x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "min_ea",
+          "variant": {
+            "key": "'min.ea()'",
+            "value": "[x]"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "data",
+          "variant": {
+            "key": "(tool:tools_data)",
+            "value": "`x`"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "data",
+          "variant": {
+            "key": "'payload='",
+            "value": "\"x\""
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "flags",
+          "variant": {
+            "key": "(tool_flags.tool)",
+            "value": "<x>"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "session_id",
+          "variant": {
+            "key": "\"session_id_tool()\"",
+            "value": "ABCD1234.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "loader",
+          "variant": {
+            "key": "\"loader_tool:\"",
+            "value": "{x}"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "include_items",
+          "variant": {
+            "key": "[include_items_tool=]",
+            "value": "x:"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "note",
+          "variant": {
+            "key": "NOTE_TOOL",
+            "value": "tool:x"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "start_ea",
+          "variant": {
+            "key": "tools_start_ea:=",
+            "value": "(x)"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "loader_options",
+          "variant": {
+            "key": "loader/options::",
+            "value": "{x}"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "limit",
+          "variant": {
+            "key": "tools-limit",
+            "value": "<16>"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "macro_data",
+          "variant": {
+            "key": "tools_macro_data()=",
+            "value": "[x]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "include_items",
+          "variant": {
+            "key": "tool-include-items",
+            "value": "tool:x"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "options",
+          "variant": {
+            "key": "tools_options()=",
+            "value": "x()"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "ida_args",
+          "variant": {
+            "key": "idaargstool:",
+            "value": "ABCD1234"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "end",
+          "variant": {
+            "key": "END",
+            "value": "`0x401000`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "min_ea",
+          "variant": {
+            "key": "min_ea_tools=:",
+            "value": "x()"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "include_bookmarks",
+          "variant": {
+            "key": "tool:include_bookmarks:",
+            "value": " action:x "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "min_ea",
+          "variant": {
+            "key": "tools-min-ea.tool",
+            "value": "`x`"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "tags",
+          "variant": {
+            "key": "tags_tools::",
+            "value": "[triage]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "tags",
+          "variant": {
+            "key": "tags-tool=",
+            "value": "<triage>"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "include_items",
+          "variant": {
+            "key": "include/items():",
+            "value": "{x}"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "action",
+          "tool": "session",
+          "target": "cleanup_stale",
+          "variant": "tool:tool:cleanup-stale",
+          "accepted": false,
+          "normalized": "tool:tool:cleanup-stale"
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "ida_args",
+          "variant": {
+            "key": "tool_ida_args.tool:",
+            "value": "[ABCD1234]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "macro_data",
+          "variant": {
+            "key": "tool_macro_data.tool:",
+            "value": "[x]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "reanalyze",
+          "variant": {
+            "key": "reanalyze-tools:",
+            "value": "X"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "end",
+          "variant": {
+            "key": "endtool:",
+            "value": "0x401000:"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "macro_data",
+          "variant": {
+            "key": "macro-data.tool=",
+            "value": " action:x "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "apply_once",
+          "variant": {
+            "key": "tool_apply_once.tool=",
+            "value": " action:x "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "name",
+          "variant": {
+            "key": "toolname:",
+            "value": " action:main "
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "options",
+          "variant": {
+            "key": "tool:tools_options=",
+            "value": "<x>"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "session",
+          "target": "aggressive_cleanup",
+          "variant": {
+            "key": "aggressive_cleanup_tools=:",
+            "value": "(x)"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        }
+      ]
+    },
+    "code": {
+      "count": 5000,
+      "accepted": 3397,
+      "rejected": 1603,
+      "sample_rows": [
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "end",
+          "variant": {
+            "key": "'tool:end_tool'",
+            "value": "\"0x401000\""
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "addrs",
+          "variant": {
+            "key": "\"addrs()\"",
+            "value": "0x401000()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_items",
+          "variant": {
+            "key": "(max/items.tool)",
+            "value": "<16>"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "target",
+          "variant": {
+            "key": "tool_target.tool",
+            "value": "\"0x401000\""
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "format",
+          "variant": {
+            "key": "'tool:format'",
+            "value": "x.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "addr",
+          "variant": {
+            "key": "offset",
+            "value": "0x401000:"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "include_bytes",
+          "variant": {
+            "key": "[include/bytes=]",
+            "value": "X"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "include_bytes",
+          "variant": {
+            "key": "(tool:include_bytes_tools)",
+            "value": "x.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "action",
+          "tool": "code",
+          "target": "strings_in_func",
+          "variant": "\"tool:strings_in_func_tool\"",
+          "accepted": true,
+          "normalized": "strings_in_func"
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_depth",
+          "variant": {
+            "key": "'max_depth_tools()'",
+            "value": "16.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "end",
+          "variant": {
+            "key": "(tools_end())",
+            "value": "0x401000()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "action",
+          "tool": "code",
+          "target": "xrefs_to_field",
+          "variant": "xrefs_to_field_tool=",
+          "accepted": true,
+          "normalized": "xrefs_to_field"
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "disasm_style",
+          "variant": {
+            "key": "[tools_disasm_style]",
+            "value": "X"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "end",
+          "variant": {
+            "key": "[tool:end_addr]",
+            "value": "0x401000.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_depth",
+          "variant": {
+            "key": "[tool_max_depth()]",
+            "value": "16()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "disasm_style",
+          "variant": {
+            "key": "(disasm.style())",
+            "value": "`x`"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "target",
+          "variant": {
+            "key": "[tool:target_tool]",
+            "value": " action:0x401000 "
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_depth",
+          "variant": {
+            "key": "TOOLS_MAX_DEPTH()",
+            "value": "\"16\""
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_depth",
+          "variant": {
+            "key": "[tool:depth]",
+            "value": "[16]"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "target",
+          "variant": {
+            "key": "(to)",
+            "value": "0x401000()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "field_name",
+          "variant": {
+            "key": "\"member:\"",
+            "value": "main()"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_items",
+          "variant": {
+            "key": "\"maxitems()\"",
+            "value": "16.tool"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "end",
+          "variant": {
+            "key": "[tool:tool_end]",
+            "value": "0x401000:"
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "disasm_style",
+          "variant": {
+            "key": "(style=)",
+            "value": " action:x "
+          },
+          "accepted": true,
+          "normalized_has_key": true
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_depth",
+          "variant": {
+            "key": "max/depth:=",
+            "value": "16.tool"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "field_name",
+          "variant": {
+            "key": "tool_field_name.tool:",
+            "value": "main="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_items",
+          "variant": {
+            "key": "max.items:=",
+            "value": "16"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "format",
+          "variant": {
+            "key": "formattools.tool",
+            "value": "x:"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "target",
+          "variant": {
+            "key": "tools-target=",
+            "value": "0x401000:"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "include_bytes",
+          "variant": {
+            "key": "tool_include_bytes=:",
+            "value": "[x]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "disasm_style",
+          "variant": {
+            "key": "disasm_style_tools.tool=",
+            "value": "\"x\""
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "addrs",
+          "variant": {
+            "key": "addrs_tool=:",
+            "value": "\"0x401000\""
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "addrs",
+          "variant": {
+            "key": "eas():",
+            "value": "0x401000="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "addrs",
+          "variant": {
+            "key": "toolsaddrs.tool",
+            "value": "0x401000="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "include_bytes",
+          "variant": {
+            "key": "bytes::",
+            "value": "\"x\""
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "disasm_style",
+          "variant": {
+            "key": "disasm-style=:",
+            "value": "<x>"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "disasm_style",
+          "variant": {
+            "key": "tool_disasm_style():",
+            "value": "'x'"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_depth",
+          "variant": {
+            "key": "maxdepthtools.tool",
+            "value": "[16]"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "action",
+          "tool": "code",
+          "target": "callees",
+          "variant": "tool:callees_tools.tool",
+          "accepted": false,
+          "normalized": "tool:callees_tools.tool"
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "end",
+          "variant": {
+            "key": "tool_end::",
+            "value": "0x401000()"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_items",
+          "variant": {
+            "key": "max-items.tool:",
+            "value": "{16}"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "include_bytes",
+          "variant": {
+            "key": "includebytestools",
+            "value": "x.tool"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "include_bytes",
+          "variant": {
+            "key": "with_bytes():",
+            "value": "tool:x"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "action",
+          "tool": "code",
+          "target": "xrefs_to",
+          "variant": "tools_xrefs_to:.tool",
+          "accepted": false,
+          "normalized": "tools_xrefs_to:.tool"
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "max_depth",
+          "variant": {
+            "key": "max_depth_tool:=",
+            "value": "tool:16"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "action",
+          "tool": "code",
+          "target": "callees",
+          "variant": "callee.tool:",
+          "accepted": false,
+          "normalized": "callee.tool:"
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "field_name",
+          "variant": {
+            "key": "field_name_tools.tool:",
+            "value": "main="
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        },
+        {
+          "kind": "arg",
+          "tool": "code",
+          "target": "addrs",
+          "variant": {
+            "key": "tool:tools_addrs=",
+            "value": "tool:0x401000"
+          },
+          "accepted": false,
+          "normalized_has_key": false
+        }
+      ]
+    }
+  }
+}

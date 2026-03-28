@@ -69,7 +69,7 @@ Installer behavior:
 4. Configures supported MCP clients.
 5. Installs Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`) with `router` mode by default (single skill, minimal context).
 6. Sets wiki path automatically when available.
-7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=0` in client config for lean `tools/list` metadata by default.
+7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1` and `IDA_MCP_TOOLS_LIST_MODE=full` so MCP clients receive full tool descriptions and schemas directly.
 
 Default install directory:
 
@@ -394,6 +394,16 @@ At call time:
 5. Host truncation and response compaction.
 6. Final MCP response serialization.
 
+Normalization hardening (host-side) now aggressively tolerates noisy LLM call formats for
+`threat_hunt`, `search`, `session`, and `code`:
+
+- wrapped or malformed action tokens (for example `[disasm]`, `"compatibility"`, `action:regexp`)
+- noisy argument keys (for example `[address]`, `targets`, `id`, `source_tool`)
+- bracketed/scalar/list-like values (for example `[0x401000]`, `[0x401000,0x401010]`)
+
+Canonical action/argument names are still preferred, but these variants are now normalized
+before routing whenever unambiguous.
+
 ### 5) Context-optimized response pipeline
 
 As of current implementation, compact mode is default.
@@ -409,6 +419,11 @@ Host now performs global compaction before sending content:
 - Uses minified JSON serialization by default
 
 Full verbose shape is still available via explicit `response_mode=full`.
+
+Every tool response now also carries:
+
+- `llm_pointer_note` (ALL CAPS): reminder to avoid mental pointer/address arithmetic and use
+  `calc` / `memory` tooling instead.
 
 ### 6) Wiki subsystem
 
@@ -472,7 +487,7 @@ Environment defaults:
 
 - `IDA_MCP_RESPONSE_MODE`
 - `IDA_MCP_QOL_MODE` (`balanced` default)
-- `IDA_MCP_TOOLS_LIST_MODE` (`ultra` default)
+- `IDA_MCP_TOOLS_LIST_MODE` (`full` default)
 - `IDA_MCP_ERROR_DETAIL_LEVEL`
 - `IDA_MCP_BATCH_COMPACT`
 - `IDA_MCP_TABLE_COMPACT`
@@ -481,17 +496,18 @@ Environment defaults:
 - `IDA_MCP_COMPACT_CHAR_BUDGET`
 - `IDA_MCP_TRUNCATE_TOKENS`
 - `IDA_MCP_WIKI_DEFAULT_LIMIT`
-- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`0` default lean, `1` full verbose tool metadata)
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`1` default full verbose tool metadata)
 
 `tools/list` mode behavior:
-- `ultra` (default): tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
+- `ultra`: tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
 - `lean`: shortened per-tool descriptions + compact parameter typing.
-- `full`: full descriptions and full input schema.
+- `full` (default): full descriptions and full input schema.
 
-Installer defaults now bias for low-context operation:
+Installer defaults now bias for direct schema-rich tool loading:
 - `IDA_MCP_RESPONSE_MODE=compact`
 - `IDA_MCP_QOL_MODE=balanced`
-- `IDA_MCP_TOOLS_LIST_MODE=ultra`
+- `IDA_MCP_TOOLS_LIST_MODE=full`
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1`
 - `IDA_MCP_BATCH_COMPACT=1`
 - `IDA_MCP_COMPACT_MAX_ITEMS=48`
 - `IDA_MCP_COMPACT_MAX_STRING=1400`
@@ -536,6 +552,15 @@ Run targeted tests:
 python -m unittest tests.test_host_wiki_and_hardening
 python -m unittest tests.test_linux_support
 python -m unittest tests.test_session_features
+```
+
+Generate noisy-argument/action acceptance corpus (10k+ cases; current default flow emits 20k):
+
+```bash
+python scripts/generate_arg_action_variations.py \
+  --max-cases-per-tool 5000 \
+  --min-total-cases 10000 \
+  --output tests/artifacts/arg_action_variations.json
 ```
 
 Manual client probing:

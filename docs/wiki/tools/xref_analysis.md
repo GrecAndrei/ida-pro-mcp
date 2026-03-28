@@ -1,53 +1,69 @@
 # XREF_ANALYSIS Tool Manual
 
 ## What It Does
-Performs callgraph-centric analysis with compact outputs by default. It finds shortest call paths, shared callers/callees, hub and leaf functions, recursion (SCC-based), entry-reachability dominators, influence reachability, dependency subgraphs, and dead-function candidates.
+Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.
 
 ## Actions
-- `call_chain`: shortest call path(s) from `addr` to `addr2`.
-- `common_callers`: functions that call all target functions.
-- `common_callees`: functions called by all target functions.
-- `hub_functions`: high-centrality functions ranked by in/out degree.
-- `leaf_functions`: functions with no outgoing calls.
-- `recursive`: direct and mutual recursion using SCC analysis.
-- `dominator`: bottleneck functions in the entry-reachable callgraph.
-- `influence`: forward/backward/bidirectional reachability from `addr`.
-- `dependency_graph`: compact callgraph around one or more seeds.
-- `dead_functions`: unreachable functions with no internal callers or external refs.
+- `call_chain`
+- `common_callers`
+- `common_callees`
+- `hub_functions`
+- `leaf_functions`
+- `recursive`
+- `dominator`
+- `influence`
+- `dependency_graph`
+- `dead_functions`
 
-## Key Parameters
-- `action`: one of the actions above.
-- `addr`, `addr2`: primary/secondary function addresses.
-- `addrs`: comma-separated addresses for multi-target actions.
-- `depth`: traversal depth limit (default `10`, max `64`).
-- `limit`: page size (default `50`, max `500`).
-- `offset`: pagination offset.
-- `include_items`: include structured objects in `items` (off by default).
-- `direction`: `forward|backward|both` (for `influence` and `dependency_graph`).
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Output Shape
-- Compact by default:
-  - `matches`: newline-delimited text rows.
-  - `count`, `total`, `offset`, `truncated`: pagination metadata.
-- Action-specific aliases are preserved (`chains`, `hubs`, `dead`, etc.).
-- Set `include_items=true` for structured arrays.
-
-## Examples
+## Example
 ```json
-{"name":"xref_analysis","arguments":{"action":"call_chain","addr":"0x401000","addr2":"0x405000","depth":8,"limit":20}}
+{
+  "name": "xref_analysis",
+  "arguments": {
+    "action": "call_chain"
+  }
+}
 ```
 
-```json
-{"name":"xref_analysis","arguments":{"action":"influence","addr":"0x401000","direction":"both","depth":4,"limit":40}}
-```
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
 
-```json
-{"name":"xref_analysis","arguments":{"action":"dependency_graph","addrs":"0x401000,0x402000","direction":"both","depth":3,"limit":200}}
-```
-
-## Failure Modes
-- `call_chain` requires both `addr` and `addr2` and both must resolve to functions.
-- `common_callers`/`common_callees` require at least two target functions.
-- `influence` requires `addr`.
-- `dependency_graph` requires at least one target function.
-- Invalid addresses or non-function targets fail validation.
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

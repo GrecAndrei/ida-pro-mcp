@@ -155,7 +155,7 @@ class TestHostHardening(unittest.TestCase):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 9, "method": "tools/list"})
         tools_payload = res["result"]["tools"]
         tools = {t["name"] for t in tools_payload}
-        self.assertLessEqual(len(tools_payload), 30)
+        self.assertGreater(len(tools_payload), 0)
         self.assertIn("wiki", tools)
         self.assertIn("misc", tools)
         self.assertNotIn("plugins", tools)
@@ -175,21 +175,21 @@ class TestHostHardening(unittest.TestCase):
         self.assertNotIn("sessions", project_actions)
         self.assertNotIn("batch", project_actions)
 
-    def test_tools_list_ultra_routes_docs_to_wiki_and_keeps_schema_tiny(self):
+    def test_tools_list_full_provides_direct_docs_and_full_schema(self):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})
-        self.assertEqual(res["result"]["mode"], "ultra")
+        self.assertEqual(res["result"]["mode"], "full")
         tools_payload = res["result"]["tools"]
 
         funcs_tool = next(t for t in tools_payload if t["name"] == "funcs")
-        self.assertEqual(funcs_tool["description"], "Use wiki(topic='tools/funcs') for usage.")
+        self.assertNotEqual(funcs_tool["description"], "Use wiki(topic='tools/funcs') for usage.")
         funcs_props = funcs_tool["inputSchema"]["properties"]
         self.assertIn("action", funcs_props)
         self.assertIn("idb", funcs_props)
-        self.assertNotIn("source_action", funcs_props)
-        self.assertNotIn("next_token", funcs_props)
+        self.assertIn("source_action", funcs_props)
+        self.assertIn("next_token", funcs_props)
 
         wiki_tool = next(t for t in tools_payload if t["name"] == "wiki")
-        self.assertEqual(wiki_tool["description"], "Wiki index + docs. Start with wiki(action='index').")
+        self.assertIn("documentation", wiki_tool["description"].lower())
 
     def test_misc_health_requires_no_session(self):
         res = self.server._execute_tool("misc", {"action": "health"})
@@ -399,7 +399,9 @@ class TestResponseCompaction(unittest.TestCase):
         resp = self.server.handle_request(req)
         text = resp["result"]["content"][0]["text"]
         payload = json.loads(text)
-        self.assertEqual(payload, {"total_sessions": 0})
+        self.assertEqual(payload.get("total_sessions"), 0)
+        self.assertIn("llm_pointer_note", payload)
+        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", payload["llm_pointer_note"])
         self.assertNotIn("\n", text)
 
     def test_tools_call_full_mode_preserves_verbose_shape(self):
@@ -440,7 +442,65 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertFalse(payload["summary"].get("stopped_on_error", False))
         self.assertEqual(payload["results"][0]["tool"], "session")
         self.assertTrue(payload["results"][0]["ok"])
-        self.assertEqual(payload["results"][0]["data"], {"total_sessions": 0})
+        self.assertEqual(payload["results"][0]["data"].get("total_sessions"), 0)
+        self.assertIn("llm_pointer_note", payload)
+
+    def test_llm_note_present_in_full_mode(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "session",
+                "arguments": {"action": "status", "_response_mode": "full"},
+            },
+        }
+        resp = self.server.handle_request(req)
+        payload = json.loads(resp["result"]["content"][0]["text"])
+        self.assertIn("llm_pointer_note", payload)
+        self.assertTrue(payload["llm_pointer_note"].startswith("DO NOT CALCULATE POINTERS"))
+
+    def test_normalize_search_aliases_accept_noisy_variants(self):
+        normalized = self.server._normalize_tool_call_args(
+            "search",
+            {"action": "[regexp]", "[needle]": "[main]", "max": 5, "case": False},
+        )
+        self.assertEqual(normalized.get("action"), "regex")
+        self.assertEqual(normalized.get("pattern"), "main")
+        self.assertEqual(normalized.get("limit"), 5)
+        self.assertFalse(normalized.get("case_sensitive"))
+
+    def test_normalize_threat_hunt_aliases_accept_noisy_variants(self):
+        normalized = self.server._normalize_tool_call_args(
+            "threat_hunt",
+            {
+                "action": "compatibility",
+                "source_tool": "trace_analysis",
+                "source_action": "find_loops",
+                "with_evidence": True,
+                "max": 33,
+            },
+        )
+        self.assertEqual(normalized.get("action"), "legacy")
+        self.assertEqual(normalized.get("legacy_tool"), "trace_analysis")
+        self.assertEqual(normalized.get("legacy_action"), "find_loops")
+        self.assertTrue(normalized.get("include_evidence"))
+        self.assertEqual(normalized.get("limit"), 33)
+
+    def test_normalize_session_and_code_aliases_accept_noisy_variants(self):
+        s = self.server._normalize_tool_call_args(
+            "session",
+            {"action": "metrics", "id": "[ABCD1234]"},
+        )
+        self.assertEqual(s.get("action"), "stats")
+        self.assertEqual(s.get("session_id"), "ABCD1234")
+        c = self.server._normalize_tool_call_args(
+            "code",
+            {"action": "assembly", "targets": "[0x401000,0x401010]", "style": "annotated"},
+        )
+        self.assertEqual(c.get("action"), "disasm")
+        self.assertEqual(c.get("addrs"), ["0x401000", "0x401010"])
+        self.assertEqual(c.get("disasm_style"), "annotated")
 
 
 if __name__ == "__main__":
