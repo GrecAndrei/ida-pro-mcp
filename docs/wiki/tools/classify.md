@@ -1,47 +1,69 @@
 # CLASSIFY Tool Manual
 
 ## What It Does
-Classify functions and binary by purpose using API call patterns and structural analysis.
+Function purpose classification. Actions: function, binary, all_functions, library_code, wrappers, callbacks, initializers, error_handlers, hot_functions, orphans.
 
 ## Actions
-- `function`: Classify a single function by behavior patterns.
-- `binary`: Classify the binary at a high level.
-- `all_functions`: Classify many functions and return grouped results.
-- `library_code`: Identify likely library/runtime functions.
-- `wrappers`: Detect thin wrapper/thunk-style functions.
-- `callbacks`: Identify callback-like functions.
-- `initializers`: Find init/setup routines.
-- `error_handlers`: Find error-handling oriented functions.
-- `hot_functions`: Rank likely hot/important functions.
-- `orphans`: Find isolated or weakly-connected functions.
+- `function`
+- `binary`
+- `all_functions`
+- `library_code`
+- `wrappers`
+- `callbacks`
+- `initializers`
+- `error_handlers`
+- `hot_functions`
+- `orphans`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addr` (default `None`): Target address or function start (hex string).
-- `limit` (default `50`): Maximum result count.
-- `category` (default `None`): Classification category filter.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "classify",
-  "args": {
-    "action": "function",
-    "addr": "0x401000"
+  "name": "classify",
+  "arguments": {
+    "action": "function"
   }
 }
 ```
-```json
-{
-  "tool": "classify",
-  "args": {
-    "action": "all_functions",
-    "limit": 100,
-    "category": "wrappers"
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `addr required for 'function' action`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

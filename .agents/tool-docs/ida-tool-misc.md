@@ -18,7 +18,14 @@ Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, p
 - `plugin_list` (tool-specific)
 - `plugin_run` (tool-specific)
 - `health` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/misc')`.
@@ -35,6 +42,7 @@ Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, p
 - `name`: `string` - Signature name for load_sig
 - `path`: `string` - File path for read_file/write_file
 - `verbose`: `boolean` - Include per-runtime details for health action.
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

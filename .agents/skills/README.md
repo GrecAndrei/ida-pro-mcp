@@ -13,7 +13,7 @@ python3 scripts/generate_tool_skills.py
 `1` router skill (`ida-tool-router`)
 
 ## Generated Tool Doc Count
-`66` per-tool docs
+`67` per-tool docs
 
 ## Notes
 - Keep only one skill loaded (`ida-tool-router`) to avoid startup skill-list bloat.
@@ -23,7 +23,7 @@ python3 scripts/generate_tool_skills.py
 ## Manifest
 ```json
 {
-  "tool_count": 66,
+  "tool_count": 67,
   "skills_root": ".agents/skills",
   "router_skill": ".agents/skills/ida-tool-router/SKILL.md",
   "tool_docs_root": ".agents/tool-docs"

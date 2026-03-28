@@ -1,50 +1,69 @@
 # DEOBFUSCATE Tool Manual
 
 ## What It Does
-LLM-optimized deobfuscation analysis for binary reverse engineering.
+Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).
 
 ## Actions
-- `detect_encoding`: Detect common encoding/packing transforms.
-- `xor_scan`: Scan for XOR-obfuscated buffers/loops.
-- `stack_strings`: Find stack string construction patterns.
-- `opaque_predicates`: Detect likely opaque predicates.
-- `control_flow_flatten`: Detect control-flow flattening patterns.
-- `dead_code`: Find likely dead/unreachable code.
-- `api_hashing`: Detect API hashing usage.
-- `dynamic_dispatch`: Detect indirect dynamic dispatch patterns.
-- `anti_disasm`: Detect anti-disassembly tricks.
-- `decode_attempt`: Try decoding bytes at/near an address with a key.
+- `detect_encoding`
+- `xor_scan`
+- `stack_strings`
+- `opaque_predicates`
+- `control_flow_flatten`
+- `dead_code`
+- `api_hashing`
+- `dynamic_dispatch`
+- `anti_disasm`
+- `decode_attempt`
 
-## Key Parameters
-- `action` (required): Operation selector.
-- `addr` (default `None`): Target address or function start (hex string).
-- `limit` (default `50`): Maximum result count.
-- `key` (default `None`): Decode/deobfuscation key (often hex byte/string).
-- `depth` (default `2`): Traversal/path depth bound.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed_count: `16`
+- `cursor`: `string`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
+- `next_token`: `string`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
 
-## Examples (JSON call snippets)
+## Example
 ```json
 {
-  "tool": "deobfuscate",
-  "args": {
-    "action": "detect_encoding",
-    "addr": "0x401000",
-    "limit": 50
+  "name": "deobfuscate",
+  "arguments": {
+    "action": "detect_encoding"
   }
 }
 ```
-```json
-{
-  "tool": "deobfuscate",
-  "args": {
-    "action": "decode_attempt",
-    "addr": "0x404200",
-    "key": "0x5A",
-    "limit": 32
-  }
-}
-```
 
-## Failure Modes
-- `INVALID_ARGS`: `addr required for decode_attempt`
-- `INVALID_ARGS`: `Unknown action: {action}`
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
+
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

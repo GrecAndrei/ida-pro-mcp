@@ -1,56 +1,80 @@
 # WIKI Tool Manual
 
 ## What It Does
-Provides built-in documentation search and reading for `docs/wiki`, with ranked search, semantic concept search, fuzzy topic resolution, section extraction, related-topic hints, and paginated reads.
+Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.
 
 ## Actions
-- `list_topics`: Returns categories -> page names, plus category/page counts.
-- `read`: Reads full topic or specific `section`; supports `offset`/`limit` chunking.
-- `search`: Ranked search across wiki pages (`query` or `topic` alias), with optional snippets and fuzzy matching.
-- `semantic_search`: Concept-aware search that expands query intent (e.g., runtime/flow/trace) before ranking results.
-- `sections`: Lists parsed markdown headers with line numbers for one topic.
-- `index`: Returns category map plus index summary.
+- `list_topics`
+- `read`
+- `search`
+- `semantic_search`
+- `sections`
+- `index`
 
-## Key Parameters
-- `action`: `list_topics|read|search|semantic_search|sections|index`.
-- `topic`: Topic name/path. Valid examples: `trace`, `tools/trace`, `workflows/ForensicProtocol`, `skills/TriageNewBinary`.
-- Topic lookup behavior: single-name topics are searched in `tools`, `workflows`, `skills`, `core`, then wiki root; `.md` suffix is optional.
-- `query`: Search term (used by `search`; falls back to `topic` when omitted).
-- `semantic_search` accepts the same query knobs as `search` (`query`, `topic`, `max_results`, `category`, `include_snippets`, `context_lines`) and adds concept expansion automatically.
-- `max_results`: Cap search result count (default 20, max 200).
-- `category`: Optional category filter (`tools`, `workflows`, `skills`, `core`, or comma-separated list).
-- `fuzzy`: Enables typo-tolerant ranking for `search` and section/header matching in `read`.
-- `strict_topic`: Disables smart topic fallback and requires exact topic match.
-- `include_related`: Include related topics in `read` results.
-- `section`: Header text filter for `read`.
-- `offset`, `limit`: Line-based pagination for `read`.
-- `include_snippets`, `context_lines`: Controls snippet output in `search`.
-- If markdown docs are missing in install environments, tool docs are auto-generated as fallback.
+## Parameters
+- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
+- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
+- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
+- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
+- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
+- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
+- `_response_max_items`: `integer` — Max list items retained in compact mode.
+- `_response_max_string`: `integer` — Max string length retained in compact mode.
+- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
+- `_response_omit`: `array | string` — Optional top-level field omission list.
+- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
+- `action`: `string`; allowed: `list_topics, read, search, semantic_search, sections, index, grep, pick, head, tail, next, stats`
+- `category`: `string | array`
+- `context_lines`: `integer`
+- `cursor`: `string`
+- `fuzzy`: `boolean`
+- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
+- `grep_case_sensitive`: `boolean`
+- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
+- `grep_invert`: `boolean`
+- `grep_limit`: `integer`
+- `grep_offset`: `integer`
+- `grep_pattern`: `string`
+- `grep_regex`: `boolean`
+- `head_n`: `integer`
+- `include_related`: `boolean`
+- `include_snippets`: `boolean`
+- `limit`: `integer`
+- `line_end`: `integer`
+- `line_start`: `integer`
+- `lines`: `string` — Line selector such as '10-40', '25', '10-', or '-40'.
+- `max_results`: `integer`
+- `next_token`: `string`
+- `offset`: `integer`
+- `on`: `string`
+- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
+- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
+- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
+- `query`: `string`
+- `section`: `string`
+- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
+- `stats_include_payload`: `boolean`
+- `strict_topic`: `boolean`
+- `subaction`: `string`
+- `tail_n`: `integer`
+- `target_action`: `string`
+- `token`: `string`
+- `topic`: `string`
+- `verbose`: `boolean` — Include full structural metadata in wiki responses.
 
-## Examples
+## Example
 ```json
-{"name":"wiki","arguments":{"action":"list_topics"}}
+{
+  "name": "wiki",
+  "arguments": {
+    "action": "list_topics"
+  }
+}
 ```
 
-```json
-{"name":"wiki","arguments":{"action":"read","topic":"trace","section":"Failure Modes","offset":0,"limit":120}}
-```
+## Notes
+- `idb` is optional for most tools and resolves from active session when omitted.
 
-```json
-{"name":"wiki","arguments":{"action":"search","query":"truncation token","include_snippets":true,"context_lines":2}}
-```
-
-```json
-{"name":"wiki","arguments":{"action":"search","query":"trcae","fuzzy":true,"category":"tools","max_results":8}}
-```
-
-```json
-{"name":"wiki","arguments":{"action":"semantic_search","query":"runtime flow tracing","category":"tools","max_results":8}}
-```
-
-## Failure Modes
-- `topic` required for `read` and `sections`.
-- Invalid topic paths (`..`, absolute paths, escapes) are rejected.
-- Missing topics return file-not-found with `details.suggestions` when available.
-- Missing `query`/`topic` for `search` is rejected.
-- Unknown action returns invalid-args error.
+---
+Doc status: Auto-generated from live tool metadata.
+Last reviewed: 2026-03-27

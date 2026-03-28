@@ -18,6 +18,7 @@
 - tools/arch_utils.md - # ARCH_UTILS Tool Manual
 - tools/batch.md - # BATCH Tool Manual
 - tools/binary_info.md - # BINARY_INFO Tool Manual
+- tools/bookmarks.md - # BOOKMARKS Tool Manual
 - tools/bulk.md - # BULK Tool Manual
 - tools/c2_detect.md - # C2_DETECT Tool Manual
 - tools/calc.md - # CALC Tool Manual
@@ -69,17 +70,21 @@
 - tools/summarize.md - # SUMMARIZE Tool Manual
 - tools/symbols.md - # SYMBOLS Tool Manual
 - tools/taint.md - # TAINT Tool Manual
+- tools/threat_hunt.md - # THREAT_HUNT Tool Manual
 - tools/trace.md - # TRACE Tool Manual
 - tools/trace_analysis.md - # TRACE_ANALYSIS Tool Manual
+- tools/truncation.md - # TRUNCATION Tool Manual
 - tools/types.md - # TYPES Tool Manual
 - tools/vuln_scan.md - # VULN_SCAN Tool Manual
 - tools/wiki.md - # WIKI Tool Manual
+- tools/xfer_analysis.md - # XFER_ANALYSIS Tool Manual
 - tools/xref_analysis.md - # XREF_ANALYSIS Tool Manual
 - tools/yara_hunt.md - # YARA_HUNT Tool Manual
 ## workflows
 - workflows/ForensicProtocol.md - # THE FORENSIC RE PROTOCOL: THE MASTER OPERATIONAL FRAMEWORK (EXHAUSTIVE EDITION)
 - workflows/Strategy.md - # The Master RE Strategy Guide
 - workflows/VulnerabilityTriage.md - # Vulnerability Triage Workflow
+
 ---
 Doc status: Auto-generated from docs/wiki tree.
-Last reviewed: 2026-02-24
+Last reviewed: 2026-03-27

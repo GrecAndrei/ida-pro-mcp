@@ -15,7 +15,14 @@ Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_retu
 - `data_flow` (tool-specific)
 - `backward_trace` (tool-specific)
 - `slice` (tool-specific)
-- `grep` (host wrapper): run another action, then grep its output lines.
+
+### Host wrapper actions (accepted by host dispatcher)
+- `grep`: run another action, then grep output lines.
+- `head`: run another action, then keep first N items.
+- `tail`: run another action, then keep last N items.
+- `pick`: run another action, then project top-level fields.
+- `next`: continue paginated output with next token/cursor.
+- `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
 - Canonical wiki page: `wiki(action='read', topic='tools/taint')`.
@@ -28,6 +35,7 @@ Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_retu
 - `arg_num`: `integer`
 - `depth`: `integer`
 - `max_hits`: `integer`
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json
