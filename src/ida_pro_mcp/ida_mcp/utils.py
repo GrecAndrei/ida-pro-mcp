@@ -6,6 +6,7 @@ import re
 import struct
 import sys
 import tempfile
+from functools import lru_cache
 from typing import (
     Annotated,
     Any,
@@ -845,6 +846,15 @@ _SEMANTIC_SINGLE_TOKEN_MIN_LEN = 5
 _SEMANTIC_FUZZY_CUTOFF = 0.86
 _SEMANTIC_CAMEL_BOUNDARY_1 = re.compile(r"([a-z])([A-Z])")
 _SEMANTIC_CAMEL_BOUNDARY_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_SMART_MATCH_MODE = str(os.environ.get("IDA_MCP_SMART_MATCH_MODE", "balanced")).strip().lower()
+if _SMART_MATCH_MODE not in {"off", "conservative", "balanced", "aggressive"}:
+    _SMART_MATCH_MODE = "balanced"
+_SMART_MATCH_MODE_DEFAULTS = {
+    "off": {"semantic_enabled": False, "fuzzy_cutoff": 1.0},
+    "conservative": {"semantic_enabled": True, "fuzzy_cutoff": 0.92},
+    "balanced": {"semantic_enabled": True, "fuzzy_cutoff": _SEMANTIC_FUZZY_CUTOFF},
+    "aggressive": {"semantic_enabled": True, "fuzzy_cutoff": 0.80},
+}
 
 
 def _normalize_semantic_token(token: str) -> str:
@@ -876,7 +886,7 @@ def _semantic_tokenize(text: str) -> list[str]:
     return tokens
 
 
-def _compile_semantic_matcher(pattern: str):
+def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_FUZZY_CUTOFF):
     query_tokens = _semantic_tokenize(pattern)
     if not query_tokens:
         return None
@@ -911,7 +921,7 @@ def _compile_semantic_matcher(pattern: str):
             return False
         fuzzy_hits = 0
         for qtok in fuzzy_tokens:
-            if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=_SEMANTIC_FUZZY_CUTOFF):
+            if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=fuzzy_cutoff):
                 fuzzy_hits += 1
                 if overlap + fuzzy_hits >= overlap_needed:
                     return True
@@ -936,7 +946,28 @@ def smart_match(pattern: str, text: str, case_sensitive: bool = False) -> bool:
     return compiled(text)
 
 
-def compile_smart_pattern(pattern: str, case_sensitive: bool = False):
+@lru_cache(maxsize=1024)
+def _compile_smart_pattern_cached(
+    pattern: str,
+    case_sensitive: bool,
+    semantic_enabled: bool,
+    fuzzy_cutoff: float,
+):
+    return _compile_smart_pattern_uncached(
+        pattern,
+        case_sensitive=case_sensitive,
+        semantic_enabled=semantic_enabled,
+        fuzzy_cutoff=fuzzy_cutoff,
+    )
+
+
+def _compile_smart_pattern_uncached(
+    pattern: str,
+    *,
+    case_sensitive: bool = False,
+    semantic_enabled: bool = True,
+    fuzzy_cutoff: float = _SEMANTIC_FUZZY_CUTOFF,
+):
     """Return a *callable(text) -> bool* for the given pattern.
 
     Compiling the pattern once and reusing the callable in a tight loop is
@@ -985,10 +1016,27 @@ def compile_smart_pattern(pattern: str, case_sensitive: bool = False):
         return lambda _text, _p=pattern: _p in _text
 
     pat_lower = pattern.lower()
-    semantic_match = _compile_semantic_matcher(pattern)
+    if not semantic_enabled:
+        return lambda _text, _p=pat_lower: _p in _text.lower()
+
+    semantic_match = _compile_semantic_matcher(pattern, fuzzy_cutoff=fuzzy_cutoff)
     if semantic_match is None:
         return lambda _text, _p=pat_lower: _p in _text.lower()
     return lambda _text, _p=pat_lower, _sem=semantic_match: (_p in _text.lower()) or _sem(_text)
+
+
+def compile_smart_pattern(
+    pattern: str,
+    case_sensitive: bool = False,
+    *,
+    semantic_enabled: Optional[bool] = None,
+    fuzzy_cutoff: Optional[float] = None,
+):
+    defaults = _SMART_MATCH_MODE_DEFAULTS[_SMART_MATCH_MODE]
+    use_semantic = defaults["semantic_enabled"] if semantic_enabled is None else bool(semantic_enabled)
+    use_cutoff = defaults["fuzzy_cutoff"] if fuzzy_cutoff is None else float(fuzzy_cutoff)
+    use_cutoff = max(0.0, min(1.0, use_cutoff))
+    return _compile_smart_pattern_cached(pattern, case_sensitive, use_semantic, use_cutoff)
 
 
 def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
