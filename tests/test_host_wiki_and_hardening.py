@@ -192,7 +192,7 @@ class TestHostHardening(unittest.TestCase):
         wiki_tool = next(t for t in tools_payload if t["name"] == "wiki")
         self.assertIn("documentation", wiki_tool["description"].lower())
 
-    def test_tools_list_has_no_empty_tooltips(self):
+    def test_tools_list_has_no_empty_descriptions(self):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 11, "method": "tools/list"})
         tools_payload = res["result"]["tools"]
         tools_with_empty_descriptions = [t["name"] for t in tools_payload if not (t.get("description") or "").strip()]
