@@ -857,6 +857,10 @@ _SMART_MATCH_MODE_DEFAULTS = {
 }
 
 
+def _resolve_optional_param(provided: Optional[Any], default: Any) -> Any:
+    return default if provided is None else provided
+
+
 def _normalize_semantic_token(token: str) -> str:
     tok = token.lower().strip()
     if not tok:
@@ -1033,8 +1037,8 @@ def compile_smart_pattern(
     fuzzy_cutoff: Optional[float] = None,
 ):
     defaults = _SMART_MATCH_MODE_DEFAULTS[_SMART_MATCH_MODE]
-    use_semantic = defaults["semantic_enabled"] if semantic_enabled is None else bool(semantic_enabled)
-    use_cutoff = defaults["fuzzy_cutoff"] if fuzzy_cutoff is None else float(fuzzy_cutoff)
+    use_semantic = bool(_resolve_optional_param(semantic_enabled, defaults["semantic_enabled"]))
+    use_cutoff = float(_resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"]))
     use_cutoff = max(0.0, min(1.0, use_cutoff))
     return _compile_smart_pattern_cached(pattern, case_sensitive, use_semantic, use_cutoff)
 
