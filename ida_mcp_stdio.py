@@ -7785,18 +7785,23 @@ class IDAMCPServer:
             mode = self.default_tools_list_mode
             if self.monolithic_tool_descriptions:
                 mode = "full"
+            def _tool_description(tool_name: str) -> str:
+                if mode == "full":
+                    desc = TOOL_DESCRIPTIONS.get(tool_name, "")
+                elif mode == "lean":
+                    desc = build_tool_description_lean(tool_name)
+                else:
+                    desc = build_tool_description_ultra(tool_name)
+                if isinstance(desc, str) and desc.strip():
+                    return desc
+                fallback = TOOL_DESCRIPTIONS.get(tool_name, "")
+                if isinstance(fallback, str) and fallback.strip():
+                    return fallback
+                return f"Use wiki(topic='tools/{tool_name}') for usage."
             tools = [
                 {
                     "name": t,
-                    "description": (
-                        TOOL_DESCRIPTIONS.get(t, "")
-                        if mode == "full"
-                        else (
-                            build_tool_description_lean(t)
-                            if mode == "lean"
-                            else build_tool_description_ultra(t)
-                        )
-                    ),
+                    "description": _tool_description(t),
                     "inputSchema": (
                         build_input_schema(t)
                         if mode == "full"
