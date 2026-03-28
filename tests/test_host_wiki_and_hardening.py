@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from ida_mcp_stdio import (  # noqa: E402
+    ADVERTISED_TOOLS,
     ACTION_ALIASES_BY_TOOL,
     ARG_ALIASES_BY_TOOL,
     IDAMCPServer,
@@ -190,6 +191,16 @@ class TestHostHardening(unittest.TestCase):
 
         wiki_tool = next(t for t in tools_payload if t["name"] == "wiki")
         self.assertIn("documentation", wiki_tool["description"].lower())
+
+    def test_tools_list_has_no_empty_tooltips(self):
+        res = self.server.handle_request({"jsonrpc": "2.0", "id": 11, "method": "tools/list"})
+        tools_payload = res["result"]["tools"]
+        empty = [t["name"] for t in tools_payload if not (t.get("description") or "").strip()]
+        self.assertEqual(empty, [])
+
+    def test_tools_list_count_matches_advertised_tools(self):
+        res = self.server.handle_request({"jsonrpc": "2.0", "id": 12, "method": "tools/list"})
+        self.assertEqual(len(res["result"]["tools"]), len(ADVERTISED_TOOLS))
 
     def test_misc_health_requires_no_session(self):
         res = self.server._execute_tool("misc", {"action": "health"})
