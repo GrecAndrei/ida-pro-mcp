@@ -487,6 +487,25 @@ _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
 LLM_POINTER_SAFETY_NOTE = (
     "DO NOT CALCULATE POINTERS OR ADDRESSES MENTALLY; ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING."
 )
+_POINTER_NOTE_SIGNAL_KEYWORDS = (
+    "addr",
+    "address",
+    "ea",
+    "offset",
+    "base",
+    "ptr",
+    "pointer",
+    "deref",
+    "index",
+    "stride",
+    "chain",
+)
+_POINTER_NOTE_SIGNAL_TOOLS_STRONG = {"calc", "memory"}
+_POINTER_NOTE_SIGNAL_TOOLS_HINT = {"data", "code", "nav", "search", "debug", "batch"}
+_POINTER_NOTE_HEX_RE = re.compile(r"0x[0-9a-fA-F]{3,}")
+_POINTER_NOTE_MATH_RE = re.compile(
+    r"0x[0-9a-fA-F]{3,}\s*(?:\+|-|\*|/|<<|>>)\s*(?:0x[0-9a-fA-F]{1,}|[0-9]+)"
+)
 ADVERTISED_TOOLS = [
     "session",
     "truncation",
@@ -3382,6 +3401,20 @@ class IDAMCPServer:
         self._next_cache_ttl_seconds = 1800
         self._activity_log: List[Dict[str, Any]] = []
         self._activity_log_max = 4000
+        self._pointer_note_interval_seconds = _bounded_int(
+            os.environ.get("IDA_MCP_POINTER_NOTE_INTERVAL", 900),
+            900,
+            min_value=60,
+            max_value=86_400,
+        )
+        self._pointer_note_min_signal = _bounded_int(
+            os.environ.get("IDA_MCP_POINTER_NOTE_MIN_SIGNAL", 3),
+            3,
+            min_value=1,
+            max_value=20,
+        )
+        self._pointer_note_last_shown_at = 0.0
+        self._pointer_note_pending_signal = 0.0
         # Controls whether tools/list returns the full monolithic description/schema payload.
         # Default OFF for context efficiency in LLM clients.
         self.monolithic_tool_descriptions = _env_bool(
@@ -4800,11 +4833,113 @@ class IDAMCPServer:
             out["error"] = payload.get("error")
         return out
 
-    def _prepare_response_payload(self, payload: Any, opts: dict) -> Any:
+    def _pointer_note_signal_from_text(self, text: str) -> float:
+        if not text:
+            return 0.0
+        s = text.strip()
+        if not s:
+            return 0.0
+        lowered = s.lower()
+        score = 0.0
+        if _POINTER_NOTE_HEX_RE.search(s):
+            score += 1.0
+        if _POINTER_NOTE_MATH_RE.search(s):
+            score += 2.0
+        if sum(1 for _ in _POINTER_NOTE_HEX_RE.finditer(s)) >= 2:
+            score += 1.0
+        if any(k in lowered for k in _POINTER_NOTE_SIGNAL_KEYWORDS):
+            score += 1.0
+        return score
+
+    def _pointer_note_signal_from_value(self, value: Any, depth: int = 0) -> float:
+        if depth > 2:
+            return 0.0
+        if isinstance(value, str):
+            return self._pointer_note_signal_from_text(value)
+        if isinstance(value, int):
+            return 0.5 if value >= 0x1000 else 0.0
+        if isinstance(value, list):
+            return sum(self._pointer_note_signal_from_value(v, depth + 1) for v in value[:8])
+        if isinstance(value, dict):
+            score = 0.0
+            for idx, (k, v) in enumerate(value.items()):
+                if idx >= 12:
+                    break
+                if isinstance(k, str):
+                    kl = k.lower()
+                    if any(sig in kl for sig in _POINTER_NOTE_SIGNAL_KEYWORDS):
+                        score += 1.0
+                score += self._pointer_note_signal_from_value(v, depth + 1)
+            return score
+        return 0.0
+
+    def _compute_pointer_note_signal(self, tool_name: str, call_args: Any, payload: Any) -> float:
+        score = 0.0
+        tn = str(tool_name or "").strip().lower()
+        if tn in _POINTER_NOTE_SIGNAL_TOOLS_STRONG:
+            score += 2.0
+        elif tn in _POINTER_NOTE_SIGNAL_TOOLS_HINT:
+            score += 1.0
+        if isinstance(call_args, dict):
+            for idx, (k, v) in enumerate(call_args.items()):
+                if idx >= 20:
+                    break
+                if isinstance(k, str):
+                    kl = k.lower()
+                    if kl.startswith("_"):
+                        continue
+                    if any(sig in kl for sig in _POINTER_NOTE_SIGNAL_KEYWORDS):
+                        score += 1.0
+                score += self._pointer_note_signal_from_value(v)
+        if isinstance(payload, dict):
+            score += self._pointer_note_signal_from_value(
+                {
+                    "address": payload.get("address"),
+                    "addr": payload.get("addr"),
+                    "target": payload.get("target"),
+                    "query": payload.get("query"),
+                    "pattern": payload.get("pattern"),
+                    "matches": payload.get("matches"),
+                    "items": payload.get("items"),
+                }
+            )
+        return min(score, 10.0)
+
+    def _should_include_pointer_note(self, tool_name: str, call_args: Any, payload: Any) -> bool:
+        signal = self._compute_pointer_note_signal(tool_name, call_args, payload)
+        if signal > 0:
+            self._pointer_note_pending_signal = min(
+                float(self._pointer_note_min_signal) * 2.0,
+                self._pointer_note_pending_signal + signal,
+            )
+        else:
+            self._pointer_note_pending_signal = max(0.0, self._pointer_note_pending_signal - 0.25)
+            return False
+        if self._pointer_note_pending_signal < float(self._pointer_note_min_signal):
+            return False
+        now = time.time()
+        if self._pointer_note_last_shown_at > 0 and (
+            now - self._pointer_note_last_shown_at
+        ) < float(self._pointer_note_interval_seconds):
+            return False
+        self._pointer_note_last_shown_at = now
+        self._pointer_note_pending_signal = 0.0
+        return True
+
+    def _prepare_response_payload(
+        self,
+        payload: Any,
+        opts: dict,
+        *,
+        tool_name: str = "",
+        call_args: Any = None,
+    ) -> Any:
+        include_pointer_note = self._should_include_pointer_note(tool_name, call_args, payload)
         if opts.get("mode") == "full":
             if isinstance(payload, dict):
                 payload = dict(payload)
-                payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
+                if include_pointer_note:
+                    payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
             return payload
         projected = self._project_top_level_fields(payload, opts)
         compacted = self._compact_value(projected, opts)
@@ -4816,7 +4951,8 @@ class IDAMCPServer:
             compacted = truncate_response(compacted, max_tokens=budget)
         if isinstance(compacted, dict):
             compacted = dict(compacted)
-            compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
+            if include_pointer_note:
+                compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
         return compacted
 
     def _serialize_payload(self, payload: Any, opts: dict) -> str:
@@ -7988,7 +8124,12 @@ class IDAMCPServer:
                 if isinstance(call_args, dict):
                     res = self._cache_next_page(resolved_tn or "", call_args, res)
                     self._record_activity(resolved_tn or "", call_args, res)
-            res = self._prepare_response_payload(res, response_opts)
+            res = self._prepare_response_payload(
+                res,
+                response_opts,
+                tool_name=resolved_tn or str(tn or ""),
+                call_args=call_args,
+            )
             is_error = bool(isinstance(res, dict) and res.get("error"))
             return {
                 "jsonrpc": "2.0",
