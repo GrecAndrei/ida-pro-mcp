@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -486,8 +487,7 @@ class TestResponseCompaction(unittest.TestCase):
         text = resp["result"]["content"][0]["text"]
         payload = json.loads(text)
         self.assertEqual(payload.get("total_sessions"), 0)
-        self.assertIn("llm_pointer_note", payload)
-        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", payload["llm_pointer_note"])
+        self.assertNotIn("llm_pointer_note", payload)
         self.assertNotIn("\n", text)
 
     def test_tools_call_full_mode_preserves_verbose_shape(self):
@@ -529,7 +529,7 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertEqual(payload["results"][0]["tool"], "session")
         self.assertTrue(payload["results"][0]["ok"])
         self.assertEqual(payload["results"][0]["data"].get("total_sessions"), 0)
-        self.assertIn("llm_pointer_note", payload)
+        self.assertNotIn("llm_pointer_note", payload)
 
     def test_llm_note_present_in_full_mode(self):
         req = {
@@ -543,8 +543,50 @@ class TestResponseCompaction(unittest.TestCase):
         }
         resp = self.server.handle_request(req)
         payload = json.loads(resp["result"]["content"][0]["text"])
-        self.assertIn("llm_pointer_note", payload)
-        self.assertTrue(payload["llm_pointer_note"].startswith("DO NOT CALCULATE POINTERS"))
+        self.assertNotIn("llm_pointer_note", payload)
+
+    def test_llm_note_shows_for_pointer_usage_after_signal_threshold(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "calc",
+                "arguments": {"action": "eval", "expr": "0x401000 + 0x20"},
+            },
+        }
+        first = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+        second = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+        self.assertNotIn("llm_pointer_note", first)
+        self.assertIn("llm_pointer_note", second)
+        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", second["llm_pointer_note"])
+
+    def test_llm_note_respects_15_min_periodic_interval(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "calc",
+                "arguments": {"action": "eval", "expr": "0x500000 + 0x40"},
+            },
+        }
+        # Warm-up to first note under a fixed clock.
+        with patch("ida_mcp_stdio.time.time", return_value=10_000.0):
+            self.server.handle_request(req)
+            first = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+        self.assertIn("llm_pointer_note", first)
+
+        # Still within interval => suppressed even with strong usage signal.
+        with patch("ida_mcp_stdio.time.time", return_value=10_100.0):
+            suppressed = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+        self.assertNotIn("llm_pointer_note", suppressed)
+
+        # After 15 minutes => eligible again once signal accumulates.
+        with patch("ida_mcp_stdio.time.time", return_value=10_901.0):
+            self.server.handle_request(req)
+            shown_again = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+        self.assertIn("llm_pointer_note", shown_again)
 
     def test_normalize_search_aliases_accept_noisy_variants(self):
         normalized = self.server._normalize_tool_call_args(
