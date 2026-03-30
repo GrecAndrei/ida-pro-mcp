@@ -4865,11 +4865,12 @@ class IDAMCPServer:
             for idx, (k, v) in enumerate(value.items()):
                 if idx >= 12:
                     break
+                child_score = self._pointer_note_signal_from_value(v, depth + 1)
                 if isinstance(k, str):
                     kl = k.lower()
-                    if any(sig in kl for sig in _POINTER_NOTE_SIGNAL_KEYWORDS):
+                    if child_score > 0 and any(sig in kl for sig in _POINTER_NOTE_SIGNAL_KEYWORDS):
                         score += 1.0
-                score += self._pointer_note_signal_from_value(v, depth + 1)
+                score += child_score
             return score
         return 0.0
 
@@ -4892,20 +4893,20 @@ class IDAMCPServer:
                         score += 1.0
                 score += self._pointer_note_signal_from_value(v)
         if isinstance(payload, dict):
+            payload_focus: Dict[str, Any] = {}
+            for key in ("address", "addr", "target", "query", "pattern", "matches", "items"):
+                if key in payload:
+                    val = payload.get(key)
+                    if val not in (None, "", [], {}):
+                        payload_focus[key] = val
             score += self._pointer_note_signal_from_value(
-                {
-                    "address": payload.get("address"),
-                    "addr": payload.get("addr"),
-                    "target": payload.get("target"),
-                    "query": payload.get("query"),
-                    "pattern": payload.get("pattern"),
-                    "matches": payload.get("matches"),
-                    "items": payload.get("items"),
-                }
+                payload_focus
             )
         return min(score, 10.0)
 
     def _should_include_pointer_note(self, tool_name: str, call_args: Any, payload: Any) -> bool:
+        if isinstance(payload, dict) and payload.get("error"):
+            return False
         signal = self._compute_pointer_note_signal(tool_name, call_args, payload)
         if signal > 0:
             self._pointer_note_pending_signal = min(
