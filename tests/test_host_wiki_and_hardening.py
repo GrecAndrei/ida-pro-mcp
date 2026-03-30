@@ -574,27 +574,36 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertIn("llm_pointer_note", third)
         self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", third["llm_pointer_note"])
 
-    def test_llm_note_respects_15_min_periodic_interval(self):
+    def test_llm_note_respects_periodic_interval(self):
         opts = self.server._default_response_options()
-        call_args = {"action": "eval", "expr": "0x500000 + 0x40"}
+        call_args = {"action": "status", "note": "ptr chain"}
         # Warm-up to first note under a fixed clock.
         with patch("ida_mcp_stdio.time.time", return_value=10_000.0):
+            self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
+            self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
             first = self.server._prepare_response_payload(
-                {"ok": True, "value": "0x500080"}, opts, tool_name="calc", call_args=call_args
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
             )
         self.assertIn("llm_pointer_note", first)
 
         # Still within interval => suppressed even with strong usage signal.
         with patch("ida_mcp_stdio.time.time", return_value=10_100.0):
             suppressed = self.server._prepare_response_payload(
-                {"ok": True, "value": "0x5000C0"}, opts, tool_name="calc", call_args=call_args
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
             )
         self.assertNotIn("llm_pointer_note", suppressed)
 
-        # After 15 minutes => eligible again once signal accumulates.
+        # After interval => eligible again once signal re-accumulates.
         with patch("ida_mcp_stdio.time.time", return_value=10_901.0):
+            self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
             shown_again = self.server._prepare_response_payload(
-                {"ok": True, "value": "0x500140"}, opts, tool_name="calc", call_args=call_args
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
             )
         self.assertIn("llm_pointer_note", shown_again)
 

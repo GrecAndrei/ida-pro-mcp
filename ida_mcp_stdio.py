@@ -506,6 +506,10 @@ _POINTER_NOTE_HEX_RE = re.compile(r"0x[0-9a-fA-F]{3,}")
 _POINTER_NOTE_MATH_RE = re.compile(
     r"0x[0-9a-fA-F]{3,}\s*(?:\+|-|\*|/|<<|>>)\s*(?:0x[0-9a-fA-F]{1,}|[0-9]+)"
 )
+_POINTER_NOTE_SIGNAL_MAX_DEPTH = 2
+_POINTER_NOTE_SIGNAL_MAX_LIST_ITEMS = 8
+_POINTER_NOTE_SIGNAL_MAX_DICT_ITEMS = 12
+_POINTER_NOTE_MAX_SIGNAL_MULTIPLIER = 2.0
 ADVERTISED_TOOLS = [
     "session",
     "truncation",
@@ -4841,29 +4845,33 @@ class IDAMCPServer:
             return 0.0
         lowered = s.lower()
         score = 0.0
-        if _POINTER_NOTE_HEX_RE.search(s):
+        hex_matches = list(_POINTER_NOTE_HEX_RE.finditer(s))
+        if hex_matches:
             score += 1.0
         if _POINTER_NOTE_MATH_RE.search(s):
             score += 2.0
-        if sum(1 for _ in _POINTER_NOTE_HEX_RE.finditer(s)) >= 2:
+        if len(hex_matches) >= 2:
             score += 1.0
         if any(k in lowered for k in _POINTER_NOTE_SIGNAL_KEYWORDS):
             score += 1.0
         return score
 
     def _pointer_note_signal_from_value(self, value: Any, depth: int = 0) -> float:
-        if depth > 2:
+        if depth > _POINTER_NOTE_SIGNAL_MAX_DEPTH:
             return 0.0
         if isinstance(value, str):
             return self._pointer_note_signal_from_text(value)
         if isinstance(value, int):
             return 0.5 if value >= 0x1000 else 0.0
         if isinstance(value, list):
-            return sum(self._pointer_note_signal_from_value(v, depth + 1) for v in value[:8])
+            return sum(
+                self._pointer_note_signal_from_value(v, depth + 1)
+                for v in value[:_POINTER_NOTE_SIGNAL_MAX_LIST_ITEMS]
+            )
         if isinstance(value, dict):
             score = 0.0
             for idx, (k, v) in enumerate(value.items()):
-                if idx >= 12:
+                if idx >= _POINTER_NOTE_SIGNAL_MAX_DICT_ITEMS:
                     break
                 child_score = self._pointer_note_signal_from_value(v, depth + 1)
                 if isinstance(k, str):
@@ -4910,7 +4918,7 @@ class IDAMCPServer:
         signal = self._compute_pointer_note_signal(tool_name, call_args, payload)
         if signal > 0:
             self._pointer_note_pending_signal = min(
-                float(self._pointer_note_min_signal) * 2.0,
+                float(self._pointer_note_min_signal) * _POINTER_NOTE_MAX_SIGNAL_MULTIPLIER,
                 self._pointer_note_pending_signal + signal,
             )
         else:
