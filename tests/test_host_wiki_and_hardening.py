@@ -469,11 +469,23 @@ class TestHostHardening(unittest.TestCase):
 
 class TestResponseCompaction(unittest.TestCase):
     def setUp(self):
+        self._old_pointer_note_interval = os.environ.get("IDA_MCP_POINTER_NOTE_INTERVAL")
+        self._old_pointer_note_min_signal = os.environ.get("IDA_MCP_POINTER_NOTE_MIN_SIGNAL")
+        os.environ["IDA_MCP_POINTER_NOTE_INTERVAL"] = "900"
+        os.environ["IDA_MCP_POINTER_NOTE_MIN_SIGNAL"] = "3"
         self.server = IDAMCPServer()
         self.tmpdir = tempfile.mkdtemp(prefix="resp-compaction-")
         self.server.session_mgr = SessionManager(self.tmpdir)
 
     def tearDown(self):
+        if self._old_pointer_note_interval is None:
+            os.environ.pop("IDA_MCP_POINTER_NOTE_INTERVAL", None)
+        else:
+            os.environ["IDA_MCP_POINTER_NOTE_INTERVAL"] = self._old_pointer_note_interval
+        if self._old_pointer_note_min_signal is None:
+            os.environ.pop("IDA_MCP_POINTER_NOTE_MIN_SIGNAL", None)
+        else:
+            os.environ["IDA_MCP_POINTER_NOTE_MIN_SIGNAL"] = self._old_pointer_note_min_signal
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_tools_call_uses_compact_mode_by_default(self):
@@ -546,46 +558,44 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertNotIn("llm_pointer_note", payload)
 
     def test_llm_note_shows_for_pointer_usage_after_signal_threshold(self):
-        req = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "calc",
-                "arguments": {"action": "eval", "expr": "0x401000 + 0x20"},
-            },
-        }
-        first = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
-        second = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+        opts = self.server._default_response_options()
+        call_args = {"action": "status", "note": "pointer chain"}
+        first = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+        )
+        second = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+        )
+        third = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+        )
         self.assertNotIn("llm_pointer_note", first)
-        self.assertIn("llm_pointer_note", second)
-        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", second["llm_pointer_note"])
+        self.assertNotIn("llm_pointer_note", second)
+        self.assertIn("llm_pointer_note", third)
+        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", third["llm_pointer_note"])
 
     def test_llm_note_respects_15_min_periodic_interval(self):
-        req = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "calc",
-                "arguments": {"action": "eval", "expr": "0x500000 + 0x40"},
-            },
-        }
+        opts = self.server._default_response_options()
+        call_args = {"action": "eval", "expr": "0x500000 + 0x40"}
         # Warm-up to first note under a fixed clock.
         with patch("ida_mcp_stdio.time.time", return_value=10_000.0):
-            self.server.handle_request(req)
-            first = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+            first = self.server._prepare_response_payload(
+                {"ok": True, "value": "0x500080"}, opts, tool_name="calc", call_args=call_args
+            )
         self.assertIn("llm_pointer_note", first)
 
         # Still within interval => suppressed even with strong usage signal.
         with patch("ida_mcp_stdio.time.time", return_value=10_100.0):
-            suppressed = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+            suppressed = self.server._prepare_response_payload(
+                {"ok": True, "value": "0x5000C0"}, opts, tool_name="calc", call_args=call_args
+            )
         self.assertNotIn("llm_pointer_note", suppressed)
 
         # After 15 minutes => eligible again once signal accumulates.
         with patch("ida_mcp_stdio.time.time", return_value=10_901.0):
-            self.server.handle_request(req)
-            shown_again = json.loads(self.server.handle_request(req)["result"]["content"][0]["text"])
+            shown_again = self.server._prepare_response_payload(
+                {"ok": True, "value": "0x500140"}, opts, tool_name="calc", call_args=call_args
+            )
         self.assertIn("llm_pointer_note", shown_again)
 
     def test_normalize_search_aliases_accept_noisy_variants(self):
