@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -468,11 +469,23 @@ class TestHostHardening(unittest.TestCase):
 
 class TestResponseCompaction(unittest.TestCase):
     def setUp(self):
+        self._old_pointer_note_interval = os.environ.get("IDA_MCP_POINTER_NOTE_INTERVAL")
+        self._old_pointer_note_min_signal = os.environ.get("IDA_MCP_POINTER_NOTE_MIN_SIGNAL")
+        os.environ["IDA_MCP_POINTER_NOTE_INTERVAL"] = "900"
+        os.environ["IDA_MCP_POINTER_NOTE_MIN_SIGNAL"] = "3"
         self.server = IDAMCPServer()
         self.tmpdir = tempfile.mkdtemp(prefix="resp-compaction-")
         self.server.session_mgr = SessionManager(self.tmpdir)
 
     def tearDown(self):
+        if self._old_pointer_note_interval is None:
+            os.environ.pop("IDA_MCP_POINTER_NOTE_INTERVAL", None)
+        else:
+            os.environ["IDA_MCP_POINTER_NOTE_INTERVAL"] = self._old_pointer_note_interval
+        if self._old_pointer_note_min_signal is None:
+            os.environ.pop("IDA_MCP_POINTER_NOTE_MIN_SIGNAL", None)
+        else:
+            os.environ["IDA_MCP_POINTER_NOTE_MIN_SIGNAL"] = self._old_pointer_note_min_signal
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_tools_call_uses_compact_mode_by_default(self):
@@ -486,8 +499,7 @@ class TestResponseCompaction(unittest.TestCase):
         text = resp["result"]["content"][0]["text"]
         payload = json.loads(text)
         self.assertEqual(payload.get("total_sessions"), 0)
-        self.assertIn("llm_pointer_note", payload)
-        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", payload["llm_pointer_note"])
+        self.assertNotIn("llm_pointer_note", payload)
         self.assertNotIn("\n", text)
 
     def test_tools_call_full_mode_preserves_verbose_shape(self):
@@ -529,7 +541,7 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertEqual(payload["results"][0]["tool"], "session")
         self.assertTrue(payload["results"][0]["ok"])
         self.assertEqual(payload["results"][0]["data"].get("total_sessions"), 0)
-        self.assertIn("llm_pointer_note", payload)
+        self.assertNotIn("llm_pointer_note", payload)
 
     def test_llm_note_present_in_full_mode(self):
         req = {
@@ -543,8 +555,57 @@ class TestResponseCompaction(unittest.TestCase):
         }
         resp = self.server.handle_request(req)
         payload = json.loads(resp["result"]["content"][0]["text"])
-        self.assertIn("llm_pointer_note", payload)
-        self.assertTrue(payload["llm_pointer_note"].startswith("DO NOT CALCULATE POINTERS"))
+        self.assertNotIn("llm_pointer_note", payload)
+
+    def test_llm_note_shows_for_pointer_usage_after_signal_threshold(self):
+        opts = self.server._default_response_options()
+        call_args = {"action": "status", "note": "pointer chain"}
+        first = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+        )
+        second = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+        )
+        third = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+        )
+        self.assertNotIn("llm_pointer_note", first)
+        self.assertNotIn("llm_pointer_note", second)
+        self.assertIn("llm_pointer_note", third)
+        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", third["llm_pointer_note"])
+
+    def test_llm_note_respects_periodic_interval(self):
+        opts = self.server._default_response_options()
+        call_args = {"action": "status", "note": "ptr chain"}
+        # Warm-up to first note under a fixed clock.
+        with patch("ida_mcp_stdio.time.time", return_value=10_000.0):
+            self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
+            self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
+            first = self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
+        self.assertIn("llm_pointer_note", first)
+
+        # Still within interval => suppressed even with strong usage signal.
+        with patch("ida_mcp_stdio.time.time", return_value=10_100.0):
+            suppressed = self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
+        self.assertNotIn("llm_pointer_note", suppressed)
+
+        # After interval => eligible again once signal re-accumulates.
+        with patch("ida_mcp_stdio.time.time", return_value=10_901.0):
+            self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
+            shown_again = self.server._prepare_response_payload(
+                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
+            )
+        self.assertIn("llm_pointer_note", shown_again)
 
     def test_normalize_search_aliases_accept_noisy_variants(self):
         normalized = self.server._normalize_tool_call_args(
