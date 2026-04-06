@@ -18,21 +18,25 @@ from pathlib import Path
 # Windows ANSI Color Support
 # ============================================================================
 
+
 def enable_ansi():
     """Enable ANSI escape codes on Windows"""
-    if os.name == 'nt':
+    if os.name == "nt":
         try:
             import ctypes
+
             kernel32 = ctypes.windll.kernel32
             kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
         except:
             pass
+
 
 enable_ansi()
 
 # ============================================================================
 # Colors
 # ============================================================================
+
 
 class C:
     if sys.stdout.isatty():
@@ -48,6 +52,7 @@ class C:
         WHITE = "\033[97m"
     else:
         RESET = BOLD = DIM = RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = ""
+
 
 # ============================================================================
 # Simple Text Logo
@@ -67,31 +72,40 @@ LOGO = f"""
 # Helpers
 # ============================================================================
 
+
 def clear():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    os.system("cls" if os.name == "nt" else "clear")
+
 
 def step(num, total, msg):
     print(f"\n{C.CYAN}[{num}/{total}]{C.RESET} {msg}")
 
+
 def success(msg):
     print(f"       {C.GREEN}OK{C.RESET} {msg}")
+
 
 def warning(msg):
     print(f"       {C.YELLOW}!!{C.RESET} {msg}")
 
+
 def error(msg):
     print(f"       {C.RED}ERR{C.RESET} {msg}")
+
 
 def dim(msg):
     print(f"       {C.DIM}{msg}{C.RESET}")
 
+
 def get_script_dir():
     return Path(__file__).parent.absolute()
+
 
 def _ida_binary_names():
     if sys.platform == "win32":
         return ["idat64.exe", "idat.exe", "ida64.exe", "ida.exe"]
     return ["idat64", "idat", "ida64", "ida"]
+
 
 def detect_ida_install_dir():
     """Best-effort auto-detection of IDA install directory."""
@@ -159,6 +173,7 @@ def detect_ida_install_dir():
             return Path(resolved).resolve().parent
     return None
 
+
 def get_ida_user_dir():
     """Locate IDA user directory used for plugins/config."""
     env_dir = os.environ.get("IDAUSR") or os.environ.get("IDA_USER_DIR")
@@ -166,8 +181,10 @@ def get_ida_user_dir():
         return Path(env_dir).expanduser()
     return Path.home() / ".idapro"
 
+
 def _ps_quote(s: str) -> str:
     return s.replace("'", "''")
+
 
 def kill_processes_for_paths(paths, kill_ida=True):
     targets = [str(p) for p in paths if p]
@@ -195,12 +212,17 @@ def kill_processes_for_paths(paths, kill_ida=True):
             for name in ["idat", "idat64", "ida", "ida64"]:
                 subprocess.run(["pkill", "-x", name], capture_output=True)
 
+
 def get_permanent_dir():
     """Get a professional permanent directory for the MCP server."""
     if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "ida-pro-mcp"
+        return (
+            Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+            / "ida-pro-mcp"
+        )
     else:
         return Path.home() / ".local" / "share" / "ida-pro-mcp"
+
 
 def get_ida_plugin_dir():
     """Find the IDA Pro plugins directory."""
@@ -328,14 +350,15 @@ def install_codex_skills(install_path: Path, skills_mode: str = "router"):
         codex_skills_dir.mkdir(parents=True, exist_ok=True)
 
         source_skill_dirs = sorted(
-            p for p in skills_root.iterdir()
-            if p.is_dir() and (p / "SKILL.md").exists()
+            p for p in skills_root.iterdir() if p.is_dir() and (p / "SKILL.md").exists()
         )
         if not source_skill_dirs:
             return {"ok": False, "reason": "no skill directories with SKILL.md found"}
 
         if skills_mode == "router":
-            source_skill_dirs = [p for p in source_skill_dirs if p.name == "ida-tool-router"]
+            source_skill_dirs = [
+                p for p in source_skill_dirs if p.name == "ida-tool-router"
+            ]
             if not source_skill_dirs:
                 return {"ok": False, "reason": "router skill not found"}
         elif skills_mode == "full":
@@ -392,33 +415,43 @@ def install_codex_skills(install_path: Path, skills_mode: str = "router"):
     except Exception as e:
         return {"ok": False, "reason": str(e)}
 
+
 def relocate_self(dest_dir: Path):
     """Copy or upgrade the project in a permanent location."""
     src_dir = get_script_dir()
     if src_dir == dest_dir:
         return True
-    
+
     is_upgrade = dest_dir.exists()
     action_str = "Upgrading" if is_upgrade else "Migrating"
     print(f"       {C.CYAN}>>{C.RESET} {action_str} to: {C.WHITE}{dest_dir}{C.RESET}")
-    
+
     try:
         # Create destination if it doesn't exist
         dest_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # 1. CORE CODE (Always replace to ensure upgrade)
-        core_items = ["src", "docs", ".agents", "scripts", "ida_mcp_stdio.py", "pyproject.toml"]
+        core_items = [
+            "src",
+            "docs",
+            ".agents",
+            "scripts",
+            "ida_mcp_stdio.py",
+            "pyproject.toml",
+        ]
         for item in core_items:
             s = src_dir / item
             d = dest_dir / item
-            if not s.exists(): continue
-            
+            if not s.exists():
+                continue
+
             if s.is_dir():
-                if d.exists(): shutil.rmtree(d)
+                if d.exists():
+                    shutil.rmtree(d)
                 shutil.copytree(s, d)
             else:
                 shutil.copy2(s, d)
-        
+
         # 2. DOCUMENTATION (Replace)
         for item in ["README.md", "LICENSE"]:
             if (src_dir / item).exists():
@@ -429,6 +462,7 @@ def relocate_self(dest_dir: Path):
     except Exception as e:
         error(f"{action_str} failed: {e}")
         return False
+
 
 def check_uv_installed():
     """Check if uv is installed."""
@@ -449,7 +483,9 @@ def _run_checked(cmd, *, cwd=None, env=None):
         if detail:
             lines = [line for line in detail.splitlines() if line.strip()]
             tail = " | ".join(lines[-6:])[:600]
-            raise RuntimeError(f"{' '.join(cmd)} failed (exit {result.returncode}): {tail}")
+            raise RuntimeError(
+                f"{' '.join(cmd)} failed (exit {result.returncode}): {tail}"
+            )
         raise RuntimeError(f"{' '.join(cmd)} failed (exit {result.returncode})")
     return result
 
@@ -479,15 +515,18 @@ def _pick_writable_uv_cache(install_path: Path) -> Path:
             continue
     raise RuntimeError("Unable to create a writable uv cache directory")
 
-def get_mcp_server_config(install_path: Path):
+
+def get_mcp_server_config(
+    install_path: Path, client_name: str = "", global_vertex_compat: bool = False
+):
     """Get the MCP server configuration pointing to the permanent venv python."""
     if sys.platform == "win32":
         python_exe = install_path / ".venv" / "Scripts" / "python.exe"
     else:
         python_exe = install_path / ".venv" / "bin" / "python"
-    
+
     server_script = install_path / "ida_mcp_stdio.py"
-    
+
     detected_idadir = os.environ.get("IDADIR") or os.environ.get("IDA_DIR")
     if not detected_idadir:
         auto_ida = detect_ida_install_dir()
@@ -513,17 +552,23 @@ def get_mcp_server_config(install_path: Path):
     env["IDA_MCP_TRUNCATE_TOKENS"] = "2000"
     env["IDA_MCP_WIKI_DEFAULT_LIMIT"] = "140"
 
+    if global_vertex_compat or client_name in ("Gemini CLI", "OpenCode", "opencode"):
+        env["IDA_MCP_VERTEX_COMPAT"] = "1"
+
     return {
         "command": str(python_exe),
         "args": ["-u", str(server_script)],
         "env": env,
     }
 
+
 def setup_virtualenv(install_path: Path):
-    """Create a high-performance virtual environment at the destination."""     
+    """Create a high-performance virtual environment at the destination."""
     print(f"       {C.CYAN}>>{C.RESET} Setting up optimized environment...")
     venv_dir = install_path / ".venv"
-    venv_python = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    venv_python = venv_dir / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
     try:
         # Force clean start to avoid interactive prompts
         if venv_dir.exists():
@@ -540,15 +585,36 @@ def setup_virtualenv(install_path: Path):
             _run_checked(["uv", "venv", ".venv"], cwd=install_path, env=uv_env)
             # Install core dependencies into the permanent venv
             _run_checked(
-                ["uv", "pip", "install", "idapro", "yara-python", "requests", "tomli-w", "-e", "."],
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "idapro",
+                    "yara-python",
+                    "requests",
+                    "tomli-w",
+                    "-e",
+                    ".",
+                ],
                 cwd=install_path,
                 env=uv_env,
             )
         else:
             _run_checked([sys.executable, "-m", "venv", ".venv"], cwd=install_path)
-            pip_exe = install_path / (".venv/Scripts/pip.exe" if sys.platform == "win32" else ".venv/bin/pip")
+            pip_exe = install_path / (
+                ".venv/Scripts/pip.exe" if sys.platform == "win32" else ".venv/bin/pip"
+            )
             _run_checked(
-                [str(pip_exe), "install", "idapro", "yara-python", "requests", "tomli-w", "-e", "."],
+                [
+                    str(pip_exe),
+                    "install",
+                    "idapro",
+                    "yara-python",
+                    "requests",
+                    "tomli-w",
+                    "-e",
+                    ".",
+                ],
                 cwd=install_path,
             )
         success("Environment optimized")
@@ -557,10 +623,11 @@ def setup_virtualenv(install_path: Path):
         error(f"Environment setup failed: {e}")
         return False
 
+
 def get_mcp_config_paths():
     """Get all known MCP client config file paths"""
     home = Path.home()
-    appdata = Path(os.environ.get('APPDATA', home / 'AppData' / 'Roaming'))
+    appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
     xdg_config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
 
     def pick_path(candidates):
@@ -571,41 +638,92 @@ def get_mcp_config_paths():
         return candidates[0]
 
     opencode_override = os.environ.get("OPENCODE_CONFIG")
-    opencode_override_path = Path(opencode_override).expanduser() if opencode_override else None
+    opencode_override_path = (
+        Path(opencode_override).expanduser() if opencode_override else None
+    )
 
     copilot_path = (
         xdg_config / "copilot" / "mcp-config.json"
         if "XDG_CONFIG_HOME" in os.environ
         else home / ".copilot" / "mcp-config.json"
     )
-    opencode_path = opencode_override_path or (xdg_config / "opencode" / "opencode.json")
+    opencode_path = opencode_override_path or (
+        xdg_config / "opencode" / "opencode.json"
+    )
 
     configs = {
         # --- Priority Clients ---
         "Gemini CLI": pick_path([home / ".gemini" / "settings.json"]),
-        "Antigravity": pick_path([home / ".gemini" / "antigravity" / "mcp_config.json"]),
+        "Antigravity": pick_path(
+            [home / ".gemini" / "antigravity" / "mcp_config.json"]
+        ),
         "Claude Code": pick_path([home / ".claude.json"]),
         "Codex": pick_path([home / ".codex" / "config.toml"]),  # TOML (official path)
         "Copilot CLI": pick_path([copilot_path]),
         "OpenCode": pick_path([opencode_path]),  # JSON/JSONC format
         # --- Other Clients ---
         "Claude Desktop": appdata / "Claude" / "claude_desktop_config.json",
-        "Cursor": appdata / "Cursor" / "User" / "globalStorage" / "cursor.mcp" / "config.json",
-        "VS Code": appdata / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json",
+        "Cursor": appdata
+        / "Cursor"
+        / "User"
+        / "globalStorage"
+        / "cursor.mcp"
+        / "config.json",
+        "VS Code": appdata
+        / "Code"
+        / "User"
+        / "globalStorage"
+        / "github.copilot"
+        / "mcp.json",
         "Windsurf": home / ".windsurf" / "mcp_config.json",
-        "Cline": appdata / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",
-        "Roo Code": appdata / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",
+        "Cline": appdata
+        / "Code"
+        / "User"
+        / "globalStorage"
+        / "saoudrizwan.claude-dev"
+        / "settings"
+        / "cline_mcp_settings.json",
+        "Roo Code": appdata
+        / "Code"
+        / "User"
+        / "globalStorage"
+        / "rooveterinaryinc.roo-cline"
+        / "settings"
+        / "mcp_settings.json",
     }
 
     # Linux/macOS adjustments for GUI/editor clients
-    if os.name != 'nt':
+    if os.name != "nt":
         configs["Claude Desktop"] = xdg_config / "Claude" / "claude_desktop_config.json"
-        configs["VS Code"] = xdg_config / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json"
+        configs["VS Code"] = (
+            xdg_config
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "github.copilot"
+            / "mcp.json"
+        )
         # Linux/macOS Cursor commonly uses ~/.cursor/mcp.json
         configs["Cursor"] = home / ".cursor" / "mcp.json"
         # Linux/macOS Cline/Roo locations under XDG config
-        configs["Cline"] = xdg_config / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json"
-        configs["Roo Code"] = xdg_config / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json"
+        configs["Cline"] = (
+            xdg_config
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "saoudrizwan.claude-dev"
+            / "settings"
+            / "cline_mcp_settings.json"
+        )
+        configs["Roo Code"] = (
+            xdg_config
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "rooveterinaryinc.roo-cline"
+            / "settings"
+            / "mcp_settings.json"
+        )
 
     return configs
 
@@ -699,29 +817,42 @@ def _toml_dump_simple(data: dict) -> str:
     emit_table(data, [])
     return "\n".join(lines) + "\n"
 
-def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", client_name: str = "", install_path: Path = None) -> bool:
+
+def update_json_config(
+    config_path: Path,
+    server_name: str = "ida-pro-mcp",
+    client_name: str = "",
+    install_path: Path = None,
+    global_vertex_compat: bool = False,
+) -> bool:
     """Add/Update server in a JSON config file."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         source_path = config_path
-        if client_name == "Copilot CLI" and not config_path.exists() and os.name != "nt":
+        if (
+            client_name == "Copilot CLI"
+            and not config_path.exists()
+            and os.name != "nt"
+        ):
             legacy = Path.home() / ".copilot" / "mcp-config.json"
             if legacy.exists() and legacy != config_path:
                 source_path = legacy
 
         if source_path.exists():
-            with open(source_path, 'r', encoding='utf-8') as f:
+            with open(source_path, "r", encoding="utf-8") as f:
                 try:
                     config = json.load(f)
                 except json.JSONDecodeError:
                     config = {}
         else:
             config = {}
-        
+
         # Get server config
-        server_config = get_mcp_server_config(install_path)
-        
+        server_config = get_mcp_server_config(
+            install_path, client_name, global_vertex_compat
+        )
+
         # GitHub Copilot CLI uses "mcpServers" with type: stdio
         if client_name == "Copilot CLI":
             # Remove stale "servers" entry if exists
@@ -729,7 +860,7 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", clie
                 del config["servers"][server_name]
             if "servers" in config and not config["servers"]:
                 del config["servers"]
-            
+
             if "mcpServers" not in config:
                 config["mcpServers"] = {}
             # Copilot CLI format: type "local", tools required
@@ -738,7 +869,7 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", clie
                 "command": server_config["command"],
                 "args": server_config["args"],
                 "env": server_config["env"],
-                "tools": ["*"]  # Required by Copilot CLI, "*" means all tools
+                "tools": ["*"],  # Required by Copilot CLI, "*" means all tools
             }
             _prune_legacy_entries(config["mcpServers"], server_name)
             config["mcpServers"][server_name] = copilot_config
@@ -748,8 +879,8 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", clie
                 config["mcpServers"] = {}
             _prune_legacy_entries(config["mcpServers"], server_name)
             config["mcpServers"][server_name] = server_config
-        
-        with open(config_path, 'w', encoding='utf-8') as f:
+
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
         return True
@@ -757,20 +888,27 @@ def update_json_config(config_path: Path, server_name: str = "ida-pro-mcp", clie
         # dim(f"Failed to update {config_path}: {e}")
         return False
 
-def update_toml_config(config_path: Path, server_name: str = "ida-pro-mcp", install_path: Path = None) -> bool:
+
+def update_toml_config(
+    config_path: Path,
+    server_name: str = "ida-pro-mcp",
+    install_path: Path = None,
+    client_name: str = "",
+    global_vertex_compat: bool = False,
+) -> bool:
     """Add/Update server in a TOML config file (for Codex)."""
     try:
         try:
             import tomllib
         except ImportError:
-            import tomli as tomllib # Fallback for older python if installed
+            import tomli as tomllib  # Fallback for older python if installed
         try:
             import tomli_w
         except ImportError:
             tomli_w = None
 
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         config = {}
         if config_path.exists():
             with open(config_path, "rb") as f:
@@ -778,13 +916,15 @@ def update_toml_config(config_path: Path, server_name: str = "ida-pro-mcp", inst
                     config = tomllib.load(f)
                 except:
                     pass
-        
+
         # Codex structure: [mcp_servers.ida-pro-mcp] ...
         if "mcp_servers" not in config:
             config["mcp_servers"] = {}
 
         _prune_legacy_entries(config["mcp_servers"], server_name)
-        config["mcp_servers"][server_name] = get_mcp_server_config(install_path)
+        config["mcp_servers"][server_name] = get_mcp_server_config(
+            install_path, client_name, global_vertex_compat
+        )
 
         if tomli_w is not None:
             with open(config_path, "wb") as f:
@@ -799,11 +939,17 @@ def update_toml_config(config_path: Path, server_name: str = "ida-pro-mcp", inst
         # dim(f"Failed to update {config_path}: {e}")
         return False
 
-def update_opencode_config(config_path: Path, server_name: str = "ida-pro-mcp", install_path: Path = None) -> bool:
+
+def update_opencode_config(
+    config_path: Path,
+    server_name: str = "ida-pro-mcp",
+    install_path: Path = None,
+    global_vertex_compat: bool = False,
+) -> bool:
     """Add/Update server in OpenCode config file (uses MCP schema)."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         source_path = config_path
         if not config_path.exists():
             # Legacy paths from earlier installer versions.
@@ -816,41 +962,44 @@ def update_opencode_config(config_path: Path, server_name: str = "ida-pro-mcp", 
                     break
 
         if source_path.exists():
-            with open(source_path, 'r', encoding='utf-8') as f:
+            with open(source_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 # Strip comments for parsing (JSONC support)
                 import re
+
                 # Remove single-line comments
-                content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
+                content = re.sub(r"//.*?$", "", content, flags=re.MULTILINE)
                 # Remove multi-line comments
-                content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+                content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
                 try:
                     config = json.loads(content)
                 except json.JSONDecodeError:
                     config = {}
         else:
             config = {}
-        
+
         # OpenCode schema: "mcp": { "server-name": { "type": "local", "command": [...], "enabled": true } }
         if "$schema" not in config:
             config["$schema"] = "https://opencode.ai/config.json"
         if "mcp" not in config:
             config["mcp"] = {}
         _prune_legacy_entries(config["mcp"], server_name)
-        
-        server_config = get_mcp_server_config(install_path)
-        
+
+        server_config = get_mcp_server_config(
+            install_path, "OpenCode", global_vertex_compat
+        )
+
         # Transform to OpenCode's local MCP format
         opencode_config = {
             "type": "local",
             "command": [server_config["command"]] + server_config["args"],
             "enabled": True,
-            "environment": server_config.get("env", {})
+            "environment": server_config.get("env", {}),
         }
-        
+
         config["mcp"][server_name] = opencode_config
-        
-        with open(config_path, 'w', encoding='utf-8') as f:
+
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
         return True
@@ -858,30 +1007,50 @@ def update_opencode_config(config_path: Path, server_name: str = "ida-pro-mcp", 
         # dim(f"Failed to update {config_path}: {e}")
         return False
 
+
 def configure_client(client_name: str, config_path: Path) -> bool:
     """Configure a specific client."""
-    if config_path.suffix == '.toml':
-        return update_toml_config(config_path)
+    if config_path.suffix == ".toml":
+        return update_toml_config(config_path, client_name=client_name)
     else:
         return update_json_config(config_path, client_name=client_name)
+
 
 # ============================================================================
 # Install
 # ============================================================================
 
+
 def do_install(skills_mode: str = "router"):
     clear()
     print(LOGO)
     print(f"   {C.DIM}Version 3.1  |  Professional Migration Edition{C.RESET}\n")
-    
+
+    # Ask the user if they want to enable Vertex AI compatibility
+    print(
+        f"   {C.CYAN}?{C.RESET} Would you like to enable Vertex AI compatibility for all MCP clients?"
+    )
+    print(
+        f"     {C.DIM}This optimizes the schema specifically for Google Gemini/Vertex API endpoints.{C.RESET}"
+    )
+    print(
+        f"     {C.DIM}It is normally only enabled automatically for OpenCode and Gemini CLI.{C.RESET}"
+    )
+    vertex_choice = input(f"   Enable globally? [y/N]: ").strip().lower()
+    global_vertex_compat = vertex_choice in ("y", "yes")
+    if global_vertex_compat:
+        success("Vertex AI schema compatibility will be enabled globally.")
+
     total_steps = 7
     script_dir = get_script_dir()
     perm_dir = get_permanent_dir()
-    
+
     # Step 1: Migration Check
     step(1, total_steps, "Analyzing location...")
-    is_temp = any(x in str(script_dir).lower() for x in ["download", "temp", "tmp", "desktop"])
-    
+    is_temp = any(
+        x in str(script_dir).lower() for x in ["download", "temp", "tmp", "desktop"]
+    )
+
     if is_temp:
         warning(f"Running from temporary location: {C.WHITE}{script_dir.name}{C.RESET}")
         if relocate_self(perm_dir):
@@ -900,7 +1069,7 @@ def do_install(skills_mode: str = "router"):
         error(f"Python 3.11+ required, found {version.major}.{version.minor}")
         return False
     success(f"Python {version.major}.{version.minor}.{version.micro}")
-    
+
     if check_uv_installed():
         success("uv detected (will be used for execution)")
     else:
@@ -920,25 +1089,51 @@ def do_install(skills_mode: str = "router"):
     kill_processes_for_paths([], kill_ida=True)
     if not setup_virtualenv(install_path):
         return False
-    
+
     # Step 4: Configure MCP Clients
     step(4, total_steps, "Configuring MCP clients...")
     configs = get_mcp_config_paths()
     configured = []
-    
+
     # Pass the install_path to get correct config
     def configure_with_path(client, path):
         if client == "OpenCode":
-            return update_opencode_config(path, install_path=install_path)
-        elif path.suffix == '.toml':
-            return update_toml_config(path, install_path=install_path)
+            return update_opencode_config(
+                path,
+                install_path=install_path,
+                global_vertex_compat=global_vertex_compat,
+            )
+        elif path.suffix == ".toml":
+            return update_toml_config(
+                path,
+                install_path=install_path,
+                client_name=client,
+                global_vertex_compat=global_vertex_compat,
+            )
         else:
-            return update_json_config(path, client_name=client, install_path=install_path)
+            return update_json_config(
+                path,
+                client_name=client,
+                install_path=install_path,
+                global_vertex_compat=global_vertex_compat,
+            )
 
-    priority_clients = ["Gemini CLI", "Antigravity", "Claude Code", "Codex", "Claude Desktop", "Copilot CLI", "OpenCode"]
+    priority_clients = [
+        "Gemini CLI",
+        "Antigravity",
+        "Claude Code",
+        "Codex",
+        "Claude Desktop",
+        "Copilot CLI",
+        "OpenCode",
+    ]
 
     for client, config_path in configs.items():
-        if config_path.exists() or config_path.parent.exists() or client in priority_clients:
+        if (
+            config_path.exists()
+            or config_path.parent.exists()
+            or client in priority_clients
+        ):
             if configure_with_path(client, config_path):
                 configured.append(client)
                 success(f"{client}")
@@ -955,7 +1150,9 @@ def do_install(skills_mode: str = "router"):
         dim(f"Mode: {codex_skills_result.get('mode', skills_mode)}")
         dim(f"Installed to: {codex_skills_result.get('path')}")
     else:
-        warning(f"Codex skills install skipped: {codex_skills_result.get('reason', 'unknown error')}")
+        warning(
+            f"Codex skills install skipped: {codex_skills_result.get('reason', 'unknown error')}"
+        )
 
     # Step 6: Install IDA Plugin
     step(6, total_steps, "Installing IDA Pro plugin...")
@@ -1007,7 +1204,7 @@ def do_install(skills_mode: str = "router"):
         success(f"Active server at: {server_script}")
     else:
         error(f"Server script not found!")
-    
+
     # Summary
     print(f"""
 {C.GREEN}================================================================================{C.RESET}
@@ -1016,8 +1213,8 @@ def do_install(skills_mode: str = "router"):
 
    {C.WHITE}Deployed Components:{C.RESET}
       - {C.CYAN}MCP Server{C.RESET} (headless host for IDEs)
-      - {C.CYAN}IDA Plugin{C.RESET} {'(installed)' if plugin_installed else '(not installed - IDA not found)'}
-      - {C.CYAN}Codex Skills{C.RESET} {'(installed)' if codex_skills_result.get('ok') else '(not installed)'} [{codex_skills_result.get('mode', skills_mode)}]
+      - {C.CYAN}IDA Plugin{C.RESET} {"(installed)" if plugin_installed else "(not installed - IDA not found)"}
+      - {C.CYAN}Codex Skills{C.RESET} {"(installed)" if codex_skills_result.get("ok") else "(not installed)"} [{codex_skills_result.get("mode", skills_mode)}]
 
    {C.WHITE}Configured MCP Clients:{C.RESET}
 """)
@@ -1036,32 +1233,39 @@ def do_install(skills_mode: str = "router"):
 """)
     return True
 
+
 # ============================================================================
 # Main
 # ============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(description="IDA Pro MCP Installer")
-    parser.add_argument('--uninstall', '-u', action='store_true', help='Uninstall IDA Pro MCP')
     parser.add_argument(
-        '--skills-mode',
-        choices=['router', 'full', 'none'],
-        default='router',
-        help='Codex skill install mode (default: router). '
-             '"router" installs only ida-tool-router to reduce context overhead; '
-             '"full" installs every skill directory found under .agents/skills; '
-             '"none" skips skill installation.',
+        "--uninstall", "-u", action="store_true", help="Uninstall IDA Pro MCP"
+    )
+    parser.add_argument(
+        "--skills-mode",
+        choices=["router", "full", "none"],
+        default="router",
+        help="Codex skill install mode (default: router). "
+        '"router" installs only ida-tool-router to reduce context overhead; '
+        '"full" installs every skill directory found under .agents/skills; '
+        '"none" skips skill installation.',
     )
     args = parser.parse_args()
-    
+
     try:
         if args.uninstall:
-            print("Uninstall not fully implemented in this version. Please verify config files manually.")
+            print(
+                "Uninstall not fully implemented in this version. Please verify config files manually."
+            )
         else:
             do_install(skills_mode=args.skills_mode)
     except KeyboardInterrupt:
         print("\nCancelled.")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

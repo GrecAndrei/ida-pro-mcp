@@ -38,17 +38,24 @@ from datetime import datetime, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
 
+
 # Runtime data/cache directories (outside repo by default)
 def _default_runtime_dir() -> str:
     if sys.platform == "win32":
         root = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return os.path.realpath(os.path.join(root, "ida-pro-mcp"))
     if sys.platform == "darwin":
-        return os.path.realpath(os.path.join(str(Path.home()), "Library", "Application Support", "ida-pro-mcp"))
+        return os.path.realpath(
+            os.path.join(
+                str(Path.home()), "Library", "Application Support", "ida-pro-mcp"
+            )
+        )
     xdg_state = os.environ.get("XDG_STATE_HOME")
     if xdg_state:
         return os.path.realpath(os.path.join(xdg_state, "ida-pro-mcp"))
-    return os.path.realpath(os.path.join(str(Path.home()), ".local", "state", "ida-pro-mcp"))
+    return os.path.realpath(
+        os.path.join(str(Path.home()), ".local", "state", "ida-pro-mcp")
+    )
 
 
 def _resolve_runtime_dir() -> str:
@@ -151,7 +158,9 @@ except ImportError:
         _trunc_path = os.path.join(
             SCRIPT_DIR, "src", "ida_pro_mcp", "ida_mcp", "truncation.py"
         )
-        _spec = importlib.util.spec_from_file_location("ida_mcp_truncation", _trunc_path)
+        _spec = importlib.util.spec_from_file_location(
+            "ida_mcp_truncation", _trunc_path
+        )
         if _spec and _spec.loader:
             _module = importlib.util.module_from_spec(_spec)
             _spec.loader.exec_module(_module)
@@ -170,6 +179,7 @@ except ImportError:
                 "code": "NOT_IMPLEMENTED",
                 "message": "Truncation middleware unavailable",
             }
+
 
 # Import smart pattern matching (regex auto-detection)
 try:
@@ -216,7 +226,9 @@ except ImportError:
     _SEMANTIC_FUZZY_CUTOFF = 0.86
     _SEMANTIC_CAMEL_BOUNDARY_1 = re.compile(r"([a-z])([A-Z])")
     _SEMANTIC_CAMEL_BOUNDARY_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
-    _SMART_MATCH_MODE = str(os.environ.get("IDA_MCP_SMART_MATCH_MODE", "balanced")).strip().lower()
+    _SMART_MATCH_MODE = (
+        str(os.environ.get("IDA_MCP_SMART_MATCH_MODE", "balanced")).strip().lower()
+    )
     if _SMART_MATCH_MODE not in {"off", "conservative", "balanced", "aggressive"}:
         _SMART_MATCH_MODE = "balanced"
     _SMART_MATCH_MODE_DEFAULTS = {
@@ -255,7 +267,9 @@ except ImportError:
                     tokens.append(tok)
         return tokens
 
-    def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_FUZZY_CUTOFF):
+    def _compile_semantic_matcher(
+        pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_FUZZY_CUTOFF
+    ):
         query_tokens = _semantic_tokenize(pattern)
         if not query_tokens:
             return None
@@ -274,7 +288,9 @@ except ImportError:
             overlap_needed = 2
         else:
             overlap_needed = max(1, (len(query_set) + 1) // 2)
-        fuzzy_tokens = [tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN]
+        fuzzy_tokens = [
+            tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN
+        ]
 
         def _semantic_matches(text: str) -> bool:
             text_tokens = set(_semantic_tokenize(text))
@@ -287,7 +303,9 @@ except ImportError:
                 return False
             fuzzy_hits = 0
             for qtok in fuzzy_tokens:
-                if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=fuzzy_cutoff):
+                if difflib.get_close_matches(
+                    qtok, text_tokens, n=1, cutoff=fuzzy_cutoff
+                ):
                     fuzzy_hits += 1
                     if overlap + fuzzy_hits >= overlap_needed:
                         return True
@@ -312,7 +330,9 @@ except ImportError:
         return False
 
     @lru_cache(maxsize=1024)
-    def _compile_smart_pattern_cached(pattern, case_sensitive, semantic_enabled, fuzzy_cutoff):
+    def _compile_smart_pattern_cached(
+        pattern, case_sensitive, semantic_enabled, fuzzy_cutoff
+    ):
         return _compile_smart_pattern_uncached(
             pattern,
             case_sensitive=case_sensitive,
@@ -332,14 +352,19 @@ except ImportError:
         regex = None
         if pattern.startswith("/") and pattern.count("/") >= 2:
             ls = pattern.rfind("/")
-            body, fs = pattern[1:ls], pattern[ls+1:]
+            body, fs = pattern[1:ls], pattern[ls + 1 :]
             flags = 0
             for c in fs:
-                if c == "i": flags |= re.IGNORECASE
-                elif c == "m": flags |= re.MULTILINE
-                elif c == "s": flags |= re.DOTALL
+                if c == "i":
+                    flags |= re.IGNORECASE
+                elif c == "m":
+                    flags |= re.MULTILINE
+                elif c == "s":
+                    flags |= re.DOTALL
             try:
-                regex = re.compile(body, flags or (0 if case_sensitive else re.IGNORECASE))
+                regex = re.compile(
+                    body, flags or (0 if case_sensitive else re.IGNORECASE)
+                )
             except re.error:
                 pass
         elif _is_regex(pattern):
@@ -370,10 +395,16 @@ except ImportError:
         fuzzy_cutoff=None,
     ):
         defaults = _SMART_MATCH_MODE_DEFAULTS[_SMART_MATCH_MODE]
-        use_semantic = bool(_resolve_optional_param(semantic_enabled, defaults["semantic_enabled"]))
-        use_cutoff = float(_resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"]))
+        use_semantic = bool(
+            _resolve_optional_param(semantic_enabled, defaults["semantic_enabled"])
+        )
+        use_cutoff = float(
+            _resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"])
+        )
         use_cutoff = max(0.0, min(1.0, use_cutoff))
-        return _compile_smart_pattern_cached(pattern, case_sensitive, use_semantic, use_cutoff)
+        return _compile_smart_pattern_cached(
+            pattern, case_sensitive, use_semantic, use_cutoff
+        )
 
     def smart_match(pattern, text, case_sensitive=False):
         return compile_smart_pattern(pattern, case_sensitive)(text)
@@ -428,7 +459,10 @@ _HOST_ERROR_HINTS = {
 
 
 def make_error(
-    code: str, message: str, recoverable: bool = False, details: dict = None,
+    code: str,
+    message: str,
+    recoverable: bool = False,
+    details: dict = None,
     hint: str = None,
 ) -> dict:
     res = {"error": True, "code": code, "message": message, "recoverable": recoverable}
@@ -484,9 +518,7 @@ WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
 _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
-LLM_POINTER_SAFETY_NOTE = (
-    "DO NOT CALCULATE POINTERS OR ADDRESSES MENTALLY; ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING."
-)
+LLM_POINTER_SAFETY_NOTE = "DO NOT CALCULATE POINTERS OR ADDRESSES MENTALLY; ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING."
 _POINTER_NOTE_SIGNAL_KEYWORDS = (
     "addr",
     "address",
@@ -728,7 +760,9 @@ class Session:
             "analysis_options": self.analysis_options,
             "analysis_applied": self.analysis_applied,
             "ida_args": self.ida_args,
-            "binary_exists": bool(self.binary_path and os.path.exists(self.binary_path)),
+            "binary_exists": bool(
+                self.binary_path and os.path.exists(self.binary_path)
+            ),
             "idb_exists": bool(self.idb_path and os.path.exists(self.idb_path)),
             "created_at": self.created_at.isoformat(),
             "last_accessed": self.last_accessed.isoformat(),
@@ -771,7 +805,9 @@ class SessionManager:
         self.sessions: Dict[str, Session] = {}
         self.cache_dir = cache_dir
         self.session_dir = os.path.join(cache_dir, "sessions")
-        self._snapshots: Dict[str, List[dict]] = {}  # sid -> list (in-memory only, lost on restart)
+        self._snapshots: Dict[
+            str, List[dict]
+        ] = {}  # sid -> list (in-memory only, lost on restart)
         os.makedirs(self.session_dir, exist_ok=True)
         # Auto-load existing sessions on startup
         self._load_sessions()
@@ -841,7 +877,9 @@ class SessionManager:
                     data = json.load(f)
                     session = Session.from_dict(data)
                     if not _normalize_session_id(session.session_id):
-                        log_rpc(f"Skipping metadata with invalid session_id: {meta_path}")
+                        log_rpc(
+                            f"Skipping metadata with invalid session_id: {meta_path}"
+                        )
                         continue
                     # Always load the session - IDB might not exist yet if session is new
                     # We'll let IDA create it on first use
@@ -891,9 +929,13 @@ class SessionManager:
         with self._lock:
             sid = self._new_session_id()
             # Use SID-specific name to avoid collisions and track metadata easily
-            idb_base = os.path.basename(binary_path) if binary_path else f"session_{sid}"
+            idb_base = (
+                os.path.basename(binary_path) if binary_path else f"session_{sid}"
+            )
             idb_name = f"SID_{sid}_{idb_base}.i64"
-            resolved_idb = idb_path or use_existing or os.path.join(self.session_dir, idb_name)
+            resolved_idb = (
+                idb_path or use_existing or os.path.join(self.session_dir, idb_name)
+            )
             if resolved_idb and os.path.isdir(resolved_idb):
                 resolved_idb = os.path.join(resolved_idb, idb_name)
             if resolved_idb and not os.path.splitext(resolved_idb)[1]:
@@ -928,7 +970,10 @@ class SessionManager:
         with self._lock:
             norm = os.path.realpath(os.path.abspath(path))
             for s in self.sessions.values():
-                if s.binary_path and os.path.realpath(os.path.abspath(s.binary_path)) == norm:
+                if (
+                    s.binary_path
+                    and os.path.realpath(os.path.abspath(s.binary_path)) == norm
+                ):
                     return copy.copy(s)
                 if s.idb_path and os.path.realpath(os.path.abspath(s.idb_path)) == norm:
                     return copy.copy(s)
@@ -965,7 +1010,11 @@ class SessionManager:
                 log_rpc(f"Deleted session file: {f}")
             except Exception as e:
                 log_rpc(f"Failed to delete {f}: {e}")
-        for log_name in (f"ida_mcp_{sid}.log", f"ida_stdout_{sid}.log", f"ida_stderr_{sid}.log"):
+        for log_name in (
+            f"ida_mcp_{sid}.log",
+            f"ida_stdout_{sid}.log",
+            f"ida_stderr_{sid}.log",
+        ):
             log_path = os.path.join(self.cache_dir, log_name)
             if os.path.exists(log_path):
                 try:
@@ -991,7 +1040,9 @@ class SessionManager:
             for key, value in kwargs.items():
                 if hasattr(session, key) and key not in ("session_id", "created_at"):
                     if key == "tags":
-                        value = self._sanitize_tags(value if isinstance(value, list) else [value])
+                        value = self._sanitize_tags(
+                            value if isinstance(value, list) else [value]
+                        )
                     elif key == "notes":
                         value = self._sanitize_note(value)
                     elif key == "auto_name":
@@ -1083,12 +1134,16 @@ class SessionManager:
     def list_archived(self) -> List[Session]:
         """List archived sessions."""
         with self._lock:
-            return [copy.copy(s) for s in self.sessions.values() if "archived" in s.tags]
+            return [
+                copy.copy(s) for s in self.sessions.values() if "archived" in s.tags
+            ]
 
     def list_active(self) -> List[Session]:
         """List non-archived sessions."""
         with self._lock:
-            return [copy.copy(s) for s in self.sessions.values() if "archived" not in s.tags]
+            return [
+                copy.copy(s) for s in self.sessions.values() if "archived" not in s.tags
+            ]
 
     def get_session_age(self, sid: str) -> Optional[timedelta]:
         """Return timedelta since creation."""
@@ -1110,7 +1165,9 @@ class SessionManager:
         """Delete sessions older than max_age_days. Returns list of deleted SIDs."""
         with self._lock:
             cutoff = datetime.now() - timedelta(days=max_age_days)
-            stale = [sid for sid, s in self.sessions.items() if s.last_accessed < cutoff]
+            stale = [
+                sid for sid, s in self.sessions.items() if s.last_accessed < cutoff
+            ]
             for sid in stale:
                 self._delete_session_unlocked(sid)
             return stale
@@ -1120,10 +1177,18 @@ class SessionManager:
         with self._lock:
             total = len(self.sessions)
             if total == 0:
-                return {"total": 0, "active": 0, "archived": 0, "avg_age_days": 0, "tags": {}}
+                return {
+                    "total": 0,
+                    "active": 0,
+                    "archived": 0,
+                    "avg_age_days": 0,
+                    "tags": {},
+                }
             archived = sum(1 for s in self.sessions.values() if "archived" in s.tags)
             now = datetime.now()
-            ages = [(now - s.created_at).total_seconds() for s in self.sessions.values()]
+            ages = [
+                (now - s.created_at).total_seconds() for s in self.sessions.values()
+            ]
             avg_age_days = (sum(ages) / len(ages)) / 86400 if ages else 0
             tag_counts: Dict[str, int] = {}
             for s in self.sessions.values():
@@ -1246,12 +1311,18 @@ class SessionManager:
         """Search across all session notes."""
         with self._lock:
             matcher = compile_smart_pattern(query, case_sensitive=False)
-            return [copy.copy(s) for s in self.sessions.values() if s.notes and matcher(s.notes)]
+            return [
+                copy.copy(s)
+                for s in self.sessions.values()
+                if s.notes and matcher(s.notes)
+            ]
 
     def get_recent(self, n: int = 5) -> List[Session]:
         """Get N most recently accessed sessions."""
         with self._lock:
-            sorted_sessions = sorted(self.sessions.values(), key=lambda s: s.last_accessed, reverse=True)
+            sorted_sessions = sorted(
+                self.sessions.values(), key=lambda s: s.last_accessed, reverse=True
+            )
             return [copy.copy(s) for s in sorted_sessions[:n]]
 
     def get_oldest(self, n: int = 5) -> List[Session]:
@@ -1427,13 +1498,16 @@ class BookmarkManager:
             filtered = [b for b in filtered if cat_matcher(b.get("category", ""))]
         if f_tag:
             tag_matcher = compile_smart_pattern(f_tag, case_sensitive=False)
-            filtered = [b for b in filtered if any(tag_matcher(t) for t in b.get("tags", []))]
+            filtered = [
+                b for b in filtered if any(tag_matcher(t) for t in b.get("tags", []))
+            ]
         if f_pri:
             filtered = [b for b in filtered if b.get("priority", 0) >= int(f_pri)]
         if f_query:
             q_matcher = compile_smart_pattern(f_query, case_sensitive=False)
             filtered = [
-                b for b in filtered
+                b
+                for b in filtered
                 if q_matcher(b.get("name", ""))
                 or q_matcher(b.get("notes", ""))
                 or q_matcher(b.get("addr", ""))
@@ -1626,7 +1700,9 @@ TOOLS = [
 ]
 
 # Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
-HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"plugins", "xfer_analysis"})
+HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union(
+    {"plugins", "xfer_analysis"}
+)
 
 
 _EXTRA_TOOL_ALIASES = {
@@ -1751,7 +1827,7 @@ def _noisy_alias_variants(value: str) -> set[str]:
         f"({base})",
         f"{{{base}}}",
         f"<{base}>",
-        f"\"{base}\"",
+        f'"{base}"',
         f"'{base}'",
         f"`{base}`",
         f"{base}()",
@@ -1896,14 +1972,45 @@ TOOL_DESCRIPTIONS = {
 
 TOOL_ACTIONS = {
     # Core session tools
-    "session": ["discover", "create", "get", "list", "switch", "close", "status", "rebuild",
-                "update", "rename", "duplicate", "export_session", "import_session",
-                "archive", "unarchive", "tag", "untag", "find_by_tag", "add_note",
-                "clear_notes", "cleanup_stale", "stats", "validate",
-                "bulk_delete", "bulk_tag", "search_notes", "recent", "oldest",
-                "snapshot", "restore_snapshot", "merge",
-                "macro_set", "macro_get", "macro_list", "macro_delete", "macro_run",
-                "recent_workset"],
+    "session": [
+        "discover",
+        "create",
+        "get",
+        "list",
+        "switch",
+        "close",
+        "status",
+        "rebuild",
+        "update",
+        "rename",
+        "duplicate",
+        "export_session",
+        "import_session",
+        "archive",
+        "unarchive",
+        "tag",
+        "untag",
+        "find_by_tag",
+        "add_note",
+        "clear_notes",
+        "cleanup_stale",
+        "stats",
+        "validate",
+        "bulk_delete",
+        "bulk_tag",
+        "search_notes",
+        "recent",
+        "oldest",
+        "snapshot",
+        "restore_snapshot",
+        "merge",
+        "macro_set",
+        "macro_get",
+        "macro_list",
+        "macro_delete",
+        "macro_run",
+        "recent_workset",
+    ],
     "truncation": ["continue"],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
     "batch": ["run"],
@@ -1917,7 +2024,16 @@ TOOL_ACTIONS = {
         "reanalyze",
     ],
     # Unified query/edit hubs (LLM-friendly entry points)
-    "query": ["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns"],
+    "query": [
+        "data",
+        "search",
+        "idb",
+        "code",
+        "types",
+        "imports_deep",
+        "symbols",
+        "patterns",
+    ],
     "edit": ["rename", "comment", "type", "patch", "create_func", "bulk"],
     # Primary data access
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
@@ -2164,84 +2280,234 @@ TOOL_ACTIONS = {
     "yara_hunt": ["scan", "compile", "list_rules"],
     # --- New LLM-optimized tools ---
     "vuln_scan": [
-        "buffer_overflow", "format_string", "integer_overflow", "use_after_free",
-        "command_injection", "race_condition", "null_deref", "info_leak",
-        "auth_bypass", "hardcoded_creds", "scan_all", "classify", "osv_query",
+        "buffer_overflow",
+        "format_string",
+        "integer_overflow",
+        "use_after_free",
+        "command_injection",
+        "race_condition",
+        "null_deref",
+        "info_leak",
+        "auth_bypass",
+        "hardcoded_creds",
+        "scan_all",
+        "classify",
+        "osv_query",
         "intelligence_report",
     ],
-    "threat_hunt": ["run", "malware", "vuln", "tracing", "findings", "quick", "deep", "legacy"],
+    "threat_hunt": [
+        "run",
+        "malware",
+        "vuln",
+        "tracing",
+        "findings",
+        "quick",
+        "deep",
+        "legacy",
+    ],
     "deobfuscate": [
-        "detect_encoding", "xor_scan", "stack_strings", "opaque_predicates",
-        "control_flow_flatten", "dead_code", "api_hashing", "dynamic_dispatch",
-        "anti_disasm", "decode_attempt",
+        "detect_encoding",
+        "xor_scan",
+        "stack_strings",
+        "opaque_predicates",
+        "control_flow_flatten",
+        "dead_code",
+        "api_hashing",
+        "dynamic_dispatch",
+        "anti_disasm",
+        "decode_attempt",
     ],
     "crypto_id": [
-        "identify", "constants", "key_schedule", "block_cipher", "hash_detect",
-        "rng_detect", "asymmetric", "custom_crypto", "encoding", "checksums",
+        "identify",
+        "constants",
+        "key_schedule",
+        "block_cipher",
+        "hash_detect",
+        "rng_detect",
+        "asymmetric",
+        "custom_crypto",
+        "encoding",
+        "checksums",
     ],
     "abi": [
-        "detect", "stack_args", "reg_args", "return_type", "varargs",
-        "struct_return", "tail_calls", "prologue", "epilogue", "abi_violations",
+        "detect",
+        "stack_args",
+        "reg_args",
+        "return_type",
+        "varargs",
+        "struct_return",
+        "tail_calls",
+        "prologue",
+        "epilogue",
+        "abi_violations",
     ],
     "summarize": [
-        "binary", "function", "segment", "imports_by_category", "strings_by_category",
-        "complexity", "call_hierarchy", "data_flow", "security_posture", "statistics",
+        "binary",
+        "function",
+        "segment",
+        "imports_by_category",
+        "strings_by_category",
+        "complexity",
+        "call_hierarchy",
+        "data_flow",
+        "security_posture",
+        "statistics",
     ],
     "compare": [
-        "functions", "blocks", "apis", "strings", "constants", "structure",
-        "semantics", "batch_compare", "find_clones", "changelog",
+        "functions",
+        "blocks",
+        "apis",
+        "strings",
+        "constants",
+        "structure",
+        "semantics",
+        "batch_compare",
+        "find_clones",
+        "changelog",
     ],
     "stack_analysis": [
-        "frame", "buffers", "canary", "alignment", "spills",
-        "usage", "variables", "arrays", "uninitialized", "summary",
+        "frame",
+        "buffers",
+        "canary",
+        "alignment",
+        "spills",
+        "usage",
+        "variables",
+        "arrays",
+        "uninitialized",
+        "summary",
     ],
     "classify": [
-        "function", "binary", "all_functions", "library_code", "wrappers",
-        "callbacks", "initializers", "error_handlers", "hot_functions", "orphans",
+        "function",
+        "binary",
+        "all_functions",
+        "library_code",
+        "wrappers",
+        "callbacks",
+        "initializers",
+        "error_handlers",
+        "hot_functions",
+        "orphans",
     ],
     "protocol": [
-        "detect", "parsers", "serializers", "handlers", "endpoints",
-        "tls_config", "socket_flow", "packet_struct", "magic_numbers", "state_machine",
+        "detect",
+        "parsers",
+        "serializers",
+        "handlers",
+        "endpoints",
+        "tls_config",
+        "socket_flow",
+        "packet_struct",
+        "magic_numbers",
+        "state_machine",
     ],
     "c2_detect": [
-        "indicators", "persistence", "evasion", "injection", "exfiltration",
-        "lateral_movement", "privilege_escalation", "capabilities", "config_extract", "ioc_extract",
+        "indicators",
+        "persistence",
+        "evasion",
+        "injection",
+        "exfiltration",
+        "lateral_movement",
+        "privilege_escalation",
+        "capabilities",
+        "config_extract",
+        "ioc_extract",
     ],
     "gadgets": [
-        "rop", "jop", "cop", "syscall", "write_what_where",
-        "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains",
+        "rop",
+        "jop",
+        "cop",
+        "syscall",
+        "write_what_where",
+        "stack_pivot",
+        "shellcode_space",
+        "mitigations",
+        "seh_handlers",
+        "pivot_chains",
     ],
     "annotation": [
-        "auto_comment", "label_loops", "label_branches", "mark_dangerous",
-        "annotate_constants", "tag_functions", "document_args", "mark_error_paths",
-        "propagate_names", "cleanup",
+        "auto_comment",
+        "label_loops",
+        "label_branches",
+        "mark_dangerous",
+        "annotate_constants",
+        "tag_functions",
+        "document_args",
+        "mark_error_paths",
+        "propagate_names",
+        "cleanup",
     ],
     "xref_analysis": [
-        "call_chain", "common_callers", "common_callees", "hub_functions",
-        "leaf_functions", "recursive", "dominator", "influence",
-        "dependency_graph", "dead_functions",
+        "call_chain",
+        "common_callers",
+        "common_callees",
+        "hub_functions",
+        "leaf_functions",
+        "recursive",
+        "dominator",
+        "influence",
+        "dependency_graph",
+        "dead_functions",
     ],
     "xfer_analysis": [
-        "call_chain", "common_callers", "common_callees", "hub_functions",
-        "leaf_functions", "recursive", "dominator", "influence",
-        "dependency_graph", "dead_functions",
+        "call_chain",
+        "common_callers",
+        "common_callees",
+        "hub_functions",
+        "leaf_functions",
+        "recursive",
+        "dominator",
+        "influence",
+        "dependency_graph",
+        "dead_functions",
     ],
     "string_ops": [
-        "decode_all", "find_urls", "find_paths", "find_registry", "find_ips",
-        "find_emails", "find_commands", "encoding_stats", "multilingual", "suspicious",
+        "decode_all",
+        "find_urls",
+        "find_paths",
+        "find_registry",
+        "find_ips",
+        "find_emails",
+        "find_commands",
+        "encoding_stats",
+        "multilingual",
+        "suspicious",
     ],
     "cfg_analysis": [
-        "complexity", "loops", "branches", "paths", "dominators",
-        "post_dominators", "back_edges", "natural_loops", "irreducible", "flatten_detect",
+        "complexity",
+        "loops",
+        "branches",
+        "paths",
+        "dominators",
+        "post_dominators",
+        "back_edges",
+        "natural_loops",
+        "irreducible",
+        "flatten_detect",
     ],
     "binary_info": [
-        "headers", "sections", "relocations", "resources", "debug_info",
-        "compiler", "linker", "timestamps", "checksums", "overlay",
+        "headers",
+        "sections",
+        "relocations",
+        "resources",
+        "debug_info",
+        "compiler",
+        "linker",
+        "timestamps",
+        "checksums",
+        "overlay",
     ],
     "llm_helpers": [
-        "context_window", "function_digest", "binary_digest", "explain_address",
-        "suggest_next", "progress_report", "focus_area", "question_answer",
-        "guided_analysis", "cheatsheet",
+        "context_window",
+        "function_digest",
+        "binary_digest",
+        "explain_address",
+        "suggest_next",
+        "progress_report",
+        "focus_area",
+        "question_answer",
+        "guided_analysis",
+        "cheatsheet",
     ],
 }
 
@@ -2249,8 +2515,14 @@ TOOL_ARG_SCHEMAS = {
     "session": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["session"]},
         "binary_path": {"type": "string", "description": "Path to target binary"},
-        "force_new": {"type": "boolean", "description": "Force creation of a new session even if one exists"},
-        "analysis_options": {"type": "object", "description": "Advanced analysis options payload"},
+        "force_new": {
+            "type": "boolean",
+            "description": "Force creation of a new session even if one exists",
+        },
+        "analysis_options": {
+            "type": "object",
+            "description": "Advanced analysis options payload",
+        },
         "ida_args": {"type": ["string", "array"], "items": {"type": "string"}},
         "session_id": {"type": "string", "description": "Session ID for switch/close"},
         "query": {
@@ -2294,15 +2566,39 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "description": "Free-form notes for the session (create action).",
         },
-        "note": {"type": "string", "description": "Single note payload for add_note action."},
-        "name": {"type": "string", "description": "Name for macro_* actions or rename action."},
-        "macro": {"type": "string", "description": "Alias for macro name in macro_* actions."},
+        "note": {
+            "type": "string",
+            "description": "Single note payload for add_note action.",
+        },
+        "name": {
+            "type": "string",
+            "description": "Name for macro_* actions or rename action.",
+        },
+        "macro": {
+            "type": "string",
+            "description": "Alias for macro name in macro_* actions.",
+        },
         "data": {"type": "object", "description": "Macro payload for macro_set."},
-        "macro_data": {"type": "object", "description": "Alias for macro payload in macro_set."},
-        "run_action": {"type": "string", "description": "Session action to execute for macro_run (default from macro or create)."},
-        "n": {"type": "integer", "description": "Count for recent/oldest/recent_workset actions."},
-        "include_bookmarks": {"type": "boolean", "description": "Include bookmark entries in recent_workset."},
-        "include_items": {"type": "boolean", "description": "Include structured items in recent_workset response."},
+        "macro_data": {
+            "type": "object",
+            "description": "Alias for macro payload in macro_set.",
+        },
+        "run_action": {
+            "type": "string",
+            "description": "Session action to execute for macro_run (default from macro or create).",
+        },
+        "n": {
+            "type": "integer",
+            "description": "Count for recent/oldest/recent_workset actions.",
+        },
+        "include_bookmarks": {
+            "type": "boolean",
+            "description": "Include bookmark entries in recent_workset.",
+        },
+        "include_items": {
+            "type": "boolean",
+            "description": "Include structured items in recent_workset response.",
+        },
     },
     "truncation": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["truncation"]},
@@ -2376,14 +2672,23 @@ TOOL_ARG_SCHEMAS = {
     },
     "misc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["misc"]},
-        "expr": {"type": "string", "description": "Python expression or IDC script to evaluate"},
+        "expr": {
+            "type": "string",
+            "description": "Python expression or IDC script to evaluate",
+        },
         "code": {"type": "string", "description": "Multi-line Python code to execute"},
         "name": {"type": "string", "description": "Signature name for load_sig"},
         "arg": {"type": "integer", "description": "Plugin argument for plugin_run"},
         "path": {"type": "string", "description": "File path for read_file/write_file"},
         "content": {"type": "string", "description": "Content to write for write_file"},
-        "encoding": {"type": "string", "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data."},
-        "verbose": {"type": "boolean", "description": "Include per-runtime details for health action."},
+        "encoding": {
+            "type": "string",
+            "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.",
+        },
+        "verbose": {
+            "type": "boolean",
+            "description": "Include per-runtime details for health action.",
+        },
     },
     "analysis": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["analysis"]},
@@ -2428,8 +2733,14 @@ TOOL_ARG_SCHEMAS = {
     },
     "vuln_scan": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["vuln_scan"]},
-        "addr": {"type": "string", "description": "Address or function scope for scanning."},
-        "limit": {"type": "integer", "description": "Max findings to return (capped for context safety)."},
+        "addr": {
+            "type": "string",
+            "description": "Address or function scope for scanning.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Max findings to return (capped for context safety).",
+        },
         "offset": {"type": "integer", "description": "Skip first N ranked findings."},
         "severity": {
             "type": "string",
@@ -2473,21 +2784,51 @@ TOOL_ARG_SCHEMAS = {
     },
     "threat_hunt": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},
-        "legacy_tool": {"type": "string", "description": "Legacy tool name to emulate (for action='legacy')."},
-        "legacy_action": {"type": "string", "description": "Legacy action to inherit/route (for action='legacy')."},
+        "legacy_tool": {
+            "type": "string",
+            "description": "Legacy tool name to emulate (for action='legacy').",
+        },
+        "legacy_action": {
+            "type": "string",
+            "description": "Legacy action to inherit/route (for action='legacy').",
+        },
         "profile": {
             "type": "string",
             "enum": ["quick", "balanced", "deep"],
             "description": "Pipeline depth profile.",
         },
-        "query": {"type": "string", "description": "Optional focus query for post-filtering and relevance scoring."},
-        "addr": {"type": "string", "description": "Optional address focus for underlying scanners where supported."},
-        "include_tracing": {"type": "boolean", "description": "Include trace/coverage analysis steps."},
-        "include_malware": {"type": "boolean", "description": "Include malware-behavior analysis steps."},
-        "include_vuln": {"type": "boolean", "description": "Include vulnerability analysis steps."},
-        "include_evidence": {"type": "boolean", "description": "Include compact raw per-step payloads for auditability."},
-        "limit": {"type": "integer", "description": "Global max findings to return after dedupe/ranking."},
-        "max_steps": {"type": "integer", "description": "Safety cap for total orchestrated tool calls."},
+        "query": {
+            "type": "string",
+            "description": "Optional focus query for post-filtering and relevance scoring.",
+        },
+        "addr": {
+            "type": "string",
+            "description": "Optional address focus for underlying scanners where supported.",
+        },
+        "include_tracing": {
+            "type": "boolean",
+            "description": "Include trace/coverage analysis steps.",
+        },
+        "include_malware": {
+            "type": "boolean",
+            "description": "Include malware-behavior analysis steps.",
+        },
+        "include_vuln": {
+            "type": "boolean",
+            "description": "Include vulnerability analysis steps.",
+        },
+        "include_evidence": {
+            "type": "boolean",
+            "description": "Include compact raw per-step payloads for auditability.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Global max findings to return after dedupe/ranking.",
+        },
+        "max_steps": {
+            "type": "integer",
+            "description": "Safety cap for total orchestrated tool calls.",
+        },
         "scan_profile": {
             "type": "string",
             "enum": ["quick", "balanced", "deep"],
@@ -2930,7 +3271,9 @@ def _build_action_aliases() -> dict[str, dict[str, str]]:
         for action in actions:
             candidates = _snake_variants(action).union(_camel_variants(action))
             candidates.update(_ACTION_ALIAS_HINTS.get(action, set()))
-            candidates.update(_TOOL_ACTION_EXTRA_ALIASES.get(tool_name, {}).get(action, set()))
+            candidates.update(
+                _TOOL_ACTION_EXTRA_ALIASES.get(tool_name, {}).get(action, set())
+            )
             if action.startswith("get_"):
                 candidates.add(action.replace("get_", "show_", 1))
             if action.startswith("set_"):
@@ -2973,8 +3316,12 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
             else:
                 candidates.discard(f"{canonical}s")
             candidates.update(_COMMON_ARG_ALIAS_HINTS.get(canonical, set()))
-            candidates.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).get(canonical, set()))
-            candidates.update(_TOOL_ARG_EXTRA_ALIASES.get(tool_name, {}).get(canonical, set()))
+            candidates.update(
+                _TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).get(canonical, set())
+            )
+            candidates.update(
+                _TOOL_ARG_EXTRA_ALIASES.get(tool_name, {}).get(canonical, set())
+            )
             for alias in list(candidates):
                 candidates.update(_noisy_alias_variants(alias))
             for alias in candidates:
@@ -2986,7 +3333,9 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
                     alias_map.pop(key, None)
                     continue
                 alias_map[key] = canonical
-        for canonical, explicit_aliases in _TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).items():
+        for canonical, explicit_aliases in _TOOL_SPECIFIC_ARG_ALIASES.get(
+            tool_name, {}
+        ).items():
             for alias in explicit_aliases:
                 alias_key = _normalize_alias_lookup_key(alias)
                 if alias_key and alias_key != canonical.lower():
@@ -3266,20 +3615,65 @@ def build_tool_description_lean(tool_name: str) -> str:
 
 _TOOL_CATEGORY_CORE = {"session", "truncation", "bookmarks", "batch", "wiki"}
 _TOOL_CATEGORY_ANALYSIS = {
-    "analysis", "query", "edit", "idb", "code", "data", "search", "types", "memory",
-    "modify", "funcs", "segments", "bulk", "calc", "nav",
+    "analysis",
+    "query",
+    "edit",
+    "idb",
+    "code",
+    "data",
+    "search",
+    "types",
+    "memory",
+    "modify",
+    "funcs",
+    "segments",
+    "bulk",
+    "calc",
+    "nav",
 }
 _TOOL_CATEGORY_DEBUG = {"debug", "trace", "coverage", "trace_analysis"}
 _TOOL_CATEGORY_PROJECT = {"project", "misc"}
 _TOOL_CATEGORY_ADVANCED = {
-    "agent", "microcode", "graph", "ctree", "taint", "emulate", "entropy", "structs",
-    "imports_deep", "patterns", "symbols", "diff", "lumina", "export", "history",
-    "comments_ai", "colorize", "data_ops", "fixups", "hooks",
+    "agent",
+    "microcode",
+    "graph",
+    "ctree",
+    "taint",
+    "emulate",
+    "entropy",
+    "structs",
+    "imports_deep",
+    "patterns",
+    "symbols",
+    "diff",
+    "lumina",
+    "export",
+    "history",
+    "comments_ai",
+    "colorize",
+    "data_ops",
+    "fixups",
+    "hooks",
 }
 _TOOL_CATEGORY_SECURITY = {
-    "vuln_scan", "threat_hunt", "deobfuscate", "crypto_id", "c2_detect", "protocol",
-    "gadgets", "annotation", "xref_analysis", "string_ops", "cfg_analysis",
-    "binary_info", "abi", "stack_analysis", "compare", "classify", "summarize", "yara_hunt",
+    "vuln_scan",
+    "threat_hunt",
+    "deobfuscate",
+    "crypto_id",
+    "c2_detect",
+    "protocol",
+    "gadgets",
+    "annotation",
+    "xref_analysis",
+    "string_ops",
+    "cfg_analysis",
+    "binary_info",
+    "abi",
+    "stack_analysis",
+    "compare",
+    "classify",
+    "summarize",
+    "yara_hunt",
 }
 _TOOL_CATEGORY_COMPAT = {"plugins", "xfer_analysis"}
 
@@ -3302,6 +3696,44 @@ def classify_tool_category(tool_name: str) -> str:
     return "other"
 
 
+def sanitize_schema_for_vertex(schema: Any) -> Any:
+    """
+    Translates a schema into a Vertex AI/Gemini-compatible format by removing
+    unsupported structures such as arrays of types, empty required arrays, and
+    empty properties dictionaries.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    out = {}
+    for k, v in schema.items():
+        if k == "type" and isinstance(v, list):
+            # Prefer a scalar type, fallback to string if none found
+            preferred = None
+            for t in ("string", "integer", "number", "boolean", "array", "object"):
+                if t in v:
+                    preferred = t
+                    break
+            out[k] = preferred or "string"
+        elif k == "required" and isinstance(v, list) and len(v) == 0:
+            continue
+        elif k == "properties" and isinstance(v, dict) and len(v) == 0:
+            continue
+        elif isinstance(v, dict):
+            out[k] = sanitize_schema_for_vertex(v)
+        elif isinstance(v, list):
+            out[k] = [sanitize_schema_for_vertex(item) for item in v]
+        else:
+            out[k] = v
+
+    if out.get("type") == "array" and "items" not in out:
+        out["items"] = {"type": "string"}
+    elif out.get("type") != "array" and "items" in out:
+        del out["items"]
+
+    return out
+
+
 # =============================================================================
 # MCP SERVER
 # =============================================================================
@@ -3315,10 +3747,14 @@ class IDAMCPServer:
         qol_mode = str(os.environ.get("IDA_MCP_QOL_MODE", "balanced")).strip().lower()
         if qol_mode not in {"tiny", "balanced", "debug"}:
             qol_mode = "balanced"
-        tools_list_mode = str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "full")).strip().lower()
+        tools_list_mode = (
+            str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "full")).strip().lower()
+        )
         if tools_list_mode not in {"ultra", "lean", "full"}:
             tools_list_mode = "full"
-        detail_level = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
+        detail_level = (
+            str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
+        )
         if detail_level not in {"none", "basic", "full"}:
             detail_level = "basic"
         self.default_response_mode = mode
@@ -3423,6 +3859,11 @@ class IDAMCPServer:
         # Default OFF for context efficiency in LLM clients.
         self.monolithic_tool_descriptions = _env_bool(
             "IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS",
+            False,
+        )
+        # Translation layer for Google Vertex AI / Gemini API schema compatibility
+        self.vertex_compat = _env_bool(
+            "IDA_MCP_VERTEX_COMPAT",
             False,
         )
         self.ida_dir = self._detect_ida_dir()
@@ -3544,7 +3985,9 @@ class IDAMCPServer:
             return False
         if sys.platform != "linux":
             return True
-        expected_path = str(lease.get("idat_exe") or getattr(self, "idat_exe", "") or "").strip()
+        expected_path = str(
+            lease.get("idat_exe") or getattr(self, "idat_exe", "") or ""
+        ).strip()
         proc_exe = f"/proc/{pid}/exe"
         proc_cmdline = f"/proc/{pid}/cmdline"
         expected_names = {n.lower() for n in self._ida_binary_names()}
@@ -3561,7 +4004,11 @@ class IDAMCPServer:
                 return True
             if expected_path:
                 try:
-                    if os.path.exists(expected_path) and os.path.exists(actual_exe) and os.path.samefile(expected_path, actual_exe):
+                    if (
+                        os.path.exists(expected_path)
+                        and os.path.exists(actual_exe)
+                        and os.path.samefile(expected_path, actual_exe)
+                    ):
                         return True
                 except Exception:
                     pass
@@ -3839,11 +4286,13 @@ class IDAMCPServer:
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
-            return "".join(lines[-max(1, int(tail_lines)):]).strip()
+            return "".join(lines[-max(1, int(tail_lines)) :]).strip()
         except Exception:
             return ""
 
-    def _get_ida_diagnostics(self, stdout_log=None, stderr_log=None, tail_lines: int = 40):
+    def _get_ida_diagnostics(
+        self, stdout_log=None, stderr_log=None, tail_lines: int = 40
+    ):
         out_log = stdout_log or os.path.join(self.cache_dir, "ida_stdout.log")
         err_log = stderr_log
         if err_log is None and out_log:
@@ -3866,7 +4315,9 @@ class IDAMCPServer:
         if not isinstance(diag, str) or not diag.strip():
             return None
         low = diag.lower()
-        has_phrase = ("library init failed" in low) or ("library initialization failed" in low)
+        has_phrase = ("library init failed" in low) or (
+            "library initialization failed" in low
+        )
         err_code = None
         m_err = re.search(r"\berr(?:or)?\s*[:=]?\s*(\d+)\b", low)
         if m_err:
@@ -3886,25 +4337,45 @@ class IDAMCPServer:
             or "failed to load shared library" in low
         ):
             causes.append("Missing shared runtime library (loader error).")
-            hints.append("Verify IDA runtime dependencies are installed and loadable (ldd on idat64).")
+            hints.append(
+                "Verify IDA runtime dependencies are installed and loadable (ldd on idat64)."
+            )
         if "glibcxx" in low or "cxxabi" in low:
             causes.append("C++ runtime ABI mismatch (libstdc++ / libc++ conflict).")
-            hints.append("Unset conflicting LD_LIBRARY_PATH entries or use system-compatible libstdc++.")
+            hints.append(
+                "Unset conflicting LD_LIBRARY_PATH entries or use system-compatible libstdc++."
+            )
         if "qt.qpa.plugin" in low or "xcb" in low or "qt platform plugin" in low:
             causes.append("Qt platform/plugin initialization failure.")
-            hints.append("Check Qt plugin paths and system GUI/runtime deps (e.g. xcb plugin packages).")
-        if "wrong elf class" in low or "bad cpu type" in low or "exec format error" in low:
+            hints.append(
+                "Check Qt plugin paths and system GUI/runtime deps (e.g. xcb plugin packages)."
+            )
+        if (
+            "wrong elf class" in low
+            or "bad cpu type" in low
+            or "exec format error" in low
+        ):
             causes.append("Binary/runtime architecture mismatch.")
-            hints.append("Use the correct IDA binary for host architecture and compatible target runtime.")
+            hints.append(
+                "Use the correct IDA binary for host architecture and compatible target runtime."
+            )
         if "permission denied" in low:
-            causes.append("Filesystem permission error while loading runtime components.")
-            hints.append("Fix file execute/read permissions on IDA installation and plugins.")
+            causes.append(
+                "Filesystem permission error while loading runtime components."
+            )
+            hints.append(
+                "Fix file execute/read permissions on IDA installation and plugins."
+            )
         if "plugin" in low and "failed" in low:
-            causes.append("A plugin failed during startup and broke library initialization.")
+            causes.append(
+                "A plugin failed during startup and broke library initialization."
+            )
             hints.append("Disable third-party plugins and retry startup.")
         if "python" in low and ("init" in low or "module" in low):
             causes.append("Embedded Python/runtime initialization mismatch.")
-            hints.append("Ensure no conflicting PYTHONHOME/PYTHONPATH overrides are injected.")
+            hints.append(
+                "Ensure no conflicting PYTHONHOME/PYTHONPATH overrides are injected."
+            )
         if not causes:
             causes.append("Generic library initialization failure.")
             hints.append("Inspect stdout/stderr tails for missing dependency details.")
@@ -3928,7 +4399,9 @@ class IDAMCPServer:
         # Preserve previous behavior: phrase alone still triggers recovery path.
         return bool(info.get("detected"))
 
-    def _normalize_ida_args(self, ida_args: Optional[Union[str, List[str]]]) -> List[str]:
+    def _normalize_ida_args(
+        self, ida_args: Optional[Union[str, List[str]]]
+    ) -> List[str]:
         if ida_args is None:
             return []
         if isinstance(ida_args, str):
@@ -4021,7 +4494,8 @@ class IDAMCPServer:
         expired = [
             token
             for token, row in self._next_cache.items()
-            if (now - float(row.get("created_at", 0.0))) > float(self._next_cache_ttl_seconds)
+            if (now - float(row.get("created_at", 0.0)))
+            > float(self._next_cache_ttl_seconds)
         ]
         for token in expired:
             self._next_cache.pop(token, None)
@@ -4107,7 +4581,11 @@ class IDAMCPServer:
                 value = cleaned
             # Accept bracketed list-like singletons such as "[0x401000]" as scalar.
             if key in {"addr", "pattern", "query", "session_id", "binary_path"}:
-                if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
+                if (
+                    isinstance(value, str)
+                    and value.startswith("[")
+                    and value.endswith("]")
+                ):
                     inner = value[1:-1].strip()
                     if inner and "," not in inner:
                         normalized[key] = _strip_balanced_wrappers(inner)
@@ -4184,7 +4662,9 @@ class IDAMCPServer:
                         normalized_tail = {}
                         for key, value in parsed_tail.items():
                             if isinstance(key, str):
-                                canonical_key = arg_aliases.get(_normalize_alias_lookup_key(key), key)
+                                canonical_key = arg_aliases.get(
+                                    _normalize_alias_lookup_key(key), key
+                                )
                             else:
                                 canonical_key = key
                             normalized_tail[canonical_key] = value
@@ -4222,7 +4702,9 @@ class IDAMCPServer:
                         break
         return self._normalize_field_variants(tool_name, out)
 
-    def _wrapper_source_action(self, tool_name: str, args: dict, wrapper_action: str) -> tuple[Optional[str], Optional[dict]]:
+    def _wrapper_source_action(
+        self, tool_name: str, args: dict, wrapper_action: str
+    ) -> tuple[Optional[str], Optional[dict]]:
         native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
         source_action = (
             args.get("source_action")
@@ -4244,7 +4726,9 @@ class IDAMCPServer:
             )
         source_action = source_action.strip()
         if not source_action:
-            return None, make_error(MCPError.INVALID_ARGS, "source_action cannot be empty")
+            return None, make_error(
+                MCPError.INVALID_ARGS, "source_action cannot be empty"
+            )
         if source_action in WRAPPER_ACTIONS and source_action not in native_actions:
             return None, make_error(
                 MCPError.INVALID_ARGS,
@@ -4296,7 +4780,11 @@ class IDAMCPServer:
             if field:
                 value = payload.get(field)
                 if isinstance(value, str):
-                    return [line for line in value.splitlines() if line.strip()], field, "string"
+                    return (
+                        [line for line in value.splitlines() if line.strip()],
+                        field,
+                        "string",
+                    )
                 if isinstance(value, list):
                     return list(value), field, "list"
                 if value is None:
@@ -4326,14 +4814,22 @@ class IDAMCPServer:
                     continue
                 value = payload.get(key)
                 if isinstance(value, str):
-                    return [line for line in value.splitlines() if line.strip()], key, "string"
+                    return (
+                        [line for line in value.splitlines() if line.strip()],
+                        key,
+                        "string",
+                    )
                 if isinstance(value, list):
                     return list(value), key, "list"
             return [payload], "payload", "list"
         if isinstance(payload, list):
             return list(payload), "payload", "list"
         if isinstance(payload, str):
-            return [line for line in payload.splitlines() if line.strip()], "payload", "string"
+            return (
+                [line for line in payload.splitlines() if line.strip()],
+                "payload",
+                "string",
+            )
         if payload is None:
             return [], "payload", "list"
         return [payload], "payload", "list"
@@ -4432,7 +4928,9 @@ class IDAMCPServer:
             "action": action,
             "addresses": deduped_addresses[:8],
             "topic": result.get("resolved_topic") or result.get("topic"),
-            "target": result.get("target") or result.get("query") or result.get("pattern"),
+            "target": result.get("target")
+            or result.get("query")
+            or result.get("pattern"),
         }
         self._activity_log.append(entry)
         if len(self._activity_log) > self._activity_log_max:
@@ -4497,7 +4995,7 @@ class IDAMCPServer:
         for item in entries:
             if item.get("kind") == "bookmark":
                 lines.append(
-                    f"{item.get('ts','')}  bookmark  {item.get('address','')}  {item.get('name','')}".strip()
+                    f"{item.get('ts', '')}  bookmark  {item.get('address', '')}  {item.get('name', '')}".strip()
                 )
                 continue
             addr_part = ",".join(item.get("addresses") or [])
@@ -4509,7 +5007,7 @@ class IDAMCPServer:
             elif item.get("target"):
                 tail_parts.append(str(item.get("target")))
             tail = "  ".join([p for p in tail_parts if p])
-            lines.append(f"{item.get('ts','')}  {tail}".strip())
+            lines.append(f"{item.get('ts', '')}  {tail}".strip())
 
         out = {
             "ok": True,
@@ -4567,8 +5065,12 @@ class IDAMCPServer:
             detail_level = "basic" if compact_mode else "full"
         opts["error_details"] = detail_level
 
-        opts["fields"] = _parse_str_list(self._pop_first(exec_args, ["_response_fields"], None))
-        opts["omit"] = _parse_str_list(self._pop_first(exec_args, ["_response_omit"], None))
+        opts["fields"] = _parse_str_list(
+            self._pop_first(exec_args, ["_response_fields"], None)
+        )
+        opts["omit"] = _parse_str_list(
+            self._pop_first(exec_args, ["_response_omit"], None)
+        )
 
         max_items_raw = self._pop_first(exec_args, ["_response_max_items"], None)
         max_string_raw = self._pop_first(exec_args, ["_response_max_string"], None)
@@ -4627,11 +5129,20 @@ class IDAMCPServer:
         )
         opts["table_mode"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_table"], None),
-            bool(opts.get("table_mode", self.default_table_mode if compact_mode else False)),
+            bool(
+                opts.get(
+                    "table_mode", self.default_table_mode if compact_mode else False
+                )
+            ),
         )
         opts["batch_compact"] = _coerce_bool(
             self._pop_first(exec_args, ["_response_batch_compact"], None),
-            bool(opts.get("batch_compact", self.default_batch_compact if compact_mode else False)),
+            bool(
+                opts.get(
+                    "batch_compact",
+                    self.default_batch_compact if compact_mode else False,
+                )
+            ),
         )
         return exec_args, opts
 
@@ -4669,7 +5180,9 @@ class IDAMCPServer:
                 continue
             if isinstance(value, str):
                 if len(value) > max_string:
-                    out[key] = f"{value[:max_string]}...(+{len(value) - max_string} chars)"
+                    out[key] = (
+                        f"{value[:max_string]}...(+{len(value) - max_string} chars)"
+                    )
                 else:
                     out[key] = value
                 continue
@@ -4741,17 +5254,29 @@ class IDAMCPServer:
 
             if opts.get("dedupe_counts"):
                 list_lengths = [len(v) for v in out.values() if isinstance(v, list)]
-                if "count" in out and isinstance(out["count"], int) and out["count"] in list_lengths:
+                if (
+                    "count" in out
+                    and isinstance(out["count"], int)
+                    and out["count"] in list_lengths
+                ):
                     out.pop("count", None)
                 if out.get("offset") == 0:
                     out.pop("offset", None)
-                if isinstance(out.get("count"), int) and out.get("total") == out.get("count"):
+                if isinstance(out.get("count"), int) and out.get("total") == out.get(
+                    "count"
+                ):
                     out.pop("total", None)
-                if isinstance(out.get("count"), int) and out.get("limit") == out.get("count"):
+                if isinstance(out.get("count"), int) and out.get("limit") == out.get(
+                    "count"
+                ):
                     out.pop("limit", None)
-                if isinstance(out.get("items"), list) and out.get("next_offset") == len(out["items"]):
+                if isinstance(out.get("items"), list) and out.get("next_offset") == len(
+                    out["items"]
+                ):
                     out.pop("next_offset", None)
-                if isinstance(out.get("results"), list) and out.get("count") == len(out["results"]):
+                if isinstance(out.get("results"), list) and out.get("count") == len(
+                    out["results"]
+                ):
                     out.pop("count", None)
                 # Prefer compact text form when both are present unless caller explicitly requests items.
                 requested_fields = set(opts.get("fields") or [])
@@ -4799,7 +5324,14 @@ class IDAMCPServer:
         fields = set(opts.get("fields") or [])
         omit = set(opts.get("omit") or [])
         if fields:
-            always_keep = {"error", "code", "message", "hint", "_truncated", "_continue"}
+            always_keep = {
+                "error",
+                "code",
+                "message",
+                "hint",
+                "_truncated",
+                "_continue",
+            }
             keep = fields.union(always_keep)
             projected = {k: v for k, v in payload.items() if k in keep}
         else:
@@ -4876,13 +5408,17 @@ class IDAMCPServer:
                 child_score = self._pointer_note_signal_from_value(v, depth + 1)
                 if isinstance(k, str):
                     kl = k.lower()
-                    if child_score > 0 and any(sig in kl for sig in _POINTER_NOTE_SIGNAL_KEYWORDS):
+                    if child_score > 0 and any(
+                        sig in kl for sig in _POINTER_NOTE_SIGNAL_KEYWORDS
+                    ):
                         score += 1.0
                 score += child_score
             return score
         return 0.0
 
-    def _compute_pointer_note_signal(self, tool_name: str, call_args: Any, payload: Any) -> float:
+    def _compute_pointer_note_signal(
+        self, tool_name: str, call_args: Any, payload: Any
+    ) -> float:
         score = 0.0
         tn = str(tool_name or "").strip().lower()
         if tn in _POINTER_NOTE_SIGNAL_TOOLS_STRONG:
@@ -4902,27 +5438,38 @@ class IDAMCPServer:
                 score += self._pointer_note_signal_from_value(v)
         if isinstance(payload, dict):
             payload_focus: Dict[str, Any] = {}
-            for key in ("address", "addr", "target", "query", "pattern", "matches", "items"):
+            for key in (
+                "address",
+                "addr",
+                "target",
+                "query",
+                "pattern",
+                "matches",
+                "items",
+            ):
                 if key in payload:
                     val = payload.get(key)
                     if val not in (None, "", [], {}):
                         payload_focus[key] = val
-            score += self._pointer_note_signal_from_value(
-                payload_focus
-            )
+            score += self._pointer_note_signal_from_value(payload_focus)
         return min(score, 10.0)
 
-    def _should_include_pointer_note(self, tool_name: str, call_args: Any, payload: Any) -> bool:
+    def _should_include_pointer_note(
+        self, tool_name: str, call_args: Any, payload: Any
+    ) -> bool:
         if isinstance(payload, dict) and payload.get("error"):
             return False
         signal = self._compute_pointer_note_signal(tool_name, call_args, payload)
         if signal > 0:
             self._pointer_note_pending_signal = min(
-                float(self._pointer_note_min_signal) * _POINTER_NOTE_MAX_SIGNAL_MULTIPLIER,
+                float(self._pointer_note_min_signal)
+                * _POINTER_NOTE_MAX_SIGNAL_MULTIPLIER,
                 self._pointer_note_pending_signal + signal,
             )
         else:
-            self._pointer_note_pending_signal = max(0.0, self._pointer_note_pending_signal - 0.25)
+            self._pointer_note_pending_signal = max(
+                0.0, self._pointer_note_pending_signal - 0.25
+            )
             return False
         if self._pointer_note_pending_signal < float(self._pointer_note_min_signal):
             return False
@@ -4943,7 +5490,9 @@ class IDAMCPServer:
         tool_name: str = "",
         call_args: Any = None,
     ) -> Any:
-        include_pointer_note = self._should_include_pointer_note(tool_name, call_args, payload)
+        include_pointer_note = self._should_include_pointer_note(
+            tool_name, call_args, payload
+        )
         if opts.get("mode") == "full":
             if isinstance(payload, dict):
                 payload = dict(payload)
@@ -4969,7 +5518,9 @@ class IDAMCPServer:
             return json.dumps(payload, ensure_ascii=False, indent=2)
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-    def _build_ida_command(self, session, log_file, script_path, use_existing_idb: bool):
+    def _build_ida_command(
+        self, session, log_file, script_path, use_existing_idb: bool
+    ):
         cmd = [self.idat_exe, "-A"]
         cmd.extend(session.ida_args or [])
         cmd.append(f"-S{script_path}")
@@ -5067,7 +5618,9 @@ class IDAMCPServer:
 
     def _start_server(self, session):
         opts = session.analysis_options or {}
-        self._nuclear_reset(session.idb_path, aggressive=bool(opts.get("aggressive_cleanup")))
+        self._nuclear_reset(
+            session.idb_path, aggressive=bool(opts.get("aggressive_cleanup"))
+        )
 
         # Validate IDA installation
         if not self.idat_exe or not self._is_executable_file(self.idat_exe):
@@ -5280,7 +5833,9 @@ class IDAMCPServer:
         backup_path = None
         if opts.get("backup_on_recover", True):
             backup_path = self._backup_idb(session.idb_path)
-        self._nuclear_reset(session.idb_path, aggressive=bool(opts.get("aggressive_cleanup", True)))
+        self._nuclear_reset(
+            session.idb_path, aggressive=bool(opts.get("aggressive_cleanup", True))
+        )
 
         if not session.binary_path or not os.path.exists(session.binary_path):
             return make_error(
@@ -5299,7 +5854,9 @@ class IDAMCPServer:
         result = self._launch_and_wait(session, server_port)
         if "error" in result and result.get("library_init"):
             # One extra attempt with sanitized runtime env to avoid host LD/Python contamination.
-            retry_result = self._launch_and_wait(session, server_port, sanitize_env=True)
+            retry_result = self._launch_and_wait(
+                session, server_port, sanitize_env=True
+            )
             if "error" not in retry_result:
                 result = retry_result
             else:
@@ -5335,8 +5892,14 @@ class IDAMCPServer:
         if not opts:
             return {"ok": True}
         if session.analysis_applied and opts.get("apply_once", True):
-            log_rpc(f"Skipping analysis options for session {session.session_id} (already applied)")
-            return {"ok": True, "skipped": True, "note": "analysis_options already applied"}
+            log_rpc(
+                f"Skipping analysis options for session {session.session_id} (already applied)"
+            )
+            return {
+                "ok": True,
+                "skipped": True,
+                "note": "analysis_options already applied",
+            }
 
         port = runtime.get("port")
         if not port:
@@ -5599,7 +6162,9 @@ class IDAMCPServer:
             # Defensive fallback: keeps semantic search working if an older cache entry
             # (without stemmed_tokens) is present during rolling updates/tests.
             if not isinstance(page_tokens, set):
-                page_tokens = {self._wiki_stem_token(t) for t in page.get("tokens", set())}
+                page_tokens = {
+                    self._wiki_stem_token(t) for t in page.get("tokens", set())
+                }
             semantic_hits = sorted(expanded_terms.intersection(page_tokens))
             if semantic_hits:
                 base_score += (len(semantic_hits) * 14) + 20
@@ -5618,7 +6183,9 @@ class IDAMCPServer:
             if semantic_hits:
                 entry["semantic_hits"] = semantic_hits[:10]
             if include_snippets:
-                snippet_terms = " ".join(sorted(semantic_hits[:4])).strip() or query_lower
+                snippet_terms = (
+                    " ".join(sorted(semantic_hits[:4])).strip() or query_lower
+                )
                 snippet_tokens = self._wiki_tokenize(snippet_terms)
                 entry["matches"] = self._wiki_extract_snippets(
                     page["text"], snippet_terms, snippet_tokens, context_lines
@@ -5648,12 +6215,16 @@ class IDAMCPServer:
                         continue
                     full_path = os.path.join(root, filename)
                     try:
-                        with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                        with open(
+                            full_path, "r", encoding="utf-8", errors="ignore"
+                        ) as f:
                             text = f.read()
                     except OSError:
                         continue
                     page_name = filename[:-3]
-                    topic = page_name if category == "root" else f"{category}/{page_name}"
+                    topic = (
+                        page_name if category == "root" else f"{category}/{page_name}"
+                    )
                     lines = text.splitlines()
                     headers = self._wiki_parse_headers([line + "\n" for line in lines])
                     title = headers[0]["text"] if headers else page_name
@@ -5676,7 +6247,9 @@ class IDAMCPServer:
                             "text_lower": text.lower(),
                             "line_count": len(lines),
                             "tokens": set(raw_tokens),
-                            "stemmed_tokens": {self._wiki_stem_token(t) for t in raw_tokens},
+                            "stemmed_tokens": {
+                                self._wiki_stem_token(t) for t in raw_tokens
+                            },
                         }
                     )
 
@@ -5694,7 +6267,9 @@ class IDAMCPServer:
         )
         return cache
 
-    def _wiki_normalize_topic(self, topic_name: Any) -> tuple[Optional[str], Optional[dict]]:
+    def _wiki_normalize_topic(
+        self, topic_name: Any
+    ) -> tuple[Optional[str], Optional[dict]]:
         normalized = str(topic_name or "").strip().replace("\\", "/")
         if not normalized:
             return None, make_error(MCPError.INVALID_ARGS, "topic required")
@@ -5781,7 +6356,9 @@ class IDAMCPServer:
                 if (
                     candidate
                     and not os.path.isabs(candidate)
-                    and not re.search(r"\.(i64|idb|exe|dll|so|dylib|bin)$", candidate, re.IGNORECASE)
+                    and not re.search(
+                        r"\.(i64|idb|exe|dll|so|dylib|bin)$", candidate, re.IGNORECASE
+                    )
                 ):
                     out["topic"] = candidate
         return out
@@ -5847,7 +6424,9 @@ class IDAMCPServer:
         if not category_filter:
             return True
         if isinstance(category_filter, str):
-            categories = [c.strip().strip("/").lower() for c in category_filter.split(",")]
+            categories = [
+                c.strip().strip("/").lower() for c in category_filter.split(",")
+            ]
         elif isinstance(category_filter, list):
             categories = [str(c).strip().strip("/").lower() for c in category_filter]
         else:
@@ -5911,7 +6490,10 @@ class IDAMCPServer:
         if query_lower == topic_lower:
             score += 500
             reasons.append("exact_topic")
-        elif topic_lower.endswith(f"/{query_lower}") or query_lower == page["topic_basename"]:
+        elif (
+            topic_lower.endswith(f"/{query_lower}")
+            or query_lower == page["topic_basename"]
+        ):
             score += 380
             reasons.append("basename_match")
         if query_lower in topic_lower:
@@ -5943,7 +6525,9 @@ class IDAMCPServer:
             ratio = max(
                 difflib.SequenceMatcher(None, query_lower, topic_lower).ratio(),
                 difflib.SequenceMatcher(None, query_lower, title_lower).ratio(),
-                difflib.SequenceMatcher(None, query_lower, page["topic_basename"]).ratio(),
+                difflib.SequenceMatcher(
+                    None, query_lower, page["topic_basename"]
+                ).ratio(),
             )
             if ratio >= 0.72:
                 score += int(ratio * 120)
@@ -5968,7 +6552,9 @@ class IDAMCPServer:
         for page in pages:
             if not self._wiki_match_category(page["topic"], category_filter):
                 continue
-            score, reasons = self._wiki_score_page(page, query_lower, query_tokens, fuzzy)
+            score, reasons = self._wiki_score_page(
+                page, query_lower, query_tokens, fuzzy
+            )
             if score <= 0:
                 continue
             entry = {
@@ -6059,9 +6645,7 @@ class IDAMCPServer:
 
         verbose = bool(args.get("verbose", False))
         default_limit = (
-            self.default_wiki_read_limit
-            if action == "read" and not verbose
-            else 0
+            self.default_wiki_read_limit if action == "read" and not verbose else 0
         )
         q_limit = _bounded_int(
             args.get("limit", default_limit),
@@ -6228,7 +6812,12 @@ class IDAMCPServer:
         lines = content.splitlines(keepends=True)
         headers = self._wiki_parse_headers(lines)
         available_sections = [
-            {"index": idx + 1, "title": h["text"], "level": h["level"], "line": h["line"]}
+            {
+                "index": idx + 1,
+                "title": h["text"],
+                "level": h["level"],
+                "line": h["line"],
+            }
             for idx, h in enumerate(headers)
         ]
 
@@ -6293,7 +6882,11 @@ class IDAMCPServer:
                 details_payload = (
                     {"available_sections": available_sections[:50]}
                     if verbose
-                    else {"available_sections": [s["title"] for s in available_sections[:20]]}
+                    else {
+                        "available_sections": [
+                            s["title"] for s in available_sections[:20]
+                        ]
+                    }
                 )
                 return make_error(
                     MCPError.INVALID_ARGS,
@@ -6329,7 +6922,9 @@ class IDAMCPServer:
             section_abs_start = section_start_line
             section_abs_end = section_start_line + max(0, total_lines - 1)
 
-            abs_start_req = line_sel_start if line_sel_start is not None else section_abs_start
+            abs_start_req = (
+                line_sel_start if line_sel_start is not None else section_abs_start
+            )
             abs_end_req = line_sel_end if line_sel_end is not None else section_abs_end
             if abs_end_req < abs_start_req:
                 abs_start_req, abs_end_req = abs_end_req, abs_start_req
@@ -6381,7 +6976,9 @@ class IDAMCPServer:
             result["_truncated"] = True
             result["next_offset"] = end
             result["lines_remaining"] = total_lines - end
-            result["hint"] = "Use wiki(action='read', topic='...', offset=next_offset, limit=...)"
+            result["hint"] = (
+                "Use wiki(action='read', topic='...', offset=next_offset, limit=...)"
+            )
         return result
 
     def _handle_misc_health(self, args: dict) -> dict:
@@ -6424,7 +7021,9 @@ class IDAMCPServer:
             },
             "sessions": {
                 "total": len(self.session_mgr.discover_sessions()),
-                "active": self.current_session.session_id if self.current_session else None,
+                "active": self.current_session.session_id
+                if self.current_session
+                else None,
                 "runtime_processes": {
                     "tracked": len(self.session_runtimes),
                     "running": running,
@@ -6449,7 +7048,9 @@ class IDAMCPServer:
                 if isinstance(item, str):
                     out.extend([line for line in item.splitlines() if line.strip()])
                 elif isinstance(item, dict):
-                    out.append(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+                    out.append(
+                        json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+                    )
                 else:
                     s = str(item).strip()
                     if s:
@@ -6473,7 +7074,9 @@ class IDAMCPServer:
         s = str(value).strip()
         return [s] if s else []
 
-    def _grep_collect_lines(self, payload: Any, field: Optional[str] = None) -> tuple[list[str], str]:
+    def _grep_collect_lines(
+        self, payload: Any, field: Optional[str] = None
+    ) -> tuple[list[str], str]:
         if field and isinstance(payload, dict):
             return self._grep_value_lines(payload.get(field)), field
         if isinstance(payload, dict):
@@ -6526,8 +7129,12 @@ class IDAMCPServer:
         grep_field = args.get("grep_field")
         if grep_field is not None and not isinstance(grep_field, str):
             return make_error(MCPError.INVALID_ARGS, "grep_field must be a string")
-        grep_limit = _bounded_int(args.get("grep_limit", 200), 200, min_value=1, max_value=5000)
-        grep_offset = _bounded_int(args.get("grep_offset", 0), 0, min_value=0, max_value=500000)
+        grep_limit = _bounded_int(
+            args.get("grep_limit", 200), 200, min_value=1, max_value=5000
+        )
+        grep_offset = _bounded_int(
+            args.get("grep_offset", 0), 0, min_value=0, max_value=500000
+        )
 
         child_args = self._strip_wrapper_args(args)
         if explicit_pattern is None:
@@ -6625,15 +7232,21 @@ class IDAMCPServer:
             out["missing_fields"] = missing
         return out
 
-    def _handle_tool_head_tail_action(self, tool_name: str, args: dict, *, tail: bool = False) -> dict:
+    def _handle_tool_head_tail_action(
+        self, tool_name: str, args: dict, *, tail: bool = False
+    ) -> dict:
         wrapper_name = "tail" if tail else "head"
-        source_action, source_err = self._wrapper_source_action(tool_name, args, wrapper_name)
+        source_action, source_err = self._wrapper_source_action(
+            tool_name, args, wrapper_name
+        )
         if source_err:
             return source_err
 
         default_n = 20
         n_key = "tail_n" if tail else "head_n"
-        n = _bounded_int(args.get(n_key, default_n), default_n, min_value=1, max_value=5000)
+        n = _bounded_int(
+            args.get(n_key, default_n), default_n, min_value=1, max_value=5000
+        )
         field = args.get("grep_field") or args.get("field")
         if field is not None and not isinstance(field, str):
             return make_error(MCPError.INVALID_ARGS, "field must be a string")
@@ -6644,10 +7257,12 @@ class IDAMCPServer:
         if isinstance(source_payload, dict) and source_payload.get("error"):
             return source_payload
 
-        items, used_field, item_kind = self._collect_wrapper_items(source_payload, field)
+        items, used_field, item_kind = self._collect_wrapper_items(
+            source_payload, field
+        )
         total = len(items)
         if tail:
-            page = items[max(0, total - n):]
+            page = items[max(0, total - n) :]
             offset = max(0, total - len(page))
         else:
             page = items[:n]
@@ -6667,7 +7282,9 @@ class IDAMCPServer:
             "total": total,
             "offset": offset,
             "truncated": is_truncated,
-            "next_offset": (offset + len(page)) if (not tail and is_truncated) else None,
+            "next_offset": (offset + len(page))
+            if (not tail and is_truncated)
+            else None,
         }
         if _coerce_bool(args.get("include_items"), False):
             out["items"] = page if item_kind == "list" else lines
@@ -6712,7 +7329,9 @@ class IDAMCPServer:
         return result
 
     def _handle_tool_stats_action(self, tool_name: str, args: dict) -> dict:
-        source_action, source_err = self._wrapper_source_action(tool_name, args, "stats")
+        source_action, source_err = self._wrapper_source_action(
+            tool_name, args, "stats"
+        )
         if source_err:
             return source_err
         include_payload = _coerce_bool(args.get("stats_include_payload"), False)
@@ -6724,7 +7343,9 @@ class IDAMCPServer:
             return source_payload
 
         try:
-            serialized = json.dumps(source_payload, ensure_ascii=False, separators=(",", ":"))
+            serialized = json.dumps(
+                source_payload, ensure_ascii=False, separators=(",", ":")
+            )
         except Exception:
             serialized = str(source_payload)
         items, used_field, item_kind = self._collect_wrapper_items(source_payload)
@@ -6734,13 +7355,19 @@ class IDAMCPServer:
         stats = {
             "type": type(source_payload).__name__,
             "top_level_keys": top_keys,
-            "line_count": len([line for line in serialized.splitlines() if line.strip()]),
+            "line_count": len(
+                [line for line in serialized.splitlines() if line.strip()]
+            ),
             "char_count": len(serialized),
             "item_count": len(items),
             "item_field": used_field,
             "item_kind": item_kind,
-            "has_error": bool(isinstance(source_payload, dict) and source_payload.get("error")),
-            "truncated": bool(isinstance(source_payload, dict) and source_payload.get("truncated")),
+            "has_error": bool(
+                isinstance(source_payload, dict) and source_payload.get("error")
+            ),
+            "truncated": bool(
+                isinstance(source_payload, dict) and source_payload.get("truncated")
+            ),
         }
         out = {
             "ok": True,
@@ -6753,7 +7380,9 @@ class IDAMCPServer:
             out["payload"] = source_payload
         return out
 
-    def _threat_hunt_step(self, ip: str, tool: str, action: str, step_args: Optional[dict] = None) -> dict:
+    def _threat_hunt_step(
+        self, ip: str, tool: str, action: str, step_args: Optional[dict] = None
+    ) -> dict:
         payload_args = dict(step_args or {})
         payload_args["action"] = action
         payload_args["idb"] = ip
@@ -6771,7 +7400,9 @@ class IDAMCPServer:
                 "ok": False,
                 "tool": tool,
                 "action": action,
-                "error": result.get("message") or result.get("error") or "unknown error",
+                "error": result.get("message")
+                or result.get("error")
+                or "unknown error",
                 "code": result.get("code"),
                 "payload": result,
             }
@@ -6790,7 +7421,16 @@ class IDAMCPServer:
         tool = str(step.get("tool", ""))
         action = str(step.get("action", ""))
 
-        for key in ("findings", "items", "matches", "results", "indicators", "iocs", "apis", "loops"):
+        for key in (
+            "findings",
+            "items",
+            "matches",
+            "results",
+            "indicators",
+            "iocs",
+            "apis",
+            "loops",
+        ):
             val = payload.get(key)
             if isinstance(val, list):
                 for entry in val:
@@ -6813,10 +7453,16 @@ class IDAMCPServer:
             )
         return out
 
-    def _threat_hunt_legacy_route(self, legacy_tool: str, legacy_action: str, args: dict) -> tuple[str, list[tuple[str, str, dict]], dict]:
+    def _threat_hunt_legacy_route(
+        self, legacy_tool: str, legacy_action: str, args: dict
+    ) -> tuple[str, list[tuple[str, str, dict]], dict]:
         tool = str(legacy_tool or "").strip().lower()
         action = str(legacy_action or "").strip().lower()
-        profile = str(args.get("profile") or args.get("scan_profile") or "balanced").strip().lower()
+        profile = (
+            str(args.get("profile") or args.get("scan_profile") or "balanced")
+            .strip()
+            .lower()
+        )
         if profile not in {"quick", "balanced", "deep"}:
             profile = "balanced"
 
@@ -6827,30 +7473,146 @@ class IDAMCPServer:
             trace_map = {
                 "get": [("trace", "get", {})],
                 "clear": [("trace", "clear", {})],
-                "set_options": [("trace", "set_options", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
-                "import_trace": [("trace_analysis", "import_trace", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "set_options": [
+                    (
+                        "trace",
+                        "set_options",
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ],
+                "import_trace": [
+                    (
+                        "trace_analysis",
+                        "import_trace",
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ],
                 "analyze_coverage": [("trace_analysis", "analyze_coverage", {})],
                 "find_loops": [("trace_analysis", "find_loops", {})],
                 "extract_api_calls": [("trace_analysis", "extract_api_calls", {})],
                 "basic_blocks_hit": [("trace_analysis", "basic_blocks_hit", {})],
-                "import_drcov": [("coverage", "import_drcov", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
-                "import_lighthouse": [("coverage", "import_lighthouse", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
-                "highlight": [("coverage", "highlight", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "import_drcov": [
+                    (
+                        "coverage",
+                        "import_drcov",
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ],
+                "import_lighthouse": [
+                    (
+                        "coverage",
+                        "import_lighthouse",
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ],
+                "highlight": [
+                    (
+                        "coverage",
+                        "highlight",
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ],
                 "report": [("coverage", "report", {})],
                 "uncovered": [("coverage", "uncovered", {})],
-                "filter": [("coverage", "filter", {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})],
+                "filter": [
+                    (
+                        "coverage",
+                        "filter",
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ],
             }
-            steps = trace_map.get(action, [("trace", "get", {}), ("trace_analysis", "analyze_coverage", {}), ("coverage", "report", {})])
+            steps = trace_map.get(
+                action,
+                [
+                    ("trace", "get", {}),
+                    ("trace_analysis", "analyze_coverage", {}),
+                    ("coverage", "report", {}),
+                ],
+            )
         elif tool in {"vuln_scan", "taint", "gadgets", "search"}:
             mapped_module = "vuln"
             if tool == "vuln_scan" and action:
-                steps = [("vuln_scan", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+                steps = [
+                    (
+                        "vuln_scan",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             elif tool == "taint" and action:
-                steps = [("taint", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+                steps = [
+                    (
+                        "taint",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             elif tool == "gadgets" and action:
-                steps = [("gadgets", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
-            elif tool == "search" and action in {"vulnerable", "constants", "api", "find", "regex"}:
-                passthrough = {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}}
+                steps = [
+                    (
+                        "gadgets",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
+            elif tool == "search" and action in {
+                "vulnerable",
+                "constants",
+                "api",
+                "find",
+                "regex",
+            }:
+                passthrough = {
+                    k: v
+                    for k, v in args.items()
+                    if k not in {"action", "legacy_tool", "legacy_action", "idb"}
+                }
                 steps = [("search", action, passthrough)]
             else:
                 steps = [
@@ -6860,20 +7622,105 @@ class IDAMCPServer:
                 ]
         else:
             mapped_module = "malware"
-            if tool in {"c2_detect", "deobfuscate", "crypto_id", "yara_hunt"} and action:
-                steps = [(tool, action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+            if (
+                tool in {"c2_detect", "deobfuscate", "crypto_id", "yara_hunt"}
+                and action
+            ):
+                steps = [
+                    (
+                        tool,
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             elif tool == "classify" and action:
-                steps = [("classify", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
-            elif tool == "summarize" and action in {"security_posture", "statistics", "binary", "function"}:
-                steps = [("summarize", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+                steps = [
+                    (
+                        "classify",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
+            elif tool == "summarize" and action in {
+                "security_posture",
+                "statistics",
+                "binary",
+                "function",
+            }:
+                steps = [
+                    (
+                        "summarize",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             elif tool == "agent" and action in {"search_all", "find_references"}:
-                steps = [("agent", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+                steps = [
+                    (
+                        "agent",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             elif tool == "protocol" and action:
-                steps = [("protocol", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+                steps = [
+                    (
+                        "protocol",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             elif tool == "xref_analysis" and action:
-                steps = [("xref_analysis", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+                steps = [
+                    (
+                        "xref_analysis",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             elif tool == "string_ops" and action:
-                steps = [("string_ops", action, {k: v for k, v in args.items() if k not in {"action", "legacy_tool", "legacy_action", "idb"}})]
+                steps = [
+                    (
+                        "string_ops",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
             else:
                 steps = [
                     ("c2_detect", "indicators", {}),
@@ -6882,12 +7729,24 @@ class IDAMCPServer:
                     ("crypto_id", "identify", {}),
                 ]
 
-        return mapped_module, steps, {"legacy_tool": tool or None, "legacy_action": action or None}
+        return (
+            mapped_module,
+            steps,
+            {"legacy_tool": tool or None, "legacy_action": action or None},
+        )
 
     def _handle_threat_hunt(self, args: dict) -> dict:
         action = str(args.get("action") or "run").strip().lower()
-        profile = str(args.get("profile") or args.get("scan_profile") or "balanced").strip().lower()
-        if action in {"quick", "deep"} and "profile" not in args and "scan_profile" not in args:
+        profile = (
+            str(args.get("profile") or args.get("scan_profile") or "balanced")
+            .strip()
+            .lower()
+        )
+        if (
+            action in {"quick", "deep"}
+            and "profile" not in args
+            and "scan_profile" not in args
+        ):
             profile = action
             action = "run"
         if action == "findings":
@@ -6895,9 +7754,15 @@ class IDAMCPServer:
         if profile not in {"quick", "balanced", "deep"}:
             profile = "balanced"
 
-        include_vuln = _coerce_bool(args.get("include_vuln"), action in {"run", "vuln", "legacy"})
-        include_malware = _coerce_bool(args.get("include_malware"), action in {"run", "malware", "legacy"})
-        include_tracing = _coerce_bool(args.get("include_tracing"), action in {"run", "tracing", "legacy"})
+        include_vuln = _coerce_bool(
+            args.get("include_vuln"), action in {"run", "vuln", "legacy"}
+        )
+        include_malware = _coerce_bool(
+            args.get("include_malware"), action in {"run", "malware", "legacy"}
+        )
+        include_tracing = _coerce_bool(
+            args.get("include_tracing"), action in {"run", "tracing", "legacy"}
+        )
         if action == "vuln":
             include_vuln, include_malware, include_tracing = True, False, False
         elif action == "malware":
@@ -6912,7 +7777,9 @@ class IDAMCPServer:
                 hint="Enable at least one of include_vuln/include_malware/include_tracing or use action run|vuln|malware|tracing.",
             )
 
-        idb_path = args.get("idb", self.current_session.idb_path if self.current_session else None)
+        idb_path = args.get(
+            "idb", self.current_session.idb_path if self.current_session else None
+        )
         if not idb_path:
             return make_error(
                 MCPError.SESSION_REQUIRED,
@@ -6920,7 +7787,9 @@ class IDAMCPServer:
             )
 
         limit = _bounded_int(args.get("limit", 120), 120, min_value=1, max_value=1000)
-        max_steps = _bounded_int(args.get("max_steps", 24), 24, min_value=1, max_value=128)
+        max_steps = _bounded_int(
+            args.get("max_steps", 24), 24, min_value=1, max_value=128
+        )
         include_evidence = _coerce_bool(args.get("include_evidence"), False)
 
         step_plan: list[tuple[str, str, dict]] = []
@@ -6949,7 +7818,11 @@ class IDAMCPServer:
             step_plan.extend(
                 [
                     ("vuln_scan", "scan_all", vuln_args),
-                    ("vuln_scan", "intelligence_report", vuln_args if profile != "quick" else {"scan_profile": profile}),
+                    (
+                        "vuln_scan",
+                        "intelligence_report",
+                        vuln_args if profile != "quick" else {"scan_profile": profile},
+                    ),
                 ]
             )
 
@@ -7007,8 +7880,14 @@ class IDAMCPServer:
                 continue
             addr = str(f.get("addr") or f.get("address") or f.get("ea") or "")
             kind = str(f.get("type") or f.get("kind") or f.get("action") or "")
-            text = str(f.get("name") or f.get("title") or f.get("summary") or f.get("value") or "")
-            key = f"{f.get('tool','')}|{kind}|{addr}|{text}".strip().lower()
+            text = str(
+                f.get("name")
+                or f.get("title")
+                or f.get("summary")
+                or f.get("value")
+                or ""
+            )
+            key = f"{f.get('tool', '')}|{kind}|{addr}|{text}".strip().lower()
             if not key:
                 continue
             if key not in dedup:
@@ -7040,7 +7919,9 @@ class IDAMCPServer:
         if legacy_meta:
             out["legacy"] = legacy_meta
         if include_evidence:
-            out["evidence"] = {"raw_findings": raw_findings[: min(300, len(raw_findings))]}
+            out["evidence"] = {
+                "raw_findings": raw_findings[: min(300, len(raw_findings))]
+            }
         return out
 
     def _execute_tool(self, tool_name, args):
@@ -7063,7 +7944,8 @@ class IDAMCPServer:
             args["action"] = action
             native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
             has_wrapper_source = any(
-                key in args for key in ("source_action", "target_action", "on", "subaction")
+                key in args
+                for key in ("source_action", "target_action", "on", "subaction")
             )
             if action in WRAPPER_ACTIONS:
                 use_wrapper = action not in native_actions
@@ -7079,9 +7961,13 @@ class IDAMCPServer:
                     if action == "pick":
                         return self._handle_tool_pick_action(tool_name, args)
                     if action == "head":
-                        return self._handle_tool_head_tail_action(tool_name, args, tail=False)
+                        return self._handle_tool_head_tail_action(
+                            tool_name, args, tail=False
+                        )
                     if action == "tail":
-                        return self._handle_tool_head_tail_action(tool_name, args, tail=True)
+                        return self._handle_tool_head_tail_action(
+                            tool_name, args, tail=True
+                        )
                     if action == "next":
                         return self._handle_tool_next_action(tool_name, args)
                     if action == "stats":
@@ -7133,7 +8019,10 @@ class IDAMCPServer:
 
         if tool_name == "session":
             action = args.get("action")
-            def _sid_arg(key: str = "session_id", allow_current: bool = True) -> tuple[Optional[str], Optional[dict]]:
+
+            def _sid_arg(
+                key: str = "session_id", allow_current: bool = True
+            ) -> tuple[Optional[str], Optional[dict]]:
                 raw_sid = args.get(key)
                 if raw_sid is None and allow_current and self.current_session:
                     raw_sid = self.current_session.session_id
@@ -7147,7 +8036,9 @@ class IDAMCPServer:
                 raw_txt = str(raw_sid).strip()
                 if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
                     return raw_txt.upper(), None
-                return None, make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
+                return None, make_error(
+                    MCPError.INVALID_ARGS, "Invalid session_id format"
+                )
 
             if action == "create":
                 binary_path = args.get("binary_path")
@@ -7165,7 +8056,9 @@ class IDAMCPServer:
                     return make_error(
                         MCPError.INVALID_ARGS,
                         "binary_path must be a string",
-                        details={"hint": "Provide a path string, e.g. session(action='create', binary_path='/abs/path/to/binary')."},
+                        details={
+                            "hint": "Provide a path string, e.g. session(action='create', binary_path='/abs/path/to/binary')."
+                        },
                     )
 
                 analysis_options = {}
@@ -7221,7 +8114,9 @@ class IDAMCPServer:
                     return make_error(
                         MCPError.INVALID_ARGS,
                         "binary_path is required",
-                        details={"hint": "Provide a binary path, e.g. session(action='create', binary_path='/abs/path/to/binary')."},
+                        details={
+                            "hint": "Provide a binary path, e.g. session(action='create', binary_path='/abs/path/to/binary')."
+                        },
                     )
 
                 existing = None
@@ -7262,24 +8157,34 @@ class IDAMCPServer:
             if action == "discover":
                 self.session_mgr._load_orphaned_idbs()
                 q = args.get("query", "")
-                sessions = [s.to_dict() for s in self.session_mgr.discover_sessions(query=q)]
+                sessions = [
+                    s.to_dict() for s in self.session_mgr.discover_sessions(query=q)
+                ]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "get":
                 raw_sid = args.get("session_id")
                 if not raw_sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required",
-                                     hint="Provide a session_id. Use session(action='list') to see available sessions.")
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "session_id required",
+                        hint="Provide a session_id. Use session(action='list') to see available sessions.",
+                    )
                 sid = _normalize_session_id(raw_sid)
                 if not sid:
                     raw_txt = str(raw_sid).strip()
                     if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
                         sid = raw_txt.upper()
                     else:
-                        return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
+                        return make_error(
+                            MCPError.INVALID_ARGS, "Invalid session_id format"
+                        )
                 session = self.session_mgr.get_session(sid)
                 if not session:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found",
-                                     hint="Use session(action='list') to see available sessions.")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND,
+                        f"Session '{sid}' not found",
+                        hint="Use session(action='list') to see available sessions.",
+                    )
                 runtime = self.session_runtimes.get(sid)
                 is_running = bool(
                     runtime
@@ -7299,7 +8204,8 @@ class IDAMCPServer:
                 if q:
                     matcher = compile_smart_pattern(q, case_sensitive=False)
                     all_sessions = [
-                        s for s in all_sessions
+                        s
+                        for s in all_sessions
                         if matcher(f"{s.session_id} {s.binary_path} {s.idb_path}")
                     ]
 
@@ -7307,8 +8213,12 @@ class IDAMCPServer:
                 all_sessions.sort(key=lambda s: s.last_accessed, reverse=True)
 
                 # Pagination
-                limit = _bounded_int(args.get("limit", 50), 50, min_value=0, max_value=MAX_LIST_LIMIT)
-                offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=MAX_LIST_OFFSET)
+                limit = _bounded_int(
+                    args.get("limit", 50), 50, min_value=0, max_value=MAX_LIST_LIMIT
+                )
+                offset = _bounded_int(
+                    args.get("offset", 0), 0, min_value=0, max_value=MAX_LIST_OFFSET
+                )
 
                 total = len(all_sessions)
                 paginated = (
@@ -7347,8 +8257,11 @@ class IDAMCPServer:
                         if found:
                             sid = found.session_id
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id or binary_path required",
-                                     hint="Provide session_id or binary_path. Use session(action='list') to see sessions.")
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "session_id or binary_path required",
+                        hint="Provide session_id or binary_path. Use session(action='list') to see sessions.",
+                    )
                 normalized_sid = _normalize_session_id(sid)
                 if normalized_sid:
                     sid = normalized_sid
@@ -7357,19 +8270,26 @@ class IDAMCPServer:
                     if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
                         sid = raw_txt.upper()
                     else:
-                        return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
+                        return make_error(
+                            MCPError.INVALID_ARGS, "Invalid session_id format"
+                        )
                 session = self.session_mgr.get_session(sid)
                 if session:
                     self.current_session = session
                     return {"ok": True, "session": self.current_session.to_dict()}
-                return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                return make_error(
+                    MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                )
             if action == "close":
                 sid, sid_err = _sid_arg()
                 if sid_err:
                     return sid_err
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required (or have an active session)",
-                                     hint="Provide session_id or create/switch to a session first.")
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "session_id required (or have an active session)",
+                        hint="Provide session_id or create/switch to a session first.",
+                    )
                 self._cleanup_runtime(sid)
                 closed = self.session_mgr.delete_session(sid)
                 if (
@@ -7390,20 +8310,37 @@ class IDAMCPServer:
                     )
                 else:
                     result = None
-                return {"ok": True, "session": result, "total_sessions": len(self.session_mgr.sessions)}
+                return {
+                    "ok": True,
+                    "session": result,
+                    "total_sessions": len(self.session_mgr.sessions),
+                }
             if action == "rebuild":
                 sid, sid_err = _sid_arg()
                 if sid_err:
                     return sid_err
                 if not sid:
-                    return make_error(MCPError.INVALID_ARGS, "session_id required",
-                                     hint="Provide session_id or create/switch to a session first.")
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "session_id required",
+                        hint="Provide session_id or create/switch to a session first.",
+                    )
                 session = self.session_mgr.get_session(sid)
                 if not session:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
 
                 analysis_options = {}
-                for key in ("processor", "flags", "loader", "value", "bitness", "endian", "reanalyze"):
+                for key in (
+                    "processor",
+                    "flags",
+                    "loader",
+                    "value",
+                    "bitness",
+                    "endian",
+                    "reanalyze",
+                ):
                     if key in args:
                         analysis_options[key] = args.get(key)
                 if not analysis_options:
@@ -7414,7 +8351,9 @@ class IDAMCPServer:
                     try:
                         os.remove(session.idb_path)
                     except Exception as e:
-                        return make_error(MCPError.FILE_LOCKED, f"Failed to remove IDB: {e}")
+                        return make_error(
+                            MCPError.FILE_LOCKED, f"Failed to remove IDB: {e}"
+                        )
                 session.analysis_options = analysis_options or {}
                 self.session_mgr._save_metadata(session)
 
@@ -7434,16 +8373,26 @@ class IDAMCPServer:
                     return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
-                update_kwargs = {k: v for k, v in args.items() if k not in ("action", "session_id")}
+                update_kwargs = {
+                    k: v for k, v in args.items() if k not in ("action", "session_id")
+                }
                 if "tags" in update_kwargs and isinstance(update_kwargs["tags"], str):
-                    update_kwargs["tags"] = [t.strip() for t in update_kwargs["tags"].split(",") if t.strip()]
+                    update_kwargs["tags"] = [
+                        t.strip() for t in update_kwargs["tags"].split(",") if t.strip()
+                    ]
                 if "notes" in update_kwargs:
-                    update_kwargs["notes"] = str(update_kwargs.get("notes", ""))[:MAX_NOTE_LEN]
+                    update_kwargs["notes"] = str(update_kwargs.get("notes", ""))[
+                        :MAX_NOTE_LEN
+                    ]
                 if "auto_name" in update_kwargs:
-                    update_kwargs["auto_name"] = str(update_kwargs.get("auto_name", "")).strip()[:MAX_NAME_LEN]
+                    update_kwargs["auto_name"] = str(
+                        update_kwargs.get("auto_name", "")
+                    ).strip()[:MAX_NAME_LEN]
                 result = self.session_mgr.update_session(sid, **update_kwargs)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "rename":
                 sid, sid_err = _sid_arg()
@@ -7457,7 +8406,9 @@ class IDAMCPServer:
                 new_name = str(new_name).strip()[:MAX_NAME_LEN]
                 result = self.session_mgr.rename_session(sid, new_name)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "duplicate":
                 sid, sid_err = _sid_arg()
@@ -7467,7 +8418,9 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.duplicate_session(sid)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "export_session":
                 sid, sid_err = _sid_arg()
@@ -7477,7 +8430,9 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.export_session(sid)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "exported": result}
             if action == "import_session":
                 data = args.get("data")
@@ -7493,7 +8448,9 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.archive_session(sid)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "unarchive":
                 sid, sid_err = _sid_arg()
@@ -7503,7 +8460,9 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.unarchive_session(sid)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "tag":
                 sid, sid_err = _sid_arg()
@@ -7519,7 +8478,9 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "tag required")
                 result = self.session_mgr.tag_session(sid, tag)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "untag":
                 sid, sid_err = _sid_arg()
@@ -7532,7 +8493,9 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "tag required")
                 result = self.session_mgr.untag_session(sid, tag)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "find_by_tag":
                 tag = args.get("tag")
@@ -7552,7 +8515,9 @@ class IDAMCPServer:
                 note = str(note)[:MAX_NOTE_LEN]
                 result = self.session_mgr.add_note(sid, note)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "clear_notes":
                 sid, sid_err = _sid_arg()
@@ -7562,10 +8527,14 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.clear_notes(sid)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "cleanup_stale":
-                max_age = _bounded_int(args.get("max_age_days", 30), 30, min_value=1, max_value=3650)
+                max_age = _bounded_int(
+                    args.get("max_age_days", 30), 30, min_value=1, max_value=3650
+                )
                 deleted = self.session_mgr.cleanup_stale(max_age_days=max_age)
                 return {"ok": True, "deleted_sids": deleted, "count": len(deleted)}
             if action == "stats":
@@ -7578,39 +8547,58 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 result = self.session_mgr.validate_session(sid)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "validation": result}
             if action == "bulk_delete":
                 sids = args.get("session_ids", [])
                 if not sids:
-                    return make_error(MCPError.INVALID_ARGS, "session_ids list required")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "session_ids list required"
+                    )
                 if not isinstance(sids, list):
-                    return make_error(MCPError.INVALID_ARGS, "session_ids must be a list")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "session_ids must be a list"
+                    )
                 cleaned_sids = []
                 for raw_sid in sids[:MAX_BATCH_CALLS]:
                     sid = _normalize_session_id(raw_sid)
                     if not sid:
-                        return make_error(MCPError.INVALID_ARGS, f"Invalid session_id in list: {raw_sid}")
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            f"Invalid session_id in list: {raw_sid}",
+                        )
                     cleaned_sids.append(sid)
                 results = self.session_mgr.bulk_delete(cleaned_sids)
                 # Clear current session if it was deleted
-                if self.current_session and self.current_session.session_id in cleaned_sids:
+                if (
+                    self.current_session
+                    and self.current_session.session_id in cleaned_sids
+                ):
                     self.current_session = None
                 return {"ok": True, "results": results}
             if action == "bulk_tag":
                 sids = args.get("session_ids", [])
                 tag = args.get("tag")
                 if not sids:
-                    return make_error(MCPError.INVALID_ARGS, "session_ids list required")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "session_ids list required"
+                    )
                 if not tag:
                     return make_error(MCPError.INVALID_ARGS, "tag required")
                 if not isinstance(sids, list):
-                    return make_error(MCPError.INVALID_ARGS, "session_ids must be a list")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "session_ids must be a list"
+                    )
                 cleaned_sids = []
                 for raw_sid in sids[:MAX_BATCH_CALLS]:
                     sid = _normalize_session_id(raw_sid)
                     if not sid:
-                        return make_error(MCPError.INVALID_ARGS, f"Invalid session_id in list: {raw_sid}")
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            f"Invalid session_id in list: {raw_sid}",
+                        )
                     cleaned_sids.append(sid)
                 tag = str(tag).strip()[:MAX_TAG_LEN]
                 if not tag:
@@ -7624,11 +8612,15 @@ class IDAMCPServer:
                 sessions = [s.to_dict() for s in self.session_mgr.search_notes(query)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "recent":
-                n = _bounded_int(args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT)
+                n = _bounded_int(
+                    args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT
+                )
                 sessions = [s.to_dict() for s in self.session_mgr.get_recent(n)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "oldest":
-                n = _bounded_int(args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT)
+                n = _bounded_int(
+                    args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT
+                )
                 sessions = [s.to_dict() for s in self.session_mgr.get_oldest(n)]
                 return {"ok": True, "sessions": sessions, "count": len(sessions)}
             if action == "snapshot":
@@ -7639,7 +8631,9 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 snapshot_id = self.session_mgr.snapshot_session(sid)
                 if snapshot_id is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 return {"ok": True, "session_id": sid, "snapshot_id": snapshot_id}
             if action == "restore_snapshot":
                 sid, sid_err = _sid_arg()
@@ -7652,21 +8646,35 @@ class IDAMCPServer:
                     return make_error(MCPError.INVALID_ARGS, "snapshot_id required")
                 result = self.session_mgr.restore_snapshot(sid, snapshot_id)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Snapshot '{snapshot_id}' not found for session '{sid}'")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND,
+                        f"Snapshot '{snapshot_id}' not found for session '{sid}'",
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "merge":
-                sid1 = _normalize_session_id(args.get("session_id") or args.get("target_id"))
+                sid1 = _normalize_session_id(
+                    args.get("session_id") or args.get("target_id")
+                )
                 sid2 = _normalize_session_id(args.get("source_id"))
                 if not sid1 or not sid2:
-                    return make_error(MCPError.INVALID_ARGS, "session_id (or target_id) and source_id required")
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "session_id (or target_id) and source_id required",
+                    )
                 result = self.session_mgr.merge_sessions(sid1, sid2)
                 if result is None:
-                    return make_error(MCPError.SESSION_NOT_FOUND, "One or both sessions not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, "One or both sessions not found"
+                    )
                 return {"ok": True, "session": result.to_dict()}
             if action == "macro_set":
-                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                macro_name = self._normalize_macro_name(
+                    args.get("name") or args.get("macro")
+                )
                 if not macro_name:
-                    return make_error(MCPError.INVALID_ARGS, "name required for macro_set")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "name required for macro_set"
+                    )
                 macro_payload = args.get("data")
                 if macro_payload is None:
                     macro_payload = args.get("macro_data")
@@ -7685,7 +8693,9 @@ class IDAMCPServer:
                         )
                     }
                 if not isinstance(macro_payload, dict):
-                    return make_error(MCPError.INVALID_ARGS, "macro payload must be an object")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "macro payload must be an object"
+                    )
                 macro_key = macro_name.lower()
                 self._session_macros[macro_key] = {
                     "name": macro_name,
@@ -7700,12 +8710,18 @@ class IDAMCPServer:
                     "data": macro_payload,
                 }
             if action == "macro_get":
-                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                macro_name = self._normalize_macro_name(
+                    args.get("name") or args.get("macro")
+                )
                 if not macro_name:
-                    return make_error(MCPError.INVALID_ARGS, "name required for macro_get")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "name required for macro_get"
+                    )
                 entry = self._session_macros.get(macro_name.lower())
                 if not entry:
-                    return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found"
+                    )
                 return {"ok": True, "action": "macro_get", **entry}
             if action == "macro_list":
                 macros = sorted(
@@ -7720,30 +8736,54 @@ class IDAMCPServer:
                     ],
                     key=lambda m: str(m.get("name", "")).lower(),
                 )
-                return {"ok": True, "action": "macro_list", "macros": macros, "count": len(macros)}
+                return {
+                    "ok": True,
+                    "action": "macro_list",
+                    "macros": macros,
+                    "count": len(macros),
+                }
             if action == "macro_delete":
-                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                macro_name = self._normalize_macro_name(
+                    args.get("name") or args.get("macro")
+                )
                 if not macro_name:
-                    return make_error(MCPError.INVALID_ARGS, "name required for macro_delete")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "name required for macro_delete"
+                    )
                 removed = self._session_macros.pop(macro_name.lower(), None)
                 if removed is None:
-                    return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found"
+                    )
                 self._save_session_macros()
                 return {"ok": True, "action": "macro_delete", "name": macro_name}
             if action == "macro_run":
-                macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
+                macro_name = self._normalize_macro_name(
+                    args.get("name") or args.get("macro")
+                )
                 if not macro_name:
-                    return make_error(MCPError.INVALID_ARGS, "name required for macro_run")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "name required for macro_run"
+                    )
                 entry = self._session_macros.get(macro_name.lower())
                 if not entry:
-                    return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found"
+                    )
                 base_args = dict(entry.get("data") or {})
-                run_action = args.get("run_action") or base_args.get("action") or "create"
+                run_action = (
+                    args.get("run_action") or base_args.get("action") or "create"
+                )
                 if not isinstance(run_action, str) or not run_action.strip():
-                    return make_error(MCPError.INVALID_ARGS, "invalid run_action for macro_run")
+                    return make_error(
+                        MCPError.INVALID_ARGS, "invalid run_action for macro_run"
+                    )
                 run_action = run_action.strip()
                 if run_action.startswith("macro_"):
-                    return make_error(MCPError.INVALID_ARGS, "macro_run cannot execute macro_* actions")
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "macro_run cannot execute macro_* actions",
+                    )
                 if run_action not in TOOL_ACTIONS["session"]:
                     return make_error(
                         MCPError.ACTION_NOT_FOUND,
@@ -7772,7 +8812,9 @@ class IDAMCPServer:
                         "session_id required (or have an active session)",
                     )
                 if not self.session_mgr.session_exists(sid):
-                    return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+                    )
                 n = _bounded_int(args.get("n", 20), 20, min_value=1, max_value=200)
                 include_bookmarks = _coerce_bool(args.get("include_bookmarks"), True)
                 include_items = _coerce_bool(args.get("include_items"), False)
@@ -7783,7 +8825,8 @@ class IDAMCPServer:
                     include_items=include_items,
                 )
             return make_error(
-                MCPError.ACTION_NOT_FOUND, f"Unsupported session action: '{action}'",
+                MCPError.ACTION_NOT_FOUND,
+                f"Unsupported session action: '{action}'",
                 hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
             )
 
@@ -7792,8 +8835,11 @@ class IDAMCPServer:
             if action == "continue":
                 token = args.get("token")
                 if not token:
-                    return make_error(MCPError.INVALID_ARGS, "token required",
-                                     hint="Provide the 'token' from a previous truncated response's _continue field.")
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "token required",
+                        hint="Provide the 'token' from a previous truncated response's _continue field.",
+                    )
                 result = continue_truncated(
                     token,
                     field=args.get("field"),
@@ -7807,8 +8853,11 @@ class IDAMCPServer:
                         details={k: v for k, v in result.items() if k != "error"},
                     )
                 return result
-            return make_error(MCPError.ACTION_NOT_FOUND, f"Unsupported truncation action: '{action}'",
-                             hint="The only valid action is 'continue'.")
+            return make_error(
+                MCPError.ACTION_NOT_FOUND,
+                f"Unsupported truncation action: '{action}'",
+                hint="The only valid action is 'continue'.",
+            )
 
         if tool_name == "bookmarks":
             if not self.current_session:
@@ -7833,7 +8882,8 @@ class IDAMCPServer:
             if action == "export":
                 return self.bookmark_mgr.export(sid)
             return make_error(
-                MCPError.ACTION_NOT_FOUND, f"Unsupported bookmark action: '{action}'",
+                MCPError.ACTION_NOT_FOUND,
+                f"Unsupported bookmark action: '{action}'",
                 hint=f"Valid bookmark actions: {', '.join(TOOL_ACTIONS['bookmarks'])}",
             )
 
@@ -7887,7 +8937,9 @@ class IDAMCPServer:
             )
         return self.call_tool(tool_name, ip, **args)
 
-    def _normalize_batch_call(self, call: Any, idx: int) -> tuple[Optional[str], Any, Optional[dict]]:
+    def _normalize_batch_call(
+        self, call: Any, idx: int
+    ) -> tuple[Optional[str], Any, Optional[dict]]:
         """
         Normalize one batch entry.
         Supported forms:
@@ -7898,18 +8950,36 @@ class IDAMCPServer:
         if isinstance(call, str):
             raw = call.strip()
             if not raw:
-                return None, {}, make_error(MCPError.INVALID_ARGS, f"Call at index {idx} is empty")
+                return (
+                    None,
+                    {},
+                    make_error(MCPError.INVALID_ARGS, f"Call at index {idx} is empty"),
+                )
             if ":" in raw:
                 name, action = raw.split(":", 1)
                 name = name.strip()
                 action = action.strip()
                 if not name:
-                    return None, {}, make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing tool name")
+                    return (
+                        None,
+                        {},
+                        make_error(
+                            MCPError.INVALID_ARGS,
+                            f"Call at index {idx} missing tool name",
+                        ),
+                    )
                 call_args = {"action": action} if action else {}
                 return name, call_args, None
             return raw, {}, None
         if not isinstance(call, dict):
-            return None, {}, make_error(MCPError.INVALID_ARGS, f"Call at index {idx} must be an object or string")
+            return (
+                None,
+                {},
+                make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Call at index {idx} must be an object or string",
+                ),
+            )
 
         name = call.get("name", call.get("tool"))
         call_args = call.get("arguments", call.get("args"))
@@ -7935,13 +9005,22 @@ class IDAMCPServer:
     def _handle_batch(self, args):
         calls = args.get("calls", [])
         if not isinstance(calls, list):
-            return make_error(MCPError.INVALID_ARGS, "calls must be a list of call objects or 'tool:action' strings")
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "calls must be a list of call objects or 'tool:action' strings",
+            )
         if not calls:
-            return make_error(MCPError.BATCH_EMPTY, "No calls provided in batch",
-                             hint="Provide at least one call: batch(calls=[{name: 'tool', arguments: {...}}])")
+            return make_error(
+                MCPError.BATCH_EMPTY,
+                "No calls provided in batch",
+                hint="Provide at least one call: batch(calls=[{name: 'tool', arguments: {...}}])",
+            )
         if len(calls) > MAX_BATCH_CALLS:
-            return make_error(MCPError.BATCH_TOO_LARGE, f"Too many batch calls ({len(calls)}, max {MAX_BATCH_CALLS})",
-                             hint=f"Split into multiple batch requests of {MAX_BATCH_CALLS} or fewer calls.")
+            return make_error(
+                MCPError.BATCH_TOO_LARGE,
+                f"Too many batch calls ({len(calls)}, max {MAX_BATCH_CALLS})",
+                hint=f"Split into multiple batch requests of {MAX_BATCH_CALLS} or fewer calls.",
+            )
 
         try:
             payload_size = len(json.dumps(calls, separators=(",", ":")))
@@ -7967,30 +9046,49 @@ class IDAMCPServer:
                     break
                 continue
             elif not name:
-                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} missing name field",
-                                hint="Each batch call must have a name field specifying the tool.")
+                res = make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Call at index {idx} missing name field",
+                    hint="Each batch call must have a name field specifying the tool.",
+                )
             elif not isinstance(name, str):
-                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-string name")
+                res = make_error(
+                    MCPError.INVALID_ARGS, f"Call at index {idx} has non-string name"
+                )
             elif resolved_name == "batch":
-                res = make_error(MCPError.INVALID_ARGS, "Nested batch calls are not allowed")
+                res = make_error(
+                    MCPError.INVALID_ARGS, "Nested batch calls are not allowed"
+                )
             elif resolved_name not in TOOLS:
-                res = make_error(MCPError.INVALID_ARGS, f"Unknown tool {name} in batch call at index {idx}",
-                                hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.")
+                res = make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Unknown tool {name} in batch call at index {idx}",
+                    hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.",
+                )
             elif call_args is None:
                 call_args = {}
                 res = self._execute_tool(name, call_args)
             elif not isinstance(call_args, dict):
-                res = make_error(MCPError.INVALID_ARGS, f"Call at index {idx} has non-object arguments")
+                res = make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Call at index {idx} has non-object arguments",
+                )
             else:
                 cleaned_args, _ = self._extract_response_options(call_args)
                 res = self._execute_tool(name, cleaned_args)
                 if isinstance(cleaned_args, dict):
-                    res = self._cache_next_page(resolved_name or name, cleaned_args, res)
+                    res = self._cache_next_page(
+                        resolved_name or name, cleaned_args, res
+                    )
                     self._record_activity(resolved_name or name, cleaned_args, res)
             results.append({"index": idx, "name": name, "result": res})
             if res.get("error") and not continue_on_error:
                 break
-        errors = sum(1 for item in results if isinstance(item.get("result"), dict) and item["result"].get("error"))
+        errors = sum(
+            1
+            for item in results
+            if isinstance(item.get("result"), dict) and item["result"].get("error")
+        )
         return {
             "ok": True,
             "results": results,
@@ -7999,7 +9097,9 @@ class IDAMCPServer:
                 "total": len(results),
                 "ok": len(results) - errors,
                 "errors": errors,
-                "stopped_on_error": bool(errors and not continue_on_error and len(results) < len(calls)),
+                "stopped_on_error": bool(
+                    errors and not continue_on_error and len(results) < len(calls)
+                ),
             },
         }
 
@@ -8019,7 +9119,9 @@ class IDAMCPServer:
             desc_text = str(desc or "").strip()
             if desc_text:
                 return desc_text
-            fallback = desc if tool_mode == "full" else TOOL_DESCRIPTIONS.get(tool_name, "")
+            fallback = (
+                desc if tool_mode == "full" else TOOL_DESCRIPTIONS.get(tool_name, "")
+            )
             fallback_text = str(fallback or "").strip()
             if fallback_text:
                 return fallback_text
@@ -8036,9 +9138,16 @@ class IDAMCPServer:
             else:
                 schema = build_input_schema_ultra(t)
             schema = dict(schema) if isinstance(schema, dict) else {}
+
+            if getattr(self, "vertex_compat", False):
+                schema = sanitize_schema_for_vertex(schema)
+
             schema.setdefault("type", "object")
-            schema.setdefault("properties", {})
-            schema.setdefault("required", [])
+
+            if not getattr(self, "vertex_compat", False):
+                schema.setdefault("properties", {})
+                schema.setdefault("required", [])
+
             catalog.append(
                 {
                     "name": t,
@@ -8081,11 +9190,23 @@ class IDAMCPServer:
 
             tools = self._build_tools_list_catalog(mode)
             if tool_name_prefix:
-                tools = [t for t in tools if str(t.get("name", "")).lower().startswith(tool_name_prefix)]
+                tools = [
+                    t
+                    for t in tools
+                    if str(t.get("name", "")).lower().startswith(tool_name_prefix)
+                ]
             if tool_name_contains:
-                tools = [t for t in tools if tool_name_contains in str(t.get("name", "")).lower()]
+                tools = [
+                    t
+                    for t in tools
+                    if tool_name_contains in str(t.get("name", "")).lower()
+                ]
             if tool_category:
-                tools = [t for t in tools if str(t.get("category", "")).lower() == tool_category]
+                tools = [
+                    t
+                    for t in tools
+                    if str(t.get("category", "")).lower() == tool_category
+                ]
 
             if sort_by == "category":
                 tools = sorted(
@@ -8094,12 +9215,18 @@ class IDAMCPServer:
                     reverse=descending,
                 )
             else:
-                tools = sorted(tools, key=lambda t: str(t.get("name", "")), reverse=descending)
+                tools = sorted(
+                    tools, key=lambda t: str(t.get("name", "")), reverse=descending
+                )
 
             total = len(tools)
             if limit > 0:
                 tools_page = tools[offset : offset + limit]
-                next_offset = (offset + len(tools_page)) if (offset + len(tools_page)) < total else None
+                next_offset = (
+                    (offset + len(tools_page))
+                    if (offset + len(tools_page)) < total
+                    else None
+                )
             else:
                 tools_page = tools[offset:]
                 next_offset = None
@@ -8125,7 +9252,9 @@ class IDAMCPServer:
                 response_opts = self._default_response_options()
             if resolved_tn == "batch":
                 if not isinstance(call_args, dict):
-                    res = make_error(MCPError.INVALID_ARGS, "arguments must be an object")
+                    res = make_error(
+                        MCPError.INVALID_ARGS, "arguments must be an object"
+                    )
                 else:
                     res = self._handle_batch(call_args)
             else:
@@ -8144,7 +9273,12 @@ class IDAMCPServer:
                 "jsonrpc": "2.0",
                 "id": rid,
                 "result": {
-                    "content": [{"type": "text", "text": self._serialize_payload(res, response_opts)}],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": self._serialize_payload(res, response_opts),
+                        }
+                    ],
                     "isError": is_error,
                 },
             }
@@ -8175,7 +9309,10 @@ class IDAMCPServer:
                     req = json.loads(line.decode("utf-8"))
                     resp = self.handle_request(req)
                     if resp:
-                        output = (json.dumps(resp, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+                        output = (
+                            json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
+                            + "\n"
+                        ).encode("utf-8")
                         rs.write(output)
                         rs.flush()
                 except Exception:
