@@ -497,6 +497,8 @@ Environment defaults:
 - `IDA_MCP_TRUNCATE_TOKENS`
 - `IDA_MCP_WIKI_DEFAULT_LIMIT`
 - `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`1` default full verbose tool metadata)
+- `IDA_MCP_POINTER_NOTE_INTERVAL` (seconds; default `900`)
+- `IDA_MCP_POINTER_NOTE_MIN_SIGNAL` (usage signal threshold before showing note; default `3`)
 
 `tools/list` mode behavior:
 - `ultra`: tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
