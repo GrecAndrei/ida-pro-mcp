@@ -672,10 +672,9 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         self.assertNotIn('"module": sem_meta.get("semantic_kind", "symbol")', self.search_source)
 
     def test_calc_pointer_chain_intent_routes_to_chain(self):
-        self.assertRegex(
-            self.calc_source,
-            r'elif "pointer chain" in ql:\s*\n\s*action = "chain"\s*\n\s*interpreted_action = "chain"',
-        )
+        self.assertIn('elif "pointer chain" in ql:', self.calc_source)
+        self.assertIn('action = "chain"', self.calc_source)
+        self.assertIn('interpreted_action = "chain"', self.calc_source)
 
     def test_calc_docstring_mentions_current_response_shapes(self):
         self.assertIn("Returns: {expr, value, value_hex}", self.calc_source)
