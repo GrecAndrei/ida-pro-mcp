@@ -650,5 +650,113 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertEqual(c.get("disasm_style"), "annotated")
 
 
+class TestGadgetSemanticIndex(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="gadget-semantic-test-")
+        self.server = IDAMCPServer()
+        self.server.session_mgr = SessionManager(self.tmpdir)
+        binary_path = os.path.join(self.tmpdir, "sample.bin")
+        with open(binary_path, "wb") as f:
+            f.write(b"\x90" * 16)
+        self.session = self.server.session_mgr.create_session(binary_path=binary_path)
+        Path(self.session.idb_path).write_bytes(b"")
+        self.server.current_session = self.session
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_semantic_find_builds_index_and_returns_ranked_matches(self):
+        def fake_call_tool(tool_name, idb_path, **kwargs):
+            self.assertEqual(tool_name, "gadgets")
+            action = kwargs.get("action")
+            if action == "rop":
+                return {
+                    "ok": True,
+                    "action": "rop",
+                    "gadgets": [
+                        {
+                            "addr": "0x401000",
+                            "insns": 2,
+                            "gadget": "pop rax ; ret",
+                        }
+                    ],
+                }
+            if action == "stack_pivot":
+                return {
+                    "ok": True,
+                    "action": "stack_pivot",
+                    "gadgets": [
+                        {
+                            "addr": "0x402000",
+                            "insns": 2,
+                            "gadget": "xchg rsp, rax ; ret",
+                        }
+                    ],
+                }
+            return {"ok": True, "action": action, "gadgets": []}
+
+        self.server.call_tool = fake_call_tool
+        res = self.server._execute_tool(
+            "gadgets",
+            {
+                "action": "semantic_find",
+                "query": "xchg rsp",
+                "source_actions": ["rop", "stack_pivot"],
+                "source_limit": 20,
+            },
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertEqual(res.get("action"), "semantic_find")
+        self.assertGreaterEqual(res.get("count", 0), 1)
+        self.assertEqual(res["matches"][0]["source_action"], "stack_pivot")
+        self.assertIn("index_refresh", res)
+        self.assertTrue(os.path.exists(res["index"]["db_path"]))
+
+    def test_semantic_find_reuses_existing_index_without_remote_calls(self):
+        calls = {"count": 0}
+
+        def fake_call_tool(tool_name, idb_path, **kwargs):
+            calls["count"] += 1
+            action = kwargs.get("action")
+            return {
+                "ok": True,
+                "action": action,
+                "gadgets": [
+                    {"addr": "0x500000", "insns": 2, "gadget": "mov rax, rbx ; ret"}
+                ],
+            }
+
+        self.server.call_tool = fake_call_tool
+        first = self.server._execute_tool(
+            "gadgets",
+            {"action": "semantic_find", "query": "move register", "source_actions": ["rop"]},
+        )
+        self.assertTrue(first.get("ok"))
+        self.assertEqual(calls["count"], 1)
+
+        def fail_call_tool(*_args, **_kwargs):
+            raise AssertionError("semantic_find unexpectedly rebuilt the cache")
+
+        self.server.call_tool = fail_call_tool
+        second = self.server._execute_tool(
+            "gadgets",
+            {"action": "semantic_find", "query": "move register", "source_actions": ["rop"]},
+        )
+        self.assertTrue(second.get("ok"))
+        self.assertNotIn("index_refresh", second)
+
+    def test_semantic_find_rejects_invalid_source_actions(self):
+        res = self.server._execute_tool(
+            "gadgets",
+            {
+                "action": "semantic_find",
+                "query": "xchg",
+                "source_actions": ["not_real_action"],
+            },
+        )
+        self.assertTrue(res.get("error"))
+        self.assertEqual(res.get("code"), MCPError.INVALID_ARGS)
+
+
 if __name__ == "__main__":
     unittest.main()
