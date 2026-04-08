@@ -88,7 +88,7 @@ def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") ->
 @idaread
 def calc(
     action: Annotated[Literal["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
-                      "Action: eval|offset|convert|resolve|deref|chain|align"],
+                       "Action: eval|offset|convert|resolve|deref|chain|align"],
     expr: Annotated[Optional[str], "Expression to evaluate (e.g. '0x401000 + 0x100')"] = None,
     addr: Annotated[Optional[str], "Address for conversion/resolution"] = None,
     target: Annotated[Optional[str], "Target address for offset calculation"] = None,
@@ -96,6 +96,10 @@ def calc(
     type: Annotated[Optional[str], "Value type (u8/u16/u32/u64/s8/s16/s32/s64/f32/f64/ptr/bytes/string)"] = None,
     size: Annotated[Optional[int], "Size in bytes for bytes/ptr/alignment"] = None,
     offsets: Annotated[Optional[Union[str, list]], "Offset chain for pointer chasing"] = None,
+    semantic_action: Annotated[Optional[str], "Optional semantic action alias (e.g. evaluate/delta/pointer_chain)"] = None,
+    intent: Annotated[Optional[str], "Optional natural-language intent/query used for semantic inference"] = None,
+    to_va: Annotated[bool, "For resolve: treat addr/value as file offset and convert to VA"] = False,
+    from_file: Annotated[bool, "Alias for to_va"] = False,
     **kwargs
 ) -> dict:
     """
@@ -130,13 +134,16 @@ def calc(
     align - Align a value/address to a boundary
         Returns: {value, alignment, aligned_down, aligned_up}
         Example: calc(action="align", value="0x401003", size=0x10)
+
+    EXTRA:
+    - semantic_action: Optional alias/intent action override (evaluate/delta/pointer_chain/etc)
+    - intent: Optional natural-language query used for semantic action/value inference
+    - to_va/from_file: In resolve mode, treat input as file offset and map to VA
     """
     try:
         interpreted_action = None
-        if not kwargs.get("query"):
-            kwargs["query"] = kwargs.get("intent")
-        nl_query = str(kwargs.get("query") or "").strip()
-        normalized_action = _normalize_calc_action(kwargs.get("semantic_action") or action, fallback=action)
+        nl_query = str(intent or kwargs.get("query") or "").strip()
+        normalized_action = _normalize_calc_action(semantic_action or action, fallback=action)
         if normalized_action != action:
             action = normalized_action
             interpreted_action = normalized_action
@@ -392,7 +399,7 @@ def calc(
             })
 
         elif action == "resolve":
-            reverse = bool(kwargs.get("to_va") or kwargs.get("from_file"))
+            reverse = bool(to_va or from_file)
             source = addr if addr is not None else value
             if source is None and nl_query:
                 source = nl_query
