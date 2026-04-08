@@ -36,12 +36,21 @@ _CALC_ACTION_ALIASES = {
 
 
 def _semantic_tokens(text: str) -> list[str]:
+    """Extract lowercase alphanumeric semantic tokens (length >= 2)."""
     if not text:
         return []
     return [tok for tok in re.findall(r"[A-Za-z0-9_]+", text.lower()) if len(tok) >= 2]
 
 
 def _semantic_score(query: str, candidate: str) -> float:
+    """Compute semantic match score for action/symbol matching.
+
+    Heuristic weights:
+    - Exact match bonus: +120
+    - Substring bonus: +55
+    - Token overlap bonus: up to +45
+    - Sequence similarity bonus: up to +20
+    """
     if not query or not candidate:
         return 0.0
     q = query.lower().strip()
@@ -62,6 +71,10 @@ def _semantic_score(query: str, candidate: str) -> float:
 
 
 def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") -> str:
+    """Normalize calc action via exact action, alias mapping, then semantic fuzzy match.
+
+    Returns *fallback* when semantic confidence remains below 32.0.
+    """
     action = (raw_action or "").strip().lower()
     if action in _CALC_ACTIONS:
         return action
@@ -100,6 +113,7 @@ def calc(
     intent: Annotated[Optional[str], "Optional natural-language intent/query used for semantic inference"] = None,
     to_va: Annotated[bool, "For resolve: treat addr/value as file offset and convert to VA"] = False,
     from_file: Annotated[bool, "Alias for to_va"] = False,
+    deref_depth: Annotated[int, "For deref: pointer depth to follow (1 = single read)"] = 1,
     **kwargs
 ) -> dict:
     """
@@ -139,6 +153,7 @@ def calc(
     - semantic_action: Optional alias/intent action override (evaluate/delta/pointer_chain/etc)
     - intent: Optional natural-language query used for semantic action/value inference
     - to_va/from_file: In resolve mode, treat input as file offset and map to VA
+    - deref_depth: Number of pointer dereference hops when type=ptr
     """
     try:
         interpreted_action = None
@@ -162,7 +177,12 @@ def calc(
                 action = "deref"
                 interpreted_action = "deref"
 
-        def _semantic_symbol_match(text_val):
+        def _semantic_symbol_match(text_val: object) -> int:
+            """Resolve free-form symbol text to best EA using semantic scoring.
+
+            Returns a resolved EA when the best candidate score is >= 30.0;
+            otherwise returns idaapi.BADADDR.
+            """
             query_text = str(text_val or "").strip()
             if not query_text:
                 return idaapi.BADADDR
@@ -422,6 +442,8 @@ def calc(
                     "file_offset": hex(file_off),
                     "va": hex(va),
                     "segment": seg_name,
+                    "segment_start": hex(seg.start_ea) if seg else None,
+                    "segment_end": hex(seg.end_ea) if seg else None,
                     "direction": "file_offset_to_va",
                 })
             
@@ -435,6 +457,8 @@ def calc(
                 "va": hex(ea),
                 "file_offset": hex(file_off) if file_off != -1 else "not in file",
                 "segment": seg_name,
+                "segment_start": hex(seg.start_ea) if seg else None,
+                "segment_end": hex(seg.end_ea) if seg else None,
                 "direction": "va_to_file_offset",
             })
 
@@ -449,23 +473,48 @@ def calc(
                 return make_error(MCPError.INVALID_ARGS, str(e))
             val_type = type or "ptr"
             try:
-                value_out = read_typed(ea, val_type, size)
+                deref_depth = max(1, min(32, int(deref_depth)))
+            except Exception:
+                deref_depth = 1
+            try:
+                if val_type == "ptr" and deref_depth > 1:
+                    steps = []
+                    cur = ea
+                    value_out = None
+                    for depth in range(1, deref_depth + 1):
+                        value_out = read_typed(cur, val_type, size)
+                        nxt = value_out
+                        steps.append({"depth": depth, "addr": hex(cur), "value": value_out, "value_hex": hex(value_out)})
+                        cur = nxt
+                else:
+                    value_out = read_typed(ea, val_type, size)
+                    steps = None
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
             resp = {"ok": True, "addr": hex(ea), "type": val_type, "value": value_out}
             if val_type in ("u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "ptr"):
                 resp["value_hex"] = hex(value_out)
+                if isinstance(value_out, int):
+                    resp["value_dec"] = value_out
             if val_type == "bytes":
                 resp["size"] = size
             if val_type == "string":
                 resp["length"] = len(value_out) if value_out else 0
+            if steps:
+                resp["depth"] = deref_depth
+                resp["steps"] = steps
             return _finalize(resp)
 
         elif action == "chain":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             if offsets is None:
-                return make_error(MCPError.INVALID_ARGS, "offsets required")
+                if nl_query:
+                    parsed_offs = re.findall(r"[-+]?0x[0-9a-fA-F]+|[-+]?\d+", nl_query)
+                    if parsed_offs:
+                        offsets = parsed_offs
+                if offsets is None:
+                    return make_error(MCPError.INVALID_ARGS, "offsets required")
             try:
                 ea = resolve_addr(addr)
             except ValueError as e:
