@@ -4,8 +4,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import difflib
 import re
+try:
+    from .semantic_matching import normalize_action, semantic_score, semantic_tokens
+except ImportError:
+    from semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
 
 
 _SEARCH_ACTIONS = {
@@ -53,7 +56,7 @@ _SEARCH_ACTION_ALIASES = {
 }
 
 _SEARCH_INTENT_PATTERNS = [
-    (re.compile(r"^\s*(?:who\s+)?callers?\s+(?:of\s+)?(.+)$", re.IGNORECASE), "callers"),
+    (re.compile(r"^\s*(?:who\s+)?(?:callers?|calls?)\s+(?:of\s+)?(.+)$", re.IGNORECASE), "callers"),
     (re.compile(r"^\s*(?:what\s+)?callees?\s+(?:of\s+)?(.+)$", re.IGNORECASE), "callees"),
     (re.compile(r"^\s*(?:api|import)s?(?:\s+usage|\s+calls?)?\s+(?:of|for)?\s+(.+)$", re.IGNORECASE), "api"),
     (re.compile(r"^\s*(?:code\s+)?xrefs?\s+(?:to|for)\s+(.+)$", re.IGNORECASE), "code_ref"),
@@ -64,13 +67,7 @@ _SEARCH_INTENT_PATTERNS = [
 
 def _semantic_tokens(text: str) -> list[str]:
     """Extract lowercase alphanumeric tokens (length >= 2) for semantic comparisons."""
-    if not text:
-        return []
-    out = []
-    for tok in re.findall(r"[A-Za-z0-9_]+", text.lower()):
-        if len(tok) >= 2:
-            out.append(tok)
-    return out
+    return semantic_tokens(text)
 
 
 def _semantic_score(query: str, candidate: str) -> float:
@@ -82,24 +79,7 @@ def _semantic_score(query: str, candidate: str) -> float:
     - Token overlap bonus: up to +45
     - Sequence similarity bonus: up to +20
     """
-    if not query or not candidate:
-        return 0.0
-    q = query.strip().lower()
-    c = candidate.strip().lower()
-    if not q or not c:
-        return 0.0
-    score = 0.0
-    if q == c:
-        score += 120.0
-    if q in c:
-        score += 60.0
-    qt = set(_semantic_tokens(q))
-    ct = set(_semantic_tokens(c))
-    if qt and ct:
-        overlap = len(qt.intersection(ct))
-        score += (overlap / max(1, len(qt))) * 45.0
-    score += difflib.SequenceMatcher(a=q, b=c).ratio() * 20.0
-    return score
+    return semantic_score(query, candidate, substring_bonus=60.0)
 
 
 def _normalize_search_action(raw_action: Optional[str], *, fallback: str = "find") -> str:
@@ -107,26 +87,14 @@ def _normalize_search_action(raw_action: Optional[str], *, fallback: str = "find
 
     Falls back to *fallback* when semantic confidence remains low (< 35.0).
     """
-    action = (raw_action or "").strip().lower()
-    if action in _SEARCH_ACTIONS:
-        return action
-    if action in _SEARCH_ACTION_ALIASES:
-        return _SEARCH_ACTION_ALIASES[action]
-    if not action:
-        return fallback
-    best = fallback
-    best_score = 0.0
-    for cand in _SEARCH_ACTIONS:
-        score = _semantic_score(action, cand)
-        if score > best_score:
-            best = cand
-            best_score = score
-    for alias, target in _SEARCH_ACTION_ALIASES.items():
-        score = _semantic_score(action, alias)
-        if score > best_score:
-            best = target
-            best_score = score
-    return best if best_score >= 35.0 else fallback
+    return normalize_action(
+        raw_action,
+        actions=tuple(_SEARCH_ACTIONS),
+        aliases=_SEARCH_ACTION_ALIASES,
+        fallback=fallback,
+        threshold=35.0,
+        substring_bonus=60.0,
+    )
 
 
 # ============================================================================
@@ -351,18 +319,38 @@ def search(
                 return exact_ea, None, {"match": "exact_name"}
 
             matcher = compile_smart_pattern(target, case_sensitive=False)
-            ranked = []
+            prelim = []
+            max_candidates = 512
+
+            def _record_candidate(
+                *,
+                ea: int,
+                raw_name: str,
+                display_name: str,
+                kind: str,
+                module_name: Optional[str] = None,
+                exact_bonus: float = 0.0,
+            ):
+                quick_score = semantic_score(target, raw_name, substring_bonus=60.0, include_fuzzy=False)
+                if raw_name.lower() == target.lower():
+                    quick_score += exact_bonus
+                if quick_score <= 0:
+                    return
+                prelim.append((quick_score, ea, raw_name, display_name, kind, module_name))
+
             for sym_ea, sym_name in idautils.Names():
                 if not sym_name or not matcher(sym_name):
                     continue
                 is_func = bool(idaapi.get_func(sym_ea))
                 if require_function and not is_func:
                     continue
-                score = _semantic_score(target, sym_name)
-                if sym_name.lower() == target.lower():
-                    score += 40.0
-                score += min(_xref_count_limited(sym_ea, max_count=64), 64)
-                ranked.append((score, sym_ea, sym_name, "function" if is_func else "symbol"))
+                _record_candidate(
+                    ea=sym_ea,
+                    raw_name=sym_name,
+                    display_name=sym_name,
+                    kind="function" if is_func else "symbol",
+                    exact_bonus=40.0,
+                )
 
             if include_imports:
                 for mod_idx in range(ida_nalt.get_import_module_qty()):
@@ -371,20 +359,32 @@ def search(
                     def _cb(import_ea, import_name, _ordinal):
                         if not import_name or not matcher(import_name):
                             return True
-                        score = _semantic_score(target, import_name)
-                        if import_name.lower() == target.lower():
-                            score += 45.0
-                        score += min(_xref_count_limited(import_ea, max_count=64), 64)
-                        ranked.append((score, import_ea, f"{mod_name}!{import_name}", "import"))
+                        _record_candidate(
+                            ea=import_ea,
+                            raw_name=import_name,
+                            display_name=f"{mod_name}!{import_name}",
+                            kind="import",
+                            module_name=mod_name,
+                            exact_bonus=45.0,
+                        )
                         return True
 
                     ida_nalt.enum_import_names(mod_idx, _cb)
 
-            if not ranked:
+            if not prelim:
                 return idaapi.BADADDR, f"Target '{target}' not found", {}
 
+            prelim.sort(key=lambda r: (r[0], r[1]), reverse=True)
+            ranked = []
+            for _, cand_ea, raw_name, display_name, kind, module_name in prelim[:max_candidates]:
+                final_score = semantic_score(target, raw_name, substring_bonus=60.0)
+                if raw_name.lower() == target.lower():
+                    final_score += 45.0 if kind == "import" else 40.0
+                final_score += min(_xref_count_limited(cand_ea, max_count=64), 64)
+                ranked.append((final_score, cand_ea, display_name, kind, module_name))
+
             ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
-            top_score, top_ea, top_name, top_kind = ranked[0]
+            top_score, top_ea, top_name, top_kind, top_module = ranked[0]
             if require_function:
                 top_func = idaapi.get_func(top_ea)
                 if top_func:
@@ -401,9 +401,17 @@ def search(
                 "semantic_kind": top_kind,
                 "semantic_score": round(top_score, 2),
             }
+            if top_kind == "import" and top_module:
+                details["semantic_module"] = top_module
             if include_semantic_alternatives and len(ranked) > 1:
                 details["semantic_alternatives"] = [
-                    {"name": row[2], "address": hex(row[1]), "kind": row[3], "score": round(row[0], 2)}
+                    {
+                        "name": row[2],
+                        "address": hex(row[1]),
+                        "kind": row[3],
+                        "score": round(row[0], 2),
+                        **({"module": row[4]} if row[3] == "import" and row[4] else {}),
+                    }
                     for row in ranked[1:6]
                 ]
             return top_ea, None, details
@@ -575,7 +583,7 @@ def search(
             except Exception:
                 resolved_ea, sem_err, sem_meta = _resolve_semantic_target(pattern, require_function=False, include_imports=False)
                 if sem_err:
-                    return make_error(MCPError.INVALID_ARGS, "Invalid immediate value")
+                    return make_error(MCPError.INVALID_ARGS, f"Invalid immediate value: {sem_err}")
                 value = resolved_ea
                 semantic_meta = sem_meta
 
@@ -1222,11 +1230,14 @@ def search(
                 target_ea, sem_err, sem_meta = _resolve_semantic_target(pattern, require_function=False, include_imports=True)
                 if not sem_err and target_ea != idaapi.BADADDR:
                     target_name = idc.get_name(target_ea) or sem_meta.get("semantic_target") or pattern
+                    module_name = sem_meta.get("semantic_module")
+                    if not module_name and "!" in str(target_name):
+                        module_name = str(target_name).split("!", 1)[0]
                     matched_apis.append(
                         {
                             "ea": target_ea,
                             "name": target_name,
-                            "module": sem_meta.get("semantic_kind", "symbol"),
+                            "module": module_name or "unknown",
                             "score": sem_meta.get("semantic_score", 0),
                         }
                     )
