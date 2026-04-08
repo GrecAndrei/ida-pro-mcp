@@ -6427,16 +6427,10 @@ class IDAMCPServer:
             return score
 
         ranked: list[tuple[int, tuple[Any, Any, Any, Any, Any, Any]]] = []
-        max_workers = max(1, min(SEMANTIC_INDEX_MAX_WORKERS, SEMANTIC_INDEX_MAX_QUERY_WORKERS))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures: list[Future[int]] = [executor.submit(_score_row, row) for row in rows]
-            for row, fut in zip(rows, futures):
-                try:
-                    score = fut.result(timeout=max(0.1, SEMANTIC_INDEX_WAIT_SECONDS))
-                except Exception:
-                    score = _score_row(row)
-                if score >= min_score:
-                    ranked.append((score, row))
+        for row in rows:
+            score = _score_row(row)
+            if score >= min_score:
+                ranked.append((score, row))
 
         def _rank_sort_key(
             item: tuple[int, tuple[Any, Any, Any, Any, Any, Any]]
