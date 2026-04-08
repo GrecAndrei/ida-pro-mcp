@@ -4,8 +4,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import difflib
 import re
+try:
+    from .semantic_matching import normalize_action, semantic_score, semantic_tokens
+except ImportError:
+    from semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
 
 
 _CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align"}
@@ -37,9 +40,7 @@ _CALC_ACTION_ALIASES = {
 
 def _semantic_tokens(text: str) -> list[str]:
     """Extract lowercase alphanumeric semantic tokens (length >= 2)."""
-    if not text:
-        return []
-    return [tok for tok in re.findall(r"[A-Za-z0-9_]+", text.lower()) if len(tok) >= 2]
+    return semantic_tokens(text)
 
 
 def _semantic_score(query: str, candidate: str) -> float:
@@ -51,23 +52,7 @@ def _semantic_score(query: str, candidate: str) -> float:
     - Token overlap bonus: up to +45
     - Sequence similarity bonus: up to +20
     """
-    if not query or not candidate:
-        return 0.0
-    q = query.lower().strip()
-    c = candidate.lower().strip()
-    if not q or not c:
-        return 0.0
-    score = 0.0
-    if q == c:
-        score += 120.0
-    if q in c:
-        score += 55.0
-    qt = set(_semantic_tokens(q))
-    ct = set(_semantic_tokens(c))
-    if qt and ct:
-        score += (len(qt.intersection(ct)) / max(1, len(qt))) * 45.0
-    score += difflib.SequenceMatcher(a=q, b=c).ratio() * 20.0
-    return score
+    return semantic_score(query, candidate, substring_bonus=55.0)
 
 
 def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") -> str:
@@ -75,26 +60,14 @@ def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") ->
 
     Returns *fallback* when semantic confidence remains below 32.0.
     """
-    action = (raw_action or "").strip().lower()
-    if action in _CALC_ACTIONS:
-        return action
-    if action in _CALC_ACTION_ALIASES:
-        return _CALC_ACTION_ALIASES[action]
-    if not action:
-        return fallback
-    best = fallback
-    best_score = 0.0
-    for cand in _CALC_ACTIONS:
-        score = _semantic_score(action, cand)
-        if score > best_score:
-            best = cand
-            best_score = score
-    for alias, mapped in _CALC_ACTION_ALIASES.items():
-        score = _semantic_score(action, alias)
-        if score > best_score:
-            best = mapped
-            best_score = score
-    return best if best_score >= 32.0 else fallback
+    return normalize_action(
+        raw_action,
+        actions=tuple(_CALC_ACTIONS),
+        aliases=_CALC_ACTION_ALIASES,
+        fallback=fallback,
+        threshold=32.0,
+        substring_bonus=55.0,
+    )
 
 
 @tool
@@ -122,23 +95,23 @@ def calc(
     ACTIONS:
 
     eval - Evaluate a mathematical expression involving addresses
-        Returns: {expr, result_hex, result_int}
+        Returns: {expr, value, value_hex}
         Example: calc(action="eval", expr="0x401000 + 0x50")
 
     offset - Calculate the distance between two addresses
-        Returns: {from, to, delta_hex, delta_int}
+        Returns: {from, to, delta_hex, delta_int, abs_delta}
         Example: calc(action="offset", addr="0x401000", target="0x401050")
 
     convert - Convert a value to Hex, Dec, Bin, and ASCII
-        Returns: {hex, dec, bin, ascii, bitmask}
+        Returns: {hex, dec, bin, oct, ascii, bitmask, signed32/64, unsigned32/64}
         Example: calc(action="convert", value="1234")
 
     resolve - Convert between Virtual Address (VA) and File Offset
-        Returns: {va, file_offset, segment}
+        Returns: {va, file_offset, segment, segment_start, segment_end, direction}
         Example: calc(action="resolve", addr="0x401000")
 
     deref - Read a typed value from memory
-        Returns: {addr, type, value, value_hex?}
+        Returns: {addr, type, value, value_hex?, value_dec?, depth?, steps?}
         Example: calc(action="deref", addr="0x401000", type="u32")
 
     chain - Follow a pointer chain with offsets
@@ -173,7 +146,10 @@ def calc(
             elif ql.startswith("resolve ") or "file offset" in ql or "virtual address" in ql:
                 action = "resolve"
                 interpreted_action = "resolve"
-            elif ql.startswith("deref ") or ql.startswith("read ") or "pointer chain" in ql:
+            elif "pointer chain" in ql:
+                action = "chain"
+                interpreted_action = "chain"
+            elif ql.startswith("deref ") or ql.startswith("read "):
                 action = "deref"
                 interpreted_action = "deref"
 
