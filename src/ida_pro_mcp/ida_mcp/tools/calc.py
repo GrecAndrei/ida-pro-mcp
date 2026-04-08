@@ -4,6 +4,85 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import difflib
+import re
+
+
+_CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align"}
+_CALC_ACTION_ALIASES = {
+    "evaluate": "eval",
+    "expression": "eval",
+    "compute": "eval",
+    "distance": "offset",
+    "delta": "offset",
+    "diff": "offset",
+    "difference": "offset",
+    "cast": "convert",
+    "conversion": "convert",
+    "translate": "convert",
+    "va": "resolve",
+    "rva": "resolve",
+    "foa": "resolve",
+    "map": "resolve",
+    "pointer": "deref",
+    "read": "deref",
+    "readmem": "deref",
+    "pointer_chain": "chain",
+    "chase": "chain",
+    "walk": "chain",
+    "alignment": "align",
+    "round": "align",
+}
+
+
+def _semantic_tokens(text: str) -> list[str]:
+    if not text:
+        return []
+    return [tok for tok in re.findall(r"[A-Za-z0-9_]+", text.lower()) if len(tok) >= 2]
+
+
+def _semantic_score(query: str, candidate: str) -> float:
+    if not query or not candidate:
+        return 0.0
+    q = query.lower().strip()
+    c = candidate.lower().strip()
+    if not q or not c:
+        return 0.0
+    score = 0.0
+    if q == c:
+        score += 120.0
+    if q in c:
+        score += 55.0
+    qt = set(_semantic_tokens(q))
+    ct = set(_semantic_tokens(c))
+    if qt and ct:
+        score += (len(qt.intersection(ct)) / max(1, len(qt))) * 45.0
+    score += difflib.SequenceMatcher(a=q, b=c).ratio() * 20.0
+    return score
+
+
+def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") -> str:
+    action = (raw_action or "").strip().lower()
+    if action in _CALC_ACTIONS:
+        return action
+    if action in _CALC_ACTION_ALIASES:
+        return _CALC_ACTION_ALIASES[action]
+    if not action:
+        return fallback
+    best = fallback
+    best_score = 0.0
+    for cand in _CALC_ACTIONS:
+        score = _semantic_score(action, cand)
+        if score > best_score:
+            best = cand
+            best_score = score
+    for alias, mapped in _CALC_ACTION_ALIASES.items():
+        score = _semantic_score(action, alias)
+        if score > best_score:
+            best = mapped
+            best_score = score
+    return best if best_score >= 32.0 else fallback
+
 
 @tool
 @idaread
@@ -53,6 +132,35 @@ def calc(
         Example: calc(action="align", value="0x401003", size=0x10)
     """
     try:
+        interpreted_action = None
+        if not kwargs.get("query"):
+            kwargs["query"] = kwargs.get("intent")
+        normalized_action = _normalize_calc_action(kwargs.get("semantic_action") or action, fallback=action)
+        if normalized_action != action:
+            action = normalized_action
+            interpreted_action = normalized_action
+
+        def _semantic_symbol_match(text_val):
+            query_text = str(text_val or "").strip()
+            if not query_text:
+                return idaapi.BADADDR
+            matcher = compile_smart_pattern(query_text, case_sensitive=False)
+            best = (0.0, idaapi.BADADDR)
+            for ea, name in idautils.Names():
+                if not name or not matcher(name):
+                    continue
+                score = _semantic_score(query_text, name)
+                if name.lower() == query_text.lower():
+                    score += 40.0
+                if score > best[0]:
+                    best = (score, ea)
+            return best[1] if best[1] != idaapi.BADADDR and best[0] >= 30.0 else idaapi.BADADDR
+
+        def _finalize(resp: dict):
+            if interpreted_action:
+                resp["interpreted_action"] = interpreted_action
+            return resp
+
         def resolve_int(val):
             if val is None:
                 raise ValueError("value required")
@@ -65,6 +173,9 @@ def calc(
                     ea = idc.get_name_ea_simple(val)
                     if ea != idaapi.BADADDR:
                         return ea
+                    sem_ea = _semantic_symbol_match(val)
+                    if sem_ea != idaapi.BADADDR:
+                        return sem_ea
             raise ValueError(f"Invalid value: {val}")
 
         def resolve_addr(val):
@@ -77,6 +188,9 @@ def calc(
                     ea = idc.get_name_ea_simple(val)
                     if ea != idaapi.BADADDR:
                         return ea
+                    sem_ea = _semantic_symbol_match(val)
+                    if sem_ea != idaapi.BADADDR:
+                        return sem_ea
             raise ValueError(f"Invalid address: {val}")
 
         def ptr_size():
