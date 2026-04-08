@@ -161,6 +161,11 @@ SEMANTIC_GADGET_SOURCE_ACTIONS = (
 SEMANTIC_INDEX_SOURCE_LIMIT = max(
     50, int(os.environ.get("IDA_MCP_SEMANTIC_INDEX_SOURCE_LIMIT", "3000"))
 )
+SEMANTIC_SCORE_SUBSTRING_MATCH = 48
+SEMANTIC_SCORE_PATTERN_MATCH = 120
+SEMANTIC_SCORE_PER_TOKEN = 12
+# Keep thread fan-out bounded to avoid oversubscribing host CPU for ranking.
+SEMANTIC_INDEX_MAX_QUERY_WORKERS = 8
 
 
 def log_rpc(msg):
@@ -6115,11 +6120,13 @@ class IDAMCPServer:
                 )
             return make_error(MCPError.IDA_CRASHED, str(e))
 
-    def _semantic_index_db_path(self, sid: str) -> str:
-        artifact_dir = self.session_mgr.get_session_artifact_dir(sid, create=True)
+    def _semantic_index_db_path(self, session_id: str) -> str:
+        """Return the per-session SQLite path used for semantic gadget indexing."""
+        artifact_dir = self.session_mgr.get_session_artifact_dir(session_id, create=True)
         return os.path.join(artifact_dir, SEMANTIC_INDEX_DB_NAME)
 
     def _semantic_index_fingerprint(self, session: Session) -> str:
+        """Build a stable content/version fingerprint used to validate cached indexes."""
         hasher = hashlib.sha256()
         hasher.update(struct.pack(">I", SEMANTIC_INDEX_VERSION))
         for path in (session.idb_path, session.binary_path):
@@ -6135,6 +6142,7 @@ class IDAMCPServer:
         return hasher.hexdigest()
 
     def _semantic_index_connect(self, db_path: str) -> sqlite3.Connection:
+        """Open a tuned SQLite connection for semantic gadget index reads/writes."""
         conn = sqlite3.connect(db_path, timeout=max(1.0, SEMANTIC_INDEX_WAIT_SECONDS))
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -6143,6 +6151,7 @@ class IDAMCPServer:
         return conn
 
     def _semantic_index_ensure_schema(self, conn: sqlite3.Connection) -> None:
+        """Create semantic index schema objects if they do not exist yet."""
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS meta (
@@ -6164,10 +6173,12 @@ class IDAMCPServer:
         )
 
     def _semantic_index_meta(self, conn: sqlite3.Connection) -> dict[str, str]:
+        """Read semantic index metadata as a flat key/value map."""
         rows = conn.execute("SELECT key, value FROM meta").fetchall()
         return {str(k): str(v) for k, v in rows}
 
     def _semantic_index_put_meta(self, conn: sqlite3.Connection, meta: dict[str, Any]) -> None:
+        """Replace semantic index metadata with the supplied values."""
         conn.execute("DELETE FROM meta")
         conn.executemany(
             "INSERT INTO meta(key, value) VALUES(?, ?)",
@@ -6177,6 +6188,7 @@ class IDAMCPServer:
     def _semantic_extract_gadget_rows(
         self, action: str, payload: Any
     ) -> list[tuple[str, int, str]]:
+        """Extract normalized (addr, insns, gadget text) rows from gadget tool payloads."""
         rows: list[tuple[str, int, str]] = []
         if not isinstance(payload, dict):
             return rows
@@ -6222,6 +6234,7 @@ class IDAMCPServer:
         source_limit: int,
         max_insns: int,
     ) -> dict[str, Any]:
+        """Rebuild and persist the semantic gadget index for a session."""
         db_path = self._semantic_index_db_path(session.session_id)
         fingerprint = self._semantic_index_fingerprint(session)
         indexed_rows: list[tuple[str, str, int, str, str, str, bytes]] = []
@@ -6305,6 +6318,7 @@ class IDAMCPServer:
         }
 
     def _handle_gadgets_semantic_find(self, args: dict) -> dict:
+        """Handle gadgets(action='semantic_find') using a cached per-session index."""
         query = str(args.get("query") or "").strip()
         if not query:
             return make_error(MCPError.INVALID_ARGS, "query required")
@@ -6401,16 +6415,19 @@ class IDAMCPServer:
             norm_text = str(row[4] or "")
             score = 0
             if query_lower in norm_text:
-                score += 48
+                score += SEMANTIC_SCORE_SUBSTRING_MATCH
             if matcher(norm_text):
-                score += 120
+                score += SEMANTIC_SCORE_PATTERN_MATCH
             token_blob = str(row[5] or "")
             if token_blob:
-                score += len(query_tokens.intersection(set(token_blob.split(",")))) * 12
+                score += (
+                    len(query_tokens.intersection(set(token_blob.split(","))))
+                    * SEMANTIC_SCORE_PER_TOKEN
+                )
             return score
 
         ranked: list[tuple[int, tuple[Any, Any, Any, Any, Any, Any]]] = []
-        max_workers = max(1, min(SEMANTIC_INDEX_MAX_WORKERS, 8))
+        max_workers = max(1, min(SEMANTIC_INDEX_MAX_WORKERS, SEMANTIC_INDEX_MAX_QUERY_WORKERS))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures: list[Future[int]] = [executor.submit(_score_row, row) for row in rows]
             for row, fut in zip(rows, futures):
@@ -6421,7 +6438,15 @@ class IDAMCPServer:
                 if score >= min_score:
                     ranked.append((score, row))
 
-        ranked.sort(key=lambda item: (-item[0], str(item[1][0]), str(item[1][1])))
+        def _rank_sort_key(
+            item: tuple[int, tuple[Any, Any, Any, Any, Any, Any]]
+        ) -> tuple[int, str, str]:
+            score, row = item
+            source_action = str(row[0] or "")
+            addr = str(row[1] or "")
+            return (-score, source_action, addr)
+
+        ranked.sort(key=_rank_sort_key)
         total = len(ranked)
         page = ranked[offset : offset + limit]
         matches = [

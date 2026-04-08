@@ -700,7 +700,7 @@ class TestGadgetSemanticIndex(unittest.TestCase):
             "gadgets",
             {
                 "action": "semantic_find",
-                "query": "stack pivot exchange register",
+                "query": "xchg rsp",
                 "source_actions": ["rop", "stack_pivot"],
                 "source_limit": 20,
             },
