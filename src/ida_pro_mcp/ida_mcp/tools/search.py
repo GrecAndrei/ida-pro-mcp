@@ -63,6 +63,7 @@ _SEARCH_INTENT_PATTERNS = [
 
 
 def _semantic_tokens(text: str) -> list[str]:
+    """Extract lowercase alphanumeric tokens (length >= 2) for semantic comparisons."""
     if not text:
         return []
     out = []
@@ -73,6 +74,14 @@ def _semantic_tokens(text: str) -> list[str]:
 
 
 def _semantic_score(query: str, candidate: str) -> float:
+    """Score semantic similarity (higher is better) using exact/substring/token/fuzzy signals.
+
+    Heuristic weights:
+    - Exact match bonus: +120
+    - Substring bonus: +60
+    - Token overlap bonus: up to +45
+    - Sequence similarity bonus: up to +20
+    """
     if not query or not candidate:
         return 0.0
     q = query.strip().lower()
@@ -94,6 +103,10 @@ def _semantic_score(query: str, candidate: str) -> float:
 
 
 def _normalize_search_action(raw_action: Optional[str], *, fallback: str = "find") -> str:
+    """Normalize action through exact match, alias map, then fuzzy semantic lookup.
+
+    Falls back to *fallback* when semantic confidence remains low (< 35.0).
+    """
     action = (raw_action or "").strip().lower()
     if action in _SEARCH_ACTIONS:
         return action
@@ -136,6 +149,9 @@ def search(
     include_items: Annotated[bool, "Include structured item arrays in output (default: false for context efficiency)"] = False,
     include_breakdown: Annotated[bool, "Include per-type breakdown fields for multi-source actions"] = False,
     semantic_action: Annotated[Optional[str], "Optional semantic action alias (e.g. 'xrefs', 'pseudocode', 'imports')"] = None,
+    intent: Annotated[Optional[str], "Optional natural-language query alias for pattern"] = None,
+    semantic_min_score: Annotated[float, "Minimum semantic score threshold for semantic target resolution (0-200)"] = 0.0,
+    include_semantic_alternatives: Annotated[bool, "Include semantic alternatives in semantic target resolution"] = False,
     **kwargs
 ) -> dict:
     """
@@ -221,6 +237,9 @@ def search(
 
     EXTRA:
     - semantic_action: Optional alias/intent action override (e.g. "xrefs", "imports", "pseudocode")
+    - intent: Optional natural-language alias for query text
+    - semantic_min_score: Optional threshold to reduce weak semantic target matches
+    - include_semantic_alternatives: Return alternative semantic target candidates
     """
     try:
         interpreted_action = None
@@ -229,6 +248,13 @@ def search(
         # Support both pattern and query for compatibility
         if not pattern and query:
             pattern = query
+        if not pattern and intent:
+            pattern = intent
+        try:
+            semantic_min_score = float(semantic_min_score)
+        except Exception:
+            semantic_min_score = 0.0
+        semantic_min_score = max(0.0, min(200.0, semantic_min_score))
 
         # Semantic/alias action normalization.
         requested_action = str(action)
@@ -248,7 +274,7 @@ def search(
                     interpreted_pattern = extracted
                     pattern = extracted
                     break
-         
+
         # Some actions don't need pattern parameter
         pattern_not_required = ["vulnerable", "constants"]
         if not pattern and action not in pattern_not_required:
@@ -301,6 +327,13 @@ def search(
             return count
 
         def _resolve_semantic_target(raw_target: Optional[str], *, require_function: bool = False, include_imports: bool = False):
+            """
+            Resolve a target address/name using exact and semantic matching.
+
+            Returns:
+                tuple[int, Optional[str], dict]:
+                    (resolved_ea, error_message_or_none, metadata)
+            """
             if raw_target is None:
                 return idaapi.BADADDR, "target is required", {}
             target = str(raw_target).strip()
@@ -356,13 +389,19 @@ def search(
                 top_func = idaapi.get_func(top_ea)
                 if top_func:
                     top_ea = top_func.start_ea
+            if top_score < semantic_min_score:
+                return idaapi.BADADDR, (
+                    f"Target '{target}' best semantic match below threshold "
+                    f"({top_score:.2f} < {semantic_min_score:.2f})"
+                ), {}
+
             details = {
                 "match": "semantic",
                 "semantic_target": top_name,
                 "semantic_kind": top_kind,
                 "semantic_score": round(top_score, 2),
             }
-            if len(ranked) > 1:
+            if include_semantic_alternatives and len(ranked) > 1:
                 details["semantic_alternatives"] = [
                     {"name": row[2], "address": hex(row[1]), "kind": row[3], "score": round(row[0], 2)}
                     for row in ranked[1:6]
