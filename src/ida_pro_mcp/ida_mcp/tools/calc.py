@@ -135,10 +135,25 @@ def calc(
         interpreted_action = None
         if not kwargs.get("query"):
             kwargs["query"] = kwargs.get("intent")
+        nl_query = str(kwargs.get("query") or "").strip()
         normalized_action = _normalize_calc_action(kwargs.get("semantic_action") or action, fallback=action)
         if normalized_action != action:
             action = normalized_action
             interpreted_action = normalized_action
+        if action == "eval" and nl_query:
+            ql = nl_query.lower()
+            if ql.startswith("offset ") or "distance between" in ql or "delta between" in ql:
+                action = "offset"
+                interpreted_action = "offset"
+            elif ql.startswith("align ") or "alignment" in ql:
+                action = "align"
+                interpreted_action = "align"
+            elif ql.startswith("resolve ") or "file offset" in ql or "virtual address" in ql:
+                action = "resolve"
+                interpreted_action = "resolve"
+            elif ql.startswith("deref ") or ql.startswith("read ") or "pointer chain" in ql:
+                action = "deref"
+                interpreted_action = "deref"
 
         def _semantic_symbol_match(text_val):
             query_text = str(text_val or "").strip()
@@ -300,36 +315,45 @@ def calc(
             return eval(expression, {"__builtins__": {}}, namespace)  # noqa: S307
 
         if action == "eval":
+            if not expr and nl_query:
+                expr = nl_query
             if not expr:
                 return make_error(MCPError.INVALID_ARGS, "expr required")
             # Evaluates expressions like "0x401000 + 0x100" or "main + 0x20"
             try:
                 res = eval_expr(expr)
-                return {
+                return _finalize({
                     "ok": True,
                     "expr": expr,
                     "value": res,
                     "value_hex": hex(res) if isinstance(res, int) else str(res)
-                }
+                })
             except Exception as e:
                 return make_error(MCPError.INVALID_ARGS, f"Evaluation error: {expr} ({e})")
 
         elif action == "offset":
+            if (not addr or not target) and nl_query:
+                m = re.search(r"between\s+(.+?)\s+(?:and|to)\s+(.+)$", nl_query, re.IGNORECASE)
+                if m:
+                    addr = addr or m.group(1).strip()
+                    target = target or m.group(2).strip()
             if not addr or not target:
                 return make_error(MCPError.INVALID_ARGS, "addr and target required")
-            
-            ea1, err1 = validate_addr(addr)
-            if err1: return err1
-            ea2, err2 = validate_addr(target)
-            if err2: return err2
+            try:
+                ea1 = resolve_addr(addr)
+                ea2 = resolve_addr(target)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
             
             delta = ea2 - ea1
-            return {
+            return _finalize({
+                "ok": True,
                 "from": hex(ea1),
                 "to": hex(ea2),
                 "delta_hex": hex(delta) if delta >= 0 else f"-{hex(abs(delta))}",
-                "delta_int": delta
-            }
+                "delta_int": delta,
+                "abs_delta": abs(delta),
+            })
 
         elif action == "convert":
             if value is None:
@@ -353,38 +377,69 @@ def calc(
             except Exception:
                 ascii_val = "n/a"
                 
-            return {
+            return _finalize({
+                "ok": True,
                 "hex": hex(v),
                 "dec": v,
                 "bin": bin(v),
+                "oct": oct(v),
                 "ascii": ascii_val,
-                "bitmask": f"{v:064b}" if v >= 0 else "n/a"
-            }
+                "bitmask": f"{v:064b}" if v >= 0 else "n/a",
+                "signed32": ((v + (1 << 31)) % (1 << 32)) - (1 << 31),
+                "unsigned32": v & 0xFFFFFFFF,
+                "signed64": ((v + (1 << 63)) % (1 << 64)) - (1 << 63),
+                "unsigned64": v & 0xFFFFFFFFFFFFFFFF,
+            })
 
         elif action == "resolve":
-            if not addr:
-                return make_error(MCPError.INVALID_ARGS, "addr required")
+            reverse = bool(kwargs.get("to_va") or kwargs.get("from_file"))
+            source = addr if addr is not None else value
+            if source is None and nl_query:
+                source = nl_query
+            if source is None:
+                return make_error(MCPError.INVALID_ARGS, "addr or value required")
+            try:
+                ea = resolve_addr(source)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
 
-            ea, err = validate_addr(addr)
-            if err: return err
+            if reverse:
+                file_off = ea
+                va = ida_nalt.get_fileregion_ea(file_off)
+                if va == idaapi.BADADDR:
+                    return make_error(MCPError.INVALID_ARGS, f"File offset {hex(file_off)} not mapped")
+                seg = idaapi.getseg(va)
+                seg_name = ida_segment.get_segm_name(seg) if seg else "none"
+                return _finalize({
+                    "ok": True,
+                    "file_offset": hex(file_off),
+                    "va": hex(va),
+                    "segment": seg_name,
+                    "direction": "file_offset_to_va",
+                })
             
             # Get file offset
             file_off = ida_nalt.get_fileregion_offset(ea)
             seg = idaapi.getseg(ea)
             seg_name = ida_segment.get_segm_name(seg) if seg else "none"
             
-            return {
+            return _finalize({
+                "ok": True,
                 "va": hex(ea),
                 "file_offset": hex(file_off) if file_off != -1 else "not in file",
-                "segment": seg_name
-            }
+                "segment": seg_name,
+                "direction": "va_to_file_offset",
+            })
 
         elif action == "deref":
+            if not addr and nl_query:
+                addr = nl_query
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr)
-            if err:
-                return err
+            try:
+                ea = resolve_addr(addr)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
             val_type = type or "ptr"
             try:
                 value_out = read_typed(ea, val_type, size)
@@ -397,16 +452,17 @@ def calc(
                 resp["size"] = size
             if val_type == "string":
                 resp["length"] = len(value_out) if value_out else 0
-            return resp
+            return _finalize(resp)
 
         elif action == "chain":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             if offsets is None:
                 return make_error(MCPError.INVALID_ARGS, "offsets required")
-            ea, err = validate_addr(addr)
-            if err:
-                return err
+            try:
+                ea = resolve_addr(addr)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
             try:
                 offs = normalize_list_input(offsets)
                 if not offs:
@@ -424,7 +480,7 @@ def calc(
                     current = next_addr
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
-            return {"ok": True, "base": hex(ea), "offsets": offs_int, "steps": steps, "final": hex(current)}
+            return _finalize({"ok": True, "base": hex(ea), "offsets": offs_int, "steps": steps, "final": hex(current)})
 
         elif action == "align":
             if size is None:
@@ -453,7 +509,7 @@ def calc(
             else:
                 aligned_down = (align_val // alignment) * alignment
             aligned_up = aligned_down if align_val == aligned_down else aligned_down + alignment
-            return {
+            return _finalize({
                 "ok": True,
                 "value": align_val,
                 "alignment": alignment,
@@ -461,7 +517,7 @@ def calc(
                 "aligned_up": aligned_up,
                 "aligned_down_hex": hex(aligned_down),
                 "aligned_up_hex": hex(aligned_up),
-            }
+            })
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
