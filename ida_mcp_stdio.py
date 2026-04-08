@@ -20,6 +20,9 @@ import re
 import fnmatch
 import difflib
 import threading
+import sqlite3
+import hashlib
+import struct
 import subprocess
 import time
 import warnings
@@ -29,6 +32,7 @@ import shlex
 import copy
 import shutil
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, Future
 from functools import lru_cache
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
@@ -138,6 +142,14 @@ PROCESS_TERMINATION_TIMEOUT_SECONDS = max(
     1.0, float(os.environ.get("IDA_MCP_PROCESS_TERMINATION_TIMEOUT", "2.0"))
 )
 _RUNTIME_LEASE_RE = re.compile(r"^SID_([A-Za-z0-9]{8})\.lease\.json$")
+SEMANTIC_INDEX_VERSION = 1
+SEMANTIC_INDEX_DB_NAME = f"semantic_asm_index_v{SEMANTIC_INDEX_VERSION}.sqlite3"
+SEMANTIC_INDEX_MAX_WORKERS = max(
+    1, int(os.environ.get("IDA_MCP_SEMANTIC_INDEX_WORKERS", "2"))
+)
+SEMANTIC_INDEX_WAIT_SECONDS = max(
+    0.0, float(os.environ.get("IDA_MCP_SEMANTIC_INDEX_WAIT_SECONDS", "3.0"))
+)
 
 
 def log_rpc(msg):
@@ -853,6 +865,12 @@ class SessionManager:
         """Get path to session metadata file"""
         return os.path.join(self.session_dir, f"SID_{sid}_metadata.json")
 
+    def get_session_artifact_dir(self, sid: str, create: bool = True) -> str:
+        path = os.path.join(self.session_dir, f"SID_{sid}")
+        if create:
+            os.makedirs(path, exist_ok=True)
+        return path
+
     def _save_metadata(self, session: Session):
         """Persist session metadata to disk (atomic write)"""
         path = self._get_metadata_path(session.session_id)
@@ -1005,7 +1023,10 @@ class SessionManager:
         base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
         for f in glob.glob(base_pattern):
             try:
-                os.remove(f)
+                if os.path.isdir(f):
+                    shutil.rmtree(f, ignore_errors=False)
+                else:
+                    os.remove(f)
                 deleted = True
                 log_rpc(f"Deleted session file: {f}")
             except Exception as e:
