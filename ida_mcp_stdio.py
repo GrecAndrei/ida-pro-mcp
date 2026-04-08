@@ -150,6 +150,17 @@ SEMANTIC_INDEX_MAX_WORKERS = max(
 SEMANTIC_INDEX_WAIT_SECONDS = max(
     0.0, float(os.environ.get("IDA_MCP_SEMANTIC_INDEX_WAIT_SECONDS", "3.0"))
 )
+SEMANTIC_GADGET_SOURCE_ACTIONS = (
+    "rop",
+    "jop",
+    "cop",
+    "syscall",
+    "write_what_where",
+    "stack_pivot",
+)
+SEMANTIC_INDEX_SOURCE_LIMIT = max(
+    50, int(os.environ.get("IDA_MCP_SEMANTIC_INDEX_SOURCE_LIMIT", "3000"))
+)
 
 
 def log_rpc(msg):
@@ -1981,7 +1992,7 @@ TOOL_DESCRIPTIONS = {
     "classify": "Function purpose classification. Actions: function, binary, all_functions, library_code, wrappers, callbacks, initializers, error_handlers, hot_functions, orphans.",
     "protocol": "Network protocol analysis. Query supports regex. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine.",
     "c2_detect": "C2/malware behavior detection. Actions: indicators, persistence, evasion, injection, exfiltration, lateral_movement, privilege_escalation, capabilities, config_extract, ioc_extract.",
-    "gadgets": "ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains.",
+    "gadgets": "ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, semantic_find.",
     "annotation": "Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.",
     "xref_analysis": "Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
     "xfer_analysis": "Alias of xref_analysis (compatibility typo, not advertised in tools/list).",
@@ -2445,6 +2456,7 @@ TOOL_ACTIONS = {
         "mitigations",
         "seh_handlers",
         "pivot_chains",
+        "semantic_find",
     ],
     "annotation": [
         "auto_comment",
@@ -2947,6 +2959,18 @@ TOOL_ARG_SCHEMAS = {
         "arg_num": {"type": "integer"},
         "depth": {"type": "integer"},
         "max_hits": {"type": "integer"},
+    },
+    "gadgets": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
+        "addr": {"type": "string"},
+        "query": {"type": "string"},
+        "limit": {"type": "integer"},
+        "max_insns": {"type": "integer"},
+        "source_actions": {"type": ["array", "string"], "items": {"type": "string"}},
+        "source_limit": {"type": "integer"},
+        "rebuild_index": {"type": "boolean"},
+        "min_score": {"type": "integer"},
+        "offset": {"type": "integer"},
     },
     "wiki": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["wiki"]},
@@ -3906,6 +3930,7 @@ class IDAMCPServer:
         self.current_session = None
         self.session_runtimes = {}
         self._runtime_lock = threading.RLock()
+        self._semantic_index_lock = threading.RLock()
         self._shutdown = False
         self._shutdown_requested = False
         self._lease_thread_stop = threading.Event()
@@ -6089,6 +6114,350 @@ class IDAMCPServer:
                     },
                 )
             return make_error(MCPError.IDA_CRASHED, str(e))
+
+    def _semantic_index_db_path(self, sid: str) -> str:
+        artifact_dir = self.session_mgr.get_session_artifact_dir(sid, create=True)
+        return os.path.join(artifact_dir, SEMANTIC_INDEX_DB_NAME)
+
+    def _semantic_index_fingerprint(self, session: Session) -> str:
+        hasher = hashlib.sha256()
+        hasher.update(struct.pack(">I", SEMANTIC_INDEX_VERSION))
+        for path in (session.idb_path, session.binary_path):
+            raw = str(path or "")
+            hasher.update(raw.encode("utf-8", errors="ignore"))
+            try:
+                st = os.stat(raw)
+                hasher.update(struct.pack(">Q", int(st.st_size)))
+                hasher.update(struct.pack(">Q", int(st.st_mtime_ns)))
+            except OSError:
+                hasher.update(struct.pack(">Q", 0))
+                hasher.update(struct.pack(">Q", 0))
+        return hasher.hexdigest()
+
+    def _semantic_index_connect(self, db_path: str) -> sqlite3.Connection:
+        conn = sqlite3.connect(db_path, timeout=max(1.0, SEMANTIC_INDEX_WAIT_SECONDS))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def _semantic_index_ensure_schema(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS gadgets (
+                source_action TEXT NOT NULL,
+                addr TEXT NOT NULL,
+                insns INTEGER NOT NULL,
+                gadget TEXT NOT NULL,
+                norm_text TEXT NOT NULL,
+                tokens TEXT NOT NULL,
+                digest BLOB NOT NULL,
+                PRIMARY KEY (source_action, addr, digest)
+            );
+            CREATE INDEX IF NOT EXISTS idx_gadgets_source_action ON gadgets(source_action);
+            """
+        )
+
+    def _semantic_index_meta(self, conn: sqlite3.Connection) -> dict[str, str]:
+        rows = conn.execute("SELECT key, value FROM meta").fetchall()
+        return {str(k): str(v) for k, v in rows}
+
+    def _semantic_index_put_meta(self, conn: sqlite3.Connection, meta: dict[str, Any]) -> None:
+        conn.execute("DELETE FROM meta")
+        conn.executemany(
+            "INSERT INTO meta(key, value) VALUES(?, ?)",
+            [(str(k), str(v)) for k, v in meta.items()],
+        )
+
+    def _semantic_extract_gadget_rows(
+        self, action: str, payload: Any
+    ) -> list[tuple[str, int, str]]:
+        rows: list[tuple[str, int, str]] = []
+        if not isinstance(payload, dict):
+            return rows
+        gadgets = payload.get("gadgets")
+        if isinstance(gadgets, list):
+            for item in gadgets:
+                if not isinstance(item, dict):
+                    continue
+                addr = str(item.get("addr") or "").strip()
+                text = str(item.get("gadget") or "").strip()
+                if not addr or not text:
+                    continue
+                insns = _bounded_int(item.get("insns", 0), 0, min_value=0, max_value=4096)
+                rows.append((addr, insns, text))
+            return rows
+        if action == "pivot_chains":
+            categories = payload.get("categories")
+            if not isinstance(categories, dict):
+                return rows
+            for cat_payload in categories.values():
+                if not isinstance(cat_payload, dict):
+                    continue
+                cat_gadgets = cat_payload.get("gadgets")
+                if not isinstance(cat_gadgets, list):
+                    continue
+                for item in cat_gadgets:
+                    if not isinstance(item, dict):
+                        continue
+                    addr = str(item.get("addr") or "").strip()
+                    text = str(item.get("gadget") or "").strip()
+                    if not addr or not text:
+                        continue
+                    insns = _bounded_int(
+                        item.get("insns", 0), 0, min_value=0, max_value=4096
+                    )
+                    rows.append((addr, insns, text))
+        return rows
+
+    def _semantic_index_rebuild(
+        self,
+        session: Session,
+        source_actions: list[str],
+        source_limit: int,
+        max_insns: int,
+    ) -> dict[str, Any]:
+        db_path = self._semantic_index_db_path(session.session_id)
+        fingerprint = self._semantic_index_fingerprint(session)
+        indexed_rows: list[tuple[str, str, int, str, str, str, bytes]] = []
+        errors: list[dict[str, Any]] = []
+        for source_action in source_actions:
+            result = self.call_tool(
+                "gadgets",
+                session.idb_path,
+                action=source_action,
+                limit=source_limit,
+                max_insns=max_insns,
+            )
+            if isinstance(result, dict) and result.get("error"):
+                errors.append(
+                    {
+                        "action": source_action,
+                        "code": result.get("code"),
+                        "message": result.get("message") or result.get("error"),
+                    }
+                )
+                continue
+            for addr, insns, gadget_text in self._semantic_extract_gadget_rows(
+                source_action, result
+            ):
+                norm_text = re.sub(r"\s+", " ", gadget_text.lower()).strip()
+                tokens = sorted(set(re.findall(r"[a-z0-9_]+", norm_text)))
+                token_blob = ",".join(tokens)
+                digest = hashlib.sha256(
+                    struct.pack(">I", int(insns))
+                    + source_action.encode("utf-8", errors="ignore")
+                    + b"\0"
+                    + addr.encode("utf-8", errors="ignore")
+                    + b"\0"
+                    + gadget_text.encode("utf-8", errors="ignore")
+                ).digest()
+                indexed_rows.append(
+                    (
+                        source_action,
+                        addr,
+                        int(insns),
+                        gadget_text,
+                        norm_text,
+                        token_blob,
+                        digest,
+                    )
+                )
+
+        with self._semantic_index_lock:
+            conn = self._semantic_index_connect(db_path)
+            try:
+                self._semantic_index_ensure_schema(conn)
+                conn.execute("DELETE FROM gadgets")
+                if indexed_rows:
+                    conn.executemany(
+                        """
+                        INSERT OR IGNORE INTO gadgets(
+                            source_action, addr, insns, gadget, norm_text, tokens, digest
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        indexed_rows,
+                    )
+                self._semantic_index_put_meta(
+                    conn,
+                    {
+                        "version": str(SEMANTIC_INDEX_VERSION),
+                        "fingerprint": fingerprint,
+                        "built_at": str(int(time.time())),
+                        "source_actions": ",".join(source_actions),
+                        "source_limit": str(source_limit),
+                        "max_insns": str(max_insns),
+                    },
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return {
+            "db_path": db_path,
+            "fingerprint": fingerprint,
+            "rows_indexed": len(indexed_rows),
+            "errors": errors,
+        }
+
+    def _handle_gadgets_semantic_find(self, args: dict) -> dict:
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return make_error(MCPError.INVALID_ARGS, "query required")
+        source_actions = _parse_str_list(args.get("source_actions"))
+        if not source_actions:
+            source_actions = list(SEMANTIC_GADGET_SOURCE_ACTIONS)
+        source_actions = [str(a).strip() for a in source_actions if str(a).strip()]
+        source_actions = list(dict.fromkeys(source_actions))
+        invalid_actions = [
+            a for a in source_actions if a not in set(SEMANTIC_GADGET_SOURCE_ACTIONS)
+        ]
+        if invalid_actions:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Unsupported semantic source action(s): {', '.join(invalid_actions)}",
+                hint=(
+                    "Use source_actions from: "
+                    + ", ".join(SEMANTIC_GADGET_SOURCE_ACTIONS)
+                ),
+            )
+        limit = _bounded_int(args.get("limit", 50), 50, min_value=1, max_value=2000)
+        offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=200000)
+        min_score = _bounded_int(args.get("min_score", 1), 1, min_value=0, max_value=1000)
+        source_limit = _bounded_int(
+            args.get("source_limit", SEMANTIC_INDEX_SOURCE_LIMIT),
+            SEMANTIC_INDEX_SOURCE_LIMIT,
+            min_value=50,
+            max_value=100000,
+        )
+        max_insns = _bounded_int(args.get("max_insns", 6), 6, min_value=2, max_value=32)
+
+        idb_ref = args.get("idb")
+        if idb_ref is None and self.current_session:
+            idb_ref = self.current_session.idb_path
+        session = self._resolve_session_from_idb_ref(idb_ref)
+        if not session:
+            return make_error(
+                MCPError.SESSION_REQUIRED,
+                "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+            )
+
+        db_path = self._semantic_index_db_path(session.session_id)
+        wanted_fingerprint = self._semantic_index_fingerprint(session)
+        rebuild_index = _coerce_bool(args.get("rebuild_index"), False) or not os.path.exists(
+            db_path
+        )
+        index_meta: dict[str, str] = {}
+
+        with self._semantic_index_lock:
+            if not rebuild_index:
+                conn = self._semantic_index_connect(db_path)
+                try:
+                    self._semantic_index_ensure_schema(conn)
+                    index_meta = self._semantic_index_meta(conn)
+                finally:
+                    conn.close()
+                rebuild_index = (
+                    index_meta.get("version") != str(SEMANTIC_INDEX_VERSION)
+                    or index_meta.get("fingerprint") != wanted_fingerprint
+                    or index_meta.get("source_actions", "")
+                    != ",".join(source_actions)
+                    or index_meta.get("source_limit") != str(source_limit)
+                    or index_meta.get("max_insns") != str(max_insns)
+                )
+
+        rebuild_info = None
+        if rebuild_index:
+            rebuild_info = self._semantic_index_rebuild(
+                session, source_actions, source_limit, max_insns
+            )
+
+        with self._semantic_index_lock:
+            conn = self._semantic_index_connect(db_path)
+            try:
+                self._semantic_index_ensure_schema(conn)
+                index_meta = self._semantic_index_meta(conn)
+                placeholders = ",".join("?" for _ in source_actions)
+                rows = conn.execute(
+                    f"""
+                    SELECT source_action, addr, insns, gadget, norm_text, tokens
+                    FROM gadgets
+                    WHERE source_action IN ({placeholders})
+                    """,
+                    tuple(source_actions),
+                ).fetchall()
+            finally:
+                conn.close()
+
+        query_lower = query.lower()
+        query_tokens = set(re.findall(r"[a-z0-9_]+", query_lower))
+        matcher = compile_smart_pattern(query, case_sensitive=False)
+
+        def _score_row(row: tuple[Any, Any, Any, Any, Any, Any]) -> int:
+            norm_text = str(row[4] or "")
+            score = 0
+            if query_lower in norm_text:
+                score += 48
+            if matcher(norm_text):
+                score += 120
+            token_blob = str(row[5] or "")
+            if token_blob:
+                score += len(query_tokens.intersection(set(token_blob.split(",")))) * 12
+            return score
+
+        ranked: list[tuple[int, tuple[Any, Any, Any, Any, Any, Any]]] = []
+        max_workers = max(1, min(SEMANTIC_INDEX_MAX_WORKERS, 8))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures: list[Future[int]] = [executor.submit(_score_row, row) for row in rows]
+            for row, fut in zip(rows, futures):
+                try:
+                    score = fut.result(timeout=max(0.1, SEMANTIC_INDEX_WAIT_SECONDS))
+                except Exception:
+                    score = _score_row(row)
+                if score >= min_score:
+                    ranked.append((score, row))
+
+        ranked.sort(key=lambda item: (-item[0], str(item[1][0]), str(item[1][1])))
+        total = len(ranked)
+        page = ranked[offset : offset + limit]
+        matches = [
+            {
+                "source_action": str(row[0]),
+                "addr": str(row[1]),
+                "insns": int(row[2]),
+                "gadget": str(row[3]),
+                "score": int(score),
+            }
+            for score, row in page
+        ]
+        truncated = (offset + len(matches)) < total
+        out = {
+            "ok": True,
+            "action": "semantic_find",
+            "query": query,
+            "matches": matches,
+            "count": len(matches),
+            "total": total,
+            "offset": offset,
+            "truncated": truncated,
+            "next_offset": (offset + len(matches)) if truncated else None,
+            "index": {
+                "version": index_meta.get("version"),
+                "fingerprint": index_meta.get("fingerprint"),
+                "source_actions": source_actions,
+                "db_path": db_path,
+            },
+        }
+        if rebuild_info:
+            out["index_refresh"] = {
+                "rows_indexed": rebuild_info.get("rows_indexed", 0),
+                "errors": rebuild_info.get("errors", []),
+            }
+        return out
 
     def _resolve_wiki_root(self) -> str:
         env_path = os.environ.get("IDA_MCP_WIKI_DIR")
@@ -8910,6 +9279,9 @@ class IDAMCPServer:
 
         if tool_name == "threat_hunt":
             return self._handle_threat_hunt(args)
+
+        if tool_name == "gadgets" and str(args.get("action") or "").strip() == "semantic_find":
+            return self._handle_gadgets_semantic_find(args)
 
         legacy_threat_tools = {
             "vuln_scan",
