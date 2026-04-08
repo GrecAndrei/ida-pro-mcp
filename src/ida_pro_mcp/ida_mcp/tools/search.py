@@ -124,7 +124,7 @@ def _normalize_search_action(raw_action: Optional[str], *, fallback: str = "find
 @idaread
 def search(
     action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled"],
-                      "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
+                       "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern (for compatibility)"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -135,6 +135,7 @@ def search(
     include_context: Annotated[bool, "Include surrounding context in results"] = False,
     include_items: Annotated[bool, "Include structured item arrays in output (default: false for context efficiency)"] = False,
     include_breakdown: Annotated[bool, "Include per-type breakdown fields for multi-source actions"] = False,
+    semantic_action: Annotated[Optional[str], "Optional semantic action alias (e.g. 'xrefs', 'pseudocode', 'imports')"] = None,
     **kwargs
 ) -> dict:
     """
@@ -217,6 +218,9 @@ def search(
                 max_functions, sample, sample_max_funcs
         Returns: {matches: "addr  func_name  L42: matching line\\n...", count}
         Example: search(action="decompiled", pattern="memcpy.*sizeof")
+
+    EXTRA:
+    - semantic_action: Optional alias/intent action override (e.g. "xrefs", "imports", "pseudocode")
     """
     try:
         interpreted_action = None
@@ -228,7 +232,7 @@ def search(
 
         # Semantic/alias action normalization.
         requested_action = str(action)
-        normalized_action = _normalize_search_action(kwargs.get("semantic_action") or requested_action, fallback=requested_action)
+        normalized_action = _normalize_search_action(semantic_action or requested_action, fallback=requested_action)
         if normalized_action != requested_action:
             interpreted_action = normalized_action
             action = normalized_action
