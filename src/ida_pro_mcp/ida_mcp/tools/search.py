@@ -331,6 +331,8 @@ def search(
                 module_name: Optional[str] = None,
                 exact_bonus: float = 0.0,
             ):
+                # Phase 1 uses non-fuzzy scoring only to cheaply shortlist candidates.
+                # Fuzzy SequenceMatcher scoring is deferred to phase 2 on the shortlist.
                 quick_score = semantic_score(target, raw_name, substring_bonus=60.0, include_fuzzy=False)
                 if raw_name.lower() == target.lower():
                     quick_score += exact_bonus
@@ -426,6 +428,14 @@ def search(
                 truncated = True
                 return True
             return False
+
+        def _extract_module_name_from_qualified(qualified_name: Optional[str]) -> Optional[str]:
+            if not qualified_name:
+                return None
+            q = str(qualified_name)
+            if "!" not in q:
+                return None
+            return q.split("!", 1)[0] or None
             
         def _search_result(**extra):
             """Common return format for search results."""
@@ -1230,9 +1240,7 @@ def search(
                 target_ea, sem_err, sem_meta = _resolve_semantic_target(pattern, require_function=False, include_imports=True)
                 if not sem_err and target_ea != idaapi.BADADDR:
                     target_name = idc.get_name(target_ea) or sem_meta.get("semantic_target") or pattern
-                    module_name = sem_meta.get("semantic_module")
-                    if not module_name and "!" in str(target_name):
-                        module_name = str(target_name).split("!", 1)[0]
+                    module_name = sem_meta.get("semantic_module") or _extract_module_name_from_qualified(target_name)
                     matched_apis.append(
                         {
                             "ea": target_ea,
