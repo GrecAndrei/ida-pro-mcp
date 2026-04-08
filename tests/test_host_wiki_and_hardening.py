@@ -650,5 +650,44 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertEqual(c.get("disasm_style"), "annotated")
 
 
+class TestSearchCalcSemanticRegressions(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[1]
+        cls.search_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search.py").read_text(encoding="utf-8")
+        cls.calc_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "calc.py").read_text(encoding="utf-8")
+
+    def test_search_signature_keeps_semantic_knobs(self):
+        self.assertIn("semantic_action: Annotated[Optional[str]", self.search_source)
+        self.assertIn("intent: Annotated[Optional[str]", self.search_source)
+        self.assertIn("semantic_min_score: Annotated[float", self.search_source)
+        self.assertIn("include_semantic_alternatives: Annotated[bool", self.search_source)
+
+    def test_search_callers_intent_accepts_calls_phrase(self):
+        self.assertIn(r"(?:callers?|calls?)", self.search_source)
+
+    def test_search_semantic_errors_and_modules_are_explicit(self):
+        self.assertIn('f"Invalid immediate value: {sem_err}"', self.search_source)
+        self.assertIn('"semantic_module"', self.search_source)
+        self.assertNotIn('"module": sem_meta.get("semantic_kind", "symbol")', self.search_source)
+
+    def test_calc_pointer_chain_intent_routes_to_chain(self):
+        self.assertRegex(
+            self.calc_source,
+            r'elif "pointer chain" in ql:\s*\n\s*action = "chain"\s*\n\s*interpreted_action = "chain"',
+        )
+
+    def test_calc_docstring_mentions_current_response_shapes(self):
+        self.assertIn("Returns: {expr, value, value_hex}", self.calc_source)
+        self.assertIn("Returns: {va, file_offset, segment, segment_start, segment_end, direction}", self.calc_source)
+        self.assertIn("Returns: {addr, type, value, value_hex?, value_dec?, depth?, steps?}", self.calc_source)
+
+    def test_search_and_calc_use_shared_semantic_helpers(self):
+        self.assertIn("semantic_matching import normalize_action, semantic_score, semantic_tokens", self.search_source)
+        self.assertIn("semantic_matching import normalize_action, semantic_score, semantic_tokens", self.calc_source)
+        self.assertNotIn("\nimport difflib\n", self.search_source)
+        self.assertNotIn("\nimport difflib\n", self.calc_source)
+
+
 if __name__ == "__main__":
     unittest.main()
