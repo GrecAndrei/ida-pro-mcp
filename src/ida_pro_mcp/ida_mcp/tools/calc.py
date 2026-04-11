@@ -4,12 +4,77 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import re
+try:
+    from .semantic_matching import normalize_action, semantic_score, semantic_tokens
+except ImportError:
+    from semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
+
+
+_CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align"}
+_CALC_ACTION_ALIASES = {
+    "evaluate": "eval",
+    "expression": "eval",
+    "compute": "eval",
+    "distance": "offset",
+    "delta": "offset",
+    "diff": "offset",
+    "difference": "offset",
+    "cast": "convert",
+    "conversion": "convert",
+    "translate": "convert",
+    "va": "resolve",
+    "rva": "resolve",
+    "foa": "resolve",
+    "map": "resolve",
+    "pointer": "deref",
+    "read": "deref",
+    "readmem": "deref",
+    "pointer_chain": "chain",
+    "chase": "chain",
+    "walk": "chain",
+    "alignment": "align",
+    "round": "align",
+}
+
+
+def _semantic_tokens(text: str) -> list[str]:
+    """Extract lowercase alphanumeric semantic tokens (length >= 2)."""
+    return semantic_tokens(text)
+
+
+def _semantic_score(query: str, candidate: str) -> float:
+    """Compute semantic match score for action/symbol matching.
+
+    Heuristic weights:
+    - Exact match bonus: +120
+    - Substring bonus: +55
+    - Token overlap bonus: up to +45
+    - Sequence similarity bonus: up to +20
+    """
+    return semantic_score(query, candidate, substring_bonus=55.0)
+
+
+def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") -> str:
+    """Normalize calc action via exact action, alias mapping, then semantic fuzzy match.
+
+    Returns *fallback* when semantic confidence remains below 32.0.
+    """
+    return normalize_action(
+        raw_action,
+        actions=tuple(_CALC_ACTIONS),
+        aliases=_CALC_ACTION_ALIASES,
+        fallback=fallback,
+        threshold=32.0,
+        substring_bonus=55.0,
+    )
+
 
 @tool
 @idaread
 def calc(
     action: Annotated[Literal["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
-                      "Action: eval|offset|convert|resolve|deref|chain|align"],
+                       "Action: eval|offset|convert|resolve|deref|chain|align"],
     expr: Annotated[Optional[str], "Expression to evaluate (e.g. '0x401000 + 0x100')"] = None,
     addr: Annotated[Optional[str], "Address for conversion/resolution"] = None,
     target: Annotated[Optional[str], "Target address for offset calculation"] = None,
@@ -17,6 +82,11 @@ def calc(
     type: Annotated[Optional[str], "Value type (u8/u16/u32/u64/s8/s16/s32/s64/f32/f64/ptr/bytes/string)"] = None,
     size: Annotated[Optional[int], "Size in bytes for bytes/ptr/alignment"] = None,
     offsets: Annotated[Optional[Union[str, list]], "Offset chain for pointer chasing"] = None,
+    semantic_action: Annotated[Optional[str], "Optional semantic action alias (e.g. evaluate/delta/pointer_chain)"] = None,
+    intent: Annotated[Optional[str], "Optional natural-language intent/query used for semantic inference"] = None,
+    to_va: Annotated[bool, "For resolve: treat addr/value as file offset and convert to VA"] = False,
+    from_file: Annotated[bool, "Alias for to_va"] = False,
+    deref_depth: Annotated[int, "For deref: pointer depth to follow (1 = single read)"] = 1,
     **kwargs
 ) -> dict:
     """
@@ -25,23 +95,23 @@ def calc(
     ACTIONS:
 
     eval - Evaluate a mathematical expression involving addresses
-        Returns: {expr, result_hex, result_int}
+        Returns: {expr, value, value_hex}
         Example: calc(action="eval", expr="0x401000 + 0x50")
 
     offset - Calculate the distance between two addresses
-        Returns: {from, to, delta_hex, delta_int}
+        Returns: {from, to, delta_hex, delta_int, abs_delta}
         Example: calc(action="offset", addr="0x401000", target="0x401050")
 
     convert - Convert a value to Hex, Dec, Bin, and ASCII
-        Returns: {hex, dec, bin, ascii, bitmask}
+        Returns: {hex, dec, bin, oct, ascii, bitmask, signed32/64, unsigned32/64}
         Example: calc(action="convert", value="1234")
 
     resolve - Convert between Virtual Address (VA) and File Offset
-        Returns: {va, file_offset, segment}
+        Returns: {va, file_offset, segment, segment_start, segment_end, direction}
         Example: calc(action="resolve", addr="0x401000")
 
     deref - Read a typed value from memory
-        Returns: {addr, type, value, value_hex?}
+        Returns: {addr, type, value, value_hex?, value_dec?, depth?, steps?}
         Example: calc(action="deref", addr="0x401000", type="u32")
 
     chain - Follow a pointer chain with offsets
@@ -51,8 +121,64 @@ def calc(
     align - Align a value/address to a boundary
         Returns: {value, alignment, aligned_down, aligned_up}
         Example: calc(action="align", value="0x401003", size=0x10)
+
+    EXTRA:
+    - semantic_action: Optional alias/intent action override (evaluate/delta/pointer_chain/etc)
+    - intent: Optional natural-language query used for semantic action/value inference
+    - to_va/from_file: In resolve mode, treat input as file offset and map to VA
+    - deref_depth: Number of pointer dereference hops when type=ptr
     """
     try:
+        interpreted_action = None
+        nl_query = str(intent or kwargs.get("query") or "").strip()
+        normalized_action = _normalize_calc_action(semantic_action or action, fallback=action)
+        if normalized_action != action:
+            action = normalized_action
+            interpreted_action = normalized_action
+        if action == "eval" and nl_query:
+            ql = nl_query.lower()
+            if ql.startswith("offset ") or "distance between" in ql or "delta between" in ql:
+                action = "offset"
+                interpreted_action = "offset"
+            elif ql.startswith("align ") or "alignment" in ql:
+                action = "align"
+                interpreted_action = "align"
+            elif ql.startswith("resolve ") or "file offset" in ql or "virtual address" in ql:
+                action = "resolve"
+                interpreted_action = "resolve"
+            elif "pointer chain" in ql:
+                action = "chain"
+                interpreted_action = "chain"
+            elif ql.startswith("deref ") or ql.startswith("read "):
+                action = "deref"
+                interpreted_action = "deref"
+
+        def _semantic_symbol_match(text_val: object) -> int:
+            """Resolve free-form symbol text to best EA using semantic scoring.
+
+            Returns a resolved EA when the best candidate score is >= 30.0;
+            otherwise returns idaapi.BADADDR.
+            """
+            query_text = str(text_val or "").strip()
+            if not query_text:
+                return idaapi.BADADDR
+            matcher = compile_smart_pattern(query_text, case_sensitive=False)
+            best = (0.0, idaapi.BADADDR)
+            for ea, name in idautils.Names():
+                if not name or not matcher(name):
+                    continue
+                score = _semantic_score(query_text, name)
+                if name.lower() == query_text.lower():
+                    score += 40.0
+                if score > best[0]:
+                    best = (score, ea)
+            return best[1] if best[1] != idaapi.BADADDR and best[0] >= 30.0 else idaapi.BADADDR
+
+        def _finalize(resp: dict):
+            if interpreted_action:
+                resp["interpreted_action"] = interpreted_action
+            return resp
+
         def resolve_int(val):
             if val is None:
                 raise ValueError("value required")
@@ -65,6 +191,9 @@ def calc(
                     ea = idc.get_name_ea_simple(val)
                     if ea != idaapi.BADADDR:
                         return ea
+                    sem_ea = _semantic_symbol_match(val)
+                    if sem_ea != idaapi.BADADDR:
+                        return sem_ea
             raise ValueError(f"Invalid value: {val}")
 
         def resolve_addr(val):
@@ -77,6 +206,9 @@ def calc(
                     ea = idc.get_name_ea_simple(val)
                     if ea != idaapi.BADADDR:
                         return ea
+                    sem_ea = _semantic_symbol_match(val)
+                    if sem_ea != idaapi.BADADDR:
+                        return sem_ea
             raise ValueError(f"Invalid address: {val}")
 
         def ptr_size():
@@ -186,36 +318,45 @@ def calc(
             return eval(expression, {"__builtins__": {}}, namespace)  # noqa: S307
 
         if action == "eval":
+            if not expr and nl_query:
+                expr = nl_query
             if not expr:
                 return make_error(MCPError.INVALID_ARGS, "expr required")
             # Evaluates expressions like "0x401000 + 0x100" or "main + 0x20"
             try:
                 res = eval_expr(expr)
-                return {
+                return _finalize({
                     "ok": True,
                     "expr": expr,
                     "value": res,
                     "value_hex": hex(res) if isinstance(res, int) else str(res)
-                }
+                })
             except Exception as e:
                 return make_error(MCPError.INVALID_ARGS, f"Evaluation error: {expr} ({e})")
 
         elif action == "offset":
+            if (not addr or not target) and nl_query:
+                m = re.search(r"between\s+(.+?)\s+(?:and|to)\s+(.+)$", nl_query, re.IGNORECASE)
+                if m:
+                    addr = addr or m.group(1).strip()
+                    target = target or m.group(2).strip()
             if not addr or not target:
                 return make_error(MCPError.INVALID_ARGS, "addr and target required")
-            
-            ea1, err1 = validate_addr(addr)
-            if err1: return err1
-            ea2, err2 = validate_addr(target)
-            if err2: return err2
+            try:
+                ea1 = resolve_addr(addr)
+                ea2 = resolve_addr(target)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
             
             delta = ea2 - ea1
-            return {
+            return _finalize({
+                "ok": True,
                 "from": hex(ea1),
                 "to": hex(ea2),
                 "delta_hex": hex(delta) if delta >= 0 else f"-{hex(abs(delta))}",
-                "delta_int": delta
-            }
+                "delta_int": delta,
+                "abs_delta": abs(delta),
+            })
 
         elif action == "convert":
             if value is None:
@@ -239,60 +380,121 @@ def calc(
             except Exception:
                 ascii_val = "n/a"
                 
-            return {
+            return _finalize({
+                "ok": True,
                 "hex": hex(v),
                 "dec": v,
                 "bin": bin(v),
+                "oct": oct(v),
                 "ascii": ascii_val,
-                "bitmask": f"{v:064b}" if v >= 0 else "n/a"
-            }
+                "bitmask": f"{v:064b}" if v >= 0 else "n/a",
+                "signed32": ((v + (1 << 31)) % (1 << 32)) - (1 << 31),
+                "unsigned32": v & 0xFFFFFFFF,
+                "signed64": ((v + (1 << 63)) % (1 << 64)) - (1 << 63),
+                "unsigned64": v & 0xFFFFFFFFFFFFFFFF,
+            })
 
         elif action == "resolve":
-            if not addr:
-                return make_error(MCPError.INVALID_ARGS, "addr required")
+            reverse = bool(to_va or from_file)
+            source = addr if addr is not None else value
+            if source is None and nl_query:
+                source = nl_query
+            if source is None:
+                return make_error(MCPError.INVALID_ARGS, "addr or value required")
+            try:
+                ea = resolve_addr(source)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
 
-            ea, err = validate_addr(addr)
-            if err: return err
+            if reverse:
+                file_off = ea
+                va = ida_nalt.get_fileregion_ea(file_off)
+                if va == idaapi.BADADDR:
+                    return make_error(MCPError.INVALID_ARGS, f"File offset {hex(file_off)} not mapped")
+                seg = idaapi.getseg(va)
+                seg_name = ida_segment.get_segm_name(seg) if seg else "none"
+                return _finalize({
+                    "ok": True,
+                    "file_offset": hex(file_off),
+                    "va": hex(va),
+                    "segment": seg_name,
+                    "segment_start": hex(seg.start_ea) if seg else None,
+                    "segment_end": hex(seg.end_ea) if seg else None,
+                    "direction": "file_offset_to_va",
+                })
             
             # Get file offset
             file_off = ida_nalt.get_fileregion_offset(ea)
             seg = idaapi.getseg(ea)
             seg_name = ida_segment.get_segm_name(seg) if seg else "none"
             
-            return {
+            return _finalize({
+                "ok": True,
                 "va": hex(ea),
                 "file_offset": hex(file_off) if file_off != -1 else "not in file",
-                "segment": seg_name
-            }
+                "segment": seg_name,
+                "segment_start": hex(seg.start_ea) if seg else None,
+                "segment_end": hex(seg.end_ea) if seg else None,
+                "direction": "va_to_file_offset",
+            })
 
         elif action == "deref":
+            if not addr and nl_query:
+                addr = nl_query
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr)
-            if err:
-                return err
+            try:
+                ea = resolve_addr(addr)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
             val_type = type or "ptr"
             try:
-                value_out = read_typed(ea, val_type, size)
+                deref_depth = max(1, min(32, int(deref_depth)))
+            except Exception:
+                deref_depth = 1
+            try:
+                if val_type == "ptr" and deref_depth > 1:
+                    steps = []
+                    cur = ea
+                    value_out = None
+                    for depth in range(1, deref_depth + 1):
+                        value_out = read_typed(cur, val_type, size)
+                        nxt = value_out
+                        steps.append({"depth": depth, "addr": hex(cur), "value": value_out, "value_hex": hex(value_out)})
+                        cur = nxt
+                else:
+                    value_out = read_typed(ea, val_type, size)
+                    steps = None
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
             resp = {"ok": True, "addr": hex(ea), "type": val_type, "value": value_out}
             if val_type in ("u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "ptr"):
                 resp["value_hex"] = hex(value_out)
+                if isinstance(value_out, int):
+                    resp["value_dec"] = value_out
             if val_type == "bytes":
                 resp["size"] = size
             if val_type == "string":
                 resp["length"] = len(value_out) if value_out else 0
-            return resp
+            if steps:
+                resp["depth"] = deref_depth
+                resp["steps"] = steps
+            return _finalize(resp)
 
         elif action == "chain":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             if offsets is None:
-                return make_error(MCPError.INVALID_ARGS, "offsets required")
-            ea, err = validate_addr(addr)
-            if err:
-                return err
+                if nl_query:
+                    parsed_offs = re.findall(r"[-+]?0x[0-9a-fA-F]+|[-+]?\d+", nl_query)
+                    if parsed_offs:
+                        offsets = parsed_offs
+                if offsets is None:
+                    return make_error(MCPError.INVALID_ARGS, "offsets required")
+            try:
+                ea = resolve_addr(addr)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
             try:
                 offs = normalize_list_input(offsets)
                 if not offs:
@@ -310,7 +512,7 @@ def calc(
                     current = next_addr
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
-            return {"ok": True, "base": hex(ea), "offsets": offs_int, "steps": steps, "final": hex(current)}
+            return _finalize({"ok": True, "base": hex(ea), "offsets": offs_int, "steps": steps, "final": hex(current)})
 
         elif action == "align":
             if size is None:
@@ -339,7 +541,7 @@ def calc(
             else:
                 aligned_down = (align_val // alignment) * alignment
             aligned_up = aligned_down if align_val == aligned_down else aligned_down + alignment
-            return {
+            return _finalize({
                 "ok": True,
                 "value": align_val,
                 "alignment": alignment,
@@ -347,7 +549,7 @@ def calc(
                 "aligned_up": aligned_up,
                 "aligned_down_hex": hex(aligned_down),
                 "aligned_up_hex": hex(aligned_up),
-            }
+            })
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
