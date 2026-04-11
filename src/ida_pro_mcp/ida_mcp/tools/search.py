@@ -4,6 +4,98 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import re
+try:
+    from .semantic_matching import normalize_action, semantic_score, semantic_tokens
+except ImportError:
+    from semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
+
+
+_SEARCH_ACTIONS = {
+    "bytes", "string", "immediate", "name", "insns", "text", "operand", "comment",
+    "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees",
+    "api", "vulnerable", "constants", "decompiled",
+}
+
+_SEARCH_ACTION_ALIASES = {
+    "byte": "bytes",
+    "bytesearch": "bytes",
+    "str": "string",
+    "strings": "string",
+    "literal": "string",
+    "imm": "immediate",
+    "constant": "immediate",
+    "symbol": "name",
+    "names": "name",
+    "instruction": "insns",
+    "instructions": "insns",
+    "disasm": "text",
+    "disassembly": "text",
+    "ops": "operand",
+    "operands": "operand",
+    "comments": "comment",
+    "xref": "code_ref",
+    "xrefs": "code_ref",
+    "datarefs": "data_ref",
+    "coderefs": "code_ref",
+    "function_signature": "func_by_sig",
+    "signature": "func_by_sig",
+    "lookup": "find",
+    "discover": "find",
+    "caller": "callers",
+    "callee": "callees",
+    "imports": "api",
+    "import": "api",
+    "apis": "api",
+    "vuln": "vulnerable",
+    "vulns": "vulnerable",
+    "crypto_constants": "constants",
+    "magic_constants": "constants",
+    "pseudo": "decompiled",
+    "pseudocode": "decompiled",
+}
+
+_SEARCH_INTENT_PATTERNS = [
+    (re.compile(r"^\s*(?:who\s+)?(?:callers?|calls?)\s+(?:of\s+)?(.+)$", re.IGNORECASE), "callers"),
+    (re.compile(r"^\s*(?:what\s+)?callees?\s+(?:of\s+)?(.+)$", re.IGNORECASE), "callees"),
+    (re.compile(r"^\s*(?:api|import)s?(?:\s+usage|\s+calls?)?\s+(?:of|for)?\s+(.+)$", re.IGNORECASE), "api"),
+    (re.compile(r"^\s*(?:code\s+)?xrefs?\s+(?:to|for)\s+(.+)$", re.IGNORECASE), "code_ref"),
+    (re.compile(r"^\s*data\s+xrefs?\s+(?:to|for)\s+(.+)$", re.IGNORECASE), "data_ref"),
+    (re.compile(r"^\s*(?:decompiled|pseudocode)\s+(?:search\s+)?(?:for|of)?\s+(.+)$", re.IGNORECASE), "decompiled"),
+]
+
+
+def _semantic_tokens(text: str) -> list[str]:
+    """Extract lowercase alphanumeric tokens (length >= 2) for semantic comparisons."""
+    return semantic_tokens(text)
+
+
+def _semantic_score(query: str, candidate: str) -> float:
+    """Score semantic similarity (higher is better) using exact/substring/token/fuzzy signals.
+
+    Heuristic weights:
+    - Exact match bonus: +120
+    - Substring bonus: +60
+    - Token overlap bonus: up to +45
+    - Sequence similarity bonus: up to +20
+    """
+    return semantic_score(query, candidate, substring_bonus=60.0)
+
+
+def _normalize_search_action(raw_action: Optional[str], *, fallback: str = "find") -> str:
+    """Normalize action through exact match, alias map, then fuzzy semantic lookup.
+
+    Falls back to *fallback* when semantic confidence remains low (< 35.0).
+    """
+    return normalize_action(
+        raw_action,
+        actions=tuple(_SEARCH_ACTIONS),
+        aliases=_SEARCH_ACTION_ALIASES,
+        fallback=fallback,
+        threshold=35.0,
+        substring_bonus=60.0,
+    )
+
 
 # ============================================================================
 # 4. SEARCH - Find patterns, bytes, references
@@ -13,7 +105,7 @@ except ImportError:
 @idaread
 def search(
     action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled"],
-                      "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
+                       "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern (for compatibility)"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -24,6 +116,10 @@ def search(
     include_context: Annotated[bool, "Include surrounding context in results"] = False,
     include_items: Annotated[bool, "Include structured item arrays in output (default: false for context efficiency)"] = False,
     include_breakdown: Annotated[bool, "Include per-type breakdown fields for multi-source actions"] = False,
+    semantic_action: Annotated[Optional[str], "Optional semantic action alias (e.g. 'xrefs', 'pseudocode', 'imports')"] = None,
+    intent: Annotated[Optional[str], "Optional natural-language query alias for pattern"] = None,
+    semantic_min_score: Annotated[float, "Minimum semantic score threshold for semantic target resolution (0-200)"] = 0.0,
+    include_semantic_alternatives: Annotated[bool, "Include semantic alternatives in semantic target resolution"] = False,
     **kwargs
 ) -> dict:
     """
@@ -106,19 +202,53 @@ def search(
                 max_functions, sample, sample_max_funcs
         Returns: {matches: "addr  func_name  L42: matching line\\n...", count}
         Example: search(action="decompiled", pattern="memcpy.*sizeof")
+
+    EXTRA:
+    - semantic_action: Optional alias/intent action override (e.g. "xrefs", "imports", "pseudocode")
+    - intent: Optional natural-language alias for query text
+    - semantic_min_score: Optional threshold to reduce weak semantic target matches
+    - include_semantic_alternatives: Return alternative semantic target candidates
     """
     try:
+        interpreted_action = None
+        interpreted_pattern = None
+
         # Support both pattern and query for compatibility
         if not pattern and query:
             pattern = query
-        
+        if not pattern and intent:
+            pattern = intent
+        try:
+            semantic_min_score = float(semantic_min_score)
+        except Exception:
+            semantic_min_score = 0.0
+        semantic_min_score = max(0.0, min(200.0, semantic_min_score))
+
+        # Semantic/alias action normalization.
+        requested_action = str(action)
+        normalized_action = _normalize_search_action(semantic_action or requested_action, fallback=requested_action)
+        if normalized_action != requested_action:
+            interpreted_action = normalized_action
+            action = normalized_action
+        for intent_re, intent_action in _SEARCH_INTENT_PATTERNS:
+            if action != "find" or not pattern:
+                break
+            m = intent_re.match(pattern)
+            if m:
+                extracted = (m.group(1) or "").strip()
+                if extracted:
+                    action = intent_action
+                    interpreted_action = intent_action
+                    interpreted_pattern = extracted
+                    pattern = extracted
+                    break
+
         # Some actions don't need pattern parameter
         pattern_not_required = ["vulnerable", "constants"]
         if not pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query parameter required")
             
         import ida_search
-        import fnmatch
         import re as re_module
 
         MAX_LIMIT = 500
@@ -164,6 +294,130 @@ def search(
                     break
             return count
 
+        def _resolve_semantic_target(raw_target: Optional[str], *, require_function: bool = False, include_imports: bool = False):
+            """
+            Resolve a target address/name using exact and semantic matching.
+
+            Returns:
+                tuple[int, Optional[str], dict]:
+                    (resolved_ea, error_message_or_none, metadata)
+            """
+            if raw_target is None:
+                return idaapi.BADADDR, "target is required", {}
+            target = str(raw_target).strip()
+            if not target:
+                return idaapi.BADADDR, "target is required", {}
+            ea, err = validate_addr(target)
+            if not err and ea != idaapi.BADADDR:
+                if require_function and not idaapi.get_func(ea):
+                    return idaapi.BADADDR, f"No function at {hex(ea)}", {}
+                return ea, None, {"match": "address"}
+            exact_ea = idc.get_name_ea_simple(target)
+            if exact_ea != idaapi.BADADDR:
+                if require_function and not idaapi.get_func(exact_ea):
+                    return idaapi.BADADDR, f"No function at {hex(exact_ea)}", {}
+                return exact_ea, None, {"match": "exact_name"}
+
+            matcher = compile_smart_pattern(target, case_sensitive=False)
+            prelim = []
+            max_candidates = 512
+
+            def _record_candidate(
+                *,
+                ea: int,
+                raw_name: str,
+                display_name: str,
+                kind: str,
+                module_name: Optional[str] = None,
+                exact_bonus: float = 0.0,
+            ):
+                # Phase 1 uses non-fuzzy scoring only to cheaply shortlist candidates.
+                # Fuzzy SequenceMatcher scoring is deferred to phase 2 on the shortlist.
+                quick_score = semantic_score(target, raw_name, substring_bonus=60.0, include_fuzzy=False)
+                if raw_name.lower() == target.lower():
+                    quick_score += exact_bonus
+                if quick_score <= 0:
+                    return
+                prelim.append((quick_score, ea, raw_name, display_name, kind, module_name))
+
+            for sym_ea, sym_name in idautils.Names():
+                if not sym_name or not matcher(sym_name):
+                    continue
+                is_func = bool(idaapi.get_func(sym_ea))
+                if require_function and not is_func:
+                    continue
+                _record_candidate(
+                    ea=sym_ea,
+                    raw_name=sym_name,
+                    display_name=sym_name,
+                    kind="function" if is_func else "symbol",
+                    exact_bonus=40.0,
+                )
+
+            if include_imports:
+                for mod_idx in range(ida_nalt.get_import_module_qty()):
+                    mod_name = ida_nalt.get_import_module_name(mod_idx) or f"mod_{mod_idx}"
+
+                    def _cb(import_ea, import_name, _ordinal):
+                        if not import_name or not matcher(import_name):
+                            return True
+                        _record_candidate(
+                            ea=import_ea,
+                            raw_name=import_name,
+                            display_name=f"{mod_name}!{import_name}",
+                            kind="import",
+                            module_name=mod_name,
+                            exact_bonus=45.0,
+                        )
+                        return True
+
+                    ida_nalt.enum_import_names(mod_idx, _cb)
+
+            if not prelim:
+                return idaapi.BADADDR, f"Target '{target}' not found", {}
+
+            prelim.sort(key=lambda r: (r[0], r[1]), reverse=True)
+            ranked = []
+            for _, cand_ea, raw_name, display_name, kind, module_name in prelim[:max_candidates]:
+                final_score = semantic_score(target, raw_name, substring_bonus=60.0)
+                if raw_name.lower() == target.lower():
+                    final_score += 45.0 if kind == "import" else 40.0
+                final_score += min(_xref_count_limited(cand_ea, max_count=64), 64)
+                ranked.append((final_score, cand_ea, display_name, kind, module_name))
+
+            ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
+            top_score, top_ea, top_name, top_kind, top_module = ranked[0]
+            if require_function:
+                top_func = idaapi.get_func(top_ea)
+                if top_func:
+                    top_ea = top_func.start_ea
+            if top_score < semantic_min_score:
+                return idaapi.BADADDR, (
+                    f"Target '{target}' best semantic match below threshold "
+                    f"({top_score:.2f} < {semantic_min_score:.2f})"
+                ), {}
+
+            details = {
+                "match": "semantic",
+                "semantic_target": top_name,
+                "semantic_kind": top_kind,
+                "semantic_score": round(top_score, 2),
+            }
+            if top_kind == "import" and top_module:
+                details["semantic_module"] = top_module
+            if include_semantic_alternatives and len(ranked) > 1:
+                details["semantic_alternatives"] = [
+                    {
+                        "name": row[2],
+                        "address": hex(row[1]),
+                        "kind": row[3],
+                        "score": round(row[0], 2),
+                        **({"module": row[4]} if row[3] == "import" and row[4] else {}),
+                    }
+                    for row in ranked[1:6]
+                ]
+            return top_ea, None, details
+
         def maybe_add(line):
             nonlocal matches_seen, truncated
             matches_seen += 1
@@ -174,10 +428,23 @@ def search(
                 truncated = True
                 return True
             return False
+
+        def _extract_module_name_from_qualified(qualified_name: Optional[str]) -> Optional[str]:
+            if not qualified_name:
+                return None
+            q = str(qualified_name)
+            if "!" not in q:
+                return None
+            return q.split("!", 1)[0] or None
             
         def _search_result(**extra):
             """Common return format for search results."""
-            return {"ok": True, "matches": "\n".join(results), "offset": offset, "count": len(results), "total": matches_seen, "truncated": truncated, **extra}
+            response = {"ok": True, "matches": "\n".join(results), "offset": offset, "count": len(results), "total": matches_seen, "truncated": truncated, **extra}
+            if interpreted_action:
+                response["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                response["interpreted_query"] = interpreted_pattern
+            return response
 
         range_start = None
         range_end = None
@@ -320,10 +587,15 @@ def search(
             return _search_result(pattern=pattern)
         
         elif action == "immediate":
-            try: 
+            semantic_meta = {}
+            try:
                 value = int(pattern, 0)
             except Exception:
-                return make_error(MCPError.INVALID_ARGS, "Invalid immediate value")
+                resolved_ea, sem_err, sem_meta = _resolve_semantic_target(pattern, require_function=False, include_imports=False)
+                if sem_err:
+                    return make_error(MCPError.INVALID_ARGS, f"Invalid immediate value: {sem_err}")
+                value = resolved_ea
+                semantic_meta = sem_meta
 
             import ida_ua
             segments = seg_list if seg_list is not None else list(idautils.Segments())
@@ -351,7 +623,7 @@ def search(
                         break
                 if truncated:
                     break
-            return _search_result(value=hex(value))
+            return _search_result(value=hex(value), **semantic_meta)
         
         elif action == "name":
             _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
@@ -508,11 +780,9 @@ def search(
             return _search_result(pattern=pattern)
 
         elif action == "data_ref":
-            target_ea, error = validate_addr(pattern)
+            target_ea, error, sem_meta = _resolve_semantic_target(pattern, require_function=False, include_imports=True)
             if error:
-                target_ea = idc.get_name_ea_simple(pattern)
-                if target_ea == idaapi.BADADDR:
-                    return make_error(MCPError.INVALID_ARGS, f"Target '{pattern}' not found")
+                return make_error(MCPError.INVALID_ARGS, error)
 
             for xref in idautils.XrefsTo(target_ea, 0):
                 if truncated:
@@ -525,14 +795,12 @@ def search(
                             line += f"  {from_name}"
                     if maybe_add(line):
                         break
-            return _search_result(target=pattern)
+            return _search_result(target=pattern, target_addr=hex(target_ea), **sem_meta)
         
         elif action == "code_ref":
-            target_ea, error = validate_addr(pattern)
+            target_ea, error, sem_meta = _resolve_semantic_target(pattern, require_function=False, include_imports=True)
             if error:
-                target_ea = idc.get_name_ea_simple(pattern)
-                if target_ea == idaapi.BADADDR:
-                    return make_error(MCPError.INVALID_ARGS, f"Target '{pattern}' not found")
+                return make_error(MCPError.INVALID_ARGS, error)
 
             for xref in idautils.XrefsTo(target_ea, 0):
                 if truncated:
@@ -545,7 +813,7 @@ def search(
                         line += f"  {ida_lines.tag_remove(idc.generate_disasm_line(xref.frm, 0))}"
                     if maybe_add(line):
                         break
-            return _search_result(target=pattern)
+            return _search_result(target=pattern, target_addr=hex(target_ea), **sem_meta)
         
         elif action == "regex":
             try:
@@ -583,9 +851,29 @@ def search(
             return _search_result(pattern=pattern)
             
         elif action == "func_by_sig":
-            # Parse signature criteria
+            # Parse signature criteria (supports semantic/natural-language style).
             criteria = pattern.lower()
-            
+            filter_matcher = compile_smart_pattern(pattern, case_sensitive=False)
+            size_rules = []
+            call_pattern = None
+            args_rule = None
+
+            for m in re_module.finditer(r"size\s*[:=]\s*([<>]?)(\d+)(?:\s*-\s*(\d+))?", criteria):
+                op, val1, val2 = m.groups()
+                size_rules.append((op or "=", int(val1), int(val2) if val2 else None))
+            for m in re_module.finditer(r"(?:larger|greater|bigger)\s+than\s+(\d+)", criteria):
+                size_rules.append((">", int(m.group(1)), None))
+            for m in re_module.finditer(r"(?:smaller|less)\s+than\s+(\d+)", criteria):
+                size_rules.append(("<", int(m.group(1)), None))
+
+            m_calls = re_module.search(r"(?:calls?|invoke(?:s|d)?|callee)\s*[:=]?\s*([^\s,;]+)", criteria)
+            if m_calls:
+                call_pattern = m_calls.group(1).strip()
+
+            m_args = re_module.search(r"(?:args?|arguments?|params?)\s*[:=]?\s*(\d+)\s*(\+|or\s+more)?", criteria)
+            if m_args:
+                args_rule = (int(m_args.group(1)), bool(m_args.group(2)))
+
             for ea in idautils.Functions():
                 if truncated:
                     break
@@ -600,64 +888,54 @@ def search(
                 reason = []
                 
                 # Size filter: size:>100, size:<50, size:100-500
-                if "size:" in criteria:
-                    import re as r
-                    m = r.search(r'size:([<>]?)(\d+)(?:-(\d+))?', criteria)
-                    if m:
-                        op, val1, val2 = m.groups()
-                        val1 = int(val1)
-                        if op == '>':
-                            if size > val1:
-                                matched = True
-                                reason.append(f"size={size}>{val1}")
-                        elif op == '<':
-                            if size < val1:
-                                matched = True
-                                reason.append(f"size={size}<{val1}")
-                        elif val2:
-                            val2 = int(val2)
-                            if val1 <= size <= val2:
-                                matched = True
-                                reason.append(f"size={size} in [{val1},{val2}]")
-                        else:
-                            if size == val1:
-                                matched = True
-                                reason.append(f"size={size}")
+                if size_rules:
+                    size_ok = False
+                    for op, val1, val2 in size_rules:
+                        if op == ">" and size > val1:
+                            size_ok = True
+                            reason.append(f"size={size}>{val1}")
+                        elif op == "<" and size < val1:
+                            size_ok = True
+                            reason.append(f"size={size}<{val1}")
+                        elif val2 is not None and val1 <= size <= val2:
+                            size_ok = True
+                            reason.append(f"size={size} in [{val1},{val2}]")
+                        elif op in ("", "=") and val2 is None and size == val1:
+                            size_ok = True
+                            reason.append(f"size={size}")
+                    matched = matched or size_ok
                 
                 # Calls filter: calls:malloc, calls:*alloc*
-                if "calls:" in criteria:
-                    import re as r
-                    m = r.search(r'calls:(\S+)', criteria)
-                    if m:
-                        call_pat = m.group(1)
-                        # Check callees
-                        for xref in idautils.XrefsFrom(ea):
-                            if xref.type in [17, 18, 19, 20, 21]:  # Call types
-                                callee_name = idc.get_name(xref.to) or ""
-                                if fnmatch.fnmatch(callee_name.lower(), call_pat):
-                                    matched = True
-                                    reason.append(f"calls:{callee_name}")
-                                    break
+                if call_pattern:
+                    call_matcher = compile_smart_pattern(call_pattern, case_sensitive=False)
+                    for xref in idautils.XrefsFrom(ea):
+                        if xref.type in [17, 18, 19, 20, 21]:  # Call types
+                            callee_name = idc.get_name(xref.to) or ""
+                            if call_matcher(callee_name):
+                                matched = True
+                                reason.append(f"calls:{callee_name}")
+                                break
                 
                 # Args filter: args:3+, args:0
-                if "args:" in criteria:
-                    import re as r
-                    m = r.search(r'args:(\d+)(\+)?', criteria)
-                    if m:
-                        arg_count, plus = m.groups()
-                        arg_count = int(arg_count)
-                        # Try to get prototype
-                        tif = ida_typeinf.tinfo_t()
-                        if ida_nalt.get_tinfo(tif, ea):
-                            func_data = ida_typeinf.func_type_data_t()
-                            if tif.get_func_details(func_data):
-                                actual_args = func_data.size()
-                                if plus and actual_args >= arg_count:
-                                    matched = True
-                                    reason.append(f"args={actual_args}>={arg_count}")
-                                elif not plus and actual_args == arg_count:
-                                    matched = True
-                                    reason.append(f"args={actual_args}")
+                if args_rule:
+                    arg_count, plus = args_rule
+                    # Try to get prototype
+                    tif = ida_typeinf.tinfo_t()
+                    if ida_nalt.get_tinfo(tif, ea):
+                        func_data = ida_typeinf.func_type_data_t()
+                        if tif.get_func_details(func_data):
+                            actual_args = func_data.size()
+                            if plus and actual_args >= arg_count:
+                                matched = True
+                                reason.append(f"args={actual_args}>={arg_count}")
+                            elif not plus and actual_args == arg_count:
+                                matched = True
+                                reason.append(f"args={actual_args}")
+
+                # Generic semantic fallback on function name when no explicit criteria matched.
+                if not (size_rules or call_pattern or args_rule) and filter_matcher(name):
+                    matched = True
+                    reason.append("semantic:name")
                 
                 if matched:
                     if maybe_add(f"{hex(ea)}  {name}  size={size}  {', '.join(reason)}"):
@@ -771,6 +1049,10 @@ def search(
                 "total": total,
                 "truncated": is_truncated,
             }
+            if interpreted_action:
+                result["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                result["interpreted_query"] = interpreted_pattern
             if include_items:
                 result["items"] = [
                     {"type": row["type"], "address": row["address"], "score": row["score"], "text": row["line"]}
@@ -793,11 +1075,9 @@ def search(
         
         elif action == "callers":
             # Find all functions that call the target
-            target_ea, error = validate_addr(pattern)
+            target_ea, error, sem_meta = _resolve_semantic_target(pattern, require_function=True, include_imports=False)
             if error:
-                target_ea = idc.get_name_ea_simple(pattern)
-                if target_ea == idaapi.BADADDR:
-                    return make_error(MCPError.INVALID_ARGS, f"Target '{pattern}' not found")
+                return make_error(MCPError.INVALID_ARGS, error)
             
             func = idaapi.get_func(target_ea)
             if not func:
@@ -846,6 +1126,11 @@ def search(
                 "offset": offset,
                 "truncated": is_truncated,
             }
+            if interpreted_action:
+                result["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                result["interpreted_query"] = interpreted_pattern
+            result.update(sem_meta)
             if include_items:
                 result["items"] = [
                     {
@@ -860,11 +1145,9 @@ def search(
         
         elif action == "callees":
             # Find all functions called by the target
-            target_ea, error = validate_addr(pattern)
+            target_ea, error, sem_meta = _resolve_semantic_target(pattern, require_function=True, include_imports=False)
             if error:
-                target_ea = idc.get_name_ea_simple(pattern)
-                if target_ea == idaapi.BADADDR:
-                    return make_error(MCPError.INVALID_ARGS, f"Target '{pattern}' not found")
+                return make_error(MCPError.INVALID_ARGS, error)
             
             func = idaapi.get_func(target_ea)
             if not func:
@@ -914,6 +1197,11 @@ def search(
                 "offset": offset,
                 "truncated": is_truncated,
             }
+            if interpreted_action:
+                result["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                result["interpreted_query"] = interpreted_pattern
+            result.update(sem_meta)
             if include_items:
                 result["items"] = [
                     {
@@ -928,28 +1216,44 @@ def search(
         
         elif action == "api":
             # Find all uses of an API/import function
-            import fnmatch
-
-            pattern_lower = pattern.lower()
+            matcher = compile_smart_pattern(pattern, case_sensitive=False)
             matched_apis = []
 
             for i in range(ida_nalt.get_import_module_qty()):
                 mod_name = ida_nalt.get_import_module_name(i) or f"mod_{i}"
 
                 def cb(ea, name, ordinal):
-                    if name and (pattern_lower == name.lower() or fnmatch.fnmatch(name.lower(), pattern_lower)):
-                        matched_apis.append({"ea": ea, "name": name, "module": mod_name})
+                    if name and matcher(name):
+                        matched_apis.append(
+                            {
+                                "ea": ea,
+                                "name": name,
+                                "module": mod_name,
+                                "score": _semantic_score(pattern, name) + min(_xref_count_limited(ea, 64), 64),
+                            }
+                        )
                     return True
 
                 ida_nalt.enum_import_names(i, cb)
 
             if not matched_apis:
-                target_ea = idc.get_name_ea_simple(pattern)
-                if target_ea != idaapi.BADADDR:
-                    matched_apis.append({"ea": target_ea, "name": pattern, "module": "symbol"})
+                target_ea, sem_err, sem_meta = _resolve_semantic_target(pattern, require_function=False, include_imports=True)
+                if not sem_err and target_ea != idaapi.BADADDR:
+                    target_name = idc.get_name(target_ea) or sem_meta.get("semantic_target") or pattern
+                    module_name = sem_meta.get("semantic_module") or _extract_module_name_from_qualified(target_name)
+                    matched_apis.append(
+                        {
+                            "ea": target_ea,
+                            "name": target_name,
+                            "module": module_name or "unknown",
+                            "score": sem_meta.get("semantic_score", 0),
+                        }
+                    )
 
             if not matched_apis:
                 return make_error(MCPError.NO_RESULTS, f"API {pattern} not found")
+
+            matched_apis.sort(key=lambda r: (r.get("score", 0), r["ea"]), reverse=True)
 
             usage_rows = []
             for api_row in matched_apis:
@@ -1000,6 +1304,10 @@ def search(
                 "offset": offset,
                 "truncated": is_truncated,
             }
+            if interpreted_action:
+                result["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                result["interpreted_query"] = interpreted_pattern
             if include_items:
                 result["items"] = [
                     {
@@ -1019,6 +1327,7 @@ def search(
         
         elif action == "vulnerable":
             # Find potentially vulnerable patterns
+            vuln_matcher = compile_smart_pattern(pattern, case_sensitive=False) if pattern else None
             DANGEROUS_FUNCS = {
                 # Format string vulnerabilities
                 "printf": "format_string",
@@ -1122,6 +1431,8 @@ def search(
                             if xref.iscode:
                                 func = idaapi.get_func(xref.frm)
                                 fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                                if vuln_matcher and not vuln_matcher(f"{vuln_type} {name} {fn_name} {mod_name}"):
+                                    continue
                                 sev = severity_rank.get(vuln_type, 1)
                                 line = f"{hex(xref.frm)}  sev={sev}  {vuln_type}  {name}  in:{fn_name}"
                                 if include_context:
@@ -1157,6 +1468,10 @@ def search(
                 "offset": offset,
                 "truncated": is_truncated,
             }
+            if interpreted_action:
+                result["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                result["interpreted_query"] = interpreted_pattern
             if include_items:
                 result["items"] = [
                     {
@@ -1171,11 +1486,14 @@ def search(
                 ]
             if include_breakdown:
                 result["type_totals"] = by_type
+            if pattern:
+                result["query"] = pattern
             return result
         
         elif action == "constants":
             # Find crypto/magic constants
             import ida_ua
+            const_matcher = compile_smart_pattern(pattern, case_sensitive=False) if pattern else None
             
             KNOWN_CONSTANTS = {
                 # MD5 initialization constants
@@ -1264,6 +1582,8 @@ def search(
                                 continue
                             func = idaapi.get_func(curr)
                             fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                            if const_matcher and not const_matcher(f"{const_name} {hex(op.value)} {fn_name}"):
+                                continue
                             line = f"{hex(curr)}  {hex(op.value)}  {const_name}  in:{fn_name}"
                             if include_context:
                                 line += f"  {_clip(ida_lines.tag_remove(idc.generate_disasm_line(curr, 0)))}"
@@ -1295,6 +1615,10 @@ def search(
                 "offset": offset,
                 "truncated": is_truncated,
             }
+            if interpreted_action:
+                result["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                result["interpreted_query"] = interpreted_pattern
             if include_items:
                 result["items"] = [
                     {
@@ -1305,6 +1629,8 @@ def search(
                     }
                     for r in page
                 ]
+            if pattern:
+                result["query"] = pattern
             return result
 
         elif action == "decompiled":
@@ -1433,6 +1759,10 @@ def search(
                 "timeout_ms": timeout_ms,
                 "timed_out": timed_out,
             }
+            if interpreted_action:
+                result["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                result["interpreted_query"] = interpreted_pattern
             if scope_func:
                 result["scope"] = hex(scope_func.start_ea)
             if scan_truncated or timed_out:
