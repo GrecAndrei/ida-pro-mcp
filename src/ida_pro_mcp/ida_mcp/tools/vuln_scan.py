@@ -69,6 +69,32 @@ _INFO_LEAK_FUNCS = [
     "NSLog", "Log", "WriteFile", "send",
 ]
 
+_DANGEROUS_FLOW_FUNCS = sorted(
+    {
+        *_BUFFER_OVERFLOW_FUNCS,
+        *_FORMAT_STRING_FUNCS,
+        *_COMMAND_INJECTION_FUNCS,
+        "fopen",
+        "open",
+        "CreateFile",
+        "CreateFileA",
+        "CreateFileW",
+    }
+)
+
+_DANGEROUS_FLOW_HIGH_IMPACT = {
+    "system",
+    "popen",
+    "execve",
+    "createprocess",
+    "createprocessa",
+    "createprocessw",
+    "strcpy",
+    "strcat",
+    "sprintf",
+    "gets",
+}
+
 _CWE_MAP = {
     "buffer_overflow":    ("CWE-120", "critical", "Buffer Copy without Checking Size of Input"),
     "format_string":      ("CWE-134", "high",     "Use of Externally-Controlled Format String"),
@@ -80,6 +106,7 @@ _CWE_MAP = {
     "info_leak":          ("CWE-200", "medium",   "Exposure of Sensitive Information"),
     "auth_bypass":        ("CWE-287", "high",     "Improper Authentication"),
     "hardcoded_creds":    ("CWE-798", "high",     "Use of Hard-coded Credentials"),
+    "dangerous_flow":     ("CWE-20",  "high",     "Improper Input Validation in Dangerous Sink Flow"),
     "osv_known_vuln":     ("CWE-937", "high",     "Using Components with Known Vulnerabilities"),
 }
 
@@ -142,6 +169,7 @@ _SINK_TOKEN_BY_TYPE = {
     "info_leak": {"printf", "syslog", "send", "writefile", "outputdebugstring"},
     "auth_bypass": {"strcmp", "strncmp", "memcmp", "wcscmp"},
     "hardcoded_creds": {"password", "passwd", "token", "apikey", "secret"},
+    "dangerous_flow": {"strcpy", "strcat", "sprintf", "system", "popen", "exec", "createprocess", "open", "fopen"},
     "osv_known_vuln": {"dependency", "package", "version", "component"},
 }
 
@@ -1478,6 +1506,130 @@ def _scan_hardcoded_creds(addr, limit, include_context):
     return findings
 
 
+def _collect_function_call_map(func_start_ea, max_items=1200):
+    """Collect normalized callee names for direct call instructions in a function."""
+    rows = []
+    count = 0
+    for item in idautils.FuncItems(func_start_ea):
+        if count >= max_items:
+            break
+        count += 1
+        for xref in idautils.XrefsFrom(item, 0):
+            if xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
+                continue
+            callee_name = idc.get_name(xref.to) or ""
+            callee_norm = _normalize_api_name(callee_name)
+            if not callee_norm:
+                continue
+            rows.append((item, callee_norm))
+    return rows
+
+
+def _scan_dangerous_flow(addr, limit, include_context):
+    """
+    Deep dangerous-call analysis:
+    - Finds dangerous sink callsites across binary (or one function scope).
+    - Tags direct vs indirect user-control signals.
+    - Downgrades confidence where sanitization signals are present.
+    """
+    scope_ea, err = _resolve_scope(addr)
+    if err:
+        return []
+
+    findings = []
+    per_sink_limit = max(24, limit * 8)
+    call_map_cache = {}
+    source_tokens = tuple(sorted(_SOURCE_TOKENS))
+    sanitizer_tokens = tuple(sorted(_SANITIZER_TOKENS))
+
+    for sink in _DANGEROUS_FLOW_FUNCS:
+        refs = _find_xrefs_to_name(sink, per_sink_limit)
+        for call_ea in refs:
+            func = idaapi.get_func(call_ea)
+            if not func:
+                continue
+            if scope_ea is not None and func.start_ea != scope_ea:
+                continue
+
+            func_calls = call_map_cache.get(func.start_ea)
+            if func_calls is None:
+                func_calls = _collect_function_call_map(func.start_ea)
+                call_map_cache[func.start_ea] = func_calls
+
+            nearby_rows = _iter_disasm_window(call_ea, backward=12, forward=4)
+            nearby_lines = [line for _, line in nearby_rows if line]
+            nearby_blob = " ".join(nearby_lines)
+
+            direct_source = any(tok in nearby_blob for tok in source_tokens)
+            direct_sanitizer = any(tok in nearby_blob for tok in sanitizer_tokens)
+
+            prior_calls = [name for ea, name in func_calls if ea < call_ea]
+            has_source_in_func = any(any(tok in cname for tok in source_tokens) for cname in prior_calls)
+            has_sanitizer_in_func = any(any(tok in cname for tok in sanitizer_tokens) for cname in prior_calls)
+
+            if not direct_source:
+                # Stronger direct signal if a source-like API call is near this sink call.
+                for ea, cname in func_calls:
+                    if ea >= call_ea:
+                        continue
+                    if call_ea - ea > 0xA0:
+                        continue
+                    if any(tok in cname for tok in source_tokens):
+                        direct_source = True
+                        break
+
+            indirect_source = (not direct_source) and has_source_in_func
+            has_sanitizer = direct_sanitizer or has_sanitizer_in_func
+            sink_norm = _normalize_api_name(sink)
+            high_impact = sink_norm in _DANGEROUS_FLOW_HIGH_IMPACT
+
+            if direct_source and not has_sanitizer:
+                confidence = "high"
+                severity_override = "critical" if high_impact else "high"
+                control_path = "direct_user_control"
+            elif indirect_source and not has_sanitizer:
+                confidence = "medium"
+                severity_override = "high" if high_impact else "medium"
+                control_path = "indirect_user_control"
+            elif direct_source and has_sanitizer:
+                confidence = "medium"
+                severity_override = "medium"
+                control_path = "direct_with_sanitizer"
+            elif indirect_source and has_sanitizer:
+                confidence = "low"
+                severity_override = "low"
+                control_path = "indirect_with_sanitizer"
+            else:
+                confidence = "low"
+                severity_override = "medium" if high_impact else "low"
+                control_path = "no_user_control_signal"
+
+            desc = (
+                f"Dangerous sink {sink}() call; flow={control_path}; "
+                f"source_signal={'yes' if (direct_source or indirect_source) else 'no'}; "
+                f"sanitizer_signal={'yes' if has_sanitizer else 'no'}"
+            )
+            finding = _make_finding(
+                call_ea,
+                "dangerous_flow",
+                desc,
+                sink,
+                include_context=include_context,
+                confidence=confidence,
+                severity_override=severity_override,
+            )
+            finding["user_control"] = {
+                "direct": bool(direct_source),
+                "indirect": bool(indirect_source),
+                "sanitized_path": bool(has_sanitizer),
+                "flow_classification": control_path,
+            }
+            findings.append(finding)
+            if len(findings) >= limit * 6:
+                return findings
+    return findings
+
+
 # Scanner dispatch table
 _SCANNERS = {
     "buffer_overflow":   _scan_buffer_overflow,
@@ -1490,6 +1642,7 @@ _SCANNERS = {
     "info_leak":         _scan_info_leak,
     "auth_bypass":       _scan_auth_bypass,
     "hardcoded_creds":   _scan_hardcoded_creds,
+    "dangerous_flow":    _scan_dangerous_flow,
 }
 
 
@@ -1498,7 +1651,7 @@ _SCANNERS = {
 def vuln_scan(
     action: Annotated[Literal["buffer_overflow", "format_string", "integer_overflow",
                                "use_after_free", "command_injection", "race_condition",
-                               "null_deref", "info_leak", "auth_bypass", "hardcoded_creds",
+                               "null_deref", "info_leak", "auth_bypass", "hardcoded_creds", "dangerous_flow",
                                "scan_all", "classify", "osv_query", "intelligence_report"],
                        "Vulnerability scan action"],
     addr: Annotated[Optional[str], "Address or function to scan (default: all functions)"] = None,
@@ -1528,6 +1681,7 @@ def vuln_scan(
     - info_leak: Find sensitive data in log/output calls [CWE-200]
     - auth_bypass: Find hardcoded auth comparisons [CWE-287]
     - hardcoded_creds: Find hardcoded credentials/keys in strings [CWE-798]
+    - dangerous_flow: Deep dangerous sink analysis with direct/indirect user-control signals [CWE-20]
     - scan_all: Run all scans, aggregate by severity
     - classify: Classify a specific address by CWE (requires addr)
     - osv_query: Query OSV for known vulnerable package versions
