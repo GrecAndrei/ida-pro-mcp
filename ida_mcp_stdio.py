@@ -1935,7 +1935,7 @@ TOOL_DESCRIPTIONS = {
     "edit": "Unified write/edit hub. Quick actions: rename, comment, type, patch, create_func, bulk.",
     # Primary data access
     "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
-    "code": "Code logic, decompilation, and flow analysis. Actions: decompile, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
+    "code": "Code logic, decompilation, and flow analysis. Actions: decompile, semantic_decompile, decomp_dataflow, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
     "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.",
     "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled. Supports semantic matching, case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
@@ -1959,9 +1959,9 @@ TOOL_DESCRIPTIONS = {
     "plugins": "Legacy compatibility plugin surface. Actions: list, run. Preferred entrypoint: misc(action=plugin_list|plugin_run).",
     # Advanced analysis
     "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
-    "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions.",
+    "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions, def_use_graph.",
     "graph": "Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph.",
-    "ctree": "Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow.",
+    "ctree": "Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
     "taint": "Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice.",
     "emulate": "Static tracing and emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr.",
     "entropy": "Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
@@ -2076,6 +2076,8 @@ TOOL_ACTIONS = {
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
     "code": [
         "decompile",
+        "semantic_decompile",
+        "decomp_dataflow",
         "disasm",
         "xrefs_to",
         "xrefs_from",
@@ -2232,7 +2234,7 @@ TOOL_ACTIONS = {
         "batch_context",
         "similar",
     ],
-    "microcode": ["get", "blocks", "instructions"],
+    "microcode": ["get", "blocks", "instructions", "def_use_graph"],
     "graph": ["callgraph", "cfg", "xref_graph"],
     "ctree": [
         "get",
@@ -2242,6 +2244,8 @@ TOOL_ACTIONS = {
         "find_strings",
         "find_conditions",
         "get_logic_flow",
+        "dominance_map",
+        "var_dependency_graph",
     ],
     "taint": [
         "find_arg_usage",
@@ -3278,6 +3282,8 @@ _TOOL_ACTION_EXTRA_ALIASES = {
     },
     "code": {
         "decompile": {"decompiled", "pseudo", "pseudocode", "hl"},
+        "semantic_decompile": {"deep_decompile", "semantic_ir", "decomp_semantics", "rich_decompile"},
+        "decomp_dataflow": {"decompiler_dataflow", "decomp_slice", "var_flow"},
         "disasm": {"disassemble", "asm", "assembly", "listing"},
         "xrefs_to": {"xref_to", "refs_to", "incoming_refs"},
         "xrefs_from": {"xref_from", "refs_from", "outgoing_refs"},
@@ -3290,6 +3296,13 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         "export": {"dump", "save"},
         "find_paths": {"paths", "path_search", "reachability"},
         "strings_in_func": {"func_strings", "strings"},
+    },
+    "ctree": {
+        "dominance_map": {"dom_map", "condition_dominance", "control_dominance"},
+        "var_dependency_graph": {"var_graph", "dependency_graph", "ssa_like_graph"},
+    },
+    "microcode": {
+        "def_use_graph": {"du_graph", "defuse", "ir_dataflow"},
     },
 }
 

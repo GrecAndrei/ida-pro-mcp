@@ -57,11 +57,193 @@ except (ImportError, ValueError):
 # 21. CTREE - Hex-Rays AST/CTree Access for Deep Decompiler Analysis
 # ============================================================================
 
+
+def _ctree_collect_expr_rows(cfunc, max_items=2500):
+    rows = []
+
+    class ExprVisitor(ida_hexrays.ctree_visitor_t):
+        def __init__(self):
+            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            self.count = 0
+
+        def visit_expr(self, e):
+            if self.count >= max_items:
+                return 1
+            self.count += 1
+            try:
+                text = ida_lines.tag_remove(e.print1(None)) or ""
+            except Exception:
+                text = ""
+            rows.append((int(getattr(e, "ea", idaapi.BADADDR)), text))
+            return 0
+
+    try:
+        v = ExprVisitor()
+        v.apply_to(cfunc.body, None)
+    except Exception:
+        pass
+    return rows
+
+
+def _ctree_build_var_dependency_graph(cfunc, max_edges=1200):
+    import re
+
+    lvars = list(getattr(cfunc, "lvars", []) or [])
+    names = []
+    arg_vars = set()
+    for v in lvars:
+        n = str(getattr(v, "name", "") or "").strip()
+        if not n:
+            continue
+        names.append(n)
+        if bool(getattr(v, "is_arg_var", False)):
+            arg_vars.add(n)
+    vocab = set(names)
+    if not vocab:
+        return {
+            "nodes": [],
+            "edges": [],
+            "arg_vars": [],
+            "edge_count": 0,
+            "assignment_edges": 0,
+            "phi_like_merges": [],
+        }
+
+    word_re = re.compile(r"[A-Za-z_]\w*")
+
+    def _vars(text):
+        return [t for t in set(word_re.findall(text or "")) if t in vocab]
+
+    rows = _ctree_collect_expr_rows(cfunc, max_items=max_edges * 4)
+    edges = []
+    edge_seen = set()
+    assigns = 0
+
+    # Track potential merge targets where same var receives multiple unique sources.
+    merge_sources = {}
+
+    for ea, expr in rows:
+        text = (expr or "").strip()
+        if not text:
+            continue
+        if "=" in text and "==" not in text and "<=" not in text and ">=" not in text and "!=" not in text:
+            lhs, rhs = text.split("=", 1)
+            lhs_vars = _vars(lhs)
+            rhs_vars = _vars(rhs)
+            if lhs_vars:
+                dst = sorted(lhs_vars, key=len, reverse=True)[0]
+                merge_sources.setdefault(dst, set())
+                for src in rhs_vars:
+                    if src == dst:
+                        continue
+                    key = (src, dst, "assign")
+                    if key in edge_seen:
+                        continue
+                    edge_seen.add(key)
+                    edges.append(
+                        {
+                            "from": src,
+                            "to": dst,
+                            "kind": "assign",
+                            "ea": hex(ea) if ea != idaapi.BADADDR else None,
+                        }
+                    )
+                    merge_sources[dst].add(src)
+                    assigns += 1
+        if len(edges) >= max_edges:
+            break
+
+    phi_like = sorted(
+        (
+            {"var": var, "incoming_sources": sorted(srcs), "source_count": len(srcs)}
+            for var, srcs in merge_sources.items()
+            if len(srcs) >= 2
+        ),
+        key=lambda it: it["source_count"],
+        reverse=True,
+    )[:32]
+
+    return {
+        "nodes": sorted(vocab),
+        "edges": edges,
+        "arg_vars": sorted(arg_vars),
+        "edge_count": len(edges),
+        "assignment_edges": assigns,
+        "phi_like_merges": phi_like,
+    }
+
+
+def _ctree_build_dominance_map(cfunc, max_nodes=600):
+    """
+    Build an approximate condition-dominance map using ctree depth/order.
+    This is a decompiler-structure approximation suitable for LLM triage.
+    """
+    conditions = []
+
+    class CondVisitor(ida_hexrays.ctree_visitor_t):
+        def __init__(self):
+            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            self.count = 0
+
+        def visit_insn(self, i):
+            if self.count >= max_nodes:
+                return 1
+            if i.op in [ida_hexrays.cit_if, ida_hexrays.cit_while, ida_hexrays.cit_for, ida_hexrays.cit_do, ida_hexrays.cit_switch]:
+                self.count += 1
+                expr = "complex"
+                try:
+                    if i.op == ida_hexrays.cit_if and i.cif.expr:
+                        expr = ida_lines.tag_remove(i.cif.expr.print1(None))
+                    elif i.op == ida_hexrays.cit_while and i.cwhile.expr:
+                        expr = ida_lines.tag_remove(i.cwhile.expr.print1(None))
+                    elif i.op == ida_hexrays.cit_for and i.cfor.cond:
+                        expr = ida_lines.tag_remove(i.cfor.cond.print1(None))
+                    elif i.op == ida_hexrays.cit_do and i.cdo.expr:
+                        expr = ida_lines.tag_remove(i.cdo.expr.print1(None))
+                except Exception:
+                    pass
+                conditions.append(
+                    {
+                        "id": f"cond_{len(conditions)}",
+                        "ea": hex(int(getattr(i, "ea", idaapi.BADADDR))),
+                        "depth": int(getattr(self, "level", 0)),
+                        "op": ida_hexrays.get_ctype_name(i.op),
+                        "expr": expr,
+                    }
+                )
+            return 0
+
+    try:
+        v = CondVisitor()
+        v.apply_to(cfunc.body, None)
+    except Exception:
+        pass
+
+    edges = []
+    for i, node in enumerate(conditions):
+        # Dominator approximation: nearest earlier condition with lower depth.
+        dom = None
+        for j in range(i - 1, -1, -1):
+            cand = conditions[j]
+            if cand["depth"] < node["depth"]:
+                dom = cand
+                break
+        if dom:
+            edges.append({"from": dom["id"], "to": node["id"], "relation": "dominates"})
+
+    return {
+        "conditions": conditions,
+        "dominance_edges": edges,
+        "condition_count": len(conditions),
+        "edge_count": len(edges),
+    }
+
+
 @tool
 @idaread
 def ctree(
-    action: Annotated[Literal["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow"],
-                      "Action: get|traverse|find_calls|find_vars|find_strings|find_conditions|get_logic_flow"],
+    action: Annotated[Literal["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow", "dominance_map", "var_dependency_graph"],
+                      "Action: get|traverse|find_calls|find_vars|find_strings|find_conditions|get_logic_flow|dominance_map|var_dependency_graph"],
     addr: Annotated[str, "Address of function to analyze"],
     query: Annotated[Optional[str], "Filter pattern (regex/glob/substring/semantic auto-detected; for find_* actions)"] = None,
     depth: Annotated[int, "Max traversal depth"] = 10,
@@ -77,6 +259,8 @@ def ctree(
     - find_strings: Find string literal references in the pseudocode.
     - find_conditions: Extract logic for if/while/for statements.
     - get_logic_flow: Simplified Logic Flow (SLF) for token-efficient reasoning.
+    - dominance_map: Approximate condition-dominance hierarchy from decompiler structure.
+    - var_dependency_graph: Build variable dependency graph + phi-like merge candidates.
     """
     try:
         ea, err = validate_addr(addr, require_func=True)
@@ -271,6 +455,34 @@ def ctree(
             visitor = TraverseVisitor(depth)
             visitor.apply_to(cfunc.body, None)
             return {"ok": True, "function": func_name, "nodes": "\n".join(node_lines), "count": len(node_lines)}
+
+        elif action == "dominance_map":
+            dom = _ctree_build_dominance_map(cfunc, max_nodes=max(100, min(2000, int(depth) * 120)))
+            edge_lines = [
+                f"{e['from']} -> {e['to']}  {e['relation']}"
+                for e in dom.get("dominance_edges", [])[:500]
+            ]
+            return {
+                "ok": True,
+                "function": func_name,
+                "dominance_map": dom,
+                "edges": "\n".join(edge_lines),
+                "count": dom.get("edge_count", 0),
+            }
+
+        elif action == "var_dependency_graph":
+            dep = _ctree_build_var_dependency_graph(cfunc, max_edges=max(200, min(2400, int(depth) * 180)))
+            edge_lines = [
+                f"{e['from']} -> {e['to']}  {e['kind']}  {e.get('ea') or ''}".rstrip()
+                for e in dep.get("edges", [])[:500]
+            ]
+            return {
+                "ok": True,
+                "function": func_name,
+                "var_dependency_graph": dep,
+                "edges": "\n".join(edge_lines),
+                "count": dep.get("edge_count", 0),
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
