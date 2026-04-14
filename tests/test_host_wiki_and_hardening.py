@@ -700,6 +700,17 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         self.assertGreaterEqual(idx, 0)
         snippet = self.stdio_source[idx : idx + 700]
         self.assertNotIn('"search"', snippet)
+
+    def test_vuln_scan_actions_include_all_advanced_capabilities(self):
+        for action_name in (
+            "dangerous_flow",
+            "taint_lattice",
+            "exploit_chains",
+            "patch_simulate",
+            "memory_sync",
+            "hybrid_rank",
+        ):
+            self.assertIn(f'"{action_name}"', self.stdio_source)
 class TestGadgetSemanticIndex(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="gadget-semantic-test-")
