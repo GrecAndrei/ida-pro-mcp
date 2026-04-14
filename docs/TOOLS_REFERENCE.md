@@ -1351,6 +1351,16 @@ Notes:
 - `set_cwd`
 - `list_dir`
 - `exists`
+- `evidence_graph`
+- `knowledge_merge`
+- `confidence_model`
+- `replay_pipeline`
+- `hypothesis_tracker`
+- `temporal_reasoning`
+- `semantic_artifact_diff`
+- `ai_governance`
+- `knowledge_debt`
+- `casefile_export`
 
 ### Args
 - `_compact`: boolean — Shortcut for compact/full mode toggle.
@@ -1364,7 +1374,7 @@ Notes:
 - `_response_mode`: string (enum: compact, full) — Output mode. compact is default and reduces token usage.
 - `_response_omit`: ['array', 'string'] — Optional top-level field omission list.
 - `_response_table`: boolean — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: string (enum: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, grep, pick, head, tail, next, stats)
+- `action`: string (enum: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, evidence_graph, knowledge_merge, confidence_model, replay_pipeline, hypothesis_tracker, temporal_reasoning, semantic_artifact_diff, ai_governance, knowledge_debt, casefile_export, grep, pick, head, tail, next, stats)
 - `cursor`: string
 - `grep`: string — Grep pattern (substring by default; regex if grep_regex=true).
 - `grep_case_sensitive`: boolean
