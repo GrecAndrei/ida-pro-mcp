@@ -1956,12 +1956,19 @@ _SCANNERS = {
 @tool
 @idaread
 def vuln_scan(
-    action: Annotated[Literal["buffer_overflow", "format_string", "integer_overflow",
-                               "use_after_free", "command_injection", "race_condition",
-                               "null_deref", "info_leak", "auth_bypass", "hardcoded_creds", "dangerous_flow",
-                               "scan_all", "classify", "osv_query", "intelligence_report",
-                               "taint_lattice", "exploit_chains", "patch_simulate", "memory_sync", "hybrid_rank"],
-                       "Vulnerability scan action"],
+    action: Annotated[
+        Literal[
+            # Base vulnerability families
+            "buffer_overflow", "format_string", "integer_overflow", "use_after_free",
+            "command_injection", "race_condition", "null_deref", "info_leak",
+            "auth_bypass", "hardcoded_creds", "dangerous_flow",
+            # Control/report actions
+            "scan_all", "classify", "osv_query", "intelligence_report",
+            # Advanced analysis actions
+            "taint_lattice", "exploit_chains", "patch_simulate", "memory_sync", "hybrid_rank",
+        ],
+        "Vulnerability scan action",
+    ],
     addr: Annotated[Optional[str], "Address or function to scan (default: all functions)"] = None,
     limit: Annotated[int, "Max results"] = 50,
     offset: Annotated[int, "Result offset (skip first N findings)"] = 0,
