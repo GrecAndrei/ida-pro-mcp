@@ -656,6 +656,7 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         cls.search_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search.py").read_text(encoding="utf-8")
         cls.calc_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "calc.py").read_text(encoding="utf-8")
+        cls.stdio_source = (root / "ida_mcp_stdio.py").read_text(encoding="utf-8")
 
     def test_search_signature_keeps_semantic_knobs(self):
         self.assertIn("semantic_action: Annotated[Optional[str]", self.search_source)
@@ -686,6 +687,19 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         self.assertIn("semantic_matching import normalize_action, semantic_score, semantic_tokens", self.calc_source)
         self.assertNotIn("\nimport difflib\n", self.search_source)
         self.assertNotIn("\nimport difflib\n", self.calc_source)
+
+    def test_search_exposes_semantic_instruction_actions(self):
+        self.assertIn('"mnemonic"', self.search_source)
+        self.assertIn('"instruction"', self.search_source)
+        self.assertIn('elif action == "mnemonic":', self.search_source)
+        self.assertIn('elif action == "instruction":', self.search_source)
+
+    def test_execute_tool_legacy_bridge_does_not_capture_search(self):
+        marker = "legacy_threat_tools = {"
+        idx = self.stdio_source.find(marker)
+        self.assertGreaterEqual(idx, 0)
+        snippet = self.stdio_source[idx : idx + 700]
+        self.assertNotIn('"search"', snippet)
 class TestGadgetSemanticIndex(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="gadget-semantic-test-")
