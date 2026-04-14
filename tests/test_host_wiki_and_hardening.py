@@ -711,6 +711,13 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
             "hybrid_rank",
         ):
             self.assertIn(f'"{action_name}"', self.stdio_source)
+
+    def test_decompilation_tools_expose_advanced_action_sets(self):
+        for action_name in ("semantic_decompile", "decomp_dataflow"):
+            self.assertIn(f'"{action_name}"', self.stdio_source)
+        for action_name in ("dominance_map", "var_dependency_graph"):
+            self.assertIn(f'"{action_name}"', self.stdio_source)
+        self.assertIn('"def_use_graph"', self.stdio_source)
 class TestGadgetSemanticIndex(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="gadget-semantic-test-")
