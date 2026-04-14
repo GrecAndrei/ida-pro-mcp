@@ -88,6 +88,19 @@ _MNEMONIC_SEMANTIC_GROUPS = {
     "syscall": ("syscall", "sysenter", "svc", "ecall", "int"),
 }
 
+_FIND_MIN_INSTRUCTION_CAP = 2000
+_FIND_INSTRUCTION_LIMIT_MULTIPLIER = 40
+_MNEMONIC_MATCH_BASE_SCORE = 95.0
+_MNEMONIC_GROUP_MATCH_SCORE = 120.0
+_MNEMONIC_TOKEN_OVERLAP_WEIGHT = 14.0
+_MNEMONIC_SEMANTIC_SCORE_CAP = 160.0
+_MNEMONIC_MIN_SCORE_THRESHOLD = 82.0
+_INSTRUCTION_SEMANTIC_SCORE_CAP = 175.0
+_INSTRUCTION_TOKEN_OVERLAP_WEIGHT = 10.0
+_INSTRUCTION_MATCH_BASE_SCORE = 90.0
+_INSTRUCTION_MIN_SCORE_THRESHOLD = 90.0
+_FIND_INSTRUCTION_MIN_SCORE = 88.0
+
 
 def _semantic_tokens(text: str) -> list[str]:
     """Extract lowercase alphanumeric tokens (length >= 2) for semantic comparisons."""
@@ -751,16 +764,16 @@ def search(
                     matched = False
                     if _matcher(mnem) or _matcher(semantic_blob):
                         matched = True
-                        score += 95.0
+                        score += _MNEMONIC_MATCH_BASE_SCORE
                     if semantic_prefixes and any(mnem.startswith(pref) for pref in semantic_prefixes):
                         matched = True
-                        score += 120.0
+                        score += _MNEMONIC_GROUP_MATCH_SCORE
                     if query_tokens:
                         overlap = len(query_tokens.intersection(set(_semantic_tokens(semantic_blob))))
                         if overlap:
-                            score += overlap * 14.0
-                    score += min(_semantic_score(pattern, semantic_blob), 160.0)
-                    if matched or score >= 82.0:
+                            score += overlap * _MNEMONIC_TOKEN_OVERLAP_WEIGHT
+                    score += min(_semantic_score(pattern, semantic_blob), _MNEMONIC_SEMANTIC_SCORE_CAP)
+                    if matched or score >= _MNEMONIC_MIN_SCORE_THRESHOLD:
                         ranked.append(
                             {
                                 "address_ea": ea,
@@ -834,10 +847,12 @@ def search(
                     semantic_blob = f"{mnem} {line_clean}"
                     matched = _matcher(line_clean) or _matcher(semantic_blob)
                     overlap = len(query_tokens.intersection(set(_semantic_tokens(semantic_blob)))) if query_tokens else 0
-                    score = min(_semantic_score(pattern, semantic_blob), 175.0) + (overlap * 10.0)
+                    score = min(_semantic_score(pattern, semantic_blob), _INSTRUCTION_SEMANTIC_SCORE_CAP) + (
+                        overlap * _INSTRUCTION_TOKEN_OVERLAP_WEIGHT
+                    )
                     if matched:
-                        score += 90.0
-                    if matched or score >= 90.0:
+                        score += _INSTRUCTION_MATCH_BASE_SCORE
+                    if matched or score >= _INSTRUCTION_MIN_SCORE_THRESHOLD:
                         out_line = f"{hex(ea)}  {line_clean}"
                         if include_context:
                             func = idaapi.get_func(ea)
@@ -1217,7 +1232,10 @@ def search(
 
             # 5. Search executable instructions semantically (mnemonic + operand text).
             # Keep bounded so "find" remains responsive on very large binaries.
-            instruction_cap = max(2000, limit * 40)
+            instruction_cap = max(
+                _FIND_MIN_INSTRUCTION_CAP,
+                limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
+            )
             instruction_hits = 0
             segments = seg_list if seg_list is not None else list(idautils.Segments())
             for seg_ea in segments:
@@ -1247,7 +1265,7 @@ def search(
                     mnem = (idc.print_insn_mnem(ea) or "").lower()
                     semantic_blob = f"{mnem} {line_clean}"
                     sem = min(_semantic_score(pattern, semantic_blob), 160.0)
-                    if _find_matcher(semantic_blob) or sem >= 88.0:
+                    if _find_matcher(semantic_blob) or sem >= _FIND_INSTRUCTION_MIN_SCORE:
                         _add_find(
                             "instructions",
                             ea,
