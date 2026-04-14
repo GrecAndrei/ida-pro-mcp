@@ -7,6 +7,206 @@ except ImportError:
 DISASM_MAX_LINES = 10_000
 
 
+def _collect_expr_rows_from_cfunc(cfunc, max_items=2000):
+    rows = []
+
+    class ExprVisitor(ida_hexrays.ctree_visitor_t):
+        def __init__(self):
+            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            self.count = 0
+
+        def visit_expr(self, e):
+            if self.count >= max_items:
+                return 1
+            self.count += 1
+            try:
+                text = ida_lines.tag_remove(e.print1(None)) or ""
+            except Exception:
+                text = ""
+            rows.append((int(getattr(e, "ea", idaapi.BADADDR)), text))
+            return 0
+
+    try:
+        v = ExprVisitor()
+        v.apply_to(cfunc.body, None)
+    except Exception:
+        pass
+    return rows
+
+
+def _compute_cfg_semantics(func):
+    """Compute richer CFG semantics and complexity metrics for a function."""
+    try:
+        fc = idaapi.FlowChart(func)
+    except Exception:
+        return {
+            "nodes": 0,
+            "edges": 0,
+            "entry_blocks": 0,
+            "exit_blocks": 0,
+            "back_edges": 0,
+            "cyclomatic_complexity": 1,
+            "loop_density": 0.0,
+        }
+
+    nodes = []
+    edges = set()
+    incoming = {}
+    outgoing = {}
+    for b in fc:
+        nodes.append(int(b.start_ea))
+        outgoing.setdefault(int(b.start_ea), 0)
+        incoming.setdefault(int(b.start_ea), 0)
+        for s in b.succs():
+            bea = int(b.start_ea)
+            sea = int(s.start_ea)
+            edges.add((bea, sea))
+            outgoing[bea] = outgoing.get(bea, 0) + 1
+            incoming[sea] = incoming.get(sea, 0) + 1
+
+    back_edges = sum(1 for a, b in edges if b <= a)
+    node_count = len(nodes)
+    edge_count = len(edges)
+    entry_blocks = sum(1 for n in nodes if incoming.get(n, 0) == 0)
+    exit_blocks = sum(1 for n in nodes if outgoing.get(n, 0) == 0)
+    cyclomatic = max(1, edge_count - node_count + 2)
+    loop_density = round(back_edges / max(1, edge_count), 4)
+    return {
+        "nodes": node_count,
+        "edges": edge_count,
+        "entry_blocks": entry_blocks,
+        "exit_blocks": exit_blocks,
+        "back_edges": back_edges,
+        "cyclomatic_complexity": cyclomatic,
+        "loop_density": loop_density,
+    }
+
+
+def _build_decompiler_dataflow(cfunc, max_items=800):
+    """
+    Build variable dependency graph from decompiler expressions.
+    Uses ctree expression text + lvar vocabulary for robust cross-version behavior.
+    """
+    import re
+
+    lvars = []
+    try:
+        lvars = list(getattr(cfunc, "lvars", []) or [])
+    except Exception:
+        lvars = []
+    var_names = []
+    arg_names = set()
+    for v in lvars:
+        name = str(getattr(v, "name", "") or "").strip()
+        if not name:
+            continue
+        var_names.append(name)
+        if bool(getattr(v, "is_arg_var", False)):
+            arg_names.add(name)
+    vocab = sorted(set(var_names), key=len, reverse=True)
+    if not vocab:
+        return {
+            "nodes": [],
+            "edges": [],
+            "assignment_edges": 0,
+            "call_edges": 0,
+            "argument_variables": [],
+            "top_hubs": [],
+        }
+    word_re = re.compile(r"[A-Za-z_]\w*")
+    rows = _collect_expr_rows_from_cfunc(cfunc, max_items=max_items * 4)
+    edge_seen = set()
+    nodes = set(vocab)
+    edges = []
+    assign_edges = 0
+    call_edges = 0
+
+    def _extract_vars(text):
+        toks = set(word_re.findall(text or ""))
+        return [t for t in toks if t in nodes]
+
+    for ea, expr in rows:
+        text = (expr or "").strip()
+        if not text:
+            continue
+        # Assignment dependency: rhs vars influence lhs var.
+        if "=" in text and "==" not in text and "<=" not in text and ">=" not in text and "!=" not in text:
+            lhs, rhs = text.split("=", 1)
+            lhs_vars = _extract_vars(lhs)
+            rhs_vars = _extract_vars(rhs)
+            if lhs_vars:
+                dst = sorted(lhs_vars, key=len, reverse=True)[0]
+                for src in rhs_vars:
+                    if src == dst:
+                        continue
+                    key = (src, dst, "assign")
+                    if key in edge_seen:
+                        continue
+                    edge_seen.add(key)
+                    edges.append(
+                        {
+                            "from": src,
+                            "to": dst,
+                            "kind": "assign",
+                            "ea": hex_ea(ea) if ea != idaapi.BADADDR else None,
+                        }
+                    )
+                    assign_edges += 1
+        # Call dependency: vars flow into call sites.
+        if "(" in text and ")" in text and "=" not in text:
+            callee = text.split("(", 1)[0].strip()
+            if callee:
+                call_node = f"call:{callee}"
+                nodes.add(call_node)
+                for src in _extract_vars(text):
+                    key = (src, call_node, "arg_flow")
+                    if key in edge_seen:
+                        continue
+                    edge_seen.add(key)
+                    edges.append(
+                        {
+                            "from": src,
+                            "to": call_node,
+                            "kind": "arg_flow",
+                            "ea": hex_ea(ea) if ea != idaapi.BADADDR else None,
+                        }
+                    )
+                    call_edges += 1
+        if len(edges) >= max_items:
+            break
+
+    # Hub ranking by incident edges.
+    degree = {}
+    for e in edges:
+        degree[e["from"]] = degree.get(e["from"], 0) + 1
+        degree[e["to"]] = degree.get(e["to"], 0) + 1
+    hubs = sorted(degree.items(), key=lambda kv: kv[1], reverse=True)[:12]
+
+    return {
+        "nodes": sorted(nodes),
+        "edges": edges,
+        "assignment_edges": assign_edges,
+        "call_edges": call_edges,
+        "argument_variables": sorted(arg_names),
+        "top_hubs": [{"node": n, "degree": d} for n, d in hubs],
+    }
+
+
+def _semantic_pseudocode_summary(pseudocode):
+    import re
+
+    src = pseudocode or ""
+    return {
+        "line_count": len(src.splitlines()),
+        "call_count": len(re.findall(r"\w+\s*\(", src)),
+        "if_count": len(re.findall(r"\bif\s*\(", src)),
+        "loop_count": len(re.findall(r"\b(for|while|do)\b", src)),
+        "switch_count": len(re.findall(r"\bswitch\s*\(", src)),
+        "return_count": len(re.findall(r"\breturn\b", src)),
+        "pointer_deref_count": src.count("->") + src.count("*"),
+    }
+
+
 def _get_prev_func(ea: int):
     getter = getattr(ida_funcs, "get_prev_func", None) or getattr(idaapi, "get_prev_func", None)
     return getter(ea) if getter else None
@@ -135,7 +335,7 @@ def code(
     action: Annotated[Literal[
         "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
         "callees", "callers", "blocks", "analyze", "callgraph", "export",
-        "find_paths", "strings_in_func", "diff_functions"
+        "find_paths", "strings_in_func", "diff_functions", "semantic_decompile", "decomp_dataflow"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,  # Alias for compatibility
@@ -217,6 +417,15 @@ def code(
         Params: addrs (REQUIRED - exactly 2 addresses)
         Returns: {func_a, func_b, diff: "unified diff text", similarity: float}
         Example: code(action="diff_functions", addrs=["0x401000", "0x402000"])
+
+    semantic_decompile - High-complexity semantic decompilation profile
+        Params: addrs (REQUIRED)
+        Returns: [{addr, pseudocode, semantic_summary, cfg_semantics, decomp_dataflow}]
+        Includes complexity metrics, control-flow semantics, and variable dependency hubs.
+
+    decomp_dataflow - Build decompiler-derived variable dependency graph
+        Params: addrs (REQUIRED)
+        Returns: [{addr, function, dataflow: {nodes, edges, top_hubs, ...}}]
     """
     try:
         # Support both addr (singular) and addrs (plural) for compatibility
@@ -675,6 +884,72 @@ def code(
                     "diff": diff_text if diff_text else "(identical)",
                     "similarity": round(ratio, 4),
                 }
+
+            elif action == "semantic_decompile":
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
+                if not cfunc:
+                    results.append(
+                        {
+                            "addr": addr,
+                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
+                            "error_code": dec_err.get("code") if isinstance(dec_err, dict) else MCPError.DECOMPILER_FAILED,
+                            "hint": dec_err.get("hint") if isinstance(dec_err, dict) else None,
+                            "details": dec_err.get("details") if isinstance(dec_err, dict) else None,
+                        }
+                    )
+                    continue
+                pseudo = str(cfunc)
+                cfg_semantics = _compute_cfg_semantics(func)
+                dataflow = _build_decompiler_dataflow(cfunc, max_items=max(200, min(1600, int(max_items))))
+                results.append(
+                    {
+                        "ok": True,
+                        "addr": hex_ea(func.start_ea),
+                        "function": ida_funcs.get_func_name(func.start_ea),
+                        "prototype": get_prototype(func),
+                        "pseudocode": pseudo,
+                        "semantic_summary": _semantic_pseudocode_summary(pseudo),
+                        "cfg_semantics": cfg_semantics,
+                        "decomp_dataflow": dataflow,
+                    }
+                )
+
+            elif action == "decomp_dataflow":
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
+                if not cfunc:
+                    results.append(
+                        {
+                            "addr": addr,
+                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
+                            "error_code": dec_err.get("code") if isinstance(dec_err, dict) else MCPError.DECOMPILER_FAILED,
+                            "hint": dec_err.get("hint") if isinstance(dec_err, dict) else None,
+                            "details": dec_err.get("details") if isinstance(dec_err, dict) else None,
+                        }
+                    )
+                    continue
+                flow = _build_decompiler_dataflow(cfunc, max_items=max(200, min(1600, int(max_items))))
+                edge_lines = [
+                    f"{e['from']} -> {e['to']}  {e['kind']}  {e.get('ea') or ''}".rstrip()
+                    for e in flow.get("edges", [])[: max(1, min(400, int(max_items)))]
+                ]
+                results.append(
+                    {
+                        "ok": True,
+                        "addr": hex_ea(func.start_ea),
+                        "function": ida_funcs.get_func_name(func.start_ea),
+                        "dataflow": flow,
+                        "edges": "\n".join(edge_lines),
+                        "count": len(flow.get("edges", [])),
+                    }
+                )
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
