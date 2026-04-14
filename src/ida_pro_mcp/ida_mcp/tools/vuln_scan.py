@@ -185,6 +185,11 @@ _MAX_GRAPH_DEPTH = 3
 _DEFAULT_GRAPH_DEPTH = 1
 _MAX_GRAPH_NODES = 80
 _MAX_GRAPH_EDGES = 240
+_DANGEROUS_FLOW_NEARBY_DISTANCE = 0xA0
+_DANGEROUS_FLOW_FINDINGS_MULTIPLIER = 6
+_DANGEROUS_FLOW_PER_SINK_MULTIPLIER = 8
+_DANGEROUS_FLOW_WINDOW_BACK = 12
+_DANGEROUS_FLOW_WINDOW_FORWARD = 4
 
 # Risk model coefficients: impact-first (severity), then confidence quality,
 # then local exploitability signal from nearby instruction evidence.
@@ -1537,7 +1542,7 @@ def _scan_dangerous_flow(addr, limit, include_context):
         return []
 
     findings = []
-    per_sink_limit = max(24, limit * 8)
+    per_sink_limit = max(24, limit * _DANGEROUS_FLOW_PER_SINK_MULTIPLIER)
     call_map_cache = {}
     source_tokens = tuple(sorted(_SOURCE_TOKENS))
     sanitizer_tokens = tuple(sorted(_SANITIZER_TOKENS))
@@ -1556,7 +1561,11 @@ def _scan_dangerous_flow(addr, limit, include_context):
                 func_calls = _collect_function_call_map(func.start_ea)
                 call_map_cache[func.start_ea] = func_calls
 
-            nearby_rows = _iter_disasm_window(call_ea, backward=12, forward=4)
+            nearby_rows = _iter_disasm_window(
+                call_ea,
+                backward=_DANGEROUS_FLOW_WINDOW_BACK,
+                forward=_DANGEROUS_FLOW_WINDOW_FORWARD,
+            )
             nearby_lines = [line for _, line in nearby_rows if line]
             nearby_blob = " ".join(nearby_lines)
 
@@ -1572,7 +1581,7 @@ def _scan_dangerous_flow(addr, limit, include_context):
                 for ea, cname in func_calls:
                     if ea >= call_ea:
                         continue
-                    if call_ea - ea > 0xA0:
+                    if call_ea - ea > _DANGEROUS_FLOW_NEARBY_DISTANCE:
                         continue
                     if any(tok in cname for tok in source_tokens):
                         direct_source = True
@@ -1625,7 +1634,7 @@ def _scan_dangerous_flow(addr, limit, include_context):
                 "flow_classification": control_path,
             }
             findings.append(finding)
-            if len(findings) >= limit * 6:
+            if len(findings) >= limit * _DANGEROUS_FLOW_FINDINGS_MULTIPLIER:
                 return findings
     return findings
 
