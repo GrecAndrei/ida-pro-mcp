@@ -108,6 +108,10 @@ class TestLLMHelpersExpansionAst(unittest.TestCase):
         self.assertEqual(len(keys), 50)
         self.assertEqual(set(keys), NEW_ACTIONS)
 
+    def test_dispatcher_source_mentions_all_expansion_actions(self):
+        for action in NEW_ACTIONS:
+            self.assertIn(f'"{action}"', self.source)
+
 
 class TestHostRegistrationExpansionAst(unittest.TestCase):
     def test_tool_actions_llm_helpers_contains_expansion_actions(self):
@@ -139,4 +143,3 @@ class TestHostRegistrationExpansionAst(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
