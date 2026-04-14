@@ -53,6 +53,7 @@ class TestVulnScanAstSurface(unittest.TestCase):
             if isinstance(e, ast.Constant) and isinstance(e.value, str)
         ]
         self.assertIn("intelligence_report", values)
+        self.assertIn("dangerous_flow", values)
 
     def test_profile_and_attack_path_helpers_exist(self):
         helper_names = {
@@ -68,6 +69,8 @@ class TestVulnScanAstSurface(unittest.TestCase):
             "_build_dataflow_graph",
             "_compute_coverage_metrics",
             "_build_remediation_plan",
+            "_collect_function_call_map",
+            "_scan_dangerous_flow",
         }
         found = {
             n.name for n in self.module.body if isinstance(n, ast.FunctionDef) and n.name in helper_names
@@ -86,6 +89,10 @@ class TestVulnScanAstSurface(unittest.TestCase):
         self.assertIn("\"dataflow_graph\": dataflow_graph", src)
         self.assertIn("\"remediation_plan\": remediation_plan", src)
         self.assertIn("\"scan_profile\": profile", src)
+
+    def test_scanner_dispatch_includes_dangerous_flow(self):
+        source = VULN_SCAN_PATH.read_text(encoding="utf-8")
+        self.assertIn('"dangerous_flow":    _scan_dangerous_flow', source)
 
 
 if __name__ == "__main__":
