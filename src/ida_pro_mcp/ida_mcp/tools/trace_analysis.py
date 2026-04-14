@@ -7,6 +7,8 @@ except ImportError:
 _TRACE_CACHE: list[int] = []
 _TRACE_RUNS: dict[str, list[int]] = {}
 _TRACE_STATE_SNAPSHOTS: dict[str, dict] = {}
+_TRACE_RUNS_MAX = 32
+_TRACE_SNAPSHOTS_MAX = 64
 
 
 # ============================================================================
@@ -102,15 +104,35 @@ def trace_analysis(
             global _TRACE_RUNS
             if run_name:
                 return list(_TRACE_RUNS.get(str(run_name), []))
-            return list(fallback or [])
+            return list(fallback) if fallback else []
+
+        def _cache_run_trace(run_name: Optional[str], values: list[int]) -> None:
+            global _TRACE_RUNS
+            if not run_name:
+                return
+            key = str(run_name)
+            if key in _TRACE_RUNS:
+                _TRACE_RUNS.pop(key, None)
+            _TRACE_RUNS[key] = list(values)
+            while len(_TRACE_RUNS) > _TRACE_RUNS_MAX:
+                oldest = next(iter(_TRACE_RUNS))
+                _TRACE_RUNS.pop(oldest, None)
+
+        def _cache_snapshot(snapshot_id: str, payload: dict) -> None:
+            global _TRACE_STATE_SNAPSHOTS
+            if snapshot_id in _TRACE_STATE_SNAPSHOTS:
+                _TRACE_STATE_SNAPSHOTS.pop(snapshot_id, None)
+            _TRACE_STATE_SNAPSHOTS[snapshot_id] = payload
+            while len(_TRACE_STATE_SNAPSHOTS) > _TRACE_SNAPSHOTS_MAX:
+                oldest = next(iter(_TRACE_STATE_SNAPSHOTS))
+                _TRACE_STATE_SNAPSHOTS.pop(oldest, None)
 
         def load_trace(run_id: Optional[str] = None):
             nonlocal trace_data
             global _TRACE_CACHE, _TRACE_RUNS
             if trace_data and isinstance(trace_data, list):
                 _TRACE_CACHE = _parse_addrs(trace_data)
-                if run_id:
-                    _TRACE_RUNS[str(run_id)] = list(_TRACE_CACHE)
+                _cache_run_trace(run_id, _TRACE_CACHE)
                 return list(_TRACE_CACHE)
             if path:
                 p, err = validate_path_safe(path)
@@ -124,18 +146,15 @@ def trace_analysis(
                         except Exception:
                             pass
                 _TRACE_CACHE = addrs
-                if run_id:
-                    _TRACE_RUNS[str(run_id)] = list(_TRACE_CACHE)
+                _cache_run_trace(run_id, _TRACE_CACHE)
                 return list(addrs)
             if _TRACE_CACHE:
-                if run_id:
-                    _TRACE_RUNS[str(run_id)] = list(_TRACE_CACHE)
+                _cache_run_trace(run_id, _TRACE_CACHE)
                 return list(_TRACE_CACHE)
             runtime_trace = _trace_from_runtime()
             if runtime_trace:
                 _TRACE_CACHE = runtime_trace
-                if run_id:
-                    _TRACE_RUNS[str(run_id)] = list(_TRACE_CACHE)
+                _cache_run_trace(run_id, _TRACE_CACHE)
                 return list(runtime_trace)
             return []
 
@@ -418,7 +437,7 @@ def trace_analysis(
         elif action == "state_replay":
             global _TRACE_STATE_SNAPSHOTS
             mode = str(kwargs.get("mode", "snapshot")).strip().lower()
-            snapshot_id = str(kwargs.get("snapshot_id", f"snap_{int(time.time())}"))
+            snapshot_id = str(kwargs.get("snapshot_id", f"snap_{time.time_ns()}"))
             if mode not in {"snapshot", "replay"}:
                 return make_error(MCPError.INVALID_ARGS, "state_replay mode must be snapshot|replay")
 
@@ -433,7 +452,7 @@ def trace_analysis(
                     "trace_count": len(trace_list),
                     "meta": kwargs.get("meta") if isinstance(kwargs.get("meta"), dict) else {},
                 }
-                _TRACE_STATE_SNAPSHOTS[snapshot_id] = snap
+                _cache_snapshot(snapshot_id, snap)
                 return {"ok": True, "mode": "snapshot", "snapshot": snap}
 
             snap = _TRACE_STATE_SNAPSHOTS.get(snapshot_id)
@@ -603,8 +622,26 @@ def trace_analysis(
                     issues.append({"id": oid, "type": "double_free", "free_count": len(frees)})
                 if frees and uses:
                     try:
-                        first_free_t = min(float(x.get("t", 0)) for x in frees)
-                        late_uses = [u for u in uses if float(u.get("t", 0)) > first_free_t]
+                        free_times = []
+                        for x in frees:
+                            t = x.get("t", None)
+                            if t is None:
+                                continue
+                            tv = float(t)
+                            if tv > 0:
+                                free_times.append(tv)
+                        if not free_times:
+                            late_uses = []
+                        else:
+                            first_free_t = min(free_times)
+                            late_uses = []
+                            for u in uses:
+                                ut = u.get("t", None)
+                                if ut is None:
+                                    continue
+                                uv = float(ut)
+                                if uv > first_free_t:
+                                    late_uses.append(u)
                     except Exception:
                         late_uses = uses
                     if late_uses:
