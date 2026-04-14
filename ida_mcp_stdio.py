@@ -2207,6 +2207,16 @@ TOOL_ACTIONS = {
         "find_loops",
         "extract_api_calls",
         "basic_blocks_hit",
+        "execution_timeline_graph",
+        "cross_run_diff",
+        "runtime_taint_overlay",
+        "state_replay",
+        "path_unlock",
+        "coverage_debug_plan",
+        "exploitability_score",
+        "anti_analysis_detect",
+        "lifetime_map",
+        "hybrid_callgraph_confidence",
     ],
     # Project and file management
     "project": [

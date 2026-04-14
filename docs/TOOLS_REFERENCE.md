@@ -1292,6 +1292,16 @@ Notes:
 - `find_loops`
 - `extract_api_calls`
 - `basic_blocks_hit`
+- `execution_timeline_graph`
+- `cross_run_diff`
+- `runtime_taint_overlay`
+- `state_replay`
+- `path_unlock`
+- `coverage_debug_plan`
+- `exploitability_score`
+- `anti_analysis_detect`
+- `lifetime_map`
+- `hybrid_callgraph_confidence`
 
 ### Args
 - `_compact`: boolean — Shortcut for compact/full mode toggle.
@@ -1305,7 +1315,7 @@ Notes:
 - `_response_mode`: string (enum: compact, full) — Output mode. compact is default and reduces token usage.
 - `_response_omit`: ['array', 'string'] — Optional top-level field omission list.
 - `_response_table`: boolean — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: string (enum: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, grep, pick, head, tail, next, stats)
+- `action`: string (enum: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, runtime_taint_overlay, state_replay, path_unlock, coverage_debug_plan, exploitability_score, anti_analysis_detect, lifetime_map, hybrid_callgraph_confidence, grep, pick, head, tail, next, stats)
 - `cursor`: string
 - `grep`: string — Grep pattern (substring by default; regex if grep_regex=true).
 - `grep_case_sensitive`: boolean
