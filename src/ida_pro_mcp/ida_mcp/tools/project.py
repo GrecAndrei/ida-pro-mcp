@@ -769,8 +769,12 @@ def project(
                 "ai_governance": ai_records[-500:],
             }
             payload_bytes = json.dumps(payload, sort_keys=True).encode("utf-8", errors="replace")
-            digest = hashlib.sha256(payload_bytes).hexdigest()
-            payload["integrity"] = {"sha256": digest}
+            payload_digest = hashlib.sha256(payload_bytes).hexdigest()
+            payload["integrity"] = {
+                "algorithm": "sha256",
+                "scope": "payload_excluding_integrity",
+                "sha256": payload_digest,
+            }
 
             out_path = kwargs.get("output_path") or path
             if out_path:
