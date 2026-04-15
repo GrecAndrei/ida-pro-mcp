@@ -45,6 +45,15 @@ class TestVulnScanAstSurface(unittest.TestCase):
         self.assertIn("trace_functions", arg_names)
         self.assertIn("trace_weight", arg_names)
         self.assertIn("patch_strategies", arg_names)
+        persist_arg = next((a for a in fn.args.args if a.arg == "persist_vuln_memory"), None)
+        self.assertIsNotNone(persist_arg)
+        persist_idx = arg_names.index("persist_vuln_memory")
+        defaults = fn.args.defaults
+        first_default_arg_idx = len(arg_names) - len(defaults)
+        self.assertGreaterEqual(persist_idx, first_default_arg_idx)
+        default_node = defaults[persist_idx - first_default_arg_idx]
+        self.assertIsInstance(default_node, ast.Constant)
+        self.assertIs(default_node.value, False)
 
         action_arg = next((a for a in fn.args.args if a.arg == "action"), None)
         self.assertIsNotNone(action_arg, "action argument missing")
@@ -127,6 +136,17 @@ class TestVulnScanAstSurface(unittest.TestCase):
             'if action in ("taint_lattice", "exploit_chains", "patch_simulate", "memory_sync", "hybrid_rank"):',
             src,
         )
+
+    def test_memory_persistence_is_memory_sync_only_and_path_validated(self):
+        source = VULN_SCAN_PATH.read_text(encoding="utf-8")
+        self.assertIn('should_persist_vuln_memory = bool(persist_vuln_memory) and action == "memory_sync"', source)
+        self.assertIn("validate_path_safe(resolved_vuln_memory_path)", source)
+        self.assertIn("parent_dir = os.path.dirname(p)", source)
+
+    def test_hybrid_rank_preserves_static_score_without_trace_inputs(self):
+        source = VULN_SCAN_PATH.read_text(encoding="utf-8")
+        self.assertIn("has_trace_inputs = bool(addr_hits or func_hits)", source)
+        self.assertIn('row["hybrid_risk_score"] = static_score', source)
 
 
 if __name__ == "__main__":

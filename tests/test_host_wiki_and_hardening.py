@@ -694,6 +694,11 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         self.assertIn('elif action == "mnemonic":', self.search_source)
         self.assertIn('elif action == "instruction":', self.search_source)
 
+    def test_search_semantic_ranking_is_bounded(self):
+        self.assertIn("ranked_heap = []", self.search_source)
+        self.assertIn("_FIND_INSTRUCTION_LIMIT_MULTIPLIER", self.search_source)
+        self.assertIn("heapq.heapreplace", self.search_source)
+
     def test_execute_tool_legacy_bridge_does_not_capture_search(self):
         marker = "legacy_threat_tools = {"
         idx = self.stdio_source.find(marker)
