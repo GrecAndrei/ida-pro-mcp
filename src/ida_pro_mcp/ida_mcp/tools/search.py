@@ -5,6 +5,7 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 import re
+import heapq
 try:
     from .semantic_matching import normalize_action, semantic_score, semantic_tokens
 except ImportError:
@@ -735,7 +736,11 @@ def search(
                 for token in query_tokens
                 for pref in _MNEMONIC_SEMANTIC_GROUPS.get(token, ())
             }
-            ranked = []
+            ranked_heap = []
+            ranked_cap = max(
+                _FIND_MIN_INSTRUCTION_CAP,
+                max(1, (offset + limit)) * _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
+            )
             segments = seg_list if seg_list is not None else list(idautils.Segments())
             for seg_ea in segments:
                 seg = idaapi.getseg(seg_ea)
@@ -774,16 +779,20 @@ def search(
                             score += overlap * _MNEMONIC_TOKEN_OVERLAP_WEIGHT
                     score += min(_semantic_score(pattern, semantic_blob), _MNEMONIC_SEMANTIC_SCORE_CAP)
                     if matched or score >= _MNEMONIC_MIN_SCORE_THRESHOLD:
-                        ranked.append(
-                            {
-                                "address_ea": ea,
-                                "address": hex(ea),
-                                "mnemonic": mnem,
-                                "score": round(score, 2),
-                                "line": f"{hex(ea)}  {mnem}" + (f"  {_clip(disasm)}" if include_context else ""),
-                            }
-                        )
+                        record = {
+                            "address_ea": ea,
+                            "address": hex(ea),
+                            "mnemonic": mnem,
+                            "score": round(score, 2),
+                            "line": f"{hex(ea)}  {mnem}" + (f"  {_clip(disasm)}" if include_context else ""),
+                        }
+                        key = (float(record["score"]), int(record["address_ea"]))
+                        if len(ranked_heap) < ranked_cap:
+                            heapq.heappush(ranked_heap, (key, record))
+                        elif key > ranked_heap[0][0]:
+                            heapq.heapreplace(ranked_heap, (key, record))
                     ea = idc.next_head(ea, seg_end)
+            ranked = [item[1] for item in ranked_heap]
             page, total, is_truncated = _paginate_records(
                 ranked, sort_key=lambda r: (r["score"], r["address_ea"])
             )
@@ -819,7 +828,11 @@ def search(
         elif action == "instruction":
             _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             query_tokens = set(_semantic_tokens(pattern))
-            ranked = []
+            ranked_heap = []
+            ranked_cap = max(
+                _FIND_MIN_INSTRUCTION_CAP,
+                max(1, (offset + limit)) * _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
+            )
             segments = seg_list if seg_list is not None else list(idautils.Segments())
             for seg_ea in segments:
                 seg = idaapi.getseg(seg_ea)
@@ -858,15 +871,19 @@ def search(
                             func = idaapi.get_func(ea)
                             if func:
                                 out_line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
-                        ranked.append(
-                            {
-                                "address_ea": ea,
-                                "address": hex(ea),
-                                "score": round(score, 2),
-                                "line": _clip(out_line, 360),
-                            }
-                        )
+                        record = {
+                            "address_ea": ea,
+                            "address": hex(ea),
+                            "score": round(score, 2),
+                            "line": _clip(out_line, 360),
+                        }
+                        key = (float(record["score"]), int(record["address_ea"]))
+                        if len(ranked_heap) < ranked_cap:
+                            heapq.heappush(ranked_heap, (key, record))
+                        elif key > ranked_heap[0][0]:
+                            heapq.heapreplace(ranked_heap, (key, record))
                     ea = idc.next_head(ea, seg_end)
+            ranked = [item[1] for item in ranked_heap]
             page, total, is_truncated = _paginate_records(
                 ranked, sort_key=lambda r: (r["score"], r["address_ea"])
             )

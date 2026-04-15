@@ -842,7 +842,9 @@ def _load_vuln_memory(path=None):
 def _save_vuln_memory(memory, path=None):
     p = path or _DEFAULT_VULN_MEMORY_PATH
     try:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
+        parent_dir = os.path.dirname(p)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             _json.dump(memory, f, sort_keys=True)
         return True, None
@@ -1069,6 +1071,7 @@ def _apply_hybrid_trace_ranking(findings, trace_addresses=None, trace_functions=
     trace_weight = max(0.0, min(float(trace_weight or _DEFAULT_HYBRID_TRACE_WEIGHT), _MAX_HYBRID_TRACE_WEIGHT))
     addr_hits = set(str(a).lower() for a in (trace_addresses or []) if a is not None)
     func_hits = set(str(f).lower() for f in (trace_functions or []) if f is not None)
+    has_trace_inputs = bool(addr_hits or func_hits)
     ranked = []
     for f in findings:
         row = dict(f)
@@ -1076,8 +1079,11 @@ def _apply_hybrid_trace_ranking(findings, trace_addresses=None, trace_functions=
         addr = str(row.get("addr") or "").lower()
         fn = str(row.get("function") or "").lower()
         trace_signal = 1.0 if (addr in addr_hits or fn in func_hits) else 0.0
-        hybrid = int((static_score * (1.0 - trace_weight)) + (100.0 * trace_signal * trace_weight))
-        row["hybrid_risk_score"] = max(static_score, hybrid) if trace_signal > 0 else hybrid
+        if not has_trace_inputs:
+            row["hybrid_risk_score"] = static_score
+        else:
+            hybrid = int((static_score * (1.0 - trace_weight)) + (100.0 * trace_signal * trace_weight))
+            row["hybrid_risk_score"] = max(static_score, hybrid) if trace_signal > 0 else static_score
         row["trace_observed"] = bool(trace_signal > 0)
         ranked.append(row)
     ranked.sort(
@@ -1979,7 +1985,7 @@ def vuln_scan(
     include_dataflow_graph: Annotated[bool, "Include compact finding correlation graph in scan_all/intelligence_report"] = True,
     include_remediation_plan: Annotated[bool, "Include prioritized remediation plan in scan_all/intelligence_report"] = True,
     include_vuln_memory: Annotated[bool, "Use cross-binary vulnerability memory to enrich ranking"] = True,
-    persist_vuln_memory: Annotated[bool, "Persist scan signatures to cross-binary vulnerability memory"] = True,
+    persist_vuln_memory: Annotated[bool, "Persist scan signatures to cross-binary vulnerability memory"] = False,
     vuln_memory_path: Annotated[Optional[str], "Optional custom path for cross-binary vulnerability memory JSON"] = None,
     trace_addresses: Annotated[Optional[list[str]], "Executed/observed addresses for hybrid static+trace ranking"] = None,
     trace_functions: Annotated[Optional[list[str]], "Executed/observed function names for hybrid static+trace ranking"] = None,
@@ -2060,16 +2066,29 @@ def vuln_scan(
                 }
             rows = _enrich_findings_with_risk(rows, profile=profile)
 
-            vuln_memory = _load_vuln_memory(vuln_memory_path) if (include_vuln_memory or persist_vuln_memory) else None
+            should_persist_vuln_memory = bool(persist_vuln_memory) and action == "memory_sync"
+            resolved_vuln_memory_path = vuln_memory_path or _DEFAULT_VULN_MEMORY_PATH
+            vuln_memory = _load_vuln_memory(resolved_vuln_memory_path) if (include_vuln_memory or should_persist_vuln_memory) else None
             if include_vuln_memory and vuln_memory:
                 rows = _enrich_findings_with_memory(rows, vuln_memory)
 
-            memory_write = {"enabled": bool(persist_vuln_memory), "ok": False, "error": None}
-            if persist_vuln_memory and vuln_memory is not None:
-                vuln_memory = _merge_scan_into_memory(vuln_memory, rows)
-                ok_mem, err_mem = _save_vuln_memory(vuln_memory, vuln_memory_path)
-                memory_write["ok"] = bool(ok_mem)
-                memory_write["error"] = err_mem
+            memory_write = {"enabled": bool(should_persist_vuln_memory), "ok": False, "error": None}
+            if should_persist_vuln_memory and vuln_memory is not None:
+                normalized_path = resolved_vuln_memory_path
+                path_error = None
+                try:
+                    normalized_path, path_err = validate_path_safe(resolved_vuln_memory_path)
+                    if path_err:
+                        path_error = path_err.get("message") or "Invalid vuln_memory_path"
+                except Exception as exc:
+                    path_error = str(exc)
+                if path_error:
+                    memory_write["error"] = path_error
+                else:
+                    vuln_memory = _merge_scan_into_memory(vuln_memory, rows)
+                    ok_mem, err_mem = _save_vuln_memory(vuln_memory, normalized_path)
+                    memory_write["ok"] = bool(ok_mem)
+                    memory_write["error"] = err_mem
 
             return rows, osv_meta_local, vuln_memory, memory_write
 

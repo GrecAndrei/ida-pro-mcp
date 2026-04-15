@@ -359,8 +359,10 @@ def trace_analysis(
         elif action == "cross_run_diff":
             run_a = kwargs.get("run_a")
             run_b = kwargs.get("run_b")
-            trace_a = kwargs.get("trace_a") if isinstance(kwargs.get("trace_a"), list) else _resolve_run_trace(str(run_a) if run_a is not None else None)
-            trace_b = kwargs.get("trace_b") if isinstance(kwargs.get("trace_b"), list) else _resolve_run_trace(str(run_b) if run_b is not None else None)
+            raw_trace_a = kwargs.get("trace_a")
+            raw_trace_b = kwargs.get("trace_b")
+            trace_a = _parse_addrs(raw_trace_a) if isinstance(raw_trace_a, list) else _resolve_run_trace(str(run_a) if run_a is not None else None)
+            trace_b = _parse_addrs(raw_trace_b) if isinstance(raw_trace_b, list) else _resolve_run_trace(str(run_b) if run_b is not None else None)
             if not trace_a:
                 trace_a = load_trace(run_id=str(run_a) if run_a is not None else None)
             if not trace_b:
