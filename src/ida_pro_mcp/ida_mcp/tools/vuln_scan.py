@@ -5,6 +5,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 import json as _json
+import os
+import time
+import hashlib
 import urllib.error
 import urllib.request
 
@@ -69,6 +72,32 @@ _INFO_LEAK_FUNCS = [
     "NSLog", "Log", "WriteFile", "send",
 ]
 
+_DANGEROUS_FLOW_FUNCS = sorted(
+    {
+        *_BUFFER_OVERFLOW_FUNCS,
+        *_FORMAT_STRING_FUNCS,
+        *_COMMAND_INJECTION_FUNCS,
+        "fopen",
+        "open",
+        "CreateFile",
+        "CreateFileA",
+        "CreateFileW",
+    }
+)
+
+_DANGEROUS_FLOW_HIGH_IMPACT = {
+    "system",
+    "popen",
+    "execve",
+    "createprocess",
+    "createprocessa",
+    "createprocessw",
+    "strcpy",
+    "strcat",
+    "sprintf",
+    "gets",
+}
+
 _CWE_MAP = {
     "buffer_overflow":    ("CWE-120", "critical", "Buffer Copy without Checking Size of Input"),
     "format_string":      ("CWE-134", "high",     "Use of Externally-Controlled Format String"),
@@ -80,6 +109,12 @@ _CWE_MAP = {
     "info_leak":          ("CWE-200", "medium",   "Exposure of Sensitive Information"),
     "auth_bypass":        ("CWE-287", "high",     "Improper Authentication"),
     "hardcoded_creds":    ("CWE-798", "high",     "Use of Hard-coded Credentials"),
+    "dangerous_flow":     ("CWE-20",  "high",     "Improper Input Validation in Dangerous Sink Flow"),
+    "taint_lattice":      ("CWE-664", "medium",   "Improper Control of Resource Through Lifetime"),
+    "exploit_chains":     ("CWE-693", "high",     "Protection Mechanism Failure via Chained Weaknesses"),
+    "patch_simulate":     ("CWE-657", "medium",   "Violation of Secure Design During Mitigation"),
+    "memory_sync":        ("CWE-1035", "low",     "Scanner Knowledge Base Synchronization Metadata"),
+    "hybrid_rank":        ("CWE-20",  "high",     "Hybrid static/runtime risk ranking for input-driven paths"),
     "osv_known_vuln":     ("CWE-937", "high",     "Using Components with Known Vulnerabilities"),
 }
 
@@ -142,6 +177,7 @@ _SINK_TOKEN_BY_TYPE = {
     "info_leak": {"printf", "syslog", "send", "writefile", "outputdebugstring"},
     "auth_bypass": {"strcmp", "strncmp", "memcmp", "wcscmp"},
     "hardcoded_creds": {"password", "passwd", "token", "apikey", "secret"},
+    "dangerous_flow": {"strcpy", "strcat", "sprintf", "system", "popen", "exec", "createprocess", "open", "fopen"},
     "osv_known_vuln": {"dependency", "package", "version", "component"},
 }
 
@@ -157,6 +193,17 @@ _MAX_GRAPH_DEPTH = 3
 _DEFAULT_GRAPH_DEPTH = 1
 _MAX_GRAPH_NODES = 80
 _MAX_GRAPH_EDGES = 240
+_DANGEROUS_FLOW_NEARBY_DISTANCE = 0xA0
+_DANGEROUS_FLOW_FINDINGS_MULTIPLIER = 6
+_DANGEROUS_FLOW_PER_SINK_MULTIPLIER = 8
+_DANGEROUS_FLOW_WINDOW_BACK = 12
+_DANGEROUS_FLOW_WINDOW_FORWARD = 4
+_DEFAULT_VULN_MEMORY_PATH = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "vuln_scan_memory.json")
+_VULN_MEMORY_MAX_RECENT_BINARIES = 128
+_VULN_MEMORY_MAX_SIGNATURES = 512
+_DEFAULT_HYBRID_TRACE_WEIGHT = 0.45
+_MAX_HYBRID_TRACE_WEIGHT = 0.9
+_DEFAULT_PATCH_STRATEGIES = ("bounds_checks", "input_sanitization", "safe_api_replacement", "isolation")
 
 # Risk model coefficients: impact-first (severity), then confidence quality,
 # then local exploitability signal from nearby instruction evidence.
@@ -758,6 +805,296 @@ def _build_remediation_plan(findings, hotspots, attack_paths):
             },
         )
     return plan
+
+
+def _current_binary_fingerprint():
+    """Best-effort stable fingerprint for the loaded binary/session context."""
+    try:
+        input_path = idc.get_input_file_path() or ""
+    except Exception:
+        input_path = ""
+    try:
+        imagebase = int(idaapi.get_imagebase())
+    except Exception:
+        imagebase = 0
+    try:
+        inf = idaapi.get_inf_structure()
+        min_ea = int(getattr(inf, "min_ea", 0) or 0)
+        max_ea = int(getattr(inf, "max_ea", 0) or 0)
+    except Exception:
+        min_ea, max_ea = 0, 0
+    blob = f"{input_path}|{imagebase:x}|{min_ea:x}|{max_ea:x}"
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
+
+
+def _load_vuln_memory(path=None):
+    p = path or _DEFAULT_VULN_MEMORY_PATH
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+            if isinstance(raw, dict):
+                return raw
+    except Exception:
+        pass
+    return {"version": 1, "updated_at": 0, "binaries": {}, "global_signatures": {}}
+
+
+def _save_vuln_memory(memory, path=None):
+    p = path or _DEFAULT_VULN_MEMORY_PATH
+    try:
+        parent_dir = os.path.dirname(p)
+        if parent_dir and not os.path.isdir(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            _json.dump(memory, f, sort_keys=True)
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def _finding_signature(f):
+    return "|".join(
+        [
+            str(f.get("type") or "unknown"),
+            str(f.get("pattern") or ""),
+            str(f.get("function") or "unknown"),
+        ]
+    )
+
+
+def _compact_memory_signatures(signature_counts):
+    rows = sorted(signature_counts.items(), key=lambda kv: kv[1], reverse=True)
+    compact = {}
+    for sig, cnt in rows[:_VULN_MEMORY_MAX_SIGNATURES]:
+        compact[sig] = int(cnt)
+    return compact
+
+
+def _merge_scan_into_memory(memory, findings):
+    now = int(time.time())
+    binary_id = _current_binary_fingerprint()
+    binaries = memory.setdefault("binaries", {})
+    global_sigs = memory.setdefault("global_signatures", {})
+    signature_counts = {}
+    for f in findings:
+        sig = _finding_signature(f)
+        signature_counts[sig] = signature_counts.get(sig, 0) + 1
+
+    bin_entry = binaries.get(binary_id, {})
+    prev_sigs = bin_entry.get("signatures", {})
+    merged_bin_sigs = dict(prev_sigs)
+    for sig, cnt in signature_counts.items():
+        merged_bin_sigs[sig] = int(merged_bin_sigs.get(sig, 0)) + int(cnt)
+        global_sigs[sig] = int(global_sigs.get(sig, 0)) + int(cnt)
+
+    binaries[binary_id] = {
+        "updated_at": now,
+        "signature_count": len(signature_counts),
+        "signatures": _compact_memory_signatures(merged_bin_sigs),
+    }
+
+    # Keep memory bounded and recent.
+    if len(binaries) > _VULN_MEMORY_MAX_RECENT_BINARIES:
+        ordered = sorted(
+            binaries.items(),
+            key=lambda kv: int((kv[1] or {}).get("updated_at", 0)),
+            reverse=True,
+        )
+        binaries.clear()
+        for bid, entry in ordered[:_VULN_MEMORY_MAX_RECENT_BINARIES]:
+            binaries[bid] = entry
+
+    memory["global_signatures"] = _compact_memory_signatures(global_sigs)
+    memory["updated_at"] = now
+    return memory
+
+
+def _enrich_findings_with_memory(findings, memory):
+    global_sigs = memory.get("global_signatures", {}) if isinstance(memory, dict) else {}
+    if not isinstance(global_sigs, dict):
+        global_sigs = {}
+    enriched = []
+    for f in findings:
+        row = dict(f)
+        sig = _finding_signature(row)
+        recur = int(global_sigs.get(sig, 0))
+        if recur > 0:
+            row["memory_recurrence"] = recur
+            row["risk_score"] = int(min(100, int(row.get("risk_score", 1)) + min(16, recur)))
+            row["line"] = f"{row.get('line','')}  mem_rec={recur}".strip()
+        enriched.append(row)
+    return enriched
+
+
+def _build_interprocedural_taint_lattice(findings, max_edges=240):
+    """
+    Build a lightweight interprocedural source->sink relationship summary.
+    This is intentionally heuristic, using function xrefs + finding roles.
+    """
+    by_func = {}
+    for f in findings:
+        fn = str(f.get("function") or "unknown")
+        by_func.setdefault(fn, []).append(f)
+
+    def _func_has_role(items, role):
+        for it in items:
+            if _classify_flow_role(it) == role:
+                return True
+        return False
+
+    func_sources = {fn for fn, items in by_func.items() if _func_has_role(items, "source")}
+    func_sinks = {fn for fn, items in by_func.items() if _func_has_role(items, "sink")}
+
+    edges = []
+    edge_seen = set()
+    for sink_fn in sorted(func_sinks):
+        sink_ea = idc.get_name_ea_simple(sink_fn)
+        if sink_ea == idaapi.BADADDR:
+            continue
+        sink_func = idaapi.get_func(sink_ea)
+        if sink_func:
+            sink_ea = sink_func.start_ea
+        for xr in idautils.XrefsTo(sink_ea, 0):
+            if not xr.iscode:
+                continue
+            caller_func = idaapi.get_func(xr.frm)
+            if not caller_func:
+                continue
+            caller_name = ida_funcs.get_func_name(caller_func.start_ea)
+            if caller_name not in func_sources:
+                continue
+            key = (caller_name, sink_fn)
+            if key in edge_seen:
+                continue
+            edge_seen.add(key)
+            edges.append(
+                {
+                    "from_function": caller_name,
+                    "to_function": sink_fn,
+                    "call_site": hex_ea(xr.frm),
+                    "relation": "source_to_sink_call",
+                }
+            )
+            if len(edges) >= max_edges:
+                break
+        if len(edges) >= max_edges:
+            break
+    nodes = sorted(set([e["from_function"] for e in edges] + [e["to_function"] for e in edges]))
+    return {
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes": nodes,
+        "edges": edges,
+        "source_functions": sorted(func_sources),
+        "sink_functions": sorted(func_sinks),
+    }
+
+
+def _synthesize_exploit_chains(findings, lattice, max_chains=32):
+    chains = []
+    by_func = {}
+    for f in findings:
+        fn = str(f.get("function") or "unknown")
+        by_func.setdefault(fn, []).append(f)
+    for edge in lattice.get("edges", []):
+        src = edge.get("from_function")
+        dst = edge.get("to_function")
+        src_findings = sorted(
+            by_func.get(src, []),
+            key=lambda it: int(it.get("risk_score", 0)),
+            reverse=True,
+        )
+        dst_findings = sorted(
+            by_func.get(dst, []),
+            key=lambda it: int(it.get("risk_score", 0)),
+            reverse=True,
+        )
+        if not src_findings or not dst_findings:
+            continue
+        top_src = src_findings[0]
+        top_dst = dst_findings[0]
+        confidence = "high" if int(top_dst.get("risk_score", 0)) >= 75 else "medium"
+        chains.append(
+            {
+                "source_function": src,
+                "sink_function": dst,
+                "stages": [
+                    {"stage": "source", "type": top_src.get("type"), "addr": top_src.get("addr")},
+                    {"stage": "call_edge", "type": "interprocedural_call", "addr": edge.get("call_site")},
+                    {"stage": "sink", "type": top_dst.get("type"), "addr": top_dst.get("addr")},
+                ],
+                "max_risk_score": max(int(top_src.get("risk_score", 0)), int(top_dst.get("risk_score", 0))),
+                "confidence": confidence,
+            }
+        )
+        if len(chains) >= max_chains:
+            break
+    chains.sort(key=lambda c: int(c.get("max_risk_score", 0)), reverse=True)
+    return chains
+
+
+def _simulate_patch_impact(findings, strategies=None):
+    strategies = [s for s in (strategies or _DEFAULT_PATCH_STRATEGIES) if s]
+    if not strategies:
+        strategies = list(_DEFAULT_PATCH_STRATEGIES)
+    impacts = []
+    base_total = sum(int(f.get("risk_score", 0)) for f in findings)
+    type_multiplier = {
+        "bounds_checks": {"buffer_overflow": 0.45, "dangerous_flow": 0.70},
+        "input_sanitization": {"command_injection": 0.50, "format_string": 0.60, "dangerous_flow": 0.65},
+        "safe_api_replacement": {"buffer_overflow": 0.35, "command_injection": 0.55, "dangerous_flow": 0.60},
+        "isolation": {"command_injection": 0.72, "info_leak": 0.70, "dangerous_flow": 0.78},
+    }
+    for strat in strategies:
+        multipliers = type_multiplier.get(strat, {})
+        after = 0.0
+        for f in findings:
+            score = float(int(f.get("risk_score", 0)))
+            t = str(f.get("type") or "")
+            m = multipliers.get(t, 0.88)
+            after += score * m
+        delta = max(0.0, base_total - after)
+        impacts.append(
+            {
+                "strategy": strat,
+                "risk_before": int(base_total),
+                "risk_after": int(after),
+                "risk_reduction": int(delta),
+                "reduction_ratio": round((delta / base_total), 4) if base_total else 0.0,
+            }
+        )
+    impacts.sort(key=lambda r: (r["risk_reduction"], r["reduction_ratio"]), reverse=True)
+    return impacts
+
+
+def _apply_hybrid_trace_ranking(findings, trace_addresses=None, trace_functions=None, trace_weight=_DEFAULT_HYBRID_TRACE_WEIGHT):
+    trace_weight = max(0.0, min(float(trace_weight or _DEFAULT_HYBRID_TRACE_WEIGHT), _MAX_HYBRID_TRACE_WEIGHT))
+    addr_hits = set(str(a).lower() for a in (trace_addresses or []) if a is not None)
+    func_hits = set(str(f).lower() for f in (trace_functions or []) if f is not None)
+    has_trace_inputs = bool(addr_hits or func_hits)
+    ranked = []
+    for f in findings:
+        row = dict(f)
+        static_score = int(row.get("risk_score", 0))
+        addr = str(row.get("addr") or "").lower()
+        fn = str(row.get("function") or "").lower()
+        trace_signal = 1.0 if (addr in addr_hits or fn in func_hits) else 0.0
+        if not has_trace_inputs:
+            row["hybrid_risk_score"] = static_score
+        else:
+            hybrid = int((static_score * (1.0 - trace_weight)) + (100.0 * trace_signal * trace_weight))
+            row["hybrid_risk_score"] = max(static_score, hybrid) if trace_signal > 0 else hybrid
+        row["trace_observed"] = bool(trace_signal > 0)
+        ranked.append(row)
+    ranked.sort(
+        key=lambda f: (
+            int(f.get("hybrid_risk_score", 0)),
+            int(f.get("risk_score", 0)),
+            _SEVERITY_RANK.get(f.get("severity", "low"), 0),
+        ),
+        reverse=True,
+    )
+    return ranked
 
 
 def _resolve_scope(addr):
@@ -1478,6 +1815,134 @@ def _scan_hardcoded_creds(addr, limit, include_context):
     return findings
 
 
+def _collect_function_call_map(func_start_ea, max_items=1200):
+    """Collect normalized callee names for direct call instructions in a function."""
+    rows = []
+    count = 0
+    for item in idautils.FuncItems(func_start_ea):
+        if count >= max_items:
+            break
+        count += 1
+        for xref in idautils.XrefsFrom(item, 0):
+            if xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
+                continue
+            callee_name = idc.get_name(xref.to) or ""
+            callee_norm = _normalize_api_name(callee_name)
+            if not callee_norm:
+                continue
+            rows.append((item, callee_norm))
+    return rows
+
+
+def _scan_dangerous_flow(addr, limit, include_context):
+    """
+    Deep dangerous-call analysis:
+    - Finds dangerous sink callsites across binary (or one function scope).
+    - Tags direct vs indirect user-control signals.
+    - Downgrades confidence where sanitization signals are present.
+    """
+    scope_ea, err = _resolve_scope(addr)
+    if err:
+        return []
+
+    findings = []
+    per_sink_limit = max(24, limit * _DANGEROUS_FLOW_PER_SINK_MULTIPLIER)
+    call_map_cache = {}
+    source_tokens = tuple(sorted(_SOURCE_TOKENS))
+    sanitizer_tokens = tuple(sorted(_SANITIZER_TOKENS))
+
+    for sink in _DANGEROUS_FLOW_FUNCS:
+        refs = _find_xrefs_to_name(sink, per_sink_limit)
+        for call_ea in refs:
+            func = idaapi.get_func(call_ea)
+            if not func:
+                continue
+            if scope_ea is not None and func.start_ea != scope_ea:
+                continue
+
+            func_calls = call_map_cache.get(func.start_ea)
+            if func_calls is None:
+                func_calls = _collect_function_call_map(func.start_ea)
+                call_map_cache[func.start_ea] = func_calls
+
+            nearby_rows = _iter_disasm_window(
+                call_ea,
+                backward=_DANGEROUS_FLOW_WINDOW_BACK,
+                forward=_DANGEROUS_FLOW_WINDOW_FORWARD,
+            )
+            nearby_lines = [line for _, line in nearby_rows if line]
+            nearby_blob = " ".join(nearby_lines)
+
+            direct_source = any(tok in nearby_blob for tok in source_tokens)
+            direct_sanitizer = any(tok in nearby_blob for tok in sanitizer_tokens)
+
+            prior_calls = [name for ea, name in func_calls if ea < call_ea]
+            has_source_in_func = any(any(tok in cname for tok in source_tokens) for cname in prior_calls)
+            has_sanitizer_in_func = any(any(tok in cname for tok in sanitizer_tokens) for cname in prior_calls)
+
+            if not direct_source:
+                # Stronger direct signal if a source-like API call is near this sink call.
+                for ea, cname in func_calls:
+                    if ea >= call_ea:
+                        continue
+                    if call_ea - ea > _DANGEROUS_FLOW_NEARBY_DISTANCE:
+                        continue
+                    if any(tok in cname for tok in source_tokens):
+                        direct_source = True
+                        break
+
+            indirect_source = (not direct_source) and has_source_in_func
+            has_sanitizer = direct_sanitizer or has_sanitizer_in_func
+            sink_norm = _normalize_api_name(sink)
+            high_impact = sink_norm in _DANGEROUS_FLOW_HIGH_IMPACT
+
+            if direct_source and not has_sanitizer:
+                confidence = "high"
+                severity_override = "critical" if high_impact else "high"
+                control_path = "direct_user_control"
+            elif indirect_source and not has_sanitizer:
+                confidence = "medium"
+                severity_override = "high" if high_impact else "medium"
+                control_path = "indirect_user_control"
+            elif direct_source and has_sanitizer:
+                confidence = "medium"
+                severity_override = "medium"
+                control_path = "direct_with_sanitizer"
+            elif indirect_source and has_sanitizer:
+                confidence = "low"
+                severity_override = "low"
+                control_path = "indirect_with_sanitizer"
+            else:
+                confidence = "low"
+                severity_override = "medium" if high_impact else "low"
+                control_path = "no_user_control_signal"
+
+            desc = (
+                f"Dangerous sink {sink}() call; flow={control_path}; "
+                f"source_signal={'yes' if (direct_source or indirect_source) else 'no'}; "
+                f"sanitizer_signal={'yes' if has_sanitizer else 'no'}"
+            )
+            finding = _make_finding(
+                call_ea,
+                "dangerous_flow",
+                desc,
+                sink,
+                include_context=include_context,
+                confidence=confidence,
+                severity_override=severity_override,
+            )
+            finding["user_control"] = {
+                "direct": bool(direct_source),
+                "indirect": bool(indirect_source),
+                "sanitized_path": bool(has_sanitizer),
+                "flow_classification": control_path,
+            }
+            findings.append(finding)
+            if len(findings) >= limit * _DANGEROUS_FLOW_FINDINGS_MULTIPLIER:
+                return findings
+    return findings
+
+
 # Scanner dispatch table
 _SCANNERS = {
     "buffer_overflow":   _scan_buffer_overflow,
@@ -1490,17 +1955,26 @@ _SCANNERS = {
     "info_leak":         _scan_info_leak,
     "auth_bypass":       _scan_auth_bypass,
     "hardcoded_creds":   _scan_hardcoded_creds,
+    "dangerous_flow":    _scan_dangerous_flow,
 }
 
 
 @tool
 @idaread
 def vuln_scan(
-    action: Annotated[Literal["buffer_overflow", "format_string", "integer_overflow",
-                               "use_after_free", "command_injection", "race_condition",
-                               "null_deref", "info_leak", "auth_bypass", "hardcoded_creds",
-                               "scan_all", "classify", "osv_query", "intelligence_report"],
-                       "Vulnerability scan action"],
+    action: Annotated[
+        Literal[
+            # Base vulnerability families
+            "buffer_overflow", "format_string", "integer_overflow", "use_after_free",
+            "command_injection", "race_condition", "null_deref", "info_leak",
+            "auth_bypass", "hardcoded_creds", "dangerous_flow",
+            # Control/report actions
+            "scan_all", "classify", "osv_query", "intelligence_report",
+            # Advanced analysis actions
+            "taint_lattice", "exploit_chains", "patch_simulate", "memory_sync", "hybrid_rank",
+        ],
+        "Vulnerability scan action",
+    ],
     addr: Annotated[Optional[str], "Address or function to scan (default: all functions)"] = None,
     limit: Annotated[int, "Max results"] = 50,
     offset: Annotated[int, "Result offset (skip first N findings)"] = 0,
@@ -1510,6 +1984,13 @@ def vuln_scan(
     max_graph_depth: Annotated[int, "Maximum correlation graph depth (0-3) for intelligence outputs"] = 1,
     include_dataflow_graph: Annotated[bool, "Include compact finding correlation graph in scan_all/intelligence_report"] = True,
     include_remediation_plan: Annotated[bool, "Include prioritized remediation plan in scan_all/intelligence_report"] = True,
+    include_vuln_memory: Annotated[bool, "Use cross-binary vulnerability memory to enrich ranking"] = True,
+    persist_vuln_memory: Annotated[bool, "Persist scan signatures to cross-binary vulnerability memory"] = False,
+    vuln_memory_path: Annotated[Optional[str], "Optional custom path for cross-binary vulnerability memory JSON"] = None,
+    trace_addresses: Annotated[Optional[list[str]], "Executed/observed addresses for hybrid static+trace ranking"] = None,
+    trace_functions: Annotated[Optional[list[str]], "Executed/observed function names for hybrid static+trace ranking"] = None,
+    trace_weight: Annotated[float, "Hybrid ranking trace weight (0.0-0.9)"] = _DEFAULT_HYBRID_TRACE_WEIGHT,
+    patch_strategies: Annotated[Optional[list[str]], "Patch-simulation strategies (bounds_checks,input_sanitization,safe_api_replacement,isolation)"] = None,
     osv_coordinates: Annotated[Optional[list[str]], "OSV package coordinates (ecosystem:name@version or pkg:purl); used by osv_query and optional scan_all enrichment"] = None,
     osv_ecosystem: Annotated[Optional[str], "Default OSV ecosystem for shorthand coords like name@version"] = None,
     osv_endpoint: Annotated[str, "OSV API endpoint/base URL (default: https://api.osv.dev)"] = "https://api.osv.dev",
@@ -1528,11 +2009,17 @@ def vuln_scan(
     - info_leak: Find sensitive data in log/output calls [CWE-200]
     - auth_bypass: Find hardcoded auth comparisons [CWE-287]
     - hardcoded_creds: Find hardcoded credentials/keys in strings [CWE-798]
+    - dangerous_flow: Deep dangerous sink analysis with direct/indirect user-control signals [CWE-20]
     - scan_all: Run all scans, aggregate by severity
     - classify: Classify a specific address by CWE (requires addr)
     - osv_query: Query OSV for known vulnerable package versions
     - intelligence_report: Run all scans and build a correlated triage report
       with dataflow graph, coverage metrics, and remediation plan
+    - taint_lattice: Build interprocedural source->sink lattice from scanner findings
+    - exploit_chains: Synthesize semantic multi-stage exploit chains across functions
+    - patch_simulate: Estimate risk deltas for candidate mitigation strategies
+    - memory_sync: Persist and analyze cross-binary vulnerability memory/signatures
+    - hybrid_rank: Blend static risk with trace/coverage evidence for ranking
 
     Each finding: {addr, function, cwe, severity, type, description, pattern}
     """
@@ -1559,6 +2046,51 @@ def vuln_scan(
 
         profile = _normalize_scan_profile(scan_profile)
         settings = _profile_settings_for(profile)
+        trace_weight = max(0.0, min(float(trace_weight or _DEFAULT_HYBRID_TRACE_WEIGHT), _MAX_HYBRID_TRACE_WEIGHT))
+
+        def _collect_all_findings():
+            rows = []
+            per_scanner_limit = _scanner_limit(limit, profile)
+            for _, scanner in _SCANNERS.items():
+                rows.extend(scanner(addr, per_scanner_limit, include_context))
+            osv_meta_local = {"queried": [], "parse_errors": [], "osv_error": None}
+            if osv_coordinates:
+                osv_findings, parsed_queries, parse_errors, osv_error = _scan_osv_coordinates(
+                    osv_coordinates, osv_endpoint=osv_endpoint, osv_ecosystem=osv_ecosystem
+                )
+                rows.extend(osv_findings)
+                osv_meta_local = {
+                    "queried": parsed_queries,
+                    "parse_errors": parse_errors,
+                    "osv_error": osv_error,
+                }
+            rows = _enrich_findings_with_risk(rows, profile=profile)
+
+            should_persist_vuln_memory = bool(persist_vuln_memory) and action == "memory_sync"
+            resolved_vuln_memory_path = vuln_memory_path or _DEFAULT_VULN_MEMORY_PATH
+            vuln_memory = _load_vuln_memory(resolved_vuln_memory_path) if (include_vuln_memory or should_persist_vuln_memory) else None
+            if include_vuln_memory and vuln_memory:
+                rows = _enrich_findings_with_memory(rows, vuln_memory)
+
+            memory_write = {"enabled": bool(should_persist_vuln_memory), "ok": False, "error": None}
+            if should_persist_vuln_memory and vuln_memory is not None:
+                normalized_path = resolved_vuln_memory_path
+                path_error = None
+                try:
+                    normalized_path, path_err = validate_path_safe(resolved_vuln_memory_path)
+                    if path_err:
+                        path_error = path_err.get("message") or "Invalid vuln_memory_path"
+                except Exception as exc:
+                    path_error = str(exc)
+                if path_error:
+                    memory_write["error"] = path_error
+                else:
+                    vuln_memory = _merge_scan_into_memory(vuln_memory, rows)
+                    ok_mem, err_mem = _save_vuln_memory(vuln_memory, normalized_path)
+                    memory_write["ok"] = bool(ok_mem)
+                    memory_write["error"] = err_mem
+
+            return rows, osv_meta_local, vuln_memory, memory_write
 
         if action == "osv_query":
             if not osv_coordinates:
@@ -1643,40 +2175,101 @@ def vuln_scan(
                 "scan_profile": profile,
             }
 
-        if action in ("scan_all", "intelligence_report"):
-            all_findings = []
-            per_scanner_limit = _scanner_limit(limit, profile)
-            for scan_type, scanner in _SCANNERS.items():
-                hits = scanner(addr, per_scanner_limit, include_context)
-                all_findings.extend(hits)
-
-            osv_meta = {"queried": [], "parse_errors": [], "osv_error": None}
-            if osv_coordinates:
-                osv_findings, parsed_queries, parse_errors, osv_error = _scan_osv_coordinates(
-                    osv_coordinates, osv_endpoint=osv_endpoint, osv_ecosystem=osv_ecosystem
-                )
-                all_findings.extend(osv_findings)
-                osv_meta = {
-                    "queried": parsed_queries,
-                    "parse_errors": parse_errors,
-                    "osv_error": osv_error,
-                }
-
-            all_findings = _enrich_findings_with_risk(all_findings, profile=profile)
-            page, total, truncated = _dedupe_sort_paginate(
-                all_findings, limit=limit, offset=offset, severity=severity
+        if action in ("taint_lattice", "exploit_chains", "patch_simulate", "memory_sync", "hybrid_rank"):
+            all_findings, osv_meta, vuln_memory, memory_write = _collect_all_findings()
+            lattice = _build_interprocedural_taint_lattice(all_findings)
+            exploit_chains = _synthesize_exploit_chains(all_findings, lattice)
+            patch_impact = _simulate_patch_impact(all_findings, strategies=patch_strategies)
+            hybrid_ranked = _apply_hybrid_trace_ranking(
+                all_findings,
+                trace_addresses=trace_addresses,
+                trace_functions=trace_functions,
+                trace_weight=trace_weight,
             )
-            sev_counts, type_counts = _summary_counts(all_findings)
-            hotspots = _summarize_hotspots(all_findings, profile=profile)
-            attack_paths = _build_attack_paths(all_findings, profile=profile)
-            recommendations = _build_recommendations(all_findings, attack_paths)
-            coverage_metrics = _compute_coverage_metrics(all_findings)
+
+            if action == "taint_lattice":
+                return {
+                    "ok": True,
+                    "action": action,
+                    "lattice": lattice,
+                    "exploit_chains_preview": exploit_chains[:12],
+                    "count": int(lattice.get("edge_count", 0)),
+                    "scan_profile": profile,
+                }
+            if action == "exploit_chains":
+                return {
+                    "ok": True,
+                    "action": action,
+                    "chains": exploit_chains,
+                    "count": len(exploit_chains),
+                    "lattice_edges": lattice.get("edge_count", 0),
+                    "scan_profile": profile,
+                }
+            if action == "patch_simulate":
+                return {
+                    "ok": True,
+                    "action": action,
+                    "simulations": patch_impact,
+                    "best_strategy": patch_impact[0] if patch_impact else None,
+                    "count": len(patch_impact),
+                    "scan_profile": profile,
+                }
+            if action == "memory_sync":
+                memory_global = (vuln_memory or {}).get("global_signatures", {}) if isinstance(vuln_memory, dict) else {}
+                top_signatures = sorted(memory_global.items(), key=lambda kv: kv[1], reverse=True)[:30] if isinstance(memory_global, dict) else []
+                return {
+                    "ok": True,
+                    "action": action,
+                    "memory_path": vuln_memory_path or _DEFAULT_VULN_MEMORY_PATH,
+                    "memory_write": memory_write,
+                    "top_signatures": [{"signature": k, "count": int(v)} for k, v in top_signatures],
+                    "signature_count": len(memory_global) if isinstance(memory_global, dict) else 0,
+                    "osv": osv_meta,
+                    "scan_profile": profile,
+                }
+            # hybrid_rank
+            page, total, truncated = _dedupe_sort_paginate(
+                hybrid_ranked, limit=limit, offset=offset, severity=severity
+            )
+            return {
+                "ok": True,
+                "action": action,
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": truncated,
+                "trace_weight": trace_weight,
+                "findings": "\n".join(f.get("line", "") for f in page),
+                "items": page,
+                "trace_hit_count": sum(1 for f in hybrid_ranked if f.get("trace_observed")),
+                "scan_profile": profile,
+            }
+
+        if action in ("scan_all", "intelligence_report"):
+            all_findings, osv_meta, vuln_memory, memory_write = _collect_all_findings()
+            hybrid_ranked = _apply_hybrid_trace_ranking(
+                all_findings,
+                trace_addresses=trace_addresses,
+                trace_functions=trace_functions,
+                trace_weight=trace_weight,
+            )
+            lattice = _build_interprocedural_taint_lattice(all_findings)
+            exploit_chains = _synthesize_exploit_chains(all_findings, lattice)
+            patch_impact = _simulate_patch_impact(all_findings, strategies=patch_strategies)
+            page, total, truncated = _dedupe_sort_paginate(
+                hybrid_ranked, limit=limit, offset=offset, severity=severity
+            )
+            sev_counts, type_counts = _summary_counts(hybrid_ranked)
+            hotspots = _summarize_hotspots(hybrid_ranked, profile=profile)
+            attack_paths = _build_attack_paths(hybrid_ranked, profile=profile)
+            recommendations = _build_recommendations(hybrid_ranked, attack_paths)
+            coverage_metrics = _compute_coverage_metrics(hybrid_ranked)
             dataflow_graph = (
-                _build_dataflow_graph(all_findings, profile=profile, max_depth=max_graph_depth)
+                _build_dataflow_graph(hybrid_ranked, profile=profile, max_depth=max_graph_depth)
                 if include_dataflow_graph else None
             )
             remediation_plan = (
-                _build_remediation_plan(all_findings, hotspots, attack_paths)
+                _build_remediation_plan(hybrid_ranked, hotspots, attack_paths)
                 if include_remediation_plan else None
             )
 
@@ -1691,13 +2284,25 @@ def vuln_scan(
                 "items": page,
                 "severity_counts": sev_counts,
                 "type_counts": type_counts,
-                "risk_histogram": _risk_histogram(all_findings),
+                "risk_histogram": _risk_histogram(hybrid_ranked),
                 "hotspots": hotspots,
                 "attack_paths": attack_paths,
                 "recommendations": recommendations,
                 "coverage_metrics": coverage_metrics,
                 "dataflow_graph": dataflow_graph,
                 "remediation_plan": remediation_plan,
+                "taint_lattice": lattice,
+                "exploit_chains": exploit_chains[:64],
+                "patch_simulation": patch_impact,
+                "hybrid_trace": {
+                    "trace_weight": trace_weight,
+                    "trace_hit_count": sum(1 for f in hybrid_ranked if f.get("trace_observed")),
+                },
+                "vuln_memory": {
+                    "path": vuln_memory_path or _DEFAULT_VULN_MEMORY_PATH,
+                    "write": memory_write,
+                    "enabled": bool(include_vuln_memory or persist_vuln_memory),
+                },
                 "scan_profile": profile,
                 "max_graph_depth": max(0, min(max_graph_depth, _MAX_GRAPH_DEPTH)),
                 "osv": osv_meta,

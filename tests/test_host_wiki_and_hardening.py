@@ -656,6 +656,7 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         cls.search_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search.py").read_text(encoding="utf-8")
         cls.calc_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "calc.py").read_text(encoding="utf-8")
+        cls.stdio_source = (root / "ida_mcp_stdio.py").read_text(encoding="utf-8")
 
     def test_search_signature_keeps_semantic_knobs(self):
         self.assertIn("semantic_action: Annotated[Optional[str]", self.search_source)
@@ -686,6 +687,42 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         self.assertIn("semantic_matching import normalize_action, semantic_score, semantic_tokens", self.calc_source)
         self.assertNotIn("\nimport difflib\n", self.search_source)
         self.assertNotIn("\nimport difflib\n", self.calc_source)
+
+    def test_search_exposes_semantic_instruction_actions(self):
+        self.assertIn('"mnemonic"', self.search_source)
+        self.assertIn('"instruction"', self.search_source)
+        self.assertIn('elif action == "mnemonic":', self.search_source)
+        self.assertIn('elif action == "instruction":', self.search_source)
+
+    def test_search_semantic_ranking_is_bounded(self):
+        self.assertIn("ranked_heap = []", self.search_source)
+        self.assertIn("_FIND_INSTRUCTION_LIMIT_MULTIPLIER", self.search_source)
+        self.assertIn("heapq.heapreplace", self.search_source)
+
+    def test_execute_tool_legacy_bridge_does_not_capture_search(self):
+        marker = "legacy_threat_tools = {"
+        idx = self.stdio_source.find(marker)
+        self.assertGreaterEqual(idx, 0)
+        snippet = self.stdio_source[idx : idx + 700]
+        self.assertNotIn('"search"', snippet)
+
+    def test_vuln_scan_actions_include_all_advanced_capabilities(self):
+        for action_name in (
+            "dangerous_flow",
+            "taint_lattice",
+            "exploit_chains",
+            "patch_simulate",
+            "memory_sync",
+            "hybrid_rank",
+        ):
+            self.assertIn(f'"{action_name}"', self.stdio_source)
+
+    def test_decompilation_tools_expose_advanced_action_sets(self):
+        for action_name in ("semantic_decompile", "decomp_dataflow"):
+            self.assertIn(f'"{action_name}"', self.stdio_source)
+        for action_name in ("dominance_map", "var_dependency_graph"):
+            self.assertIn(f'"{action_name}"', self.stdio_source)
+        self.assertIn('"def_use_graph"', self.stdio_source)
 class TestGadgetSemanticIndex(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="gadget-semantic-test-")
