@@ -52,6 +52,12 @@ class TestTraceAnalysisDynamicIntelAst(unittest.TestCase):
         for action in NEW_ACTIONS:
             self.assertIn(f'elif action == "{action}":', self.source)
 
+    def test_cross_run_diff_normalizes_inline_trace_lists(self):
+        self.assertIn("raw_trace_a = kwargs.get(\"trace_a\")", self.source)
+        self.assertIn("raw_trace_b = kwargs.get(\"trace_b\")", self.source)
+        self.assertIn("_parse_addrs(raw_trace_a)", self.source)
+        self.assertIn("_parse_addrs(raw_trace_b)", self.source)
+
 
 class TestHostToolActionsDynamicIntel(unittest.TestCase):
     def test_tool_actions_trace_analysis_contains_dynamic_intel_actions(self):
