@@ -843,7 +843,7 @@ def _save_vuln_memory(memory, path=None):
     p = path or _DEFAULT_VULN_MEMORY_PATH
     try:
         parent_dir = os.path.dirname(p)
-        if parent_dir:
+        if parent_dir and not os.path.isdir(parent_dir):
             os.makedirs(parent_dir, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             _json.dump(memory, f, sort_keys=True)
@@ -1083,7 +1083,7 @@ def _apply_hybrid_trace_ranking(findings, trace_addresses=None, trace_functions=
             row["hybrid_risk_score"] = static_score
         else:
             hybrid = int((static_score * (1.0 - trace_weight)) + (100.0 * trace_signal * trace_weight))
-            row["hybrid_risk_score"] = max(static_score, hybrid) if trace_signal > 0 else static_score
+            row["hybrid_risk_score"] = max(static_score, hybrid) if trace_signal > 0 else hybrid
         row["trace_observed"] = bool(trace_signal > 0)
         ranked.append(row)
     ranked.sort(
