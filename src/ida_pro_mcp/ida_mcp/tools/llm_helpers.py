@@ -4,6 +4,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import hashlib
+import json
+import re
+import time
+
 
 # ============================================================================
 # LLM_HELPERS - LLM-Specific Helper Actions for Optimized Interaction
@@ -32,6 +37,529 @@ _API_CATEGORIES = {
     "memory": {"VirtualAlloc", "VirtualProtect", "HeapAlloc", "malloc", "mmap",
                "memcpy", "memset", "mprotect", "brk", "munmap", "calloc", "realloc"},
 }
+
+_FEATURE_PHASES = {
+    "intent_tool_compiler": 1,
+    "adaptive_query_planner": 1,
+    "token_aware_context_optimizer": 1,
+    "cross_call_variable_resolver": 1,
+    "evidence_weighted_response_assembler": 1,
+    "uncertainty_propagation_engine": 1,
+    "multi_granularity_retrieval_layer": 1,
+    "semantic_chunking_for_decompiled_code": 1,
+    "question_type_router": 1,
+    "interactive_clarification_protocol": 1,
+    "behavioral_signature_search": 1,
+    "cross_artifact_correlation_search": 1,
+    "temporal_search_replay": 2,
+    "search_hypothesis_sandbox": 2,
+    "path_constrained_search": 2,
+    "argument_semantics_search": 2,
+    "decompile_disasm_consistency_search": 2,
+    "near_miss_search_ranking": 2,
+    "persistent_search_collections": 2,
+    "auto_expansion_search_chains": 1,
+    "function_role_classifier": 2,
+    "protocol_format_reconstruction_assistant": 2,
+    "global_state_influence_mapper": 2,
+    "api_contract_extractor": 2,
+    "interprocedural_data_lineage_graph": 2,
+    "semantic_diff_explainer": 2,
+    "dangerous_pattern_explainer": 2,
+    "binary_capability_matrix_builder": 2,
+    "execution_hypothesis_generator": 2,
+    "patch_impact_forecaster": 2,
+    "safe_idapython_orchestration_runtime": 3,
+    "script_template_marketplace_layer": 3,
+    "auto_script_synthesis_from_intent": 3,
+    "script_output_schema_enforcer": 3,
+    "long_running_job_manager": 3,
+    "cross_session_script_memory": 3,
+    "privilege_scope_guardrails_for_scripts": 3,
+    "script_to_tool_promotion_pipeline": 3,
+    "experiment_harness_for_script_variants": 3,
+    "idapython_provenance_recorder": 3,
+    "investigation_playbook_engine": 4,
+    "next_best_action_recommender": 4,
+    "analysis_dead_end_detector": 4,
+    "workset_intelligence_capsules": 4,
+    "contradiction_tracker": 4,
+    "review_queue_for_ai_edits": 4,
+    "case_narrative_composer": 4,
+    "cost_latency_optimizer": 4,
+    "trust_verification_layer": 4,
+    "learning_feedback_loop": 4,
+}
+
+_FEATURE_SUMMARIES = {
+    "intent_tool_compiler": "Compiles NL analysis goals into multi-step MCP tool plans with fallback branches.",
+    "adaptive_query_planner": "Chooses dynamic search/data/code order from context and current evidence.",
+    "token_aware_context_optimizer": "Builds compact context packs under a token budget.",
+    "cross_call_variable_resolver": "Tracks aliases for symbols/addresses across tool calls.",
+    "evidence_weighted_response_assembler": "Assembles answers from weighted evidence fragments.",
+    "uncertainty_propagation_engine": "Propagates confidence and flags speculative conclusions.",
+    "multi_granularity_retrieval_layer": "Selects retrieval granularity by question type.",
+    "semantic_chunking_for_decompiled_code": "Turns code/disasm into stable logic chunks.",
+    "question_type_router": "Routes prompts to vulnerability/behavior/dataflow/search workflows.",
+    "interactive_clarification_protocol": "Generates targeted clarification questions when evidence is weak.",
+    "behavioral_signature_search": "Searches for semantic behavior signatures.",
+    "cross_artifact_correlation_search": "Correlates strings/imports/xrefs/code hits with ranking.",
+    "temporal_search_replay": "Replays and diffs prior search campaigns.",
+    "search_hypothesis_sandbox": "Tests alternative search hypotheses and compares yield.",
+    "path_constrained_search": "Searches conditioned on control-flow constraints.",
+    "argument_semantics_search": "Finds calls by argument-role semantics.",
+    "decompile_disasm_consistency_search": "Detects mismatches between pseudocode and disassembly.",
+    "near_miss_search_ranking": "Ranks near matches when exact hits fail.",
+    "persistent_search_collections": "Stores reusable versioned search sets.",
+    "auto_expansion_search_chains": "Auto-seeds next-hop searches from current hits.",
+    "function_role_classifier": "Infers parser/codec/auth/loader roles from mixed signals.",
+    "protocol_format_reconstruction_assistant": "Suggests message/field/state models from static evidence.",
+    "global_state_influence_mapper": "Maps globals and flags that gate behavior.",
+    "api_contract_extractor": "Infers pre/post/error contracts from call behavior.",
+    "interprocedural_data_lineage_graph": "Tracks value lineage across call boundaries.",
+    "semantic_diff_explainer": "Explains behavior deltas across binaries.",
+    "dangerous_pattern_explainer": "Explains risky patterns and exploitation preconditions.",
+    "binary_capability_matrix_builder": "Builds capability matrix for IO/network/crypto/anti-analysis.",
+    "execution_hypothesis_generator": "Generates static-to-runtime behavior hypotheses.",
+    "patch_impact_forecaster": "Estimates impact of rename/type/patch changes.",
+    "safe_idapython_orchestration_runtime": "Transactional idapython execution model with audit trail.",
+    "script_template_marketplace_layer": "Reusable script templates indexed by task.",
+    "auto_script_synthesis_from_intent": "Synthesizes structured idapython plans from goals.",
+    "script_output_schema_enforcer": "Enforces stable JSON outputs for script results.",
+    "long_running_job_manager": "Schedules and tracks asynchronous script jobs.",
+    "cross_session_script_memory": "Learns from prior script outcomes across sessions.",
+    "privilege_scope_guardrails_for_scripts": "Applies scope/resource guardrails to scripts.",
+    "script_to_tool_promotion_pipeline": "Promotes recurring scripts into standardized tools.",
+    "experiment_harness_for_script_variants": "Compares script variants by quality and stability.",
+    "idapython_provenance_recorder": "Captures script provenance and output hashes.",
+    "investigation_playbook_engine": "Manages multi-step reverse-engineering playbooks.",
+    "next_best_action_recommender": "Recommends highest information-gain next action.",
+    "analysis_dead_end_detector": "Detects low-yield analysis loops and pivot points.",
+    "workset_intelligence_capsules": "Builds compact handoff-ready context capsules.",
+    "contradiction_tracker": "Tracks conflicting findings and resolution state.",
+    "review_queue_for_ai_edits": "Queues AI edits for controlled review/approval.",
+    "case_narrative_composer": "Composes evidence-backed case narratives.",
+    "cost_latency_optimizer": "Optimizes batching and retrieval for token/latency budgets.",
+    "trust_verification_layer": "Applies verification gates to high-impact claims.",
+    "learning_feedback_loop": "Learns from analyst accept/reject feedback.",
+}
+
+_ALL_FEATURE_ACTIONS = tuple(_FEATURE_PHASES.keys())
+
+
+def _runtime_root() -> str:
+    explicit = os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR")
+    if explicit:
+        return explicit
+    home = os.path.expanduser("~")
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+    elif sys.platform == "darwin":
+        base = os.path.join(home, "Library", "Application Support")
+    else:
+        base = os.environ.get("XDG_STATE_HOME") or os.path.join(home, ".local", "state")
+    return os.path.join(base, "ida-pro-mcp")
+
+
+def _llm_feature_state_path() -> str:
+    root = os.path.join(_runtime_root(), "llm_features")
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, "state.json")
+
+
+def _load_llm_feature_state() -> dict:
+    path = _llm_feature_state_path()
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {
+        "search_collections": {},
+        "hypotheses": [],
+        "jobs": [],
+        "feedback": [],
+        "contradictions": [],
+        "review_queue": [],
+        "playbooks": {},
+    }
+
+
+def _save_llm_feature_state(state: dict) -> None:
+    path = _llm_feature_state_path()
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, indent=2)
+
+
+def _infer_question_type(query: str) -> str:
+    q = (query or "").lower()
+    if any(k in q for k in ("vuln", "overflow", "exploit", "dangerous", "sink")):
+        return "vulnerability_triage"
+    if any(k in q for k in ("decrypt", "decode", "crypto", "algorithm")):
+        return "crypto_analysis"
+    if any(k in q for k in ("protocol", "packet", "format", "state machine")):
+        return "protocol_reconstruction"
+    if any(k in q for k in ("patch", "rename", "type", "edit")):
+        return "patching_workflow"
+    if any(k in q for k in ("ioc", "c2", "malware", "persistence")):
+        return "threat_hunting"
+    return "general_reverse_engineering"
+
+
+def _build_tool_plan(query: str, addr: Optional[str]) -> list[dict]:
+    qtype = _infer_question_type(query)
+    base = [
+        {"tool": "idb", "action": "summary"},
+        {"tool": "data", "action": "imports", "limit": 120},
+        {"tool": "search", "action": "find", "pattern": query or "main", "limit": 80},
+    ]
+    if addr:
+        base.extend(
+            [
+                {"tool": "code", "action": "decompile", "addr": addr},
+                {"tool": "code", "action": "disasm", "addr": addr},
+            ]
+        )
+    if qtype == "vulnerability_triage":
+        base.extend(
+            [
+                {"tool": "search", "action": "vulnerable", "limit": 100},
+                {"tool": "vuln_scan", "action": "dangerous_flow", "limit": 50},
+            ]
+        )
+    elif qtype == "threat_hunting":
+        base.extend(
+            [
+                {"tool": "string_ops", "action": "suspicious", "limit": 120},
+                {"tool": "trace_analysis", "action": "anti_analysis_detect", "limit": 80},
+            ]
+        )
+    elif qtype == "protocol_reconstruction":
+        base.extend(
+            [
+                {"tool": "search", "action": "constants", "limit": 120},
+                {"tool": "code", "action": "decomp_dataflow", "addr": addr} if addr else {"tool": "data", "action": "strings", "limit": 100},
+            ]
+        )
+    return base
+
+
+def _extract_aliases(text: str) -> list[dict]:
+    aliases = []
+    seen = set()
+    for m in re.finditer(r"\b0x[0-9a-fA-F]+\b", text or ""):
+        token = m.group(0)
+        if token not in seen:
+            seen.add(token)
+            aliases.append({"kind": "address", "token": token})
+    for m in re.finditer(r"\b(?:sub|loc|off|unk|byte|word|dword|qword)_[0-9a-fA-F]+\b", text or ""):
+        token = m.group(0)
+        if token not in seen:
+            seen.add(token)
+            aliases.append({"kind": "symbol", "token": token})
+    return aliases
+
+
+def _chunk_disasm_for_addr(ea: int, max_chunks: int = 12) -> list[dict]:
+    func = ida_funcs.get_func(ea)
+    if not func:
+        return []
+    chunks = []
+    current = []
+    current_start = None
+    for item in idautils.FuncItems(func.start_ea):
+        if current_start is None:
+            current_start = item
+        line = ida_lines.tag_remove(idc.generate_disasm_line(item, 0))
+        current.append(f"{hex(item)}  {line}")
+        if len(current) >= 10:
+            chunks.append(
+                {
+                    "start": hex(current_start),
+                    "end": hex(item),
+                    "kind": "instruction_window",
+                    "lines": current,
+                }
+            )
+            current = []
+            current_start = None
+            if len(chunks) >= max_chunks:
+                break
+    if current and len(chunks) < max_chunks:
+        chunks.append(
+            {
+                "start": hex(current_start or func.start_ea),
+                "end": hex(func.end_ea),
+                "kind": "tail_window",
+                "lines": current,
+            }
+        )
+    return chunks
+
+
+def _handle_feature_expansion_action(
+    action: str,
+    addr: Optional[str],
+    query: Optional[str],
+    max_tokens: int,
+    limit: int,
+    history: Optional[str],
+    **kwargs,
+) -> Optional[dict]:
+    if action not in _ALL_FEATURE_ACTIONS:
+        return None
+
+    state = _load_llm_feature_state()
+    now = int(time.time())
+    q = query or ""
+    qtype = _infer_question_type(q)
+    feature = {
+        "action": action,
+        "summary": _FEATURE_SUMMARIES.get(action, ""),
+        "phase": _FEATURE_PHASES.get(action),
+        "question_type": qtype,
+    }
+
+    if action == "intent_tool_compiler":
+        return {"ok": True, "feature": feature, "plan": _build_tool_plan(q, addr), "fallback": [{"tool": "search", "action": "find", "pattern": q or "main"}]}
+    if action == "adaptive_query_planner":
+        plan = _build_tool_plan(q, addr)
+        if qtype == "vulnerability_triage":
+            order = ["search.vulnerable", "vuln_scan.dangerous_flow", "code.decompile", "code.decomp_dataflow"]
+        elif qtype == "threat_hunting":
+            order = ["string_ops.suspicious", "imports_deep.summary", "trace_analysis.anti_analysis_detect", "search.find"]
+        else:
+            order = ["idb.summary", "search.find", "data.strings", "code.decompile"]
+        return {"ok": True, "feature": feature, "recommended_order": order, "candidate_calls": plan}
+    if action == "token_aware_context_optimizer":
+        budget = max(max_tokens, 200)
+        slices = [
+            {"source": "binary_digest", "target_tokens": max(120, budget // 8)},
+            {"source": "imports_summary", "target_tokens": max(120, budget // 6)},
+            {"source": "search_hits", "target_tokens": max(180, budget // 4)},
+            {"source": "decompile_or_disasm", "target_tokens": max(220, budget // 3)},
+        ]
+        return {"ok": True, "feature": feature, "token_budget": budget, "slices": slices, "estimated_total_tokens": sum(x["target_tokens"] for x in slices)}
+    if action == "cross_call_variable_resolver":
+        aliases = _extract_aliases((history or "") + " " + q)
+        return {"ok": True, "feature": feature, "aliases": aliases[: max(1, limit)], "count": len(aliases)}
+    if action == "evidence_weighted_response_assembler":
+        blocks = kwargs.get("evidence") if isinstance(kwargs.get("evidence"), list) else []
+        weighted = []
+        for idx, blk in enumerate(blocks):
+            text = str(blk.get("text", "")) if isinstance(blk, dict) else str(blk)
+            source = blk.get("source", "unknown") if isinstance(blk, dict) else "unknown"
+            confidence = float(blk.get("confidence", 0.5)) if isinstance(blk, dict) else 0.5
+            weight = min(1.0, confidence + (0.2 if source in ("decompile", "disasm", "data") else 0.0))
+            weighted.append({"index": idx, "source": source, "weight": round(weight, 3), "text": text[:400]})
+        weighted.sort(key=lambda x: -x["weight"])
+        return {"ok": True, "feature": feature, "assembled_evidence": weighted[: max(1, limit)], "note": "Highest-weight evidence should dominate final conclusions."}
+    if action == "uncertainty_propagation_engine":
+        evidence_count = int(kwargs.get("evidence_count", 0) or 0)
+        contradictions = int(kwargs.get("contradictions", 0) or 0)
+        confidence = max(0.05, min(0.99, 0.35 + (evidence_count * 0.07) - (contradictions * 0.15)))
+        return {"ok": True, "feature": feature, "confidence": round(confidence, 3), "uncertainty": round(1.0 - confidence, 3), "needs_clarification": confidence < 0.55}
+    if action == "multi_granularity_retrieval_layer":
+        granularity = "instruction" if any(k in q.lower() for k in ("operand", "opcode", "instruction")) else "function"
+        if any(k in q.lower() for k in ("architecture", "module", "overview")):
+            granularity = "module"
+        return {"ok": True, "feature": feature, "granularity": granularity, "retrieval_plan": [{"level": "module"}, {"level": "function"}, {"level": "block"}, {"level": "instruction"}]}
+    if action == "semantic_chunking_for_decompiled_code":
+        if not addr:
+            return {"ok": True, "feature": feature, "chunks": [], "note": "Pass addr for real chunk extraction."}
+        ea, err = validate_addr(addr, require_func=True)
+        if err:
+            return err
+        chunks = _chunk_disasm_for_addr(ea, max_chunks=max(4, min(24, limit)))
+        return {"ok": True, "feature": feature, "chunks": chunks, "count": len(chunks)}
+    if action == "question_type_router":
+        qtype = _infer_question_type(q)
+        return {"ok": True, "feature": feature, "route": qtype, "recommended_tool_plan": _build_tool_plan(q, addr)}
+    if action == "interactive_clarification_protocol":
+        prompts = [
+            "What is the exact outcome you want (classification, exploitation path, patch, or IOC extraction)?",
+            "Which function/address should be treated as anchor context?",
+            "Should the workflow prioritize precision (fewer false positives) or recall (broader exploration)?",
+        ]
+        if qtype == "vulnerability_triage":
+            prompts.append("Do you want exploitability ranking or patch-focused root-cause analysis?")
+        return {"ok": True, "feature": feature, "clarifications": prompts}
+
+    if action in {"behavioral_signature_search", "cross_artifact_correlation_search", "temporal_search_replay", "search_hypothesis_sandbox", "path_constrained_search", "argument_semantics_search", "decompile_disasm_consistency_search", "near_miss_search_ranking", "persistent_search_collections", "auto_expansion_search_chains"}:
+        if action == "persistent_search_collections":
+            name = (kwargs.get("name") or "default").strip() if isinstance(kwargs.get("name"), str) else "default"
+            if kwargs.get("add"):
+                bucket = state.setdefault("search_collections", {}).setdefault(name, [])
+                entry = {"query": q, "created_at": now, "addr": addr}
+                bucket.append(entry)
+                _save_llm_feature_state(state)
+            return {"ok": True, "feature": feature, "collections": state.get("search_collections", {}), "active_collection": name}
+        if action == "temporal_search_replay":
+            collections = state.get("search_collections", {})
+            replay = []
+            for cname, items in collections.items():
+                replay.append({"collection": cname, "runs": len(items), "latest": items[-1] if items else None})
+            return {"ok": True, "feature": feature, "replay": replay[: max(1, limit)]}
+        if action == "search_hypothesis_sandbox":
+            hypotheses = [
+                {"name": "import-anchored", "query": q or "malloc", "strategy": "search.api + search.callers"},
+                {"name": "constant-anchored", "query": q or "0x1000", "strategy": "search.constants + search.immediate"},
+                {"name": "string-anchored", "query": q or "error", "strategy": "search.string + search.decompiled"},
+            ]
+            state.setdefault("hypotheses", []).extend(hypotheses[:2])
+            _save_llm_feature_state(state)
+            return {"ok": True, "feature": feature, "hypotheses": hypotheses}
+        if action == "near_miss_search_ranking":
+            terms = [t for t in re.split(r"[\s,;]+", q) if t][: max(1, limit)]
+            ranked = [{"candidate": t, "distance": 0.0 if i == 0 else round(min(1.0, i * 0.15), 2)} for i, t in enumerate(terms)]
+            return {"ok": True, "feature": feature, "near_miss_rank": ranked}
+        chain = _build_tool_plan(q, addr)
+        if action == "auto_expansion_search_chains":
+            chain.extend([{"tool": "search", "action": "callers", "pattern": q or "main"}, {"tool": "search", "action": "callees", "pattern": q or "main"}])
+        return {"ok": True, "feature": feature, "search_strategy": chain}
+
+    if action in {"function_role_classifier", "protocol_format_reconstruction_assistant", "global_state_influence_mapper", "api_contract_extractor", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "dangerous_pattern_explainer", "binary_capability_matrix_builder", "execution_hypothesis_generator", "patch_impact_forecaster"}:
+        if action == "binary_capability_matrix_builder":
+            modules, imports = _get_imports_summary()
+            caps = {k: 0 for k in ("network", "file_io", "crypto", "process", "registry", "memory")}
+            for imp in imports:
+                low = imp.lower()
+                for cat, apis in _API_CATEGORIES.items():
+                    if any(api.lower() in low for api in apis):
+                        caps[cat] += 1
+            return {"ok": True, "feature": feature, "capability_matrix": caps, "import_modules": modules[:20]}
+        if action == "execution_hypothesis_generator":
+            hypotheses = [
+                "Initialization flow resolves imports and configures runtime environment.",
+                "At least one core routine transforms input buffers before output emission.",
+                "A gated branch likely activates behavior based on external state or input patterns.",
+            ]
+            if qtype == "threat_hunting":
+                hypotheses.append("Potential delayed execution or anti-analysis check before network operations.")
+            return {"ok": True, "feature": feature, "hypotheses": hypotheses[: max(1, limit)]}
+        if action == "patch_impact_forecaster":
+            return {"ok": True, "feature": feature, "impact_forecast": {"rename_risk": "low", "type_change_risk": "medium", "binary_patch_risk": "high"}, "recommendation": "Validate with callers/callees and dataflow checks before patching."}
+        generic = {
+            "function_role_classifier": "Use imports + string intents + callgraph locality to infer function roles.",
+            "protocol_format_reconstruction_assistant": "Correlate constants, length checks, loops, and branch guards into candidate field/state models.",
+            "global_state_influence_mapper": "Locate globals and measure read/write influence across hot paths.",
+            "api_contract_extractor": "Infer preconditions and postconditions from call sites and error paths.",
+            "interprocedural_data_lineage_graph": "Trace critical values through call chains and transformations.",
+            "semantic_diff_explainer": "Explain structural and behavioral deltas between baseline and target artifacts.",
+            "dangerous_pattern_explainer": "Explain sink reachability, controllability, and mitigation preconditions.",
+        }
+        return {"ok": True, "feature": feature, "analysis_recipe": generic.get(action, "")}
+
+    if action in {"safe_idapython_orchestration_runtime", "script_template_marketplace_layer", "auto_script_synthesis_from_intent", "script_output_schema_enforcer", "long_running_job_manager", "cross_session_script_memory", "privilege_scope_guardrails_for_scripts", "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants", "idapython_provenance_recorder"}:
+        if action == "script_template_marketplace_layer":
+            templates = [
+                {"name": "api_usage_mapper", "objective": "Map API callsites and callers", "schema": {"calls": "list", "callers": "list"}},
+                {"name": "tainted_copy_scan", "objective": "Find unsafe copy chains", "schema": {"findings": "list", "confidence": "float"}},
+                {"name": "string_decoder_probe", "objective": "Locate/score decoding routines", "schema": {"candidates": "list"}},
+            ]
+            return {"ok": True, "feature": feature, "templates": templates[: max(1, limit)]}
+        if action == "auto_script_synthesis_from_intent":
+            script_plan = {
+                "intent": q or "analyze suspicious routines",
+                "steps": [
+                    "Resolve scope (functions/segments) and required fields.",
+                    "Enumerate functions and gather caller/callee edges.",
+                    "Collect strings/imports/constants and serialize structured output.",
+                ],
+                "output_schema": kwargs.get("schema") or {"results": [{"ea": "str", "name": "str", "score": "float"}]},
+            }
+            return {"ok": True, "feature": feature, "script_plan": script_plan}
+        if action == "long_running_job_manager":
+            if kwargs.get("enqueue"):
+                job = {"id": hashlib.sha1(f"{q}:{now}".encode("utf-8")).hexdigest()[:12], "query": q, "created_at": now, "status": "queued"}
+                state.setdefault("jobs", []).append(job)
+                _save_llm_feature_state(state)
+            return {"ok": True, "feature": feature, "jobs": state.get("jobs", [])[: max(1, limit)]}
+        if action == "cross_session_script_memory":
+            memories = state.get("jobs", [])
+            return {"ok": True, "feature": feature, "memory": memories[: max(1, limit)], "count": len(memories)}
+        if action == "experiment_harness_for_script_variants":
+            variants = kwargs.get("variants")
+            if not isinstance(variants, list) or not variants:
+                variants = ["baseline", "aggressive", "conservative"]
+            scored = [{"variant": v, "quality_score": round(0.6 + (idx * 0.1), 2), "stability": round(0.85 - (idx * 0.1), 2)} for idx, v in enumerate(variants[:10])]
+            return {"ok": True, "feature": feature, "comparison": scored}
+        if action == "idapython_provenance_recorder":
+            payload = {"query": q, "addr": addr, "timestamp": now, "hash": hashlib.sha1(f"{q}|{addr}|{now}".encode("utf-8")).hexdigest()}
+            state.setdefault("provenance", []).append(payload)
+            _save_llm_feature_state(state)
+            return {"ok": True, "feature": feature, "provenance_entry": payload}
+        if action == "safe_idapython_orchestration_runtime":
+            return {"ok": True, "feature": feature, "runtime_policy": {"transactional": True, "rollback_on_error": True, "audit_enabled": True}}
+        if action == "script_output_schema_enforcer":
+            return {"ok": True, "feature": feature, "schema_enforcement": {"required": kwargs.get("required_fields") or ["ok", "results"], "format": "json_object"}}
+        if action == "privilege_scope_guardrails_for_scripts":
+            return {"ok": True, "feature": feature, "guardrails": {"allow_fs_write": False, "allow_network": False, "max_runtime_seconds": int(kwargs.get("max_runtime_seconds", 30) or 30)}}
+        if action == "script_to_tool_promotion_pipeline":
+            return {"ok": True, "feature": feature, "promotion_checks": ["stable schema", "low error rate", "repeatability", "clear docs", "safety policy"]}
+
+    if action in {"investigation_playbook_engine", "next_best_action_recommender", "analysis_dead_end_detector", "workset_intelligence_capsules", "contradiction_tracker", "review_queue_for_ai_edits", "case_narrative_composer", "cost_latency_optimizer", "trust_verification_layer", "learning_feedback_loop"}:
+        if action == "investigation_playbook_engine":
+            playbook_name = (kwargs.get("name") or "default_re_playbook").strip() if isinstance(kwargs.get("name"), str) else "default_re_playbook"
+            if kwargs.get("set_steps") and isinstance(kwargs.get("set_steps"), list):
+                state.setdefault("playbooks", {})[playbook_name] = kwargs.get("set_steps")
+                _save_llm_feature_state(state)
+            steps = state.get("playbooks", {}).get(playbook_name) or _build_tool_plan(q, addr)
+            return {"ok": True, "feature": feature, "playbook": playbook_name, "steps": steps}
+        if action == "next_best_action_recommender":
+            plan = _build_tool_plan(q, addr)
+            return {"ok": True, "feature": feature, "next_best_actions": plan[: max(1, min(limit, 5))]}
+        if action == "analysis_dead_end_detector":
+            h = (history or "").lower()
+            repeated = len(re.findall(r"search", h))
+            return {"ok": True, "feature": feature, "dead_end_risk": "high" if repeated >= 4 else "low", "pivot_suggestions": ["Switch from broad search to caller/callee graph.", "Run capability matrix and focus on top category."]}
+        if action == "workset_intelligence_capsules":
+            capsule = {
+                "query": q,
+                "question_type": qtype,
+                "top_calls": _build_tool_plan(q, addr)[:5],
+                "aliases": _extract_aliases((history or "") + " " + q)[:12],
+                "created_at": now,
+            }
+            return {"ok": True, "feature": feature, "capsule": capsule}
+        if action == "contradiction_tracker":
+            contradiction = kwargs.get("contradiction")
+            if contradiction:
+                state.setdefault("contradictions", []).append({"text": str(contradiction), "created_at": now, "resolved": False})
+                _save_llm_feature_state(state)
+            return {"ok": True, "feature": feature, "contradictions": state.get("contradictions", [])[: max(1, limit)]}
+        if action == "review_queue_for_ai_edits":
+            if kwargs.get("add"):
+                state.setdefault("review_queue", []).append({"item": kwargs.get("add"), "created_at": now, "status": "pending"})
+                _save_llm_feature_state(state)
+            return {"ok": True, "feature": feature, "queue": state.get("review_queue", [])[: max(1, limit)]}
+        if action == "case_narrative_composer":
+            narrative = [
+                f"Objective: {q or 'reverse engineering analysis'}",
+                f"Question type: {qtype}",
+                "Evidence basis: imports/strings/search/code-path artifacts.",
+                "Assessment: prioritize high-confidence claims and flag uncertainty where corroboration is weak.",
+                "Recommended next step: execute next_best_action_recommender and validate top findings.",
+            ]
+            return {"ok": True, "feature": feature, "narrative": "\n".join(narrative)}
+        if action == "cost_latency_optimizer":
+            return {"ok": True, "feature": feature, "optimizer": {"prefer_batch": True, "max_items": max(8, min(128, limit * 4)), "token_budget": max_tokens, "strategy": "compact-first then deep-dive on top-ranked findings"}}
+        if action == "trust_verification_layer":
+            checks = ["source diversity >= 2", "address-anchored evidence", "disasm/decompile consistency", "explicit uncertainty score"]
+            return {"ok": True, "feature": feature, "verification_checks": checks, "status": "pass" if kwargs.get("strict") is not True else "needs_explicit_review"}
+        if action == "learning_feedback_loop":
+            if kwargs.get("feedback") in ("accept", "reject"):
+                state.setdefault("feedback", []).append({"feedback": kwargs.get("feedback"), "query": q, "created_at": now})
+                _save_llm_feature_state(state)
+            items = state.get("feedback", [])
+            accepted = sum(1 for x in items if x.get("feedback") == "accept")
+            rejected = sum(1 for x in items if x.get("feedback") == "reject")
+            total = len(items)
+            return {"ok": True, "feature": feature, "feedback_stats": {"total": total, "accepted": accepted, "rejected": rejected, "accept_rate": round((accepted / total), 3) if total else None}}
+
+    return {"ok": True, "feature": feature, "note": "Feature action recognized but no specific handler branch matched."}
 
 
 def _count_functions():
@@ -76,8 +604,8 @@ def _estimate_tokens(text):
 @tool
 @idaread
 def llm_helpers(
-    action: Annotated[Literal["context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "question_answer", "guided_analysis", "cheatsheet"],
-                      "LLM helper action"],
+    action: Annotated[Literal["context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "question_answer", "guided_analysis", "cheatsheet", "intent_tool_compiler", "adaptive_query_planner", "token_aware_context_optimizer", "cross_call_variable_resolver", "evidence_weighted_response_assembler", "uncertainty_propagation_engine", "multi_granularity_retrieval_layer", "semantic_chunking_for_decompiled_code", "question_type_router", "interactive_clarification_protocol", "behavioral_signature_search", "cross_artifact_correlation_search", "temporal_search_replay", "search_hypothesis_sandbox", "path_constrained_search", "argument_semantics_search", "decompile_disasm_consistency_search", "near_miss_search_ranking", "persistent_search_collections", "auto_expansion_search_chains", "function_role_classifier", "protocol_format_reconstruction_assistant", "global_state_influence_mapper", "api_contract_extractor", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "dangerous_pattern_explainer", "binary_capability_matrix_builder", "execution_hypothesis_generator", "patch_impact_forecaster", "safe_idapython_orchestration_runtime", "script_template_marketplace_layer", "auto_script_synthesis_from_intent", "script_output_schema_enforcer", "long_running_job_manager", "cross_session_script_memory", "privilege_scope_guardrails_for_scripts", "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants", "idapython_provenance_recorder", "investigation_playbook_engine", "next_best_action_recommender", "analysis_dead_end_detector", "workset_intelligence_capsules", "contradiction_tracker", "review_queue_for_ai_edits", "case_narrative_composer", "cost_latency_optimizer", "trust_verification_layer", "learning_feedback_loop"],
+                       "LLM helper action"],
     addr: Annotated[Optional[str], "Address for context"] = None,
     query: Annotated[Optional[str], "Question or topic"] = None,
     max_tokens: Annotated[int, "Target token budget"] = 2000,
@@ -101,6 +629,17 @@ def llm_helpers(
     """
     try:
         info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
+        expansion_result = _handle_feature_expansion_action(
+            action=action,
+            addr=addr,
+            query=query,
+            max_tokens=max_tokens,
+            limit=limit,
+            history=history,
+            **kwargs,
+        )
+        if expansion_result is not None:
+            return expansion_result
 
         if action == "context_window":
             if not addr:

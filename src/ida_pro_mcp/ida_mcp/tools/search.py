@@ -5,6 +5,7 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 import re
+import heapq
 try:
     from .semantic_matching import normalize_action, semantic_score, semantic_tokens
 except ImportError:
@@ -12,7 +13,7 @@ except ImportError:
 
 
 _SEARCH_ACTIONS = {
-    "bytes", "string", "immediate", "name", "insns", "text", "operand", "comment",
+    "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction", "text", "operand", "comment",
     "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees",
     "api", "vulnerable", "constants", "decompiled",
 }
@@ -27,8 +28,17 @@ _SEARCH_ACTION_ALIASES = {
     "constant": "immediate",
     "symbol": "name",
     "names": "name",
-    "instruction": "insns",
-    "instructions": "insns",
+    "instruction_seq": "insns",
+    "instruction_sequence": "insns",
+    "instructions": "instruction",
+    "mnemonics": "mnemonic",
+    "mnem": "mnemonic",
+    "opcode": "mnemonic",
+    "opcodes": "mnemonic",
+    "insn_text": "instruction",
+    "instruction_text": "instruction",
+    "asm_text": "instruction",
+    "semantic_instruction": "instruction",
     "disasm": "text",
     "disassembly": "text",
     "ops": "operand",
@@ -62,7 +72,35 @@ _SEARCH_INTENT_PATTERNS = [
     (re.compile(r"^\s*(?:code\s+)?xrefs?\s+(?:to|for)\s+(.+)$", re.IGNORECASE), "code_ref"),
     (re.compile(r"^\s*data\s+xrefs?\s+(?:to|for)\s+(.+)$", re.IGNORECASE), "data_ref"),
     (re.compile(r"^\s*(?:decompiled|pseudocode)\s+(?:search\s+)?(?:for|of)?\s+(.+)$", re.IGNORECASE), "decompiled"),
+    (re.compile(r"^\s*(?:mnemonic|opcode)s?\s+(?:search\s+)?(?:for|of)?\s+(.+)$", re.IGNORECASE), "mnemonic"),
+    (re.compile(r"^\s*(?:instruction|assembly|asm)\s+(?:search\s+)?(?:for|of)?\s+(.+)$", re.IGNORECASE), "instruction"),
 ]
+
+_MNEMONIC_SEMANTIC_GROUPS = {
+    "call": ("call", "bl", "blx", "jal", "jsr"),
+    "branch": ("j", "b", "cb", "tb", "br"),
+    "jump": ("j", "b", "br"),
+    "return": ("ret", "retn", "bx", "jr", "blr"),
+    "compare": ("cmp", "test", "cmn", "tst"),
+    "move": ("mov", "lea", "ld", "st", "ldr", "str"),
+    "arithmetic": ("add", "sub", "mul", "imul", "div", "idiv", "adc", "sbb"),
+    "logic": ("and", "or", "xor", "not", "shl", "shr", "rol", "ror"),
+    "stack": ("push", "pop", "enter", "leave"),
+    "syscall": ("syscall", "sysenter", "svc", "ecall", "int"),
+}
+
+_FIND_MIN_INSTRUCTION_CAP = 2000
+_FIND_INSTRUCTION_LIMIT_MULTIPLIER = 40
+_MNEMONIC_MATCH_BASE_SCORE = 95.0
+_MNEMONIC_GROUP_MATCH_SCORE = 120.0
+_MNEMONIC_TOKEN_OVERLAP_WEIGHT = 14.0
+_MNEMONIC_SEMANTIC_SCORE_CAP = 160.0
+_MNEMONIC_MIN_SCORE_THRESHOLD = 82.0
+_INSTRUCTION_SEMANTIC_SCORE_CAP = 175.0
+_INSTRUCTION_TOKEN_OVERLAP_WEIGHT = 10.0
+_INSTRUCTION_MATCH_BASE_SCORE = 90.0
+_INSTRUCTION_MIN_SCORE_THRESHOLD = 90.0
+_FIND_INSTRUCTION_MIN_SCORE = 88.0
 
 
 def _semantic_tokens(text: str) -> list[str]:
@@ -104,8 +142,8 @@ def _normalize_search_action(raw_action: Optional[str], *, fallback: str = "find
 @tool
 @idaread
 def search(
-    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled"],
-                       "Action: bytes|string|immediate|name|insns|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
+    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled"],
+                       "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern (for compatibility)"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -174,6 +212,12 @@ def search(
         
     insns - Search for instruction mnemonic sequences
         Params: pattern (comma-separated, e.g. "push, mov, sub"), wildcards supported (*)
+
+    mnemonic - Semantic mnemonic/opcode search
+        Params: pattern (mnemonic/opcode or intent, e.g. "call", "branch", "return", "arithmetic")
+
+    instruction - Semantic full-instruction search (mnemonic + operands)
+        Params: pattern (e.g. "mov rax, [rcx]" or natural-language style intent)
         
     text - Search disassembly text
         Params: pattern (substring), case_sensitive, include_context
@@ -684,6 +728,186 @@ def search(
                     ea = idc.next_head(ea, seg_end)
             return _search_result(pattern=pattern)
 
+        elif action == "mnemonic":
+            _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
+            query_tokens = set(_semantic_tokens(pattern))
+            semantic_prefixes = {
+                pref
+                for token in query_tokens
+                for pref in _MNEMONIC_SEMANTIC_GROUPS.get(token, ())
+            }
+            ranked_heap = []
+            ranked_cap = max(
+                _FIND_MIN_INSTRUCTION_CAP,
+                max(1, (offset + limit)) * _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
+            )
+            segments = seg_list if seg_list is not None else list(idautils.Segments())
+            for seg_ea in segments:
+                seg = idaapi.getseg(seg_ea)
+                if not seg or (seg.perm & idaapi.SEGPERM_EXEC) == 0:
+                    continue
+                seg_start = seg.start_ea
+                seg_end = seg.end_ea
+                if range_start is not None:
+                    seg_start = max(seg_start, range_start)
+                    seg_end = min(seg_end, range_end)
+                    if seg_start >= seg_end:
+                        continue
+                ea = seg_start
+                while ea < seg_end:
+                    flags_val = ida_bytes.get_flags(ea)
+                    if not ida_bytes.is_code(flags_val):
+                        ea = idc.next_head(ea, seg_end)
+                        continue
+                    mnem = (idc.print_insn_mnem(ea) or "").strip().lower()
+                    if not mnem:
+                        ea = idc.next_head(ea, seg_end)
+                        continue
+                    disasm = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0)) or ""
+                    semantic_blob = f"{mnem} {disasm}"
+                    score = 0.0
+                    matched = False
+                    if _matcher(mnem) or _matcher(semantic_blob):
+                        matched = True
+                        score += _MNEMONIC_MATCH_BASE_SCORE
+                    if semantic_prefixes and any(mnem.startswith(pref) for pref in semantic_prefixes):
+                        matched = True
+                        score += _MNEMONIC_GROUP_MATCH_SCORE
+                    if query_tokens:
+                        overlap = len(query_tokens.intersection(set(_semantic_tokens(semantic_blob))))
+                        if overlap:
+                            score += overlap * _MNEMONIC_TOKEN_OVERLAP_WEIGHT
+                    score += min(_semantic_score(pattern, semantic_blob), _MNEMONIC_SEMANTIC_SCORE_CAP)
+                    if matched or score >= _MNEMONIC_MIN_SCORE_THRESHOLD:
+                        record = {
+                            "address_ea": ea,
+                            "address": hex(ea),
+                            "mnemonic": mnem,
+                            "score": round(score, 2),
+                            "line": f"{hex(ea)}  {mnem}" + (f"  {_clip(disasm)}" if include_context else ""),
+                        }
+                        key = (float(record["score"]), int(record["address_ea"]))
+                        if len(ranked_heap) < ranked_cap:
+                            heapq.heappush(ranked_heap, (key, record))
+                        elif key > ranked_heap[0][0]:
+                            heapq.heapreplace(ranked_heap, (key, record))
+                    ea = idc.next_head(ea, seg_end)
+            ranked = [item[1] for item in ranked_heap]
+            page, total, is_truncated = _paginate_records(
+                ranked, sort_key=lambda r: (r["score"], r["address_ea"])
+            )
+            out = {
+                "ok": True,
+                "action": "mnemonic",
+                "query": pattern,
+                "matches": "\n".join(r["line"] for r in page),
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+            }
+            if include_items:
+                out["items"] = [
+                    {
+                        "address": r["address"],
+                        "mnemonic": r["mnemonic"],
+                        "score": r["score"],
+                    }
+                    for r in page
+                ]
+            if include_breakdown:
+                out["semantic_groups"] = sorted(
+                    token for token in query_tokens if token in _MNEMONIC_SEMANTIC_GROUPS
+                )
+            if interpreted_action:
+                out["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                out["interpreted_query"] = interpreted_pattern
+            return out
+
+        elif action == "instruction":
+            _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
+            query_tokens = set(_semantic_tokens(pattern))
+            ranked_heap = []
+            ranked_cap = max(
+                _FIND_MIN_INSTRUCTION_CAP,
+                max(1, (offset + limit)) * _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
+            )
+            segments = seg_list if seg_list is not None else list(idautils.Segments())
+            for seg_ea in segments:
+                seg = idaapi.getseg(seg_ea)
+                if not seg or (seg.perm & idaapi.SEGPERM_EXEC) == 0:
+                    continue
+                seg_start = seg.start_ea
+                seg_end = seg.end_ea
+                if range_start is not None:
+                    seg_start = max(seg_start, range_start)
+                    seg_end = min(seg_end, range_end)
+                    if seg_start >= seg_end:
+                        continue
+                ea = seg_start
+                while ea < seg_end:
+                    flags_val = ida_bytes.get_flags(ea)
+                    if not ida_bytes.is_code(flags_val):
+                        ea = idc.next_head(ea, seg_end)
+                        continue
+                    line = idc.generate_disasm_line(ea, 0)
+                    if not line:
+                        ea = idc.next_head(ea, seg_end)
+                        continue
+                    line_clean = ida_lines.tag_remove(line) or ""
+                    mnem = (idc.print_insn_mnem(ea) or "").lower()
+                    semantic_blob = f"{mnem} {line_clean}"
+                    matched = _matcher(line_clean) or _matcher(semantic_blob)
+                    overlap = len(query_tokens.intersection(set(_semantic_tokens(semantic_blob)))) if query_tokens else 0
+                    score = min(_semantic_score(pattern, semantic_blob), _INSTRUCTION_SEMANTIC_SCORE_CAP) + (
+                        overlap * _INSTRUCTION_TOKEN_OVERLAP_WEIGHT
+                    )
+                    if matched:
+                        score += _INSTRUCTION_MATCH_BASE_SCORE
+                    if matched or score >= _INSTRUCTION_MIN_SCORE_THRESHOLD:
+                        out_line = f"{hex(ea)}  {line_clean}"
+                        if include_context:
+                            func = idaapi.get_func(ea)
+                            if func:
+                                out_line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                        record = {
+                            "address_ea": ea,
+                            "address": hex(ea),
+                            "score": round(score, 2),
+                            "line": _clip(out_line, 360),
+                        }
+                        key = (float(record["score"]), int(record["address_ea"]))
+                        if len(ranked_heap) < ranked_cap:
+                            heapq.heappush(ranked_heap, (key, record))
+                        elif key > ranked_heap[0][0]:
+                            heapq.heapreplace(ranked_heap, (key, record))
+                    ea = idc.next_head(ea, seg_end)
+            ranked = [item[1] for item in ranked_heap]
+            page, total, is_truncated = _paginate_records(
+                ranked, sort_key=lambda r: (r["score"], r["address_ea"])
+            )
+            out = {
+                "ok": True,
+                "action": "instruction",
+                "query": pattern,
+                "matches": "\n".join(r["line"] for r in page),
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "truncated": is_truncated,
+            }
+            if include_items:
+                out["items"] = [
+                    {"address": r["address"], "score": r["score"], "text": r["line"]}
+                    for r in page
+                ]
+            if interpreted_action:
+                out["interpreted_action"] = interpreted_action
+            if interpreted_pattern:
+                out["interpreted_query"] = interpreted_pattern
+            return out
+
         elif action == "text":
             _matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
             segments = seg_list if seg_list is not None else list(idautils.Segments())
@@ -1023,14 +1247,60 @@ def search(
 
                 ida_nalt.enum_import_names(i, cb)
 
+            # 5. Search executable instructions semantically (mnemonic + operand text).
+            # Keep bounded so "find" remains responsive on very large binaries.
+            instruction_cap = max(
+                _FIND_MIN_INSTRUCTION_CAP,
+                limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
+            )
+            instruction_hits = 0
+            segments = seg_list if seg_list is not None else list(idautils.Segments())
+            for seg_ea in segments:
+                if instruction_hits >= instruction_cap:
+                    break
+                seg = idaapi.getseg(seg_ea)
+                if not seg or (seg.perm & idaapi.SEGPERM_EXEC) == 0:
+                    continue
+                seg_start = seg.start_ea
+                seg_end = seg.end_ea
+                if range_start is not None:
+                    seg_start = max(seg_start, range_start)
+                    seg_end = min(seg_end, range_end)
+                    if seg_start >= seg_end:
+                        continue
+                ea = seg_start
+                while ea < seg_end and instruction_hits < instruction_cap:
+                    flags_val = ida_bytes.get_flags(ea)
+                    if not ida_bytes.is_code(flags_val):
+                        ea = idc.next_head(ea, seg_end)
+                        continue
+                    line = idc.generate_disasm_line(ea, 0)
+                    if not line:
+                        ea = idc.next_head(ea, seg_end)
+                        continue
+                    line_clean = ida_lines.tag_remove(line) or ""
+                    mnem = (idc.print_insn_mnem(ea) or "").lower()
+                    semantic_blob = f"{mnem} {line_clean}"
+                    sem = min(_semantic_score(pattern, semantic_blob), 160.0)
+                    if _find_matcher(semantic_blob) or sem >= _FIND_INSTRUCTION_MIN_SCORE:
+                        _add_find(
+                            "instructions",
+                            ea,
+                            f"{hex(ea)}  {mnem}  {_clip(line_clean, 180)}",
+                            int(70 + sem),
+                        )
+                        instruction_hits += 1
+                    ea = idc.next_head(ea, seg_end)
+
             page, total, is_truncated = _paginate_records(
                 ranked, sort_key=lambda r: (r["score"], r["address_ea"])
             )
-            by_type = {"names": [], "strings": [], "imports": [], "code_refs": [], "data_refs": []}
+            by_type = {"names": [], "strings": [], "imports": [], "instructions": [], "code_refs": [], "data_refs": []}
             type_to_key = {
                 "names": "names",
                 "strings": "strings",
                 "imports": "imports",
+                "instructions": "instructions",
                 "code_ref": "code_refs",
                 "data_ref": "data_refs",
             }
@@ -1063,12 +1333,14 @@ def search(
                     "names": sum(1 for r in ranked if r["type"] == "names"),
                     "strings": sum(1 for r in ranked if r["type"] == "strings"),
                     "imports": sum(1 for r in ranked if r["type"] == "imports"),
+                    "instructions": sum(1 for r in ranked if r["type"] == "instructions"),
                     "code_refs": sum(1 for r in ranked if r["type"] == "code_ref"),
                     "data_refs": sum(1 for r in ranked if r["type"] == "data_ref"),
                 }
                 result["names"] = "\n".join(by_type["names"])
                 result["strings"] = "\n".join(by_type["strings"])
                 result["imports"] = "\n".join(by_type["imports"])
+                result["instructions"] = "\n".join(by_type["instructions"])
                 result["code_refs"] = "\n".join(by_type["code_refs"])
                 result["data_refs"] = "\n".join(by_type["data_refs"])
             return result
