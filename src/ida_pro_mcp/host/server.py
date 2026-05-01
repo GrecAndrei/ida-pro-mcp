@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
+import shlex
 
 # Suppress ALL warnings
 warnings.filterwarnings("ignore")
@@ -142,6 +143,8 @@ except ImportError:
 
 
 class IDAMCPServer:
+    _atexit_registered = False
+
     def __init__(self):
         mode = str(os.environ.get("IDA_MCP_RESPONSE_MODE", "compact")).strip().lower()
         if mode not in {"compact", "full"}:
@@ -543,7 +546,9 @@ class IDAMCPServer:
             t.join(timeout=1.0)
 
     def _register_lifecycle_handlers(self) -> None:
-        atexit.register(self.shutdown)
+        if not IDAMCPServer._atexit_registered:
+            atexit.register(self.shutdown)
+            IDAMCPServer._atexit_registered = True
         for sig_name in ("SIGINT", "SIGTERM"):
             sig = getattr(signal, sig_name, None)
             if sig is None:
@@ -556,10 +561,7 @@ class IDAMCPServer:
     def _handle_termination_signal(self, signum, frame):
         self._shutdown_requested = True
         self._lease_thread_stop.set()
-        # Interrupt blocked stdin reads so run() can unwind through finally.
-        if signum == getattr(signal, "SIGINT", None):
-            raise KeyboardInterrupt()
-        raise SystemExit(0)
+        # Do NOT raise SystemExit or KeyboardInterrupt - let run() loop exit gracefully
 
     def shutdown(self) -> None:
         if self._shutdown:
@@ -1926,6 +1928,18 @@ class IDAMCPServer:
     ):
         cmd = [self.idat_exe, "-A"]
         cmd.extend(session.ida_args or [])
+
+        # For new databases, inject processor/loader CLI flags so IDA loads
+        # with the correct architecture from the start instead of defaulting
+        # to metapc and requiring a post-load switch.
+        if not use_existing_idb:
+            opts = session.analysis_options or {}
+            ida_prefixes = {str(a)[:2] for a in (session.ida_args or [])}
+            if opts.get("processor") and "-p" not in ida_prefixes:
+                cmd.append(f"-p{opts['processor']}")
+            if opts.get("loader") and "-T" not in ida_prefixes:
+                cmd.append(f"-T{opts['loader']}")
+
         cmd.append(f"-S{script_path}")
         cmd.append(f"-L{log_file}")
         if use_existing_idb:
@@ -2054,6 +2068,8 @@ class IDAMCPServer:
         env["IDA_MCP_BYPASS_SYNC"] = "1"
         env["IDA_MCP_SESSION_ID"] = session.session_id
         env["IDA_MCP_CACHE_DIR"] = self.cache_dir
+        env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
+        env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
         sid_tag = session.session_id
         log_file = os.path.join(self.cache_dir, f"ida_mcp_{sid_tag}.log")
         stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
@@ -2144,6 +2160,9 @@ class IDAMCPServer:
         env["IDA_MCP_BYPASS_SYNC"] = "1"
         env["IDA_MCP_SESSION_ID"] = session.session_id
         env["IDA_MCP_CACHE_DIR"] = self.cache_dir
+        env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
+        use_existing_idb = os.path.exists(session.idb_path)
+        env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
         if sanitize_env:
             for k in (
                 "LD_LIBRARY_PATH",
@@ -2159,7 +2178,6 @@ class IDAMCPServer:
         stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
         stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
 
-        use_existing_idb = os.path.exists(session.idb_path)
         if use_existing_idb:
             log_rpc(f"Opening existing session IDB: {session.idb_path}")
         else:
@@ -2360,7 +2378,17 @@ class IDAMCPServer:
         if opts.get("apply_once", True):
             session.analysis_applied = True
         self.session_mgr._save_metadata(session)
-        return {"ok": True}
+        current_options = {}
+        try:
+            current_options = self._send_rpc_raw(
+                {"tool": "analysis", "args": {"action": "get_options"}}, port
+            )
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "current_options": current_options if not current_options.get("error") else None,
+        }
 
     def _cleanup_runtime(self, sid):
         with self._runtime_lock:
