@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_PATH = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "project.py"
-HOST_PATH = ROOT / "ida_mcp_stdio.py"
+HOST_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"
 
 
 def _find_fn(module, name):

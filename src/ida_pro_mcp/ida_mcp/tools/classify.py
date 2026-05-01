@@ -9,152 +9,10 @@ except ImportError:
 # CLASSIFY - Function and Binary Purpose Classification for LLMs
 # ============================================================================
 
-# API-to-category mappings for function classification
-_CATEGORY_APIS = {
-    "crypto": [
-        "CryptAcquireContext", "CryptCreateHash", "CryptHashData",
-        "CryptDeriveKey", "CryptEncrypt", "CryptDecrypt",
-        "CryptGenRandom", "CryptReleaseContext",
-        "BCryptOpenAlgorithmProvider", "BCryptGenerateSymmetricKey",
-        "BCryptEncrypt", "BCryptDecrypt",
-        "CreateHash", "HashData",
-        "EVP_EncryptInit", "EVP_DecryptInit", "EVP_DigestInit",
-        "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate",
-        "EVP_EncryptFinal", "EVP_DecryptFinal", "EVP_DigestFinal",
-        "AES_encrypt", "AES_decrypt", "AES_set_encrypt_key", "AES_set_decrypt_key",
-        "RSA_public_encrypt", "RSA_private_decrypt",
-        "SHA1", "SHA256", "SHA384", "SHA512",
-        "SHA1_Init", "SHA1_Update", "SHA1_Final",
-        "SHA256_Init", "SHA256_Update", "SHA256_Final",
-        "MD5_Init", "MD5_Update", "MD5_Final", "MD5Init", "MD5Update", "MD5Final",
-        "HMAC", "HMAC_Init", "HMAC_Update", "HMAC_Final",
-        "RAND_bytes", "RAND_pseudo_bytes",
-    ],
-    "network": [
-        "socket", "connect", "bind", "listen", "accept", "send", "recv",
-        "sendto", "recvfrom", "select", "poll", "shutdown", "closesocket",
-        "WSAStartup", "WSACleanup", "WSAGetLastError", "WSASocket",
-        "WSASend", "WSARecv", "WSAConnect",
-        "getaddrinfo", "gethostbyname", "inet_addr", "inet_ntoa",
-        "htons", "htonl", "ntohs", "ntohl",
-        "InternetOpen", "InternetConnect", "HttpOpenRequest",
-        "HttpSendRequest", "InternetReadFile", "URLDownloadToFile",
-        "WinHttpOpen", "WinHttpConnect", "WinHttpOpenRequest",
-        "WinHttpSendRequest", "WinHttpReceiveResponse",
-        "curl_easy_init", "curl_easy_perform", "curl_easy_setopt",
-        "curl_easy_cleanup",
-    ],
-    "file_io": [
-        "CreateFile", "CreateFileA", "CreateFileW",
-        "ReadFile", "WriteFile", "CloseHandle", "DeleteFile",
-        "CopyFile", "MoveFile", "GetFileSize", "SetFilePointer",
-        "FindFirstFile", "FindNextFile", "FindClose",
-        "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "fgets", "fputs",
-        "open", "close", "read", "write", "lseek",
-        "stat", "fstat", "lstat", "unlink", "rename",
-        "mkdir", "rmdir", "opendir", "readdir",
-    ],
-    "memory": [
-        "malloc", "calloc", "realloc", "free",
-        "VirtualAlloc", "VirtualFree", "VirtualProtect", "VirtualQuery",
-        "HeapAlloc", "HeapFree", "HeapCreate", "HeapDestroy",
-        "GlobalAlloc", "GlobalFree", "LocalAlloc", "LocalFree",
-        "mmap", "munmap", "mprotect", "brk", "sbrk",
-        "new", "delete", "operator new", "operator delete",
-    ],
-    "string_ops": [
-        "strcpy", "strncpy", "strcat", "strncat", "strlen", "strcmp",
-        "strncmp", "strstr", "strchr", "strrchr", "strtok",
-        "sprintf", "snprintf", "sscanf", "printf", "fprintf",
-        "wcslen", "wcscpy", "wcscat", "wcscmp", "wcsstr",
-        "lstrcpy", "lstrcmp", "lstrlen", "lstrcat",
-        "MultiByteToWideChar", "WideCharToMultiByte",
-        "strtol", "strtoul", "atoi", "atol", "atof",
-    ],
-    "math": [
-        "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-        "sqrt", "pow", "exp", "log", "log10", "log2",
-        "floor", "ceil", "round", "fabs", "fmod",
-        "abs", "labs", "llabs", "div", "ldiv",
-    ],
-    "ui": [
-        "CreateWindow", "CreateWindowEx", "ShowWindow", "UpdateWindow",
-        "MessageBox", "MessageBoxA", "MessageBoxW",
-        "DialogBox", "DialogBoxParam", "EndDialog",
-        "GetDlgItem", "SetDlgItemText", "GetDlgItemText",
-        "SendMessage", "PostMessage", "DefWindowProc",
-        "RegisterClass", "RegisterClassEx",
-        "GetMessage", "TranslateMessage", "DispatchMessage",
-        "BeginPaint", "EndPaint", "InvalidateRect",
-        "DrawText", "TextOut", "SetWindowText", "GetWindowText",
-    ],
-    "registry": [
-        "RegOpenKey", "RegOpenKeyEx", "RegOpenKeyExA", "RegOpenKeyExW",
-        "RegCloseKey",
-        "RegQueryValue", "RegQueryValueEx", "RegQueryValueExA", "RegQueryValueExW",
-        "RegSetValue", "RegSetValueEx", "RegSetValueExA", "RegSetValueExW",
-        "RegCreateKey", "RegCreateKeyEx",
-        "RegDeleteKey", "RegDeleteValue",
-        "RegEnumKey", "RegEnumKeyEx", "RegEnumValue",
-    ],
-    "process": [
-        "CreateProcess", "CreateProcessA", "CreateProcessW",
-        "OpenProcess", "TerminateProcess", "ExitProcess",
-        "GetCurrentProcess", "GetCurrentProcessId",
-        "CreateThread", "CreateRemoteThread", "ExitThread",
-        "GetCurrentThread", "GetCurrentThreadId",
-        "WaitForSingleObject", "WaitForMultipleObjects",
-        "fork", "exec", "execl", "execv", "execve", "execvp",
-        "system", "popen", "kill", "waitpid", "wait",
-        "ShellExecute", "ShellExecuteEx",
-    ],
-    "authentication": [
-        "LogonUser", "LogonUserA", "LogonUserW",
-        "LookupAccountSid", "LookupAccountName",
-        "OpenProcessToken", "AdjustTokenPrivileges",
-        "GetTokenInformation", "SetTokenInformation",
-        "ImpersonateLoggedOnUser", "RevertToSelf",
-        "LsaOpenPolicy", "LsaEnumerateAccountRights",
-        "getpwnam", "getpwuid", "getgrnam", "crypt",
-    ],
-    "logging": [
-        "OutputDebugString", "OutputDebugStringA", "OutputDebugStringW",
-        "ReportEvent", "RegisterEventSource",
-        "syslog", "openlog", "closelog",
-        "vfprintf", "vsprintf", "vsnprintf",
-    ],
-    "error_handling": [
-        "GetLastError", "SetLastError", "FormatMessage",
-        "RaiseException", "SetUnhandledExceptionFilter",
-        "AddVectoredExceptionHandler",
-        "signal", "raise", "abort",
-        "perror", "strerror", "errno",
-        "__cxa_throw", "__cxa_begin_catch", "__cxa_end_catch",
-        "_CxxThrowException",
-    ],
-    "serialization": [
-        "json_object_new", "json_object_get", "json_tokener_parse",
-        "cJSON_Parse", "cJSON_Print", "cJSON_CreateObject",
-        "xmlReadFile", "xmlReadMemory", "xmlParseFile",
-        "xmlNewDoc", "xmlNewNode", "xmlSaveFile",
-        "yaml_parser_initialize", "yaml_parser_parse",
-        "protobuf_c_message_pack", "protobuf_c_message_unpack",
-    ],
-    "compression": [
-        "compress", "compress2", "uncompress",
-        "deflateInit", "deflate", "deflateEnd",
-        "inflateInit", "inflate", "inflateEnd",
-        "BZ2_bzCompress", "BZ2_bzDecompress",
-        "LZ4_compress", "LZ4_decompress_safe",
-        "ZSTD_compress", "ZSTD_decompress",
-    ],
-}
-
-# Build a reverse lookup: api_name -> category
-_API_TO_CATEGORY = {}
-for _cat, _apis in _CATEGORY_APIS.items():
-    for _api in _apis:
-        _API_TO_CATEGORY[_api.lower()] = _cat
+try:
+    from ._api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY
+except ImportError:
+    from _api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY  # type: ignore[import-not-found]
 
 
 def _get_func_callees(func_ea):
@@ -213,12 +71,116 @@ def _get_xrefs_to_count(ea):
     return count
 
 
+# ============================================================================
+# VOERA: Schema Induction for Structured Semantic Retrieval
+# ============================================================================
+
+def _induce_function_schema(func_ea: int) -> dict:
+    """Induce a structured attribute-value schema for a single function.
+    
+    Returns dict with behavior_tags, dangerous_apis, string_refs, vuln_class,
+    compiler_hints, and structural_features.
+    """
+    schema = {
+        "behavior_tags": set(),
+        "dangerous_apis": set(),
+        "string_refs": set(),
+        "vuln_class": set(),
+        "compiler_hints": set(),
+        "structural_features": set(),
+    }
+    
+    fn = ida_funcs.get_func(func_ea)
+    if not fn:
+        return schema
+    
+    callees = _get_func_callees(func_ea)
+    
+    # Category-based behavior tags
+    category_hits = {}
+    matched_apis = {}
+    for callee in callees:
+        base = callee
+        for suffix in ("A", "W", "@plt", "@PLT"):
+            if base.endswith(suffix):
+                base = base[:-len(suffix)]
+                break
+        cat = _API_TO_CATEGORY.get(base.lower())
+        if cat:
+            category_hits[cat] = category_hits.get(cat, 0) + 1
+            matched_apis.setdefault(cat, []).append(callee)
+            schema["behavior_tags"].add(cat)
+    
+    # Dangerous API detection
+    for callee in callees:
+        if callee in _DANGEROUS_APIS:
+            schema["dangerous_apis"].add(callee)
+            schema["vuln_class"].add("dangerous_api")
+        base = callee
+        for suffix in ("A", "W", "@plt", "@PLT"):
+            if base.endswith(suffix):
+                base = base[:-len(suffix)]
+                break
+        if base in _DANGEROUS_APIS:
+            schema["dangerous_apis"].add(callee)
+            schema["vuln_class"].add("dangerous_api")
+    
+    # String references
+    for head in idautils.Heads(fn.start_ea, fn.end_ea):
+        for dref in idautils.DataRefsFrom(head):
+            stype = idc.get_str_type(dref)
+            if stype is not None and stype >= 0:
+                s = idc.get_strlit_contents(dref, -1, stype)
+                if s:
+                    s = s.decode("utf-8", errors="replace") if isinstance(s, bytes) else s
+                    schema["string_refs"].add(s[:80])
+                    # Heuristic behavior tags from strings
+                    if any(proto in s for proto in ("http://", "https://", "ftp://")):
+                        schema["behavior_tags"].add("network")
+                    if "HKEY_" in s or "Software\\" in s:
+                        schema["behavior_tags"].add("registry")
+                    if s.startswith("C:\\") or "/home/" in s or "/usr/" in s:
+                        schema["behavior_tags"].add("file_io")
+                    if any(cmd in s for cmd in ("cmd.exe", "/bin/sh", "powershell", "bash")):
+                        schema["behavior_tags"].add("process")
+                        schema["vuln_class"].add("command_injection")
+    
+    # Structural features
+    insn_count = _count_func_instructions(func_ea)
+    if insn_count < 5:
+        schema["structural_features"].add("very_small")
+    elif insn_count > 500:
+        schema["structural_features"].add("very_large")
+    
+    xref_count = _get_xrefs_to_count(func_ea)
+    if xref_count == 0:
+        schema["structural_features"].add("orphan")
+    elif xref_count > 20:
+        schema["structural_features"].add("highly_referenced")
+    
+    # Loop detection
+    try:
+        fc = idaapi.FlowChart(fn)
+        for block in fc:
+            for succ in block.succs():
+                if succ.start_ea <= block.start_ea:
+                    schema["structural_features"].add("has_loops")
+                    break
+            if "has_loops" in schema["structural_features"]:
+                break
+    except Exception:
+        pass
+    
+    # Convert sets to sorted lists for JSON serialization
+    return {k: sorted(v) for k, v in schema.items()}
+
+
 @tool
 @idaread
 def classify(
     action: Annotated[Literal["function", "binary", "all_functions", "library_code",
                                "wrappers", "callbacks", "initializers",
-                               "error_handlers", "hot_functions", "orphans"],
+                               "error_handlers", "hot_functions", "orphans", "induce_schema"],
                       "Classification action"],
     addr: Annotated[Optional[str], "Function address for single-function actions"] = None,
     limit: Annotated[int, "Max results"] = 50,
@@ -270,6 +232,11 @@ def classify(
     orphans - Find orphan functions (no callers).
         Params: limit
         Returns: {orphans}
+
+    induce_schema - Induce structured attribute-value schema for a function (VOERA SchemaBoot).
+        Params: addr (required)
+        Returns: {schema: {behavior_tags, dangerous_apis, string_refs, vuln_class, compiler_hints, structural_features}}
+        Use for structured semantic retrieval and precise filtering.
     """
     try:
         # ----------------------------------------------------------------
@@ -583,6 +550,25 @@ def classify(
                     if len(orphans) >= limit:
                         break
             return {"ok": True, "orphans": orphans, "count": len(orphans)}
+
+        # ----------------------------------------------------------------
+        # ACTION: induce_schema (VOERA SchemaBoot for RE)
+        # ----------------------------------------------------------------
+        elif action == "induce_schema":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for induce_schema")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            fname = idc.get_func_name(ea)
+            schema = _induce_function_schema(ea)
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "name": fname,
+                "schema": schema,
+                "note": "Structured schema induced from API calls, strings, and structural analysis. Use with search(action='structured', constraints=...) for precise filtering.",
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

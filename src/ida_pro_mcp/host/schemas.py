@@ -1,0 +1,2364 @@
+#!/usr/bin/env python3
+"""
+Tool registry: TOOL_ACTIONS, TOOL_DESCRIPTIONS, TOOL_ARG_SCHEMAS,
+schema builders, alias resolution.
+"""
+import os
+import re
+import json
+import difflib
+from typing import Any, Dict, List, Optional, Union
+
+from .config import log_rpc
+from .patterns import compile_smart_pattern, smart_match
+
+TOOL_ALIASES = {
+    "plugins": "misc",
+    "xfer_analysis": "xref_analysis",
+}
+WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
+ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
+ACTION_STRIP_CHARS = "\"'"
+_WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
+
+# =============================================================================
+# TOOLS REGISTRY
+# =============================================================================
+
+TOOLS = [
+    # Core session and batch tools (host-side)
+    "session",
+    "truncation",
+    "bookmarks",
+    "batch",
+    # Analysis configuration
+    "analysis",
+    # Unified query/edit hubs (delegating to sub-tools)
+    "query",
+    "edit",
+    # Primary data access tools
+    "idb",
+    "code",
+    "data",
+    "search",
+    "types",
+    "memory",
+    # Modification tools
+    "modify",
+    "funcs",
+    "segments",
+    "bulk",
+    # Utilities
+    "misc",
+    "plugins",
+    "calc",
+    "nav",
+    # Debugging and tracing
+    "debug",
+    "trace",
+    "coverage",
+    "trace_analysis",
+    # Project and file management
+    "project",
+    # Advanced analysis
+    "agent",
+    "microcode",
+    "graph",
+    "ctree",
+    "taint",
+    "emulate",
+    "entropy",
+    # Structure and type recovery
+    "structs",
+    "imports_deep",
+    "patterns",
+    "symbols",
+    # Differential and comparison
+    "diff",
+    "lumina",
+    # Export and annotation
+    "export",
+    "history",
+    "comments_ai",
+    "colorize",
+    "data_ops",
+    "fixups",
+    # Instrumentation
+    "hooks",
+    # Documentation and YARA
+    "wiki",
+    "yara_hunt",
+    # --- New LLM-optimized tools ---
+    # Security & vulnerability analysis
+    "vuln_scan",
+    "threat_hunt",
+    "gadgets",
+    "c2_detect",
+    # Deobfuscation & crypto
+    "deobfuscate",
+    "crypto_id",
+    # ABI & calling conventions
+    "abi",
+    # Summarization & classification
+    "summarize",
+    "classify",
+    # Function comparison
+    "compare",
+    # Stack analysis
+    "stack_analysis",
+    # Protocol analysis
+    "protocol",
+    # Intelligent annotation
+    "annotation",
+    # Deep cross-reference analysis
+    "xref_analysis",
+    "xfer_analysis",
+    # String operations
+    "string_ops",
+    # CFG analysis
+    "cfg_analysis",
+    # Binary info
+    "binary_info",
+    # LLM helpers
+    "llm_helpers",
+]
+
+ADVERTISED_TOOLS = [
+    "session",
+    "truncation",
+    "bookmarks",
+    "batch",
+    "wiki",
+    "analysis",
+    "query",
+    "edit",
+    "idb",
+    "code",
+    "data",
+    "search",
+    "imports_deep",
+    "symbols",
+    "patterns",
+    "types",
+    "memory",
+    "modify",
+    "funcs",
+    "segments",
+    "bulk",
+    "misc",
+    "calc",
+    "nav",
+    "project",
+    "debug",
+    "graph",
+    "ctree",
+    "export",
+    "history",
+    "annotation",
+    "binary_info",
+    "threat_hunt",
+    "compare",
+]
+
+# Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
+HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union(
+    {"plugins", "xfer_analysis"}
+)
+
+
+_EXTRA_TOOL_ALIASES = {
+    "analysis_tool": "analysis",
+    "annotate": "annotation",
+    "annotations": "annotation",
+    "assembler": "code",
+    "assembly": "code",
+    "bookmarks_tool": "bookmarks",
+    "code_tool": "code",
+    "database": "idb",
+    "decompiler": "code",
+    "decomp": "code",
+    "diag": "misc",
+    "disasm": "code",
+    "disassembly": "code",
+    "fn": "funcs",
+    "func": "funcs",
+    "function": "funcs",
+    "functions": "funcs",
+    "graphs": "graph",
+    "helper": "llm_helpers",
+    "helpers": "llm_helpers",
+    "hexrays": "code",
+    "i_db": "idb",
+    "ida": "idb",
+    "imports": "imports_deep",
+    "lookup": "data",
+    "notes": "bookmarks",
+    "plugins_tool": "misc",
+    "python": "misc",
+    "queries": "query",
+    "rename": "edit",
+    "scanner": "vuln_scan",
+    "vuln": "threat_hunt",
+    "vulnerability": "threat_hunt",
+    "vulnerabilities": "threat_hunt",
+    "threat": "threat_hunt",
+    "threat_hunt_tool": "threat_hunt",
+    "malware": "threat_hunt",
+    "security": "threat_hunt",
+    "trace": "threat_hunt",
+    "tracing": "threat_hunt",
+    "coverage": "threat_hunt",
+    "taint": "threat_hunt",
+    "c2": "threat_hunt",
+    "deobfuscation": "threat_hunt",
+    "crypto": "threat_hunt",
+    "yara": "threat_hunt",
+    "hunt": "threat_hunt",
+    "automated_findings": "threat_hunt",
+    "searches": "search",
+    "segment": "segments",
+    "session_tool": "session",
+    "strings": "string_ops",
+    "symbols_tool": "symbols",
+    "trace_analyze": "trace_analysis",
+    "xref": "xref_analysis",
+    "xrefs": "xref_analysis",
+}
+
+
+def _snake_variants(value: str) -> set[str]:
+    base = str(value or "").strip().lower()
+    if not base:
+        return set()
+    out = {
+        base,
+        base.replace("-", "_"),
+        base.replace(" ", "_"),
+        base.replace("_", "-"),
+        base.replace("_", ""),
+        base.replace("_", "."),
+        base.replace("_", "/"),
+    }
+    if base.endswith("s") and len(base) > 3:
+        out.add(base[:-1])
+    else:
+        out.add(f"{base}s")
+    out.add(f"{base}_tool")
+    out.add(f"{base}_tools")
+    out.add(f"tool_{base}")
+    out.add(f"tools_{base}")
+    return {x for x in out if x}
+
+
+def _camel_variants(value: str) -> set[str]:
+    words = [w for w in str(value or "").replace("-", "_").split("_") if w]
+    if len(words) <= 1:
+        return set()
+    pascal = "".join(w.capitalize() for w in words)
+    camel = words[0].lower() + "".join(w.capitalize() for w in words[1:])
+    return {camel, pascal}
+
+
+def _strip_balanced_wrappers(value: str, rounds: int = 3) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for _ in range(rounds):
+        changed = False
+        text = text.strip().strip(",;")
+        stripped_quotes = text.strip(ACTION_STRIP_CHARS + "`")
+        if stripped_quotes != text:
+            text = stripped_quotes
+            changed = True
+        for left, right in _WRAPPER_PAIRS:
+            if len(text) >= 2 and text.startswith(left) and text.endswith(right):
+                text = text[1:-1].strip()
+                changed = True
+        if not changed:
+            break
+    return text
+
+
+def _noisy_alias_variants(value: str) -> set[str]:
+    base = str(value or "").strip().lower()
+    if not base:
+        return set()
+    return {
+        f"[{base}]",
+        f"({base})",
+        f"{{{base}}}",
+        f"<{base}>",
+        f'"{base}"',
+        f"'{base}'",
+        f"`{base}`",
+        f"{base}()",
+        f"{base}:",
+        f"{base}=",
+        f"tool:{base}",
+        f"{base}.tool",
+    }
+
+
+def _normalize_alias_lookup_key(value: Any) -> str:
+    stripped = _strip_balanced_wrappers(str(value or ""))
+    without_prefix = ACTION_PREFIX_RE.sub("", stripped)
+    return without_prefix.strip().strip(",;").lower()
+
+
+def _resolve_tool_alias(name: Any) -> Any:
+    if not isinstance(name, str):
+        return name
+    normalized = _normalize_alias_lookup_key(name)
+    if not normalized:
+        return name
+    resolved = TOOL_ALIASES.get(normalized)
+    if resolved:
+        return resolved
+    if normalized in TOOLS:
+        return normalized
+    # Fallback for callers that already pass clean aliases/canonical names.
+    return TOOL_ALIASES.get(name, name)
+
+
+def _build_tool_aliases(tools: list[str], explicit: dict[str, str]) -> dict[str, str]:
+    candidates: Dict[str, set[str]] = {}
+    for tool in tools:
+        variants = _snake_variants(tool).union(_camel_variants(tool))
+        for alias in list(variants):
+            variants.update(_noisy_alias_variants(alias))
+        for alias in variants:
+            key = _normalize_alias_lookup_key(alias)
+            if key:
+                candidates.setdefault(key, set()).add(tool)
+    for alias, target in (explicit or {}).items():
+        key = _normalize_alias_lookup_key(alias)
+        target_key = _normalize_alias_lookup_key(target)
+        if key and target_key:
+            candidates.setdefault(key, set()).add(target_key)
+    resolved: dict[str, str] = {}
+    for alias, targets in candidates.items():
+        if len(targets) == 1:
+            target = next(iter(targets))
+            if alias != target:
+                resolved[alias] = target
+    return resolved
+
+
+TOOL_ALIASES = _build_tool_aliases(TOOLS, {**TOOL_ALIASES, **_EXTRA_TOOL_ALIASES})
+
+TOOL_DESCRIPTIONS = {
+    # Core session tools (host-side, no IDA process required)
+    "session": "Session lifecycle + runtime context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.",
+    "truncation": "Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).",
+    "bookmarks": "Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.",
+    "batch": "Run multiple tool calls in a single request. Supports shorthand calls like 'tool:action' and inline {name, action, ...args} objects. Returns compact per-call rows + summary.",
+    # Analysis configuration
+    "analysis": "Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze.",
+    # Unified query/edit hubs
+    "query": "Unified read-only query hub. Actions: data, search, idb, code, types, imports_deep, symbols, patterns.",
+    "edit": "Unified write/edit hub. Quick actions: rename, comment, type, patch, create_func, bulk.",
+    # Primary data access
+    "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
+    "code": "Code logic, decompilation, and flow analysis. Actions: decompile, semantic_decompile, decomp_dataflow, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
+    "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.",
+    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled. Supports semantic matching, case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
+    "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
+    "memory": "Direct database memory access. Actions: read, write, hexdump.",
+    # Modification tools
+    "modify": "Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set_type, patch_asm (assembles instruction(s) and patches bytes, supports multi-line separated by semicolons).",
+    "funcs": "Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force deletion of overlaps), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).",
+    "segments": "Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.",
+    "bulk": "Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.",
+    # Utilities
+    "misc": "Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. plugin_* manages IDA plugins. health runs host diagnostics without requiring a session.",
+    "calc": "Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.",
+    "nav": "Navigation and triage. Actions: goto, cursor, interesting.",
+    # Debugging and tracing
+    "debug": "Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem.",
+    "trace": "Execution tracing. Actions: get, clear, set_options.",
+    "coverage": "Code coverage import and analysis. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter.",
+    "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.",
+    # Project and file management
+    "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.",
+    "plugins": "Legacy compatibility plugin surface. Actions: list, run. Preferred entrypoint: misc(action=plugin_list|plugin_run).",
+    # Advanced analysis
+    "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
+    "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions, def_use_graph.",
+    "graph": "Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph.",
+    "ctree": "Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
+    "taint": "Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice.",
+    "emulate": "Static tracing and emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr.",
+    "entropy": "Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
+    # Structure and type recovery
+    "structs": "Structure recovery and reconstruction. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.",
+    "imports_deep": "Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
+    "patterns": "Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, create_sig.",
+    "symbols": "PDB/DWARF symbol management. Actions: load_pdb, load_dwarf, status, apply, export.",
+    # Differential and comparison
+    "diff": "Binary differential analysis. Actions: functions, bytes, signatures, summary, export_binexport.",
+    "lumina": "Lumina server interaction. Actions: pull, push, status, history, search.",
+    # Export and annotation
+    "export": "Database export. Actions: listing, html, idc, json, binexport, headers.",
+    "history": "Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff.",
+    "comments_ai": "AI-optimized comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.",
+    "colorize": "Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
+    "data_ops": "Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.",
+    "fixups": "Relocation/fixup management. Actions: list, get, add, delete.",
+    # Instrumentation
+    "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
+    # Documentation and YARA
+    "wiki": "Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.",
+    "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
+    # --- New LLM-optimized tools ---
+    "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, dangerous_flow, taint_lattice, exploit_chains, patch_simulate, memory_sync, hybrid_rank, scan_all, classify, osv_query, intelligence_report. Adds interprocedural source/sink lattice, semantic exploit-chain synthesis, patch-impact simulation, cross-binary vulnerability memory, and hybrid static+trace ranking.",
+    "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
+    "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
+    "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
+    "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
+    "summarize": "LLM-friendly summarization with compact output. Actions: binary, function, segment, imports_by_category, strings_by_category, complexity, call_hierarchy, data_flow, security_posture, statistics.",
+    "compare": "Function comparison and similarity. Actions: functions (side-by-side diff), blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.",
+    "stack_analysis": "Stack frame analysis. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
+    "classify": "Function purpose classification. Actions: function, binary, all_functions, library_code, wrappers, callbacks, initializers, error_handlers, hot_functions, orphans.",
+    "protocol": "Network protocol analysis. Query supports regex. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine.",
+    "c2_detect": "C2/malware behavior detection. Actions: indicators, persistence, evasion, injection, exfiltration, lateral_movement, privilege_escalation, capabilities, config_extract, ioc_extract.",
+    "gadgets": "ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, semantic_find.",
+    "annotation": "Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.",
+    "xref_analysis": "Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
+    "xfer_analysis": "Alias of xref_analysis (compatibility typo, not advertised in tools/list).",
+    "string_ops": "Advanced string analysis. Query supports regex. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious.",
+    "cfg_analysis": "Control flow graph metrics. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
+    "binary_info": "Binary metadata analysis. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
+    "llm_helpers": "LLM workflow helpers plus 50 advanced external-expansion actions for planning, search orchestration, fusion intelligence, idapython orchestration, and analyst workflow systems.",
+}
+
+TOOL_ACTIONS = {
+    # Core session tools
+    "session": [
+        "discover",
+        "create",
+        "get",
+        "list",
+        "switch",
+        "close",
+        "status",
+        "rebuild",
+        "update",
+        "rename",
+        "duplicate",
+        "export_session",
+        "import_session",
+        "archive",
+        "unarchive",
+        "tag",
+        "untag",
+        "find_by_tag",
+        "add_note",
+        "clear_notes",
+        "cleanup_stale",
+        "stats",
+        "validate",
+        "bulk_delete",
+        "bulk_tag",
+        "search_notes",
+        "recent",
+        "oldest",
+        "snapshot",
+        "restore_snapshot",
+        "merge",
+        "macro_set",
+        "macro_get",
+        "macro_list",
+        "macro_delete",
+        "macro_run",
+        "recent_workset",
+    ],
+    "truncation": ["continue"],
+    "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
+    "batch": ["run"],
+    # Analysis configuration
+    "analysis": [
+        "get_options",
+        "set_options",
+        "set_processor",
+        "set_loader_options",
+        "set_architecture",
+        "reanalyze",
+    ],
+    # Unified query/edit hubs (LLM-friendly entry points)
+    "query": [
+        "data",
+        "search",
+        "idb",
+        "code",
+        "types",
+        "imports_deep",
+        "symbols",
+        "patterns",
+    ],
+    "edit": ["rename", "comment", "type", "patch", "create_func", "bulk"],
+    # Primary data access
+    "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
+    "code": [
+        "decompile",
+        "semantic_decompile",
+        "decomp_dataflow",
+        "disasm",
+        "xrefs_to",
+        "xrefs_from",
+        "xrefs_to_field",
+        "callees",
+        "callers",
+        "blocks",
+        "analyze",
+        "callgraph",
+        "export",
+        "find_paths",
+        "strings_in_func",
+    ],
+    "data": [
+        "functions",
+        "globals",
+        "strings",
+        "imports",
+        "exports",
+        "lookup",
+        "bulk_query",
+    ],
+    "search": [
+        "bytes",
+        "string",
+        "immediate",
+        "name",
+        "insns",
+        "mnemonic",
+        "instruction",
+        "text",
+        "operand",
+        "comment",
+        "data_ref",
+        "code_ref",
+        "regex",
+        "func_by_sig",
+        "find",
+        "callers",
+        "callees",
+        "api",
+        "vulnerable",
+        "constants",
+        "decompiled",
+    ],
+    "types": [
+        "list",
+        "get",
+        "set_prototype",
+        "parse_decl",
+        "declare",
+        "apply",
+        "search_structs",
+        "infer",
+        "read_struct",
+        "import_header",
+    ],
+    "memory": ["read", "write", "hexdump"],
+    # Modification tools
+    "modify": ["rename", "comment", "set_type", "patch_asm"],
+    "funcs": [
+        "create",
+        "delete",
+        "set_flags",
+        "set_name",
+        "rename",
+        "add_comment",
+        "list",
+        "info",
+    ],
+    "segments": ["list", "add", "delete", "set_attr", "set_perms", "move", "info"],
+    "bulk": [
+        "rename",
+        "comment",
+        "apply_type",
+        "rename_stack",
+        "import_annotations",
+        "export_annotations",
+    ],
+    # Utilities
+    "misc": [
+        "python",
+        "idc",
+        "load_sig",
+        "cache_stats",
+        "read_file",
+        "write_file",
+        "plugin_list",
+        "plugin_run",
+        "health",
+    ],
+    "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
+    "nav": ["goto", "cursor", "interesting"],
+    # Debugging and tracing
+    "debug": [
+        "start",
+        "stop",
+        "continue",
+        "step_into",
+        "step_over",
+        "run_to",
+        "run_until",
+        "breakpoints",
+        "add_bp",
+        "del_bp",
+        "enable_bp",
+        "regs",
+        "set_reg",
+        "threads",
+        "modules",
+        "callstack",
+        "read_mem",
+        "write_mem",
+    ],
+    "trace": ["get", "clear", "set_options"],
+    "coverage": [
+        "import_drcov",
+        "import_lighthouse",
+        "highlight",
+        "report",
+        "uncovered",
+        "filter",
+    ],
+    "trace_analysis": [
+        "import_trace",
+        "analyze_coverage",
+        "find_loops",
+        "extract_api_calls",
+        "basic_blocks_hit",
+        "execution_timeline_graph",
+        "cross_run_diff",
+        "runtime_taint_overlay",
+        "state_replay",
+        "path_unlock",
+        "coverage_debug_plan",
+        "exploitability_score",
+        "anti_analysis_detect",
+        "lifetime_map",
+        "hybrid_callgraph_confidence",
+    ],
+    # Project and file management
+    "project": [
+        "save",
+        "close",
+        "open",
+        "load_binary",
+        "list_recent",
+        "get_cwd",
+        "set_cwd",
+        "list_dir",
+        "exists",
+        "evidence_graph",
+        "knowledge_merge",
+        "confidence_model",
+        "replay_pipeline",
+        "hypothesis_tracker",
+        "temporal_reasoning",
+        "semantic_artifact_diff",
+        "ai_governance",
+        "knowledge_debt",
+        "casefile_export",
+    ],
+    "plugins": ["list", "run"],
+    # Advanced analysis (LLM-friendly)
+    "agent": [
+        "analyze_function",
+        "explore_address",
+        "find_references",
+        "search_all",
+        "search_structs",
+        "context_pack",
+        "quick",
+        "rename_suggestions",
+        "batch_context",
+        "similar",
+    ],
+    "microcode": ["get", "blocks", "instructions", "def_use_graph"],
+    "graph": ["callgraph", "cfg", "xref_graph"],
+    "ctree": [
+        "get",
+        "traverse",
+        "find_calls",
+        "find_vars",
+        "find_strings",
+        "find_conditions",
+        "get_logic_flow",
+        "dominance_map",
+        "var_dependency_graph",
+    ],
+    "taint": [
+        "find_arg_usage",
+        "trace_return",
+        "find_sinks",
+        "data_flow",
+        "backward_trace",
+        "slice",
+    ],
+    "emulate": ["static_trace", "appcall", "decrypt_strings", "eval_expr"],
+    "entropy": [
+        "section",
+        "region",
+        "packed_detect",
+        "crypto_detect",
+        "compare",
+        "window",
+        "summary",
+    ],
+    # Structure and type recovery
+    "structs": [
+        "recover",
+        "analyze_usage",
+        "list",
+        "create",
+        "add_member",
+        "apply",
+        "reconstruct_vtable",
+    ],
+    "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
+    "patterns": [
+        "generate",
+        "match",
+        "list_sigs",
+        "apply_sig",
+        "create_sig",
+        "matched",
+    ],
+    "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
+    # Differential and comparison
+    "diff": ["functions", "bytes", "signatures", "summary", "export_binexport"],
+    "lumina": ["pull", "push", "status", "history", "search", "get_metadata"],
+    # Export and annotation
+    "export": ["listing", "html", "idc", "json", "binexport", "headers"],
+    "history": ["undo", "redo", "list", "snapshot", "restore", "diff"],
+    "comments_ai": [
+        "get_context",
+        "set_structured",
+        "bulk_set",
+        "export_md",
+        "import_md",
+        "summary",
+    ],
+    "colorize": [
+        "set_func",
+        "set_range",
+        "set_insn",
+        "get",
+        "clear",
+        "palette",
+        "highlight_pattern",
+    ],
+    "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code"],
+    "fixups": ["list", "get", "add", "delete"],
+    # Instrumentation
+    "hooks": [
+        "suggest",
+        "generate_frida",
+        "generate_detours",
+        "find_targets",
+        "inline_hooks",
+    ],
+    # Documentation and YARA
+    "wiki": ["list_topics", "read", "search", "semantic_search", "sections", "index"],
+    "yara_hunt": ["scan", "compile", "list_rules"],
+    # --- New LLM-optimized tools ---
+    "vuln_scan": [
+        "buffer_overflow",
+        "format_string",
+        "integer_overflow",
+        "use_after_free",
+        "command_injection",
+        "race_condition",
+        "null_deref",
+        "info_leak",
+        "auth_bypass",
+        "hardcoded_creds",
+        "dangerous_flow",
+        "taint_lattice",
+        "exploit_chains",
+        "patch_simulate",
+        "memory_sync",
+        "hybrid_rank",
+        "scan_all",
+        "classify",
+        "osv_query",
+        "intelligence_report",
+    ],
+    "threat_hunt": [
+        "run",
+        "malware",
+        "vuln",
+        "tracing",
+        "findings",
+        "quick",
+        "deep",
+        "legacy",
+    ],
+    "deobfuscate": [
+        "detect_encoding",
+        "xor_scan",
+        "stack_strings",
+        "opaque_predicates",
+        "control_flow_flatten",
+        "dead_code",
+        "api_hashing",
+        "dynamic_dispatch",
+        "anti_disasm",
+        "decode_attempt",
+    ],
+    "crypto_id": [
+        "identify",
+        "constants",
+        "key_schedule",
+        "block_cipher",
+        "hash_detect",
+        "rng_detect",
+        "asymmetric",
+        "custom_crypto",
+        "encoding",
+        "checksums",
+    ],
+    "abi": [
+        "detect",
+        "stack_args",
+        "reg_args",
+        "return_type",
+        "varargs",
+        "struct_return",
+        "tail_calls",
+        "prologue",
+        "epilogue",
+        "abi_violations",
+    ],
+    "summarize": [
+        "binary",
+        "function",
+        "segment",
+        "imports_by_category",
+        "strings_by_category",
+        "complexity",
+        "call_hierarchy",
+        "data_flow",
+        "security_posture",
+        "statistics",
+    ],
+    "compare": [
+        "functions",
+        "blocks",
+        "apis",
+        "strings",
+        "constants",
+        "structure",
+        "semantics",
+        "batch_compare",
+        "find_clones",
+        "changelog",
+    ],
+    "stack_analysis": [
+        "frame",
+        "buffers",
+        "canary",
+        "alignment",
+        "spills",
+        "usage",
+        "variables",
+        "arrays",
+        "uninitialized",
+        "summary",
+    ],
+    "classify": [
+        "function",
+        "binary",
+        "all_functions",
+        "library_code",
+        "wrappers",
+        "callbacks",
+        "initializers",
+        "error_handlers",
+        "hot_functions",
+        "orphans",
+    ],
+    "protocol": [
+        "detect",
+        "parsers",
+        "serializers",
+        "handlers",
+        "endpoints",
+        "tls_config",
+        "socket_flow",
+        "packet_struct",
+        "magic_numbers",
+        "state_machine",
+    ],
+    "c2_detect": [
+        "indicators",
+        "persistence",
+        "evasion",
+        "injection",
+        "exfiltration",
+        "lateral_movement",
+        "privilege_escalation",
+        "capabilities",
+        "config_extract",
+        "ioc_extract",
+    ],
+    "gadgets": [
+        "rop",
+        "jop",
+        "cop",
+        "syscall",
+        "write_what_where",
+        "stack_pivot",
+        "shellcode_space",
+        "mitigations",
+        "seh_handlers",
+        "pivot_chains",
+        "semantic_find",
+    ],
+    "annotation": [
+        "auto_comment",
+        "label_loops",
+        "label_branches",
+        "mark_dangerous",
+        "annotate_constants",
+        "tag_functions",
+        "document_args",
+        "mark_error_paths",
+        "propagate_names",
+        "cleanup",
+    ],
+    "xref_analysis": [
+        "call_chain",
+        "common_callers",
+        "common_callees",
+        "hub_functions",
+        "leaf_functions",
+        "recursive",
+        "dominator",
+        "influence",
+        "dependency_graph",
+        "dead_functions",
+    ],
+    "xfer_analysis": [
+        "call_chain",
+        "common_callers",
+        "common_callees",
+        "hub_functions",
+        "leaf_functions",
+        "recursive",
+        "dominator",
+        "influence",
+        "dependency_graph",
+        "dead_functions",
+    ],
+    "string_ops": [
+        "decode_all",
+        "find_urls",
+        "find_paths",
+        "find_registry",
+        "find_ips",
+        "find_emails",
+        "find_commands",
+        "encoding_stats",
+        "multilingual",
+        "suspicious",
+    ],
+    "cfg_analysis": [
+        "complexity",
+        "loops",
+        "branches",
+        "paths",
+        "dominators",
+        "post_dominators",
+        "back_edges",
+        "natural_loops",
+        "irreducible",
+        "flatten_detect",
+    ],
+    "binary_info": [
+        "headers",
+        "sections",
+        "relocations",
+        "resources",
+        "debug_info",
+        "compiler",
+        "linker",
+        "timestamps",
+        "checksums",
+        "overlay",
+    ],
+    "llm_helpers": [
+        "context_window",
+        "function_digest",
+        "binary_digest",
+        "explain_address",
+        "suggest_next",
+        "progress_report",
+        "focus_area",
+        "question_answer",
+        "guided_analysis",
+        "cheatsheet",
+        "intent_tool_compiler",
+        "adaptive_query_planner",
+        "token_aware_context_optimizer",
+        "cross_call_variable_resolver",
+        "evidence_weighted_response_assembler",
+        "uncertainty_propagation_engine",
+        "multi_granularity_retrieval_layer",
+        "semantic_chunking_for_decompiled_code",
+        "question_type_router",
+        "interactive_clarification_protocol",
+        "behavioral_signature_search",
+        "cross_artifact_correlation_search",
+        "temporal_search_replay",
+        "search_hypothesis_sandbox",
+        "path_constrained_search",
+        "argument_semantics_search",
+        "decompile_disasm_consistency_search",
+        "near_miss_search_ranking",
+        "persistent_search_collections",
+        "auto_expansion_search_chains",
+        "function_role_classifier",
+        "protocol_format_reconstruction_assistant",
+        "global_state_influence_mapper",
+        "api_contract_extractor",
+        "interprocedural_data_lineage_graph",
+        "semantic_diff_explainer",
+        "dangerous_pattern_explainer",
+        "binary_capability_matrix_builder",
+        "execution_hypothesis_generator",
+        "patch_impact_forecaster",
+        "safe_idapython_orchestration_runtime",
+        "script_template_marketplace_layer",
+        "auto_script_synthesis_from_intent",
+        "script_output_schema_enforcer",
+        "long_running_job_manager",
+        "cross_session_script_memory",
+        "privilege_scope_guardrails_for_scripts",
+        "script_to_tool_promotion_pipeline",
+        "experiment_harness_for_script_variants",
+        "idapython_provenance_recorder",
+        "investigation_playbook_engine",
+        "next_best_action_recommender",
+        "analysis_dead_end_detector",
+        "workset_intelligence_capsules",
+        "contradiction_tracker",
+        "review_queue_for_ai_edits",
+        "case_narrative_composer",
+        "cost_latency_optimizer",
+        "trust_verification_layer",
+        "learning_feedback_loop",
+    ],
+}
+
+TOOL_ARG_SCHEMAS = {
+    "session": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["session"]},
+        "binary_path": {"type": "string", "description": "Path to target binary"},
+        "force_new": {
+            "type": "boolean",
+            "description": "Force creation of a new session even if one exists",
+        },
+        "analysis_options": {
+            "type": "object",
+            "description": "Advanced analysis options payload",
+        },
+        "ida_args": {"type": ["string", "array"], "items": {"type": "string"}},
+        "session_id": {"type": "string", "description": "Session ID for switch/close"},
+        "query": {
+            "type": "string",
+            "description": "Filter sessions by name/path (supports regex, glob, substring)",
+        },
+        "processor": {"type": "string"},
+        "flags": {"type": "integer"},
+        "loader": {"type": "string"},
+        "value": {"type": ["string", "object"]},
+        "loader_options": {"type": ["string", "object"]},
+        "bitness": {"type": "integer"},
+        "endian": {"type": "string"},
+        "reanalyze": {"type": "boolean"},
+        "options": {"type": "object"},
+        "analysis_actions": {"type": "array", "items": {"type": "object"}},
+        "apply_once": {"type": "boolean"},
+        "recover": {"type": "boolean"},
+        "backup_on_recover": {"type": "boolean"},
+        "aggressive_cleanup": {"type": "boolean"},
+        "start": {"type": ["string", "integer"]},
+        "end": {"type": ["string", "integer"]},
+        "baseaddr": {"type": ["string", "integer"]},
+        "start_ea": {"type": ["string", "integer"]},
+        "min_ea": {"type": ["string", "integer"]},
+        "max_ea": {"type": ["string", "integer"]},
+        "limit": {
+            "type": "integer",
+            "description": "Max sessions to return (list action)",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Skip first N sessions (list action)",
+        },
+        "tags": {
+            "type": ["array", "string"],
+            "items": {"type": "string"},
+            "description": "Tags for the session (create action). Comma-separated string or array.",
+        },
+        "notes": {
+            "type": "string",
+            "description": "Free-form notes for the session (create action).",
+        },
+        "note": {
+            "type": "string",
+            "description": "Single note payload for add_note action.",
+        },
+        "name": {
+            "type": "string",
+            "description": "Name for macro_* actions or rename action.",
+        },
+        "macro": {
+            "type": "string",
+            "description": "Alias for macro name in macro_* actions.",
+        },
+        "data": {"type": "object", "description": "Macro payload for macro_set."},
+        "macro_data": {
+            "type": "object",
+            "description": "Alias for macro payload in macro_set.",
+        },
+        "run_action": {
+            "type": "string",
+            "description": "Session action to execute for macro_run (default from macro or create).",
+        },
+        "n": {
+            "type": "integer",
+            "description": "Count for recent/oldest/recent_workset actions.",
+        },
+        "include_bookmarks": {
+            "type": "boolean",
+            "description": "Include bookmark entries in recent_workset.",
+        },
+        "include_items": {
+            "type": "boolean",
+            "description": "Include structured items in recent_workset response.",
+        },
+    },
+    "truncation": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["truncation"]},
+        "token": {"type": "string"},
+        "field": {"type": "string"},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+    },
+    "bookmarks": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["bookmarks"]},
+        "addr": {"type": "string"},
+        "id": {"type": "integer"},
+        "name": {"type": "string"},
+        "notes": {"type": "string"},
+        "category": {"type": "string"},
+        "priority": {"type": "integer"},
+        "tags": {"type": ["array", "string"], "items": {"type": "string"}},
+        "query": {"type": "string"},
+    },
+    "funcs": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["funcs"]},
+        "addr": {"type": "string"},
+        "end": {"type": "string"},
+        "name": {"type": "string"},
+        "flags": {"type": "integer"},
+        "force": {"type": "boolean"},
+        "comment": {"type": "string"},
+        "repeatable": {"type": "boolean"},
+        "query": {"type": "string"},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+        "named_only": {"type": "boolean"},
+        "include_prototype": {"type": "boolean"},
+        "include_stack": {"type": "boolean"},
+        "include_items": {"type": "boolean"},
+        "include_xrefs": {"type": "boolean"},
+    },
+    "calc": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["calc"]},
+        "expr": {"type": "string"},
+        "addr": {"type": "string"},
+        "target": {"type": "string"},
+        "value": {"type": ["string", "integer"]},
+        "type": {"type": "string"},
+        "size": {"type": "integer"},
+        "offsets": {"type": ["array", "string"], "items": {"type": "string"}},
+    },
+    "memory": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["memory"]},
+        "addr": {"type": "string"},
+        "type": {
+            "type": "string",
+            "enum": [
+                "bytes",
+                "u8",
+                "u16",
+                "u32",
+                "u64",
+                "s8",
+                "s16",
+                "s32",
+                "s64",
+                "f32",
+                "f64",
+                "ptr",
+                "string",
+            ],
+        },
+        "size": {"type": "integer"},
+        "data": {"type": "string"},
+    },
+    "misc": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["misc"]},
+        "expr": {
+            "type": "string",
+            "description": "Python expression or IDC script to evaluate",
+        },
+        "code": {"type": "string", "description": "Multi-line Python code to execute"},
+        "name": {"type": "string", "description": "Signature name for load_sig"},
+        "arg": {"type": "integer", "description": "Plugin argument for plugin_run"},
+        "path": {"type": "string", "description": "File path for read_file/write_file"},
+        "content": {"type": "string", "description": "Content to write for write_file"},
+        "encoding": {
+            "type": "string",
+            "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.",
+        },
+        "verbose": {
+            "type": "boolean",
+            "description": "Include per-runtime details for health action.",
+        },
+    },
+    "analysis": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["analysis"]},
+        "options": {"type": "object"},
+        "processor": {"type": "string"},
+        "flags": {"type": "integer"},
+        "loader": {"type": "string"},
+        "value": {"type": ["string", "object"]},
+        "bitness": {"type": "integer"},
+        "endian": {"type": "string"},
+        "start": {"type": "string"},
+        "end": {"type": "string"},
+    },
+    "data": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["data"]},
+        "query": {"type": "string"},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+        "include_prototype": {"type": "boolean"},
+        "include_xrefs": {"type": "boolean"},
+        "min_size": {"type": "integer"},
+        "named_only": {"type": "boolean"},
+        "items": {"type": "array", "items": {"type": "object"}},
+    },
+    "search": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["search"]},
+        "pattern": {"type": "string"},
+        "query": {"type": "string"},
+        "addr": {"type": "string"},
+        "limit": {"type": "integer"},
+        "offset": {"type": "integer"},
+        "start": {"type": "string"},
+        "end": {"type": "string"},
+        "case_sensitive": {"type": "boolean"},
+        "include_context": {"type": "boolean"},
+        "include_items": {"type": "boolean"},
+        "include_breakdown": {"type": "boolean"},
+        "timeout_ms": {"type": "integer"},
+        "max_functions": {"type": "integer"},
+        "sample": {"type": "boolean"},
+        "sample_max_funcs": {"type": "integer"},
+    },
+    "vuln_scan": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["vuln_scan"]},
+        "addr": {
+            "type": "string",
+            "description": "Address or function scope for scanning.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Max findings to return (capped for context safety).",
+        },
+        "offset": {"type": "integer", "description": "Skip first N ranked findings."},
+        "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "Optional severity filter.",
+        },
+        "include_context": {
+            "type": "boolean",
+            "description": "Include compact decompiled context when available.",
+        },
+        "scan_profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Scan depth profile controlling local evidence/ranking rigor.",
+        },
+        "max_graph_depth": {
+            "type": "integer",
+            "description": "Correlation graph depth (0-3) for intelligence outputs.",
+        },
+        "include_dataflow_graph": {
+            "type": "boolean",
+            "description": "Include compact correlation graph in scan_all/intelligence_report.",
+        },
+        "include_remediation_plan": {
+            "type": "boolean",
+            "description": "Include prioritized remediation plan in scan_all/intelligence_report.",
+        },
+        "include_vuln_memory": {
+            "type": "boolean",
+            "description": "Use cross-binary vulnerability memory for ranking enrichment.",
+        },
+        "persist_vuln_memory": {
+            "type": "boolean",
+            "description": "Persist current scan signatures into cross-binary vulnerability memory.",
+        },
+        "vuln_memory_path": {
+            "type": "string",
+            "description": "Optional custom path for vulnerability memory JSON cache.",
+        },
+        "trace_addresses": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Executed/observed addresses for hybrid static+trace ranking.",
+        },
+        "trace_functions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Executed/observed function names for hybrid static+trace ranking.",
+        },
+        "trace_weight": {
+            "type": "number",
+            "description": "Trace weight used during hybrid ranking (0.0-0.9).",
+        },
+        "patch_strategies": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Patch simulation strategies (bounds_checks,input_sanitization,safe_api_replacement,isolation).",
+        },
+        "osv_coordinates": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "OSV package coordinates (ecosystem:name@version or pkg:purl). Used by osv_query and optional scan_all enrichment.",
+        },
+        "osv_ecosystem": {
+            "type": "string",
+            "description": "Default OSV ecosystem for shorthand coordinates like name@version.",
+        },
+        "osv_endpoint": {
+            "type": "string",
+            "description": "OSV endpoint/base URL (default: https://api.osv.dev).",
+        },
+    },
+    "threat_hunt": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},
+        "legacy_tool": {
+            "type": "string",
+            "description": "Legacy tool name to emulate (for action='legacy').",
+        },
+        "legacy_action": {
+            "type": "string",
+            "description": "Legacy action to inherit/route (for action='legacy').",
+        },
+        "profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Pipeline depth profile.",
+        },
+        "query": {
+            "type": "string",
+            "description": "Optional focus query for post-filtering and relevance scoring.",
+        },
+        "addr": {
+            "type": "string",
+            "description": "Optional address focus for underlying scanners where supported.",
+        },
+        "include_tracing": {
+            "type": "boolean",
+            "description": "Include trace/coverage analysis steps.",
+        },
+        "include_malware": {
+            "type": "boolean",
+            "description": "Include malware-behavior analysis steps.",
+        },
+        "include_vuln": {
+            "type": "boolean",
+            "description": "Include vulnerability analysis steps.",
+        },
+        "include_evidence": {
+            "type": "boolean",
+            "description": "Include compact raw per-step payloads for auditability.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Global max findings to return after dedupe/ranking.",
+        },
+        "max_steps": {
+            "type": "integer",
+            "description": "Safety cap for total orchestrated tool calls.",
+        },
+        "scan_profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Forwarded depth profile to vuln_scan.",
+        },
+        "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "Optional severity filter for vulnerability findings.",
+        },
+        "legacy_passthrough": {
+            "type": "boolean",
+            "description": "For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.",
+        },
+    },
+    "segments": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["segments"]},
+        "start": {"type": "string"},
+        "end": {"type": "string"},
+        "name": {"type": "string"},
+        "sclass": {"type": "string"},
+        "attr": {"type": "string"},
+        "value": {"type": ["string", "integer"]},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+    },
+    "agent": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["agent"]},
+        "addr": {"type": "string"},
+        "query": {"type": "string"},
+        "depth": {"type": "integer"},
+        "include_pseudocode": {"type": "boolean"},
+        "max_items": {"type": "integer"},
+        "use_cache": {"type": "boolean"},
+    },
+    "query": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["query"]},
+        "subaction": {"type": "string"},
+        "args": {"type": "object"},
+    },
+    "edit": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["edit"]},
+        "subaction": {"type": "string"},
+        "args": {"type": "object"},
+    },
+    "idb": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["idb"]},
+        "offset": {"type": "integer"},
+        "count": {"type": "integer"},
+    },
+    "code": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["code"]},
+        "addrs": {"type": ["array", "string"], "items": {"type": "string"}},
+        "addr": {"type": "string"},
+        "max_items": {"type": "integer"},
+        "max_depth": {"type": "integer"},
+        "format": {"type": "string"},
+        "disasm_style": {"type": "string", "enum": ["csmini", "classic", "annotated"]},
+        "include_bytes": {"type": "boolean"},
+        "end": {"type": "string"},
+        "limit": {"type": "integer"},
+        "field_name": {"type": "string"},
+        "target": {"type": "string"},
+    },
+    "ctree": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},
+        "addr": {"type": "string"},
+        "query": {"type": "string"},
+        "depth": {"type": "integer"},
+    },
+    "entropy": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["entropy"]},
+        "addr": {"type": "string"},
+        "size": {"type": "integer"},
+        "threshold": {"type": "number"},
+        "end_addr": {"type": "string"},
+        "window": {"type": "integer"},
+        "step": {"type": "integer"},
+        "limit": {"type": "integer"},
+    },
+    "emulate": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["emulate"]},
+        "addr": {"type": "string"},
+        "func_name": {"type": "string"},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "max_steps": {"type": "integer"},
+        "follow_calls": {"type": "boolean"},
+        "max_depth": {"type": "integer"},
+        "include_blocks": {"type": "boolean"},
+        "expr": {"type": "string"},
+    },
+    "taint": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["taint"]},
+        "addr": {"type": "string"},
+        "arg_num": {"type": "integer"},
+        "depth": {"type": "integer"},
+        "max_hits": {"type": "integer"},
+    },
+    "gadgets": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
+        "addr": {"type": "string"},
+        "query": {"type": "string"},
+        "limit": {"type": "integer"},
+        "max_insns": {"type": "integer"},
+        "source_actions": {"type": ["array", "string"], "items": {"type": "string"}},
+        "source_limit": {"type": "integer"},
+        "rebuild_index": {"type": "boolean"},
+        "min_score": {"type": "integer"},
+        "offset": {"type": "integer"},
+    },
+    "wiki": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["wiki"]},
+        "topic": {"type": "string"},
+        "query": {"type": "string"},
+        "section": {"type": "string"},
+        "lines": {
+            "type": "string",
+            "description": "Line selector such as '10-40', '25', '10-', or '-40'.",
+        },
+        "line_start": {"type": "integer"},
+        "line_end": {"type": "integer"},
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"},
+        "max_results": {"type": "integer"},
+        "category": {"type": ["string", "array"], "items": {"type": "string"}},
+        "fuzzy": {"type": "boolean"},
+        "strict_topic": {"type": "boolean"},
+        "include_related": {"type": "boolean"},
+        "include_snippets": {"type": "boolean"},
+        "context_lines": {"type": "integer"},
+        "verbose": {
+            "type": "boolean",
+            "description": "Include full structural metadata in wiki responses.",
+        },
+    },
+    "bulk": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["bulk"]},
+        "items": {"type": "array", "items": {"type": "object"}},
+        "path": {"type": "string"},
+        "continue_on_error": {"type": "boolean"},
+    },
+    "batch": {
+        "calls": {
+            "type": "array",
+            "items": {
+                "type": ["object", "string"],
+                "description": "Each item can be 'tool:action', {name, arguments}, or {name, action, ...args}.",
+            },
+        },
+        "continue_on_error": {"type": "boolean"},
+    },
+}
+
+_ACTION_ALIAS_HINTS = {
+    "add": {"append", "insert", "create"},
+    "analyze": {"analyse", "inspect"},
+    "bookmarks": {"marks"},
+    "callers": {"incoming_calls", "who_calls"},
+    "callees": {"outgoing_calls", "calls"},
+    "comment": {"set_comment", "annotate"},
+    "create": {"new", "make"},
+    "decompile": {"pseudo", "pseudocode"},
+    "decompile_func": {"decompile", "pseudo"},
+    "delete": {"remove", "rm", "del"},
+    "disasm": {"asm", "assembly", "disassemble", "listing"},
+    "entrypoints": {"entries"},
+    "export": {"dump"},
+    "find": {"search", "query", "lookup"},
+    "functions": {"funcs", "function_list"},
+    "get": {"show", "view", "read", "info"},
+    "health": {"diagnostics", "diag"},
+    "imports": {"imports_list"},
+    "info": {"details", "describe"},
+    "list": {"ls", "enumerate", "all"},
+    "lookup": {"resolve", "find_addr", "find_address"},
+    "meta": {"metadata"},
+    "name": {"symbol"},
+    "plugin_list": {"plugins", "list_plugins"},
+    "plugin_run": {"run_plugin", "exec_plugin"},
+    "read": {"load"},
+    "recent": {"latest"},
+    "regex": {"regexp"},
+    "rename": {"set_name"},
+    "run": {"execute", "exec"},
+    "scan_all": {"scan", "full_scan"},
+    "search": {"find", "query", "lookup"},
+    "set_attr": {"set_attribute"},
+    "set_flags": {"flags"},
+    "set_name": {"rename"},
+    "set_options": {"configure"},
+    "set_perms": {"permissions", "set_permissions"},
+    "status": {"state"},
+    "strings": {"strs"},
+    "summary": {"overview"},
+    "switch": {"use"},
+    "write": {"save"},
+    "xrefs_from": {"refs_from", "xrefs_out"},
+    "xrefs_to": {"refs_to", "xrefs_in"},
+}
+
+_COMMON_ARG_ALIAS_HINTS = {
+    "action": {"cmd", "command", "op", "operation", "tool_action"},
+    "addr": {"address", "ea", "va", "offset"},
+    "addrs": {"addr", "address", "addresses", "ea", "eas", "vas"},
+    "args": {"arguments", "params", "parameters"},
+    "binary_path": {"binary", "file", "path", "target"},
+    "calls": {"steps", "requests"},
+    "count": {"limit", "max", "max_items", "n"},
+    "data": {"payload", "value"},
+    "end": {"end_addr", "stop", "to"},
+    "idb": {"database"},
+    "idb_path": {"idb", "database", "database_path"},
+    "limit": {"count", "max", "max_items", "n"},
+    "max_items": {"limit", "count", "max", "n"},
+    "name": {"func_name", "symbol", "label"},
+    "notes": {"description"},
+    "offset": {"skip"},
+    "pattern": {"query", "needle", "match"},
+    "query": {"q", "search", "pattern"},
+    "session_id": {"sid", "session"},
+    "source_action": {"on", "target_action", "subaction", "source"},
+    "start": {"from", "start_addr"},
+    "target": {"to"},
+    "topic": {"doc", "page"},
+}
+
+_TOOL_SPECIFIC_ARG_ALIASES = {
+    "code": {
+        "addrs": {"addr", "address", "addresses", "ea", "eas"},
+        "max_items": {"count", "max"},
+    },
+    "data": {
+        "query": {"name", "symbol", "lookup"},
+    },
+    "search": {
+        "pattern": {"query", "needle"},
+    },
+}
+
+# Broad malformed/variant aliases accepted for high-noise LLM tool calls.
+_TOOL_ACTION_EXTRA_ALIASES = {
+    "threat_hunt": {
+        "run": {
+            "default",
+            "all",
+            "full",
+            "hunt",
+            "triage",
+            "investigate",
+            "orchestrate",
+            "pipeline",
+            "execute_all",
+            "end_to_end",
+            "go",
+        },
+        "legacy": {
+            "compat",
+            "compatibility",
+            "legacy_route",
+            "legacy_mode",
+            "bridge",
+            "fallback",
+            "inherit",
+        },
+        "vuln": {
+            "vulnerability",
+            "vulnerabilities",
+            "security",
+            "security_scan",
+            "vuln_scan",
+            "vulnscan",
+            "cve",
+        },
+        "malware": {
+            "mal",
+            "mal_scan",
+            "malware_scan",
+            "malware_hunt",
+            "ioc",
+            "iocs",
+            "threats",
+        },
+        "tracing": {
+            "trace",
+            "trace_analysis",
+            "runtime",
+            "coverage",
+            "flow",
+            "behavior",
+        },
+        "findings": {
+            "finds",
+            "results",
+            "report",
+            "summary",
+            "alerts",
+        },
+        "quick": {"fast", "lite", "quick_scan", "quickly"},
+        "deep": {"thorough", "intensive", "deep_scan", "full_depth"},
+    },
+    "search": {
+        "bytes": {"byte", "opcode_bytes", "hex_bytes"},
+        "string": {"strings", "str", "text_string"},
+        "immediate": {"imm", "immediates", "literal", "number"},
+        "name": {"symbol", "symbol_name", "func_name", "named"},
+        "insns": {"insn", "instruction_seq", "instruction_sequence", "asm_seq"},
+        "mnemonic": {"mnemonics", "mnem", "opcode", "opcodes"},
+        "instruction": {"instruction", "instructions", "instructions_text", "insn_text", "instruction_text", "asm_text", "semantic_instruction"},
+        "text": {"full_text", "plaintext"},
+        "operand": {"operands", "opnd", "arg_text"},
+        "comment": {"comments", "cmt", "annotation", "notes"},
+        "data_ref": {"data_refs", "dref", "drefs"},
+        "code_ref": {"code_refs", "cref", "crefs", "xref"},
+        "regex": {"regexp", "re", "pattern_regex"},
+        "func_by_sig": {"signature", "sig", "func_signature", "signature_search"},
+        "find": {"search", "lookup", "query", "locate", "discover"},
+        "callers": {"incoming", "inbound_calls", "who_calls"},
+        "callees": {"outgoing", "outbound_calls", "calls_from"},
+        "api": {"apis", "import_api", "api_calls"},
+        "vulnerable": {"vuln", "vulnerabilities", "risky"},
+        "constants": {"const", "literals", "magic"},
+        "decompiled": {"decompile", "pseudo", "pseudocode", "hl"},
+    },
+    "vuln_scan": {
+        "dangerous_flow": {"dangerous_functions", "sink_flow", "user_controlled_flow", "deep_flow"},
+        "taint_lattice": {"taint_graph", "interprocedural_taint", "flow_lattice"},
+        "exploit_chains": {"chain_synthesis", "semantic_chains", "attack_chains"},
+        "patch_simulate": {"mitigation_simulation", "patch_impact", "what_if_patch"},
+        "memory_sync": {"knowledge_sync", "scanner_memory", "vuln_memory"},
+        "hybrid_rank": {"trace_rank", "runtime_weighted_rank", "hybrid_static_trace"},
+    },
+    "session": {
+        "discover": {"scan", "discover_sessions", "find_sessions"},
+        "create": {"new", "open", "start", "init", "spawn"},
+        "get": {"show", "read", "info", "details"},
+        "list": {"ls", "all", "enumerate"},
+        "switch": {"use", "activate", "focus"},
+        "close": {"delete", "remove", "terminate", "stop"},
+        "status": {"state", "current", "active"},
+        "rebuild": {"refresh", "recreate", "reanalyze"},
+        "update": {"edit", "set"},
+        "rename": {"set_name", "retitle"},
+        "duplicate": {"clone", "copy"},
+        "export_session": {"export", "dump"},
+        "import_session": {"import", "load"},
+        "archive": {"stash"},
+        "unarchive": {"unstash"},
+        "tag": {"add_tag", "label"},
+        "untag": {"remove_tag", "del_tag"},
+        "find_by_tag": {"search_tag", "tag_search"},
+        "add_note": {"note", "append_note"},
+        "clear_notes": {"wipe_notes", "reset_notes"},
+        "cleanup_stale": {"cleanup", "gc", "prune"},
+        "stats": {"statistics", "metrics"},
+        "validate": {"check", "verify"},
+        "bulk_delete": {"delete_many", "mass_delete"},
+        "bulk_tag": {"tag_many", "mass_tag"},
+        "search_notes": {"find_notes", "notes_search"},
+        "recent": {"latest", "newest"},
+        "oldest": {"old"},
+        "snapshot": {"savepoint", "checkpoint"},
+        "restore_snapshot": {"rollback", "restore"},
+        "merge": {"combine", "join"},
+        "macro_set": {"save_macro", "macro_save"},
+        "macro_get": {"load_macro", "macro_read"},
+        "macro_list": {"list_macros", "macros"},
+        "macro_delete": {"remove_macro", "delete_macro"},
+        "macro_run": {"run_macro", "execute_macro"},
+        "recent_workset": {"workset", "active_workset"},
+    },
+    "code": {
+        "decompile": {"decompiled", "pseudo", "pseudocode", "hl"},
+        "semantic_decompile": {"deep_decompile", "semantic_ir", "decomp_semantics", "rich_decompile"},
+        "decomp_dataflow": {"decompiler_dataflow", "decomp_slice", "var_flow"},
+        "disasm": {"disassemble", "asm", "assembly", "listing"},
+        "xrefs_to": {"xref_to", "refs_to", "incoming_refs"},
+        "xrefs_from": {"xref_from", "refs_from", "outgoing_refs"},
+        "xrefs_to_field": {"field_xrefs", "xrefs_field"},
+        "callees": {"calls", "called_functions", "outgoing_calls"},
+        "callers": {"who_calls", "incoming_calls"},
+        "blocks": {"basic_blocks", "bb"},
+        "analyze": {"analysis", "inspect"},
+        "callgraph": {"cg", "graph_calls"},
+        "export": {"dump", "save"},
+        "find_paths": {"paths", "path_search", "reachability"},
+        "strings_in_func": {"func_strings", "strings"},
+    },
+    "ctree": {
+        "dominance_map": {"dom_map", "condition_dominance", "control_dominance"},
+        "var_dependency_graph": {"var_graph", "dependency_graph", "ssa_like_graph"},
+    },
+    "microcode": {
+        "def_use_graph": {"du_graph", "defuse", "ir_dataflow"},
+    },
+}
+
+_TOOL_ARG_EXTRA_ALIASES = {
+    "threat_hunt": {
+        "legacy_tool": {"source_tool", "tool_name", "legacyTool", "tool"},
+        "legacy_action": {"source_action", "action_name", "legacyAction", "on"},
+        "profile": {"mode", "depth", "scan_mode"},
+        "query": {"q", "needle", "search"},
+        "addr": {"address", "ea", "va"},
+        "include_tracing": {"tracing", "with_tracing", "trace"},
+        "include_malware": {"malware", "with_malware"},
+        "include_vuln": {"vuln", "with_vuln", "security"},
+        "include_evidence": {"evidence", "with_evidence", "proof"},
+        "limit": {"max", "max_items", "count", "n"},
+        "max_steps": {"steps", "max_calls", "pipeline_steps"},
+        "scan_profile": {"vuln_profile", "scanner_profile"},
+        "severity": {"risk", "level"},
+        "legacy_passthrough": {"passthrough", "exact_legacy", "strict_legacy"},
+    },
+    "search": {
+        "pattern": {"needle", "text", "query_text"},
+        "query": {"q", "search", "find"},
+        "addr": {"address", "ea"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "start": {"from", "start_addr"},
+        "end": {"to", "end_addr"},
+        "case_sensitive": {"case", "match_case"},
+        "include_context": {"context", "with_context"},
+        "include_items": {"items", "with_items"},
+        "include_breakdown": {"breakdown", "stats"},
+        "timeout_ms": {"timeout", "timeout_millis"},
+        "max_functions": {"max_funcs", "function_cap"},
+        "sample": {"sample_mode", "sampling"},
+        "sample_max_funcs": {"sample_limit", "sample_cap"},
+    },
+    "vuln_scan": {
+        "addr": {"address", "ea", "va"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "severity": {"risk", "level"},
+        "include_context": {"context", "with_context"},
+        "scan_profile": {"profile", "depth", "mode"},
+        "max_graph_depth": {"graph_depth", "depth_limit"},
+        "include_dataflow_graph": {"dataflow", "with_dataflow", "graph"},
+        "include_remediation_plan": {"remediation", "plan", "with_plan"},
+        "include_vuln_memory": {"use_memory", "memory_enrich", "with_memory"},
+        "persist_vuln_memory": {"save_memory", "write_memory", "persist_memory"},
+        "vuln_memory_path": {"memory_path", "knowledge_path"},
+        "trace_addresses": {"trace_addrs", "executed_addresses", "coverage_addresses"},
+        "trace_functions": {"trace_funcs", "executed_functions", "coverage_functions"},
+        "trace_weight": {"runtime_weight", "hybrid_weight"},
+        "patch_strategies": {"patches", "mitigations", "simulation_strategies"},
+        "osv_coordinates": {"osv_coords", "coordinates", "packages"},
+        "osv_ecosystem": {"ecosystem", "package_ecosystem"},
+        "osv_endpoint": {"endpoint", "osv_url"},
+    },
+    "session": {
+        "binary_path": {"binary", "path", "target", "input"},
+        "session_id": {"sid", "session", "id"},
+        "force_new": {"new", "create_new", "fresh"},
+        "analysis_options": {"analysis", "options"},
+        "ida_args": {"idat_args", "args"},
+        "tags": {"labels", "tag_list"},
+        "notes": {"description"},
+        "query": {"q", "search"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "name": {"title", "session_name"},
+        "data": {"payload"},
+        "session_ids": {"sids", "sessions"},
+        "tag": {"label"},
+        "snapshot_id": {"snapshot", "snap_id"},
+        "source_id": {"from_sid", "source"},
+        "target_id": {"to_sid", "target"},
+        "run_action": {"macro_action", "action_to_run"},
+    },
+    "code": {
+        "addrs": {"addr", "address", "ea", "vas", "targets"},
+        "addr": {"address", "ea", "va"},
+        "max_items": {"max", "count", "n"},
+        "max_depth": {"depth", "levels"},
+        "format": {"fmt"},
+        "disasm_style": {"style", "disasmStyle"},
+        "include_bytes": {"bytes", "with_bytes"},
+        "end": {"end_addr", "to"},
+        "limit": {"max", "count"},
+        "field_name": {"field", "member"},
+        "target": {"to", "destination"},
+    },
+}
+
+
+def _build_action_aliases() -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for tool_name, actions in TOOL_ACTIONS.items():
+        alias_map: dict[str, str] = {}
+        for action in actions:
+            candidates = _snake_variants(action).union(_camel_variants(action))
+            candidates.update(_ACTION_ALIAS_HINTS.get(action, set()))
+            candidates.update(
+                _TOOL_ACTION_EXTRA_ALIASES.get(tool_name, {}).get(action, set())
+            )
+            if action.startswith("get_"):
+                candidates.add(action.replace("get_", "show_", 1))
+            if action.startswith("set_"):
+                candidates.add(action.replace("set_", "update_", 1))
+            if action.startswith("find_"):
+                candidates.add(action.replace("find_", "search_", 1))
+            if action.startswith("list_"):
+                candidates.add(action.replace("list_", "get_", 1))
+            for alias in list(candidates):
+                candidates.update(_noisy_alias_variants(alias))
+            for alias in candidates:
+                key = _normalize_alias_lookup_key(alias)
+                if not key:
+                    continue
+                existing = alias_map.get(key)
+                if existing and existing != action:
+                    alias_map.pop(key, None)
+                    continue
+                alias_map[key] = action
+        for action in actions:
+            alias_map.pop(action.lower(), None)
+        out[tool_name] = alias_map
+    return out
+
+
+def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for tool_name in TOOLS:
+        canonical_keys = set(TOOL_ARG_SCHEMAS.get(tool_name, {}).keys())
+        canonical_keys.add("action")
+        canonical_keys.update(_TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).keys())
+        alias_map: dict[str, str] = {}
+        # Sort for deterministic alias conflict resolution across processes/runs.
+        for canonical in sorted(canonical_keys):
+            candidates = _snake_variants(canonical).union(_camel_variants(canonical))
+            # Keep argument aliasing conservative: avoid automatic singular/plural flips,
+            # because some tools intentionally use both (e.g. tag vs tags, note vs notes).
+            if canonical.endswith("s") and len(canonical) > 3:
+                candidates.discard(canonical[:-1])
+            else:
+                candidates.discard(f"{canonical}s")
+            candidates.update(_COMMON_ARG_ALIAS_HINTS.get(canonical, set()))
+            candidates.update(
+                _TOOL_SPECIFIC_ARG_ALIASES.get(tool_name, {}).get(canonical, set())
+            )
+            candidates.update(
+                _TOOL_ARG_EXTRA_ALIASES.get(tool_name, {}).get(canonical, set())
+            )
+            for alias in list(candidates):
+                candidates.update(_noisy_alias_variants(alias))
+            for alias in candidates:
+                key = _normalize_alias_lookup_key(alias)
+                if not key:
+                    continue
+                existing = alias_map.get(key)
+                if existing and existing != canonical:
+                    alias_map.pop(key, None)
+                    continue
+                alias_map[key] = canonical
+        for canonical, explicit_aliases in _TOOL_SPECIFIC_ARG_ALIASES.get(
+            tool_name, {}
+        ).items():
+            for alias in explicit_aliases:
+                alias_key = _normalize_alias_lookup_key(alias)
+                if alias_key and alias_key != canonical.lower():
+                    alias_map[alias_key] = canonical
+        for canonical in canonical_keys:
+            alias_map.pop(canonical.lower(), None)
+        out[tool_name] = alias_map
+    return out
+
+
+ACTION_ALIASES_BY_TOOL = _build_action_aliases()
+ARG_ALIASES_BY_TOOL = _build_tool_arg_aliases()
+
+GLOBAL_RESPONSE_CONTROLS = {
+    "_response_mode": {
+        "type": "string",
+        "enum": ["compact", "full"],
+        "description": "Output mode. compact is default and reduces token usage.",
+    },
+    "_compact": {
+        "type": "boolean",
+        "description": "Shortcut for compact/full mode toggle.",
+    },
+    "_response_fields": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "Optional top-level field projection (comma-separated string or list).",
+    },
+    "_response_omit": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "Optional top-level field omission list.",
+    },
+    "_response_max_items": {
+        "type": "integer",
+        "description": "Max list items retained in compact mode.",
+    },
+    "_response_max_string": {
+        "type": "integer",
+        "description": "Max string length retained in compact mode.",
+    },
+    "_response_char_budget": {
+        "type": "integer",
+        "description": "Approximate max output chars before truncation middleware applies.",
+    },
+    "_response_table": {
+        "type": "boolean",
+        "description": "Convert repetitive list-of-object payloads into {columns,rows}.",
+    },
+    "_response_batch_compact": {
+        "type": "boolean",
+        "description": "Compact batch envelopes in compact mode.",
+    },
+    "_error_details": {
+        "type": "string",
+        "enum": ["none", "basic", "full"],
+        "description": "Controls verbosity of error details.",
+    },
+    "_qol_mode": {
+        "type": "string",
+        "enum": ["tiny", "balanced", "debug"],
+        "description": "QoL profile shortcut for response compaction presets.",
+    },
+}
+
+
+GLOBAL_WRAPPER_ACTION_CONTROLS = {
+    "source_action": {
+        "type": "string",
+        "description": "For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).",
+    },
+    "target_action": {"type": "string"},
+    "on": {"type": "string"},
+    "subaction": {"type": "string"},
+    "grep": {
+        "type": "string",
+        "description": "Grep pattern (substring by default; regex if grep_regex=true).",
+    },
+    "grep_pattern": {"type": "string"},
+    "grep_regex": {"type": "boolean"},
+    "grep_case_sensitive": {"type": "boolean"},
+    "grep_invert": {"type": "boolean"},
+    "grep_field": {
+        "type": "string",
+        "description": "Optional top-level source field to grep (e.g. matches, functions, content).",
+    },
+    "grep_limit": {"type": "integer"},
+    "grep_offset": {"type": "integer"},
+    "pick_fields": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "For action='pick': top-level fields to include.",
+    },
+    "pick_omit": {
+        "type": ["array", "string"],
+        "items": {"type": "string"},
+        "description": "For action='pick': top-level fields to omit after pick_fields.",
+    },
+    "head_n": {"type": "integer"},
+    "tail_n": {"type": "integer"},
+    "next_token": {"type": "string"},
+    "token": {"type": "string"},
+    "cursor": {"type": "string"},
+    "stats_include_payload": {"type": "boolean"},
+    "_qol_mode": {
+        "type": "string",
+        "enum": ["tiny", "balanced", "debug"],
+        "description": "QoL response profile preset.",
+    },
+    "qol_mode": {
+        "type": "string",
+        "enum": ["tiny", "balanced", "debug"],
+    },
+}
+
+
+def _action_enum_with_grep(tool_name: str) -> list[str]:
+    actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
+    for wrapper_action in WRAPPER_ACTIONS:
+        if wrapper_action not in actions:
+            actions.append(wrapper_action)
+    return actions
+
+
+def build_input_schema(tool_name: str) -> dict:
+    props = {}
+    required = []
+    if tool_name in TOOL_ARG_SCHEMAS:
+        props.update(TOOL_ARG_SCHEMAS[tool_name])
+    elif tool_name in TOOL_ACTIONS:
+        props["action"] = {"type": "string", "enum": TOOL_ACTIONS[tool_name]}
+    for key, schema in GLOBAL_RESPONSE_CONTROLS.items():
+        props.setdefault(key, schema)
+    # idb parameter is now completely optional - uses current_session automatically
+    # Only include it in schema for documentation, never required
+    if (
+        tool_name not in ("session", "bookmarks", "wiki", "batch")
+        and "idb" not in props
+    ):
+        props["idb"] = {
+            "type": "string",
+            "description": "Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.",
+        }
+    if "action" in props:
+        action_schema = props.get("action")
+        if isinstance(action_schema, dict):
+            action_schema = dict(action_schema)
+            action_schema["enum"] = _action_enum_with_grep(tool_name)
+            props["action"] = action_schema
+        for key, schema in GLOBAL_WRAPPER_ACTION_CONTROLS.items():
+            props.setdefault(key, schema)
+        required.append("action")
+    return {"type": "object", "properties": props, "required": required}
+
+
+def _lean_prop_schema(prop_name: str, schema: Any) -> dict:
+    """
+    Produce an ultra-lean per-parameter schema for tools/list.
+    Keep action enum, but collapse other fields to just a basic type.
+    """
+    if not isinstance(schema, dict):
+        return {"type": "string"}
+
+    out: dict[str, Any] = {}
+    raw_type = schema.get("type")
+    if isinstance(raw_type, str):
+        out["type"] = raw_type
+    elif isinstance(raw_type, list):
+        # Prefer a concrete scalar-ish type to avoid noisy anyOf-style payloads.
+        preferred = None
+        for t in ("string", "integer", "number", "boolean", "array", "object"):
+            if t in raw_type:
+                preferred = t
+                break
+        out["type"] = preferred or "string"
+    elif prop_name == "action":
+        out["type"] = "string"
+    else:
+        out["type"] = "string"
+
+    if prop_name == "action":
+        enum_vals = schema.get("enum")
+        if isinstance(enum_vals, list):
+            out["enum"] = enum_vals
+    return out
+
+
+def build_input_schema_lean(tool_name: str) -> dict:
+    """
+    Build a minimal input schema for tools/list to reduce prompt/context overhead.
+    Preserves essential per-tool argument fields while stripping verbose text.
+    """
+    props = {}
+    required = []
+    if tool_name in TOOL_ARG_SCHEMAS:
+        for k, v in TOOL_ARG_SCHEMAS[tool_name].items():
+            props[k] = _lean_prop_schema(k, v)
+    elif tool_name in TOOL_ACTIONS:
+        props["action"] = {"type": "string", "enum": TOOL_ACTIONS[tool_name]}
+    if tool_name not in ("session", "bookmarks", "wiki", "batch"):
+        props["idb"] = {"type": "string"}
+    if "action" in props:
+        action_schema = props.get("action")
+        if isinstance(action_schema, dict):
+            action_schema = dict(action_schema)
+            action_schema["enum"] = _action_enum_with_grep(tool_name)
+            props["action"] = action_schema
+        for key, schema in GLOBAL_WRAPPER_ACTION_CONTROLS.items():
+            props.setdefault(key, _lean_prop_schema(key, schema))
+        required.append("action")
+    return {"type": "object", "properties": props, "required": required}
+
+
+def build_input_schema_ultra(tool_name: str) -> dict:
+    """
+    Build a very small schema for tools/list to minimize startup context.
+    Keeps only the essential invocation shape (action enum + optional idb).
+    """
+    if tool_name == "batch":
+        return {
+            "type": "object",
+            "properties": {
+                "calls": {"type": "array", "items": {"type": ["object", "string"]}},
+                "continue_on_error": {"type": "boolean"},
+            },
+            "required": ["calls"],
+        }
+    if tool_name == "truncation":
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": TOOL_ACTIONS["truncation"]},
+                "token": {"type": "string"},
+            },
+            "required": ["action"],
+        }
+
+    props: Dict[str, Any] = {}
+    required: List[str] = []
+    action_enum = TOOL_ACTIONS.get(tool_name)
+    if action_enum:
+        props["action"] = {"type": "string", "enum": _action_enum_with_grep(tool_name)}
+        required.append("action")
+    if tool_name not in ("session", "bookmarks", "wiki", "batch", "truncation"):
+        props["idb"] = {
+            "type": "string",
+            "description": "Optional. session_id, SID_* id, binary path, or full IDB path.",
+        }
+    return {"type": "object", "properties": props, "required": required}
+
+
+def build_tool_description_ultra(tool_name: str) -> str:
+    """Return a tiny wiki-first routing hint for ultra tools/list mode."""
+    if tool_name == "wiki":
+        return "Wiki index + docs. Start with wiki(action='index')."
+    if tool_name == "session":
+        return "Session hub. IDB is optional after create/switch."
+    if tool_name == "batch":
+        return "Batch hub. Use calls as 'tool:action' or {name,action,...}."
+    return f"Use wiki(topic='tools/{tool_name}') for usage."
+
+
+def build_tool_description_lean(tool_name: str) -> str:
+    """Return a short description without embedded action lists."""
+    full = str(TOOL_DESCRIPTIONS.get(tool_name, "") or "").strip()
+    if not full:
+        return ""
+    if "Actions:" in full:
+        full = full.split("Actions:", 1)[0].strip()
+    full = re.sub(r"\s+", " ", full).strip(" .")
+    if not full:
+        return ""
+    if len(full) > 140:
+        full = full[:137].rstrip() + "..."
+    return full + "."
+
+
+_TOOL_CATEGORY_CORE = {"session", "truncation", "bookmarks", "batch", "wiki"}
+_TOOL_CATEGORY_ANALYSIS = {
+    "analysis",
+    "query",
+    "edit",
+    "idb",
+    "code",
+    "data",
+    "search",
+    "types",
+    "memory",
+    "modify",
+    "funcs",
+    "segments",
+    "bulk",
+    "calc",
+    "nav",
+}
+_TOOL_CATEGORY_DEBUG = {"debug", "trace", "coverage", "trace_analysis"}
+_TOOL_CATEGORY_PROJECT = {"project", "misc"}
+_TOOL_CATEGORY_ADVANCED = {
+    "agent",
+    "microcode",
+    "graph",
+    "ctree",
+    "taint",
+    "emulate",
+    "entropy",
+    "structs",
+    "imports_deep",
+    "patterns",
+    "symbols",
+    "diff",
+    "lumina",
+    "export",
+    "history",
+    "comments_ai",
+    "colorize",
+    "data_ops",
+    "fixups",
+    "hooks",
+}
+_TOOL_CATEGORY_SECURITY = {
+    "vuln_scan",
+    "threat_hunt",
+    "deobfuscate",
+    "crypto_id",
+    "c2_detect",
+    "protocol",
+    "gadgets",
+    "annotation",
+    "xref_analysis",
+    "string_ops",
+    "cfg_analysis",
+    "binary_info",
+    "abi",
+    "stack_analysis",
+    "compare",
+    "classify",
+    "summarize",
+    "yara_hunt",
+}
+_TOOL_CATEGORY_COMPAT = {"plugins", "xfer_analysis"}
+
+
+def classify_tool_category(tool_name: str) -> str:
+    if tool_name in _TOOL_CATEGORY_CORE:
+        return "core"
+    if tool_name in _TOOL_CATEGORY_ANALYSIS:
+        return "analysis"
+    if tool_name in _TOOL_CATEGORY_DEBUG:
+        return "debug"
+    if tool_name in _TOOL_CATEGORY_PROJECT:
+        return "project"
+    if tool_name in _TOOL_CATEGORY_ADVANCED:
+        return "advanced"
+    if tool_name in _TOOL_CATEGORY_SECURITY:
+        return "security"
+    if tool_name in _TOOL_CATEGORY_COMPAT:
+        return "compat"
+    return "other"
+
+
+def sanitize_schema_for_vertex(schema: Any) -> Any:
+    """
+    Translates a schema into a Vertex AI/Gemini-compatible format by removing
+    unsupported structures such as arrays of types, empty required arrays, and
+    empty properties dictionaries.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    out = {}
+    for k, v in schema.items():
+        if k == "type" and isinstance(v, list):
+            # Prefer a scalar type, fallback to string if none found
+            preferred = None
+            for t in ("string", "integer", "number", "boolean", "array", "object"):
+                if t in v:
+                    preferred = t
+                    break
+            out[k] = preferred or "string"
+        elif k == "required" and isinstance(v, list) and len(v) == 0:
+            continue
+        elif k == "properties" and isinstance(v, dict) and len(v) == 0:
+            continue
+        elif isinstance(v, dict):
+            out[k] = sanitize_schema_for_vertex(v)
+        elif isinstance(v, list):
+            out[k] = [sanitize_schema_for_vertex(item) for item in v]
+        else:
+            out[k] = v
+
+    if out.get("type") == "array" and "items" not in out:
+        out["items"] = {"type": "string"}
+    elif out.get("type") != "array" and "items" in out:
+        del out["items"]
+
+    return out
+
+
+

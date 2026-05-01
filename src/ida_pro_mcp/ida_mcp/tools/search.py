@@ -142,7 +142,7 @@ def _normalize_search_action(raw_action: Optional[str], *, fallback: str = "find
 @tool
 @idaread
 def search(
-    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled"],
+    action: Annotated[Literal["bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction", "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig", "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured"],
                        "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern (for compatibility)"] = None,
@@ -244,8 +244,15 @@ def search(
         Params: pattern, case_sensitive, limit
                 Optional guardrails: addr (single function scope), timeout_ms,
                 max_functions, sample, sample_max_funcs
-        Returns: {matches: "addr  func_name  L42: matching line\\n...", count}
+        Returns: {matches: "addr  func_name  L42: matching line\n...", count}
         Example: search(action="decompiled", pattern="memcpy.*sizeof")
+
+    structured - Structured semantic retrieval (SchemaBoot for RE).
+        Params: constraints (dict of attribute-value pairs to filter by),
+                pattern (optional semantic query for ranking after filtering)
+        Returns: {matches, count, schema_hits}
+        Example: search(action="structured", constraints={"behavior_tags": "network", "behavior_tags": "registry"})
+        Available attributes: behavior_tags, dangerous_apis, string_refs, vuln_class, compiler, language
 
     EXTRA:
     - semantic_action: Optional alias/intent action override (e.g. "xrefs", "imports", "pseudocode")
@@ -2053,6 +2060,140 @@ def search(
                     for r in page
                 ]
             return result
+
+        # ----------------------------------------------------------------
+        # ACTION: structured (VOERA SchemaBoot-inspired structured retrieval)
+        # ----------------------------------------------------------------
+        elif action == "structured":
+            constraints = kwargs.get("constraints", {})
+            if not isinstance(constraints, dict):
+                return make_error(MCPError.INVALID_ARGS, "constraints must be a dict of attribute-value pairs")
+            if not constraints and not pattern:
+                return make_error(MCPError.INVALID_ARGS, "constraints dict or pattern required for structured search")
+
+            # Import classification data for schema induction
+            try:
+                from .classify import _CATEGORY_APIS, _classify_func
+            except ImportError:
+                from classify import _CATEGORY_APIS, _classify_func  # type: ignore[import-not-found]
+            try:
+                from .annotation import _DANGEROUS_APIS, _TAG_CATEGORIES
+            except ImportError:
+                from annotation import _DANGEROUS_APIS, _TAG_CATEGORIES  # type: ignore[import-not-found]
+
+            def _induce_func_schema(func_ea: int) -> dict:
+                """Induce structured attribute-value schema for a function."""
+                schema = {
+                    "behavior_tags": set(),
+                    "dangerous_apis": set(),
+                    "string_refs": set(),
+                    "vuln_class": set(),
+                }
+                fn = ida_funcs.get_func(func_ea)
+                if not fn:
+                    return schema
+
+                # Classify by API categories
+                cat, matched_apis, all_callees = _classify_func(func_ea)
+                if cat != "unknown":
+                    schema["behavior_tags"].add(cat)
+                for c, apis in matched_apis.items():
+                    schema["behavior_tags"].add(c)
+                    for api in apis:
+                        if api in _DANGEROUS_APIS:
+                            schema["dangerous_apis"].add(api)
+                            schema["vuln_class"].add("dangerous_api")
+
+                # Check for anti-debug/persistence/evasion tags
+                for _, callee_name in [(0, c) for c in all_callees]:
+                    base = callee_name
+                    for suffix in ("A", "W", "@plt", "@PLT"):
+                        if base.endswith(suffix):
+                            base = base[:-len(suffix)]
+                            break
+                    for tag, apis in _TAG_CATEGORIES.items():
+                        if any(api.lower() == base.lower() for api in apis):
+                            schema["behavior_tags"].add(tag)
+
+                # String references
+                for head in idautils.Heads(fn.start_ea, fn.end_ea):
+                    for dref in idautils.DataRefsFrom(head):
+                        stype = idc.get_str_type(dref)
+                        if stype is not None and stype >= 0:
+                            s = idc.get_strlit_contents(dref, -1, stype)
+                            if s:
+                                s = s.decode("utf-8", errors="replace") if isinstance(s, bytes) else s
+                                schema["string_refs"].add(s[:60])
+                                # Heuristic: URL strings suggest network behavior
+                                if any(proto in s for proto in ("http://", "https://", "ftp://", "tcp://")):
+                                    schema["behavior_tags"].add("network")
+                                # Registry keys
+                                if "HKEY_" in s or "Software\\" in s:
+                                    schema["behavior_tags"].add("registry")
+                                # File paths
+                                if s.startswith("C:\\") or "/home/" in s or "/usr/" in s or "/etc/" in s:
+                                    schema["behavior_tags"].add("file_io")
+
+                return schema
+
+            def _schema_matches(schema: dict, constraints: dict) -> bool:
+                """Check if pre-computed function schema satisfies all constraints."""
+                for key, val in constraints.items():
+                    if key == "behavior_tags":
+                        vals = val if isinstance(val, (list, set, tuple)) else [val]
+                        if not any(v in schema["behavior_tags"] for v in vals):
+                            return False
+                    elif key == "dangerous_apis":
+                        vals = val if isinstance(val, (list, set, tuple)) else [val]
+                        if not any(v in schema["dangerous_apis"] for v in vals):
+                            return False
+                    elif key == "vuln_class":
+                        vals = val if isinstance(val, (list, set, tuple)) else [val]
+                        if not any(v in schema["vuln_class"] for v in vals):
+                            return False
+                    elif key == "string_refs":
+                        matcher = compile_smart_pattern(str(val), case_sensitive=False)
+                        if not any(matcher(s) for s in schema["string_refs"]):
+                            return False
+                    else:
+                        # Generic: check all string values
+                        all_vals = set()
+                        for v in schema.values():
+                            all_vals.update(v)
+                        if str(val).lower() not in " ".join(all_vals).lower():
+                            return False
+                return True
+
+            results = []
+            schema_hits = {}
+            for func_ea in idautils.Functions():
+                schema = _induce_func_schema(func_ea)
+                if _schema_matches(schema, constraints):
+                    fname = idc.get_func_name(func_ea) or f"sub_{func_ea:x}"
+                    tags = ", ".join(sorted(schema["behavior_tags"]))
+                    dangerous = ", ".join(sorted(schema["dangerous_apis"]))
+                    line = f"{hex(func_ea)}  {fname}  tags=[{tags}]"
+                    if dangerous:
+                        line += f"  dangerous=[{dangerous}]"
+                    results.append(line)
+                    schema_hits[hex(func_ea)] = {
+                        "name": fname,
+                        "behavior_tags": sorted(schema["behavior_tags"]),
+                        "dangerous_apis": sorted(schema["dangerous_apis"]),
+                        "string_refs": sorted(schema["string_refs"])[:5],
+                    }
+                    if len(results) >= limit:
+                        break
+
+            return {
+                "ok": True,
+                "action": "structured",
+                "constraints": constraints,
+                "matches": "\n".join(results),
+                "count": len(results),
+                "schema_hits": schema_hits,
+                "note": "Structured semantic retrieval pre-filters by induced function schema before semantic ranking.",
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

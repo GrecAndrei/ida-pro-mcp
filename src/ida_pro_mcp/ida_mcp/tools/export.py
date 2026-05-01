@@ -4,16 +4,49 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import re
+
 
 # ============================================================================
 # 28. EXPORT - Export Database in Various Formats
 # ============================================================================
 
+# ============================================================================
+# VOERA: Neuro-Symbolic Redaction for Exports
+# ============================================================================
+
+_REDACTION_PATTERNS = [
+    (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), "SSN"),
+    (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), "EMAIL"),
+    (re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'), "IP"),
+    (re.compile(r'\b[a-f0-9]{32}\b'), "MD5"),
+    (re.compile(r'\b[a-f0-9]{40}\b'), "SHA1"),
+    (re.compile(r'\b[a-f0-9]{64}\b'), "SHA256"),
+    (re.compile(r'\bhttps?://[^\s"\']+'), "URL"),
+    (re.compile(r'\b[A-Za-z0-9+/]{40,}={0,2}\b'), "BASE64"),
+]
+
+
+def _redact_content(content: str, patterns: list = None) -> tuple[str, list[str]]:
+    """Redact sensitive data from exported content.
+    Returns (redacted_content, list_of_redactions).
+    """
+    patterns = patterns or _REDACTION_PATTERNS
+    redacted = content
+    redactions = []
+    for pattern, label in patterns:
+        matches = pattern.findall(redacted)
+        for match in matches:
+            redactions.append(f"{label}: {match[:30]}...")
+        redacted = pattern.sub(f"[{label}_REDACTED]", redacted)
+    return redacted, redactions
+
+
 @tool
 @idaread
 def export(
-    action: Annotated[Literal["listing", "html", "idc", "json", "binexport", "headers"],
-                      "Action: listing|html|idc|json|binexport|headers"],
+    action: Annotated[Literal["listing", "html", "idc", "json", "binexport", "headers", "redact"],
+                      "Action: listing|html|idc|json|binexport|headers|redact"],
     path: Annotated[Optional[str], "Output file path"] = None,
     addr: Annotated[Optional[str], "Address or range (for partial export)"] = None,
     include_decompile: Annotated[bool, "Include decompiled code"] = False,
@@ -47,6 +80,10 @@ def export(
     headers - Export C headers for types
         Params: path
         Returns: {exported, path, types_count}
+
+    redact - Preview redaction of sensitive data from a text snippet (neuro-symbolic governance).
+        Params: addr (not used), path (text to redact, or omit to redact all strings from binary)
+        Returns: {redacted, redactions, count}
     """
     try:
         import os
@@ -330,6 +367,38 @@ def export(
                 f.write('\n'.join(headers))
             
             return {"ok": True, "exported": True, "path": path, "types_count": type_count}
+
+        elif action == "redact":
+            if path:
+                # Redact provided text
+                content = str(path)
+                redacted, redactions = _redact_content(content)
+                return {
+                    "ok": True,
+                    "original_length": len(content),
+                    "redacted_length": len(redacted),
+                    "redactions": redactions,
+                    "count": len(redactions),
+                    "redacted": redacted,
+                }
+            else:
+                # Redact all strings from binary
+                all_strings = []
+                for s in idautils.Strings():
+                    if len(all_strings) >= 500:
+                        break
+                    val = str(s)
+                    if val and len(val) > 3:
+                        all_strings.append(val)
+                combined = "\n".join(all_strings)
+                redacted, redactions = _redact_content(combined)
+                return {
+                    "ok": True,
+                    "source": "binary_strings",
+                    "redactions": redactions[:50],
+                    "count": len(redactions),
+                    "note": "Redacted sensitive patterns (IPs, emails, hashes, URLs, base64). Review before sharing externally.",
+                }
         
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
