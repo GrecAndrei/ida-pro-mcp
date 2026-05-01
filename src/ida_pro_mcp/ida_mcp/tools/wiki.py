@@ -1,5 +1,7 @@
 import re
 import difflib
+import time
+from collections import OrderedDict
 
 try:
     from ._common import *
@@ -18,23 +20,64 @@ SEMANTIC_ALIASES = {
     "rewrite": "modify",
 }
 
+# Simple LRU cache for wiki page content
+_WIKI_CACHE = OrderedDict()
+_MAX_WIKI_CACHE = 16
+
+
+def _get_wiki_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_script_dir))))
+    return os.path.join(_repo_root, "docs", "wiki")
+
+
+def _read_wiki_file(path):
+    """Read a wiki file with caching."""
+    global _WIKI_CACHE
+    real_path = os.path.realpath(path)
+    if real_path in _WIKI_CACHE:
+        _WIKI_CACHE.move_to_end(real_path)
+        return _WIKI_CACHE[real_path]
+    with open(path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    _WIKI_CACHE[real_path] = content
+    if len(_WIKI_CACHE) > _MAX_WIKI_CACHE:
+        _WIKI_CACHE.popitem(last=False)
+    return content
+
+
+def _fuzzy_find_topic(query, topics_dict, cutoff=0.6):
+    """Fuzzy find a topic name across all categories."""
+    query_lower = query.lower().replace("_", " ")
+    best_match = None
+    best_score = 0.0
+    for category, pages in topics_dict.items():
+        for page in pages:
+            # Check exact or substring
+            full = f"{category}/{page}".lower()
+            if query_lower in full or full in query_lower:
+                return full, 1.0
+            # Fuzzy match
+            for candidate in (page.lower(), full, category.lower()):
+                score = difflib.SequenceMatcher(None, query_lower, candidate).ratio()
+                if score > best_score and score >= cutoff:
+                    best_score = score
+                    best_match = full
+    return best_match, best_score
+
 
 def protocol_resource() -> str:
     """The Master Forensic RE Protocol - Rules of Engagement for AI Agents."""
-    _script_dir = os.path.dirname(os.path.abspath(__file__))
-    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_script_dir))))
-    wiki_root = os.path.join(_repo_root, "docs", "wiki")
-    path = os.path.join(wiki_root, "workflows", "ForensicProtocol.md")
+    path = os.path.join(_get_wiki_root(), "workflows", "ForensicProtocol.md")
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return f.read()
+        return _read_wiki_file(path)
     except Exception:
         return "CRITICAL: Name everything. Define structs. Debug is truth. Use wiki(topic='workflows/ForensicProtocol') for details."
 
 @tool
 def wiki(
-    action: Annotated[Literal["list_topics", "read", "search", "semantic_search", "index", "sections"],
-                      "Action: list_topics|read|search|semantic_search|index|sections"],
+    action: Annotated[Literal["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],
+                      "Action: list_topics|read|search|semantic_search|index|sections|suggest"],
     topic: Annotated[Optional[str], "Topic name (e.g. 'debug', 'workflows/ForensicProtocol')"] = None,
     query: Annotated[Optional[str], "Search query (alias for topic when action=search)"] = None,
     section: Annotated[Optional[str], "Specific section or subsection to read (header text)"] = None,
@@ -46,8 +89,8 @@ def wiki(
 ) -> dict:
     """
     Access the specialized IDA MCP Wiki for tool documentation and workflows.
-    Supports hierarchical section reading and line-based pagination.
-    
+    Supports hierarchical section reading, line-based pagination, and fuzzy suggestion.
+
     Actions:
     - list_topics: List all available categories and pages.
     - read: Read a wiki page. Use 'section' for specific parts, and 'offset'/'limit' for chunks.
@@ -55,6 +98,7 @@ def wiki(
     - semantic_search: Search with concept expansion (synonyms) plus typo-tolerant ranking.
     - index: Structured index with doc counts and metadata.
     - sections: List headers for a specific topic with line numbers.
+    - suggest: Fuzzy-find the best-matching topic for a given query.
     """
     # Use script path to find docs, not os.getcwd() which may be wrong
     _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -132,10 +176,15 @@ def wiki(
             if not topic: return make_error(MCPError.INVALID_ARGS, "topic required")
             path, err = resolve_topic_path(topic)
             if err:
+                # Try fuzzy suggestion and include it in the error
+                topics = collect_topics()
+                suggestion, score = _fuzzy_find_topic(topic, topics)
+                if suggestion:
+                    err["suggestion"] = suggestion
+                    err["fuzzy_score"] = round(score, 3)
                 return err
             
-            with open(path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+            lines = _read_wiki_file(path).splitlines(True)
             
             content_lines = lines
             target_section = None
@@ -249,10 +298,9 @@ def wiki(
                     if f.endswith(".md"):
                         p = os.path.join(root, f)
                         rel_name = os.path.relpath(p, wiki_root).replace(".md", "").replace(os.sep, "/")
-                        with open(p, 'r', encoding='utf-8') as file:
-                            content = file.read()
-                            content_lower = content.lower()
-                            if any(t in content_lower or t in f.lower() for t in query_terms):
+                        content = _read_wiki_file(p)
+                        content_lower = content.lower()
+                        if any(t in content_lower or t in f.lower() for t in query_terms):
                                 entry = {
                                     "topic": rel_name,
                                     "matched_on": ["semantic_overlap"] if action == "semantic_search" else ["content_contains"],
@@ -296,11 +344,25 @@ def wiki(
                 return make_error(MCPError.INVALID_ARGS, "topic required")
             path, err = resolve_topic_path(topic)
             if err:
+                topics = collect_topics()
+                suggestion, score = _fuzzy_find_topic(topic, topics)
+                if suggestion:
+                    err["suggestion"] = suggestion
+                    err["fuzzy_score"] = round(score, 3)
                 return err
-            with open(path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+            lines = _read_wiki_file(path).splitlines(True)
             headers = parse_headers(lines)
             return {"ok": True, "topic": topic, "headers": headers}
+
+        elif action == "suggest":
+            q = (query or topic or "").strip()
+            if not q:
+                return make_error(MCPError.INVALID_ARGS, "query or topic required")
+            topics = collect_topics()
+            suggestion, score = _fuzzy_find_topic(q, topics)
+            if suggestion:
+                return {"ok": True, "query": q, "suggestion": suggestion, "score": round(score, 3)}
+            return {"ok": True, "query": q, "suggestion": None, "score": 0.0}
 
         elif action == "index":
             topics = collect_topics()

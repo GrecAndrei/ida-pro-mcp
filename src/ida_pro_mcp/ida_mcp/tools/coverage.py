@@ -13,13 +13,16 @@ except ImportError:
 @idaread
 def coverage(
     action: Annotated[
-        Literal["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter"],
-        "Action: import_drcov|import_lighthouse|highlight|report|uncovered|filter",
+        Literal["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter",
+                "function_coverage", "gaps", "compare", "merge"],
+        "Action: import_drcov|import_lighthouse|highlight|report|uncovered|filter|function_coverage|gaps|compare|merge",
     ],
     path: Annotated[Optional[str], "Path to coverage file"] = None,
     addr: Annotated[Optional[str], "Function to analyze"] = None,
     color: Annotated[Optional[str], "Highlight color (green|yellow|red)"] = "green",
     addresses: Annotated[Optional[list[str]], "List of addresses to filter (for action=filter)"] = None,
+    paths: Annotated[Optional[list[str]], "List of coverage file paths (for merge/compare)"] = None,
+    top_n: Annotated[int, "Number of top results to return (for function_coverage/gaps)"] = 20,
     **kwargs,
 ) -> dict:
     """
@@ -50,6 +53,22 @@ def coverage(
     filter - Test which of the provided addresses were actually executed
         Params: path (coverage file), addresses (list of hex strings)
         Returns: {executed: [hex_str], count}
+
+    function_coverage - Coverage % for all functions, sorted by coverage (ascending)
+        Params: path (optional coverage data), top_n
+        Returns: {functions: [{name, addr, total_blocks, covered_blocks, percentage}]}
+
+    gaps - Find largest contiguous uncovered code regions
+        Params: path (optional coverage data), top_n
+        Returns: {gaps: [{start, end, size, function}]}
+
+    compare - Compare two coverage files (path vs paths[0])
+        Params: path (base), paths[0] (compare)
+        Returns: {newly_covered, newly_uncovered, unchanged}
+
+    merge - Merge multiple coverage files
+        Params: paths (list of coverage files)
+        Returns: {merged, total_unique_addresses, sources}
     """
     try:
         import bisect
@@ -601,6 +620,194 @@ def coverage(
 
             uncovered.sort(key=lambda x: (0 if x["importance"] == "high" else 1, x["name"]))
             return {"ok": True, "uncovered": uncovered[:50], "coverage_loaded": cov is not None}
+
+        elif action == "function_coverage":
+            cov = {"kind": "addresses", "addresses": set(), "ranges": [], "range_starts": [], "source": "none"}
+            if path:
+                path, err = validate_path_safe(path)
+                if err:
+                    return err
+                if not os.path.exists(path):
+                    return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {path}")
+                loaded, load_err = _load_coverage(path)
+                if load_err:
+                    return make_error(MCPError.FILE_NOT_FOUND, load_err)
+                cov = loaded
+
+            results = []
+            for func_ea in idautils.Functions():
+                fn = ida_funcs.get_func(func_ea)
+                if not fn:
+                    continue
+                try:
+                    fc = idaapi.FlowChart(fn)
+                except Exception:
+                    continue
+                total = 0
+                covered = 0
+                for block in fc:
+                    total += 1
+                    if _range_has_coverage(block.start_ea, block.end_ea, cov):
+                        covered += 1
+                if total > 0:
+                    pct = round((covered / total) * 100, 2)
+                    results.append({
+                        "name": idc.get_func_name(func_ea) or hex(func_ea),
+                        "addr": hex(func_ea),
+                        "total_blocks": total,
+                        "covered_blocks": covered,
+                        "percentage": pct,
+                    })
+
+            # Sort by coverage ascending (most uncovered first), then by name
+            results.sort(key=lambda x: (x["percentage"], x["name"]))
+            return {
+                "ok": True,
+                "functions": results[:top_n],
+                "total_functions": len(results),
+                "fully_covered": sum(1 for r in results if r["percentage"] == 100.0),
+                "zero_covered": sum(1 for r in results if r["percentage"] == 0.0),
+                "coverage_loaded": cov.get("source") != "none",
+            }
+
+        elif action == "gaps":
+            cov = {"kind": "addresses", "addresses": set(), "ranges": [], "range_starts": [], "source": "none"}
+            if path:
+                path, err = validate_path_safe(path)
+                if err:
+                    return err
+                if not os.path.exists(path):
+                    return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {path}")
+                loaded, load_err = _load_coverage(path)
+                if load_err:
+                    return make_error(MCPError.FILE_NOT_FOUND, load_err)
+                cov = loaded
+
+            gaps = []
+            for func_ea in idautils.Functions():
+                fn = ida_funcs.get_func(func_ea)
+                if not fn:
+                    continue
+                try:
+                    fc = idaapi.FlowChart(fn)
+                except Exception:
+                    continue
+                prev_end = fn.start_ea
+                for block in fc:
+                    if not _range_has_coverage(block.start_ea, block.end_ea, cov):
+                        # This block is uncovered; measure gap from prev_end to block.end_ea
+                        # but only if contiguous with previous uncovered blocks
+                        gap_start = block.start_ea
+                        gap_end = block.end_ea
+                        if prev_end > gap_start:
+                            gap_start = prev_end
+                        if gap_end > gap_start:
+                            gaps.append({
+                                "start": hex(gap_start),
+                                "end": hex(gap_end),
+                                "size": int(gap_end - gap_start),
+                                "function": idc.get_func_name(func_ea) or hex(func_ea),
+                                "func_addr": hex(func_ea),
+                            })
+                    prev_end = block.end_ea
+
+            gaps.sort(key=lambda x: -x["size"])
+            return {
+                "ok": True,
+                "gaps": gaps[:top_n],
+                "total_gap_bytes": sum(g["size"] for g in gaps),
+                "coverage_loaded": cov.get("source") != "none",
+            }
+
+        elif action == "compare":
+            if not path:
+                return make_error(MCPError.INVALID_ARGS, "path (base coverage file) required")
+            if not paths or len(paths) < 1:
+                return make_error(MCPError.INVALID_ARGS, "paths[0] (compare coverage file) required")
+            base_path, err = validate_path_safe(path)
+            if err:
+                return err
+            cmp_path, err = validate_path_safe(paths[0])
+            if err:
+                return err
+            if not os.path.exists(base_path):
+                return make_error(MCPError.FILE_NOT_FOUND, f"Base file not found: {base_path}")
+            if not os.path.exists(cmp_path):
+                return make_error(MCPError.FILE_NOT_FOUND, f"Compare file not found: {cmp_path}")
+
+            base_cov, base_err = _load_coverage(base_path)
+            if base_err:
+                return make_error(MCPError.FILE_NOT_FOUND, base_err)
+            cmp_cov, cmp_err = _load_coverage(cmp_path)
+            if cmp_err:
+                return make_error(MCPError.FILE_NOT_FOUND, cmp_err)
+
+            # Build address sets for quick comparison
+            def _to_addr_set(cov):
+                addrs = set()
+                if cov.get("kind") == "addresses":
+                    addrs.update(cov.get("addresses", set()))
+                else:
+                    for start, end in cov.get("ranges", []):
+                        # Sample every 16 bytes to keep sets manageable
+                        for ea in range(start, end, 16):
+                            addrs.add(ea)
+                return addrs
+
+            base_addrs = _to_addr_set(base_cov)
+            cmp_addrs = _to_addr_set(cmp_cov)
+
+            newly_covered = sorted(cmp_addrs - base_addrs)
+            newly_uncovered = sorted(base_addrs - cmp_addrs)
+            unchanged = sorted(base_addrs & cmp_addrs)
+
+            return {
+                "ok": True,
+                "base_path": base_path,
+                "compare_path": cmp_path,
+                "newly_covered_count": len(newly_covered),
+                "newly_uncovered_count": len(newly_uncovered),
+                "unchanged_count": len(unchanged),
+                "newly_covered": [hex(a) for a in newly_covered[:50]],
+                "newly_uncovered": [hex(a) for a in newly_uncovered[:50]],
+                "unchanged": [hex(a) for a in unchanged[:50]],
+            }
+
+        elif action == "merge":
+            if not paths:
+                return make_error(MCPError.INVALID_ARGS, "paths (list of coverage files) required")
+            merged_addrs = set()
+            merged_ranges = []
+            sources = []
+            for p in paths:
+                safe_p, err = validate_path_safe(p)
+                if err:
+                    continue
+                if not os.path.exists(safe_p):
+                    continue
+                cov, load_err = _load_coverage(safe_p)
+                if load_err:
+                    continue
+                sources.append(safe_p)
+                if cov.get("kind") == "addresses":
+                    merged_addrs.update(cov.get("addresses", set()))
+                else:
+                    merged_ranges.extend(cov.get("ranges", []))
+
+            # Merge ranges and deduplicate with address set
+            if merged_ranges:
+                merged_ranges = _normalize_ranges(merged_ranges)
+                for start, end in merged_ranges:
+                    for ea in range(start, end, 16):
+                        merged_addrs.add(ea)
+
+            return {
+                "ok": True,
+                "merged": True,
+                "sources": sources,
+                "total_unique_addresses": len(merged_addrs),
+                "total_sources": len(sources),
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
