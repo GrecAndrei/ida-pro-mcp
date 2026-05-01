@@ -25,6 +25,7 @@ from .config import (
     _parse_iso_datetime,
     MAX_SESSION_ID_RETRIES,
     MAX_SNAPSHOT_ID_RETRIES,
+    MAX_SNAPSHOTS_PER_SESSION,
     MAX_TAG_LEN,
     MAX_TAGS_PER_SESSION,
     MAX_NOTE_LEN,
@@ -296,8 +297,7 @@ class SessionManager:
             session = self.sessions.get(sid)
             if session:
                 session.update_access()
-                self._save_metadata(session)
-                return copy.copy(session)
+                return copy.deepcopy(session)
             return None
 
     def find_session_by_path(self, path: str) -> Optional[Session]:
@@ -341,7 +341,7 @@ class SessionManager:
         for f in glob.glob(base_pattern):
             try:
                 if os.path.isdir(f):
-                    shutil.rmtree(f, ignore_errors=False)
+                    shutil.rmtree(f, ignore_errors=True)
                 else:
                     os.remove(f)
                 deleted = True
@@ -723,6 +723,8 @@ class SessionManager:
             if sid not in self._snapshots:
                 self._snapshots[sid] = []
             self._snapshots[sid].append(snapshot)
+            if len(self._snapshots[sid]) > MAX_SNAPSHOTS_PER_SESSION:
+                self._snapshots[sid] = self._snapshots[sid][-MAX_SNAPSHOTS_PER_SESSION:]
             return snapshot_id
 
     def restore_snapshot(self, sid: str, snapshot_id: str) -> Optional[Session]:
@@ -954,10 +956,14 @@ class BookmarkManager:
                 return []
         return []
 
-    def save(self, sid: str, bookmarks: List[dict]):
+    def save(self, sid: str, bookmarks: List[dict]) -> dict:
         path = self._get_path(sid)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(bookmarks, f, indent=2)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(bookmarks, f, indent=2)
+            return {"ok": True}
+        except Exception as e:
+            return make_error(MCPError.IO_ERROR, f"Failed to save bookmarks: {e}")
 
     def add(self, sid: str, data: dict) -> dict:
         if not data.get("addr"):
@@ -984,14 +990,19 @@ class BookmarkManager:
             if bm["addr"] == data.get("addr"):
                 new_bm["id"] = bm["id"]
                 bookmarks[i] = new_bm
-                self.save(sid, bookmarks)
+                res = self.save(sid, bookmarks)
+                if res.get("error"):
+                    return res
                 return {"ok": True, "updated": True, "bookmark": new_bm}
 
         bookmarks.append(new_bm)
-        self.save(sid, bookmarks)
+        res = self.save(sid, bookmarks)
+        if res.get("error"):
+            return res
         return {"ok": True, "bookmark": new_bm}
 
     def list(self, sid: str, filters: dict) -> dict:
+        filters = filters or {}
         bookmarks = self.load(sid)
         f_cat = filters.get("category")
         f_tag = filters.get("tag")
@@ -1040,7 +1051,9 @@ class BookmarkManager:
             bookmarks = [b for b in bookmarks if b.get("addr") != addr]
 
         if len(bookmarks) < original_len:
-            self.save(sid, bookmarks)
+            res = self.save(sid, bookmarks)
+            if res.get("error"):
+                return res
             return {"ok": True, "deleted": original_len - len(bookmarks)}
         return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
@@ -1058,12 +1071,16 @@ class BookmarkManager:
                         if key == "tags" and isinstance(val, str):
                             val = [t.strip() for t in val.split(",") if t.strip()]
                         bookmarks[i][key] = val
-                self.save(sid, bookmarks)
+                res = self.save(sid, bookmarks)
+                if res.get("error"):
+                    return res
                 return {"ok": True, "bookmark": bookmarks[i]}
         return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
     def clear(self, sid: str) -> dict:
-        self.save(sid, [])
+        res = self.save(sid, [])
+        if res.get("error"):
+            return res
         return {"ok": True}
 
     def find(self, sid: str, query: str) -> dict:

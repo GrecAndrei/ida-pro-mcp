@@ -157,7 +157,23 @@ def analysis(
         if action == "set_processor":
             if not processor:
                 return make_error(MCPError.INVALID_ARGS, "processor required")
-            proc_flags = flags if flags is not None else idaapi.SETPROC_LOADER
+            proc_flags = flags if flags is not None else getattr(
+                idaapi, "SETPROC_LOADER_NON_FATAL", idaapi.SETPROC_LOADER
+            )
+            prev = ""
+            try:
+                inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+                prev = getattr(inf, "procname", "") if inf else ""
+            except Exception:
+                pass
+            if prev == processor:
+                return {
+                    "ok": True,
+                    "processor": processor,
+                    "previous": prev,
+                    "result": True,
+                    "note": "already set",
+                }
             try:
                 ok = idaapi.set_processor_type(processor, proc_flags)
             except RuntimeError as e:
@@ -165,9 +181,9 @@ def analysis(
                     MCPError.IDA_ERROR,
                     str(e),
                     hint="Processor changes must be compatible with the loaded file. For mismatched architectures, use a raw binary or select the processor before loading.",
-                    details={"processor": processor, "flags": proc_flags},
+                    details={"processor": processor, "flags": proc_flags, "previous": prev},
                 )
-            return {"ok": True, "processor": processor, "result": ok}
+            return {"ok": True, "processor": processor, "previous": prev, "result": ok}
 
         if action == "set_loader_options":
             if value is None:
@@ -234,62 +250,91 @@ def analysis(
             if not any([processor, bitness, endian]):
                 return make_error(MCPError.INVALID_ARGS, "processor, bitness, or endian required")
             applied = {}
+            warnings_list = []
+            prev = ""
+            try:
+                inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+                prev = getattr(inf, "procname", "") if inf else ""
+            except Exception:
+                pass
             if processor:
-                proc_flags = flags if flags is not None else idaapi.SETPROC_LOADER
-                try:
-                    result = idaapi.set_processor_type(processor, proc_flags)
-                except RuntimeError as e:
-                    return make_error(
-                        MCPError.IDA_ERROR,
-                        str(e),
-                        hint="Processor changes must be compatible with the loaded file. For mismatched architectures, use a raw binary or select the processor before loading.",
-                        details={"processor": processor, "flags": proc_flags},
-                    )
-                applied["processor"] = {"value": processor, "result": result}
-            if bitness is not None:
-                if int(bitness) not in (16, 32, 64):
-                    return make_error(MCPError.INVALID_ARGS, "bitness must be 16, 32, or 64")
-                if hasattr(ida_ida, "inf_set_app_bitness"):
+                proc_flags = flags if flags is not None else getattr(
+                    idaapi, "SETPROC_LOADER_NON_FATAL", idaapi.SETPROC_LOADER
+                )
+                if prev == processor:
+                    applied["processor"] = {
+                        "value": processor,
+                        "previous": prev,
+                        "result": True,
+                        "note": "already set",
+                    }
+                else:
                     try:
-                        max_ea = ida_ida.inf_get_max_ea()
-                    except Exception:
-                        max_ea = None
-                    if max_ea is not None:
-                        max_allowed = (1 << int(bitness)) - 1
-                        if max_ea > max_allowed:
-                            return make_error(
-                                MCPError.INVALID_ARGS,
-                                f"bitness {bitness} too small for address space",
-                                details={"max_ea": hex(max_ea), "max_allowed": hex(max_allowed)},
-                            )
-                    try:
-                        ida_ida.inf_set_app_bitness(int(bitness))
-                    except Exception as e:
+                        result = idaapi.set_processor_type(processor, proc_flags)
+                    except RuntimeError as e:
                         return make_error(
                             MCPError.IDA_ERROR,
                             str(e),
-                            details={"bitness": int(bitness)},
+                            hint="Processor changes must be compatible with the loaded file. For mismatched architectures, use a raw binary or select the processor before loading.",
+                            details={"processor": processor, "flags": proc_flags, "previous": prev},
                         )
-                    applied["bitness"] = int(bitness)
+                    applied["processor"] = {"value": processor, "previous": prev, "result": result}
+            if bitness is not None:
+                if int(bitness) not in (16, 32, 64):
+                    return make_error(MCPError.INVALID_ARGS, "bitness must be 16, 32, or 64")
+                current_bitness = _get_app_bitness()
+                if current_bitness == int(bitness):
+                    applied["bitness"] = {"value": int(bitness), "note": "already set"}
                 else:
-                    applied["bitness_requested"] = int(bitness)
-                    applied["bitness_applied"] = False
-                    applied["bitness_note"] = "inf_set_app_bitness unavailable in this IDA build"
+                    if hasattr(ida_ida, "inf_set_app_bitness"):
+                        try:
+                            max_ea = ida_ida.inf_get_max_ea()
+                        except Exception:
+                            max_ea = None
+                        if max_ea is not None:
+                            max_allowed = (1 << int(bitness)) - 1
+                            if max_ea > max_allowed:
+                                warnings_list.append(
+                                    f"bitness {bitness} may truncate addresses (max_ea={hex(max_ea)} > {hex(max_allowed)})"
+                                )
+                        try:
+                            ida_ida.inf_set_app_bitness(int(bitness))
+                        except Exception as e:
+                            return make_error(
+                                MCPError.IDA_ERROR,
+                                str(e),
+                                details={"bitness": int(bitness)},
+                            )
+                        applied["bitness"] = int(bitness)
+                        if warnings_list:
+                            applied["bitness_warnings"] = warnings_list
+                    else:
+                        applied["bitness_requested"] = int(bitness)
+                        applied["bitness_applied"] = False
+                        applied["bitness_note"] = "inf_set_app_bitness unavailable in this IDA build"
             if endian:
                 if hasattr(ida_ida, "inf_set_be"):
                     be = str(endian).lower() in ("be", "big", "big_endian", "big-endian", "bigendian", "1", "true")
                     le = str(endian).lower() in ("le", "little", "little_endian", "little-endian", "littleendian", "0", "false")
                     if not (be or le):
                         return make_error(MCPError.INVALID_ARGS, "endian must be le|be|little|big")
+                    current_be = None
                     try:
-                        ida_ida.inf_set_be(be)
-                    except Exception as e:
-                        return make_error(
-                            MCPError.IDA_ERROR,
-                            str(e),
-                            details={"endian": "be" if be else "le"},
-                        )
-                    applied["endian"] = "be" if be else "le"
+                        current_be = ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else None
+                    except Exception:
+                        pass
+                    if current_be is not None and current_be == be:
+                        applied["endian"] = {"value": "be" if be else "le", "note": "already set"}
+                    else:
+                        try:
+                            ida_ida.inf_set_be(be)
+                        except Exception as e:
+                            return make_error(
+                                MCPError.IDA_ERROR,
+                                str(e),
+                                details={"endian": "be" if be else "le"},
+                            )
+                        applied["endian"] = "be" if be else "le"
                 else:
                     applied["endian_requested"] = str(endian)
                     applied["endian_applied"] = False

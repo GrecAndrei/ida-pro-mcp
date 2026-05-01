@@ -316,11 +316,112 @@ def run_server():
         except KeyboardInterrupt: break
         except Exception as e: log_ev(f"Loop error: {e}")
 
+def _apply_pre_analysis_options():
+    """Apply processor/bitness/endian/loader_options BEFORE auto-analysis."""
+    raw = os.environ.get("IDA_MCP_PRE_ANALYSIS_OPTS", "{}")
+    try:
+        opts = json.loads(raw)
+    except Exception:
+        return
+    if not opts:
+        return
+
+    # Skip if opening an existing IDB — don't clobber saved settings.
+    if os.environ.get("IDA_MCP_USE_EXISTING_IDB") == "1":
+        return
+
+    import idaapi
+    import ida_ida
+    import ida_loader
+
+    processor = opts.get("processor")
+    bitness = opts.get("bitness")
+    endian = opts.get("endian")
+    loader = opts.get("loader")
+    loader_options = opts.get("value") or opts.get("loader_options")
+    flags = opts.get("flags")
+
+    changed = []
+    warnings_list = []
+
+    # Processor
+    if processor:
+        try:
+            current = ""
+            if hasattr(idaapi, "get_inf_structure"):
+                try:
+                    inf = idaapi.get_inf_structure()
+                    current = getattr(inf, "procname", "") if inf else ""
+                except Exception:
+                    pass
+            if current != processor:
+                proc_flags = flags if flags is not None else getattr(
+                    idaapi, "SETPROC_LOADER_NON_FATAL", idaapi.SETPROC_LOADER
+                )
+                ok = idaapi.set_processor_type(processor, proc_flags)
+                changed.append(f"processor={processor} (ok={ok})")
+            else:
+                changed.append(f"processor={processor} (already set)")
+        except Exception as e:
+            warnings_list.append(f"processor={processor}: {e}")
+
+    # Bitness
+    if bitness is not None:
+        try:
+            if hasattr(ida_ida, "inf_set_app_bitness"):
+                ida_ida.inf_set_app_bitness(int(bitness))
+                changed.append(f"bitness={bitness}")
+            else:
+                warnings_list.append("inf_set_app_bitness unavailable")
+        except Exception as e:
+            warnings_list.append(f"bitness={bitness}: {e}")
+
+    # Endian
+    if endian:
+        try:
+            if hasattr(ida_ida, "inf_set_be"):
+                be = str(endian).lower() in (
+                    "be", "big", "big_endian", "big-endian", "bigendian", "1", "true"
+                )
+                le = str(endian).lower() in (
+                    "le", "little", "little_endian", "little-endian", "littleendian", "0", "false"
+                )
+                if be or le:
+                    ida_ida.inf_set_be(be)
+                    changed.append(f"endian={'be' if be else 'le'}")
+                else:
+                    warnings_list.append(f"endian={endian}: invalid value")
+            else:
+                warnings_list.append("inf_set_be unavailable")
+        except Exception as e:
+            warnings_list.append(f"endian={endian}: {e}")
+
+    # Loader options (best-effort before auto_wait)
+    if loader_options and loader:
+        try:
+            if hasattr(ida_loader, "set_loader_options"):
+                opts_str = loader_options
+                if isinstance(opts_str, dict):
+                    opts_str = ";".join(f"{k}={v}" for k, v in opts_str.items())
+                ok = ida_loader.set_loader_options(loader, opts_str)
+                changed.append(f"loader_options={ok}")
+            else:
+                warnings_list.append("set_loader_options unavailable")
+        except Exception as e:
+            warnings_list.append(f"loader_options: {e}")
+
+    if changed:
+        log_ev(f"Pre-analysis options applied: {', '.join(changed)}")
+    if warnings_list:
+        log_ev(f"Pre-analysis warnings: {', '.join(warnings_list)}")
+
+
 if __name__ == "__main__":
+    _apply_pre_analysis_options()
     # Wait for IDA auto-analysis to complete before starting server
     log_ev("Waiting for auto-analysis to complete...")
     ida_auto.auto_wait()
     log_ev("Auto-analysis complete!")
-    
+
     load_tools()
     run_server()
