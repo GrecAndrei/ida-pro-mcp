@@ -266,11 +266,24 @@ def debug(
             steps = 0
 
             class CPU:
+                _SAFE_REG_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
                 def __getattr__(self, name):
+                    if not self._SAFE_REG_RE.match(name):
+                        raise AttributeError(f"Invalid register name: {name}")
                     return ida_dbg.get_reg_val(name)
 
             def check_condition(expr):
-                return eval(expr, {"cpu": CPU(), "ida_dbg": ida_dbg, "idc": idc})
+                # Security: only allow a very restricted set of operations.
+                # Whitelist: alphanumeric, operators, parentheses, dots for cpu.xxx,
+                # decimal/hex numbers, and whitespace.
+                if not isinstance(expr, str) or len(expr) > 512:
+                    raise ValueError("Condition too long or not a string")
+                allowed = set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_.=<>!+-%*/&|~^ ")
+                if not all(c in allowed for c in expr):
+                    raise ValueError("Condition contains forbidden characters")
+                # Only expose cpu (register reads) and basic math constants.
+                safe_ns = {"cpu": CPU(), "True": True, "False": False, "None": None}
+                return eval(expr, {"__builtins__": {}}, safe_ns)  # noqa: S307
 
             while steps < max_steps:
                 ida_dbg.step_over()
