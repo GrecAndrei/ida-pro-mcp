@@ -578,7 +578,7 @@ class TestResponseCompaction(unittest.TestCase):
         opts = self.server._default_response_options()
         call_args = {"action": "status", "note": "ptr chain"}
         # Warm-up to first note under a fixed clock.
-        with patch("ida_mcp_stdio.time.time", return_value=10_000.0):
+        with patch("ida_pro_mcp.host.server.time.time", return_value=10_000.0):
             self.server._prepare_response_payload(
                 {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
             )
@@ -591,14 +591,14 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertIn("llm_pointer_note", first)
 
         # Still within interval => suppressed even with strong usage signal.
-        with patch("ida_mcp_stdio.time.time", return_value=10_100.0):
+        with patch("ida_pro_mcp.host.server.time.time", return_value=10_100.0):
             suppressed = self.server._prepare_response_payload(
                 {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
             )
         self.assertNotIn("llm_pointer_note", suppressed)
 
         # After interval => eligible again once signal re-accumulates.
-        with patch("ida_mcp_stdio.time.time", return_value=10_901.0):
+        with patch("ida_pro_mcp.host.server.time.time", return_value=10_901.0):
             self.server._prepare_response_payload(
                 {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
             )
@@ -657,6 +657,8 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         cls.search_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search.py").read_text(encoding="utf-8")
         cls.calc_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "calc.py").read_text(encoding="utf-8")
         cls.stdio_source = (root / "ida_mcp_stdio.py").read_text(encoding="utf-8")
+        cls.schemas_source = (root / "src" / "ida_pro_mcp" / "host" / "schemas.py").read_text(encoding="utf-8")
+        cls.server_source = (root / "src" / "ida_pro_mcp" / "host" / "server.py").read_text(encoding="utf-8")
 
     def test_search_signature_keeps_semantic_knobs(self):
         self.assertIn("semantic_action: Annotated[Optional[str]", self.search_source)
@@ -701,9 +703,9 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
 
     def test_execute_tool_legacy_bridge_does_not_capture_search(self):
         marker = "legacy_threat_tools = {"
-        idx = self.stdio_source.find(marker)
+        idx = self.server_source.find(marker)
         self.assertGreaterEqual(idx, 0)
-        snippet = self.stdio_source[idx : idx + 700]
+        snippet = self.server_source[idx : idx + 700]
         self.assertNotIn('"search"', snippet)
 
     def test_vuln_scan_actions_include_all_advanced_capabilities(self):
@@ -715,14 +717,14 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
             "memory_sync",
             "hybrid_rank",
         ):
-            self.assertIn(f'"{action_name}"', self.stdio_source)
+            self.assertIn(f'"{action_name}"', self.schemas_source)
 
     def test_decompilation_tools_expose_advanced_action_sets(self):
         for action_name in ("semantic_decompile", "decomp_dataflow"):
-            self.assertIn(f'"{action_name}"', self.stdio_source)
+            self.assertIn(f'"{action_name}"', self.schemas_source)
         for action_name in ("dominance_map", "var_dependency_graph"):
-            self.assertIn(f'"{action_name}"', self.stdio_source)
-        self.assertIn('"def_use_graph"', self.stdio_source)
+            self.assertIn(f'"{action_name}"', self.schemas_source)
+        self.assertIn('"def_use_graph"', self.schemas_source)
 class TestGadgetSemanticIndex(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="gadget-semantic-test-")

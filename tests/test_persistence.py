@@ -31,12 +31,12 @@ def test_persistence():
     
     # Start server instance 1
     print("\n[1] Starting server instance 1...")
+    server_path = os.path.join(os.path.dirname(__file__), "..", "ida_mcp_stdio.py")
     proc1 = subprocess.Popen(
-        [sys.executable, "-u", "ida_mcp_stdio.py"],
+        [sys.executable, "-u", os.path.abspath(server_path)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=os.path.dirname(__file__) or "."
     )
     
     time.sleep(2)
@@ -83,11 +83,10 @@ def test_persistence():
     # Start server instance 2
     print("[5] Starting server instance 2...")
     proc2 = subprocess.Popen(
-        [sys.executable, "-u", "ida_mcp_stdio.py"],
+        [sys.executable, "-u", os.path.abspath(server_path)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=os.path.dirname(__file__) or "."
     )
     
     time.sleep(2)

@@ -1,0 +1,70 @@
+{
+  "_comment": "MCP client configuration paths. Paths use {home}, {appdata}, and {xdg_config} placeholders.",
+  "clients": {
+    "Gemini CLI": {
+      "paths": ["{home}/.gemini/settings.json"],
+      "pick_existing": true
+    },
+    "Antigravity": {
+      "paths": ["{home}/.gemini/antigravity/mcp_config.json"],
+      "pick_existing": true
+    },
+    "Claude Code": {
+      "paths": ["{home}/.claude.json"],
+      "pick_existing": true
+    },
+    "Codex": {
+      "paths": ["{home}/.codex/config.toml"],
+      "pick_existing": true
+    },
+    "Copilot CLI": {
+      "paths": ["{xdg_config}/copilot/mcp-config.json", "{home}/.copilot/mcp-config.json"],
+      "pick_existing": true,
+      "env_fallback": "XDG_CONFIG_HOME"
+    },
+    "OpenCode": {
+      "paths": ["{xdg_config}/opencode/opencode.json"],
+      "pick_existing": true,
+      "env_override": "OPENCODE_CONFIG"
+    },
+    "Claude Desktop": {
+      "paths": {
+        "windows": "{appdata}/Claude/claude_desktop_config.json",
+        "unix": "{xdg_config}/Claude/claude_desktop_config.json"
+      },
+      "pick_existing": false
+    },
+    "Cursor": {
+      "paths": {
+        "windows": "{appdata}/Cursor/User/globalStorage/cursor.mcp/config.json",
+        "unix": "{home}/.cursor/mcp.json"
+      },
+      "pick_existing": false
+    },
+    "VS Code": {
+      "paths": {
+        "windows": "{appdata}/Code/User/globalStorage/github.copilot/mcp.json",
+        "unix": "{xdg_config}/Code/User/globalStorage/github.copilot/mcp.json"
+      },
+      "pick_existing": false
+    },
+    "Windsurf": {
+      "paths": ["{home}/.windsurf/mcp_config.json"],
+      "pick_existing": false
+    },
+    "Cline": {
+      "paths": {
+        "windows": "{appdata}/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        "unix": "{xdg_config}/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
+      },
+      "pick_existing": false
+    },
+    "Roo Code": {
+      "paths": {
+        "windows": "{appdata}/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+        "unix": "{xdg_config}/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json"
+      },
+      "pick_existing": false
+    }
+  }
+}

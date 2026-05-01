@@ -19,8 +19,8 @@ _FUNC_SUMMARY_CACHE = {}
 @tool
 @idaread
 def agent(
-    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar"],
-                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar"],
+    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect"],
+                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect"],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Search query or comma-separated addresses"] = None,
     depth: Annotated[int, "Exploration depth"] = 1,
@@ -53,6 +53,18 @@ def agent(
         Returns: {similar_functions: [{addr, name, score, reasons, shared_apis}]}
         Use when: You found one function and want to find related ones
         Example: Found decrypt_string, use similar to find other crypto functions
+
+    bridge_query - Bridge-conditioned multi-hop search (VOERA-inspired).
+        Params: query (natural language query requiring intermediate bridge entity),
+                addr (optional bridge address), max_items
+        Returns: {bridge, expanded_queries, candidates, ranked}
+        Use when: The answer requires chaining through an intermediate entity.
+        Example: "Who decrypts strings referenced by the function calling InternetOpenA?"
+
+    reflect - ReasoningBank-style reflection: analyze attempted strategies and distill insights.
+        Params: query (task description), items (list of attempted strategies with outcomes)
+        Returns: {insights, guardrails, distilled_strategy}
+        Use when: You want to learn from successes and failures to build reusable playbooks.
     
     DETAILED ANALYSIS:
     
@@ -601,6 +613,189 @@ def agent(
                 "target_strings": list(target_strings)[:5],
                 "similar_functions": similar_funcs,
                 "count": len(similar_funcs)
+            }
+
+        elif action == "bridge_query":
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required for bridge_query")
+            
+            # Stage 1: Bridge Selection
+            bridge_addr = None
+            bridge_name = None
+            if addr:
+                bridge_ea, err = validate_addr(addr)
+                if err:
+                    return err
+                bridge_addr = bridge_ea
+                bridge_name = idc.get_func_name(bridge_ea) or hex(bridge_ea)
+            else:
+                # Try to extract a likely bridge from the query via semantic search
+                from .search import search as search_tool
+                find_res = search_tool(action="find", pattern=query, limit=5)
+                names = find_res.get("names", "")
+                for line in names.splitlines()[:3]:
+                    parts = line.split()
+                    if parts:
+                        try:
+                            candidate_ea = int(parts[0], 16)
+                            if idaapi.get_func(candidate_ea):
+                                bridge_addr = candidate_ea
+                                bridge_name = idc.get_func_name(candidate_ea) or hex(candidate_ea)
+                                break
+                        except Exception:
+                            continue
+            
+            if not bridge_addr:
+                return make_error(MCPError.NOT_FOUND, "Could not identify bridge entity for query", "Try providing addr explicitly or use a more specific query.")
+            
+            # Stage 2: Extract entities from bridge (string refs, callees)
+            bridge_strings = []
+            bridge_apis = []
+            bridge_func = idaapi.get_func(bridge_addr)
+            if bridge_func:
+                for item in idautils.FuncItems(bridge_func.start_ea):
+                    for xref in idautils.XrefsFrom(item, 0):
+                        if not xref.iscode:
+                            s = idc.get_strlit_contents(xref.to)
+                            if s:
+                                bridge_strings.append(s.decode("utf-8", errors="replace")[:50])
+                        else:
+                            callee = idc.get_func_name(xref.to)
+                            if callee and not callee.startswith("sub_"):
+                                bridge_apis.append(callee)
+            
+            # Stage 3: Dual-entity expansion
+            candidate_pool = {}
+            
+            # Search for functions referencing bridge strings
+            for s in bridge_strings[:5]:
+                from .search import search as search_tool
+                res = search_tool(action="string", pattern=s, limit=10)
+                for line in res.get("matches", "").splitlines():
+                    parts = line.split()
+                    if parts:
+                        try:
+                            candidate_ea = int(parts[0], 16)
+                            func = idaapi.get_func(candidate_ea)
+                            if func and func.start_ea != bridge_addr:
+                                candidate_pool.setdefault(func.start_ea, {"score": 0, "reasons": set()})
+                                candidate_pool[func.start_ea]["score"] += 10
+                                candidate_pool[func.start_ea]["reasons"].add(f"string_ref:{s[:20]}")
+                        except Exception:
+                            continue
+            
+            # Search for callers of bridge APIs
+            for api in bridge_apis[:5]:
+                from .search import search as search_tool
+                res = search_tool(action="api", pattern=api, limit=10)
+                for line in res.get("matches", "").splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            call_ea = int(parts[0], 16)
+                            func = idaapi.get_func(call_ea)
+                            if func and func.start_ea != bridge_addr:
+                                candidate_pool.setdefault(func.start_ea, {"score": 0, "reasons": set()})
+                                candidate_pool[func.start_ea]["score"] += 15
+                                candidate_pool[func.start_ea]["reasons"].add(f"api_call:{api}")
+                        except Exception:
+                            continue
+            
+            # Stage 4: Rank candidates
+            ranked = []
+            for candidate_ea, data in candidate_pool.items():
+                fname = idc.get_func_name(candidate_ea) or f"sub_{candidate_ea:x}"
+                # Bonus for crypto/string manipulation patterns
+                for item in idautils.FuncItems(candidate_ea):
+                    mnem = idc.print_insn_mnem(item)
+                    if mnem and mnem.lower() in ("xor", "rol", "ror", "shl", "shr"):
+                        data["score"] += 3
+                        data["reasons"].add("crypto_pattern")
+                        break
+                ranked.append({
+                    "addr": hex(candidate_ea),
+                    "name": fname,
+                    "score": data["score"],
+                    "reasons": sorted(data["reasons"]),
+                })
+            
+            ranked.sort(key=lambda x: -x["score"])
+            ranked = ranked[:max_items]
+            
+            return {
+                "ok": True,
+                "query": query,
+                "bridge": {
+                    "addr": hex(bridge_addr),
+                    "name": bridge_name,
+                    "strings": bridge_strings[:5],
+                    "apis": bridge_apis[:5],
+                },
+                "expanded_queries": [f"functions referencing strings from {bridge_name}", f"callers of APIs used by {bridge_name}"],
+                "candidates": ranked,
+                "count": len(ranked),
+                "note": "Bridge-conditioned multi-hop search: finds entities connected to the bridge through shared strings or API usage.",
+            }
+
+        elif action == "reflect":
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required for reflect (task description)")
+            strategies = kwargs.get("items", [])
+            if not isinstance(strategies, list):
+                return make_error(MCPError.INVALID_ARGS, "items must be a list of {strategy, outcome, notes} dicts")
+
+            successes = []
+            failures = []
+            for s in strategies:
+                if not isinstance(s, dict):
+                    continue
+                outcome = str(s.get("outcome", "")).lower()
+                if outcome in ("success", "true", "yes", "1", "found"):
+                    successes.append(s)
+                else:
+                    failures.append(s)
+
+            insights = []
+            guardrails = []
+
+            # Analyze success patterns
+            if successes:
+                success_tools = {}
+                for s in successes:
+                    tool = s.get("tool", "unknown")
+                    success_tools[tool] = success_tools.get(tool, 0) + 1
+                top_tool = max(success_tools, key=success_tools.get) if success_tools else "unknown"
+                insights.append(f"Most successful tool: {top_tool} ({success_tools.get(top_tool, 0)} successes)")
+
+            # Analyze failure patterns
+            if failures:
+                failure_reasons = {}
+                for f in failures:
+                    reason = f.get("notes", f.get("reason", "unknown"))
+                    failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+                for reason, count in sorted(failure_reasons.items(), key=lambda x: -x[1])[:3]:
+                    insights.append(f"Common failure: {reason} ({count} times)")
+                    guardrails.append(f"Avoid: {reason}")
+
+            # Distill a generalized strategy
+            distilled = {
+                "task": query,
+                "recommended_first_step": successes[0].get("strategy", "search for entry points") if successes else "start with broad search",
+                "fallback_steps": [f.get("strategy", "") for f in failures[:2]],
+                "success_indicators": [s.get("notes", "") for s in successes[:3]],
+                "failure_indicators": [f.get("notes", "") for f in failures[:3]],
+            }
+
+            return {
+                "ok": True,
+                "query": query,
+                "total_attempts": len(strategies),
+                "successes": len(successes),
+                "failures": len(failures),
+                "insights": insights,
+                "guardrails": guardrails,
+                "distilled_strategy": distilled,
+                "note": "Store distilled_strategy as a crystallized skill using session(action='crystallize_skill') for future reuse.",
             }
 
         else:

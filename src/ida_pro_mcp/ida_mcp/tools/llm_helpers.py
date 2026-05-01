@@ -14,29 +14,10 @@ import time
 # LLM_HELPERS - LLM-Specific Helper Actions for Optimized Interaction
 # ============================================================================
 
-# Common API categories for quick classification (multi-platform)
-_API_CATEGORIES = {
-    "network": {"socket", "connect", "bind", "listen", "accept", "send", "recv",
-                "sendto", "recvfrom", "sendmsg", "recvmsg",
-                "WSAStartup", "InternetOpen", "HttpOpenRequest", "WinHttpOpen",
-                "getaddrinfo", "gethostbyname", "URLDownloadToFile",
-                "curl_easy_perform", "SSL_read", "SSL_write"},
-    "file_io": {"CreateFile", "ReadFile", "WriteFile", "DeleteFile", "fopen",
-                "fclose", "fread", "fwrite", "open", "close", "read", "write",
-                "FindFirstFile", "FindNextFile",
-                "opendir", "readdir", "stat", "lstat", "unlink", "rename"},
-    "crypto": {"CryptEncrypt", "CryptDecrypt", "CryptHashData", "BCryptEncrypt",
-               "AES_encrypt", "EVP_EncryptInit", "MD5Init", "SHA256_Init",
-               "EVP_DigestInit", "EVP_CipherInit", "RAND_bytes"},
-    "process": {"CreateProcess", "OpenProcess", "CreateThread", "CreateRemoteThread",
-                "ExitProcess", "TerminateProcess", "fork", "exec", "system",
-                "execve", "posix_spawn", "clone", "pthread_create",
-                "waitpid", "kill", "signal"},
-    "registry": {"RegOpenKey", "RegSetValue", "RegQueryValue", "RegCreateKey",
-                 "RegDeleteKey"},
-    "memory": {"VirtualAlloc", "VirtualProtect", "HeapAlloc", "malloc", "mmap",
-               "memcpy", "memset", "mprotect", "brk", "munmap", "calloc", "realloc"},
-}
+try:
+    from ._api_categories import API_CATEGORIES as _API_CATEGORIES
+except ImportError:
+    from _api_categories import API_CATEGORIES as _API_CATEGORIES  # type: ignore[import-not-found]
 
 _FEATURE_PHASES = {
     "intent_tool_compiler": 1,
@@ -601,10 +582,89 @@ def _estimate_tokens(text):
     return len(text) // 4 if text else 0
 
 
+# ============================================================================
+# VOERA: Context Density Optimizer for RE-specific compaction
+# ============================================================================
+
+_RE_COMPACTION_RULES = [
+    # Strip IDA color/font tags
+    (re.compile(r'<[^>]+>'), ''),
+    # Collapse xref dumps: "xref: addr1\nxref: addr2\n..." -> "xrefs: addr1, addr2, ... (N total)"
+    (re.compile(r'(xref[s]?\s*[:\-]?\s*)\n+', re.IGNORECASE), r'\1'),
+    # Compress hex dumps: keep first 3 and last 1 line, collapse middle
+    (re.compile(r'((?:[0-9a-fA-F]{8,16}\s+[0-9a-fA-F ]{16,48}\s+.*\n){3})(?:[0-9a-fA-F]{8,16}\s+[0-9a-fA-F ]{16,48}\s+.*\n){3,}((?:[0-9a-fA-F]{8,16}\s+[0-9a-fA-F ]{16,48}\s+.*\n){1})'), r'\1... (hex truncated)\n\2'),
+    # Compress long decompiler output: keep first 5 lines
+    (re.compile(r'(//.*?\n|\n){6,}'), lambda m: '... (code truncated)\n'),
+]
+
+
+def _clean_re_content(raw_message: str, max_lines: int = 30, max_line_len: int = 200) -> str:
+    """Aggressively prune RE-specific verbose content to maximize context density.
+    
+    Implements VOERA Contextual Information Density Maximization principles:
+    - Strip IDA markup tags
+    - Compress hex dumps to previews
+    - Truncate long xref lists to histograms
+    - Collapse redundant whitespace
+    """
+    if not raw_message:
+        return ""
+    cleaned = raw_message
+    
+    # Apply regex-based compaction rules
+    for pattern, replacement in _RE_COMPACTION_RULES:
+        cleaned = pattern.sub(replacement, cleaned)
+    
+    # Line-level compaction
+    lines = cleaned.splitlines()
+    if len(lines) > max_lines:
+        # Keep first N/2 and last N/2 lines, indicate truncation
+        half = max_lines // 2
+        lines = lines[:half] + [f"... ({len(lines) - max_lines} lines truncated) ..."] + lines[-half:]
+    
+    # Truncate individual long lines
+    result_lines = []
+    for line in lines:
+        line = line.strip()
+        if len(line) > max_line_len:
+            line = line[:max_line_len - 3] + "..."
+        result_lines.append(line)
+    
+    cleaned = "\n".join(result_lines)
+    
+    # Collapse redundant whitespace
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    cleaned = re.sub(r'[ \t]+', ' ', cleaned)
+    
+    return cleaned.strip()
+
+
+def _compress_xref_list(xrefs: list[str], max_show: int = 10) -> str:
+    """Compress a list of xrefs into a compact histogram + preview."""
+    if not xrefs:
+        return "none"
+    total = len(xrefs)
+    if total <= max_show:
+        return ", ".join(xrefs)
+    # Show top N and indicate remainder
+    preview = ", ".join(xrefs[:max_show])
+    return f"{preview} ... ({total - max_show} more)"
+
+
+def _histogram_by_segment(addresses: list[int]) -> dict[str, int]:
+    """Count addresses by segment name for compact representation."""
+    counts: dict[str, int] = {}
+    for ea in addresses:
+        seg = idaapi.getseg(ea)
+        name = ida_segment.get_segm_name(seg) if seg else "unknown"
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 @tool
 @idaread
 def llm_helpers(
-    action: Annotated[Literal["context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "question_answer", "guided_analysis", "cheatsheet", "intent_tool_compiler", "adaptive_query_planner", "token_aware_context_optimizer", "cross_call_variable_resolver", "evidence_weighted_response_assembler", "uncertainty_propagation_engine", "multi_granularity_retrieval_layer", "semantic_chunking_for_decompiled_code", "question_type_router", "interactive_clarification_protocol", "behavioral_signature_search", "cross_artifact_correlation_search", "temporal_search_replay", "search_hypothesis_sandbox", "path_constrained_search", "argument_semantics_search", "decompile_disasm_consistency_search", "near_miss_search_ranking", "persistent_search_collections", "auto_expansion_search_chains", "function_role_classifier", "protocol_format_reconstruction_assistant", "global_state_influence_mapper", "api_contract_extractor", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "dangerous_pattern_explainer", "binary_capability_matrix_builder", "execution_hypothesis_generator", "patch_impact_forecaster", "safe_idapython_orchestration_runtime", "script_template_marketplace_layer", "auto_script_synthesis_from_intent", "script_output_schema_enforcer", "long_running_job_manager", "cross_session_script_memory", "privilege_scope_guardrails_for_scripts", "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants", "idapython_provenance_recorder", "investigation_playbook_engine", "next_best_action_recommender", "analysis_dead_end_detector", "workset_intelligence_capsules", "contradiction_tracker", "review_queue_for_ai_edits", "case_narrative_composer", "cost_latency_optimizer", "trust_verification_layer", "learning_feedback_loop"],
+    action: Annotated[Literal["context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "question_answer", "guided_analysis", "cheatsheet", "compact", "intent_tool_compiler", "adaptive_query_planner", "token_aware_context_optimizer", "cross_call_variable_resolver", "evidence_weighted_response_assembler", "uncertainty_propagation_engine", "multi_granularity_retrieval_layer", "semantic_chunking_for_decompiled_code", "question_type_router", "interactive_clarification_protocol", "behavioral_signature_search", "cross_artifact_correlation_search", "temporal_search_replay", "search_hypothesis_sandbox", "path_constrained_search", "argument_semantics_search", "decompile_disasm_consistency_search", "near_miss_search_ranking", "persistent_search_collections", "auto_expansion_search_chains", "function_role_classifier", "protocol_format_reconstruction_assistant", "global_state_influence_mapper", "api_contract_extractor", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "dangerous_pattern_explainer", "binary_capability_matrix_builder", "execution_hypothesis_generator", "patch_impact_forecaster", "safe_idapython_orchestration_runtime", "script_template_marketplace_layer", "auto_script_synthesis_from_intent", "script_output_schema_enforcer", "long_running_job_manager", "cross_session_script_memory", "privilege_scope_guardrails_for_scripts", "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants", "idapython_provenance_recorder", "investigation_playbook_engine", "next_best_action_recommender", "analysis_dead_end_detector", "workset_intelligence_capsules", "contradiction_tracker", "review_queue_for_ai_edits", "case_narrative_composer", "cost_latency_optimizer", "trust_verification_layer", "learning_feedback_loop"],
                        "LLM helper action"],
     addr: Annotated[Optional[str], "Address for context"] = None,
     query: Annotated[Optional[str], "Question or topic"] = None,
@@ -626,6 +686,9 @@ def llm_helpers(
     - question_answer: Answer a question about the binary using available data
     - guided_analysis: Step-by-step guided analysis workflow
     - cheatsheet: Dynamic cheatsheet of relevant tool calls for this binary
+    - compact: RE-specific context density optimizer (strip IDA tags, compress hex/xrefs, truncate long output)
+        Params: query (content to compact), max_lines, max_line_len
+        Returns: {compacted, original_tokens, compacted_tokens, note}
     """
     try:
         info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
@@ -1085,6 +1148,22 @@ def llm_helpers(
                 ])
 
             return {"ok": True, "guided_steps": "\n".join(steps)}
+
+        elif action == "compact":
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query (content to compact) required for compact action")
+            max_lines = int(kwargs.get("max_lines", 30))
+            max_line_len = int(kwargs.get("max_line_len", 200))
+            compacted = _clean_re_content(query, max_lines=max_lines, max_line_len=max_line_len)
+            return {
+                "ok": True,
+                "original_lines": len(query.splitlines()) if query else 0,
+                "compacted_lines": len(compacted.splitlines()),
+                "original_tokens": _estimate_tokens(query),
+                "compacted_tokens": _estimate_tokens(compacted),
+                "compacted": compacted,
+                "note": "RE-specific compaction applied: IDA tags stripped, hex dumps truncated, xrefs compressed, redundant whitespace collapsed."
+            }
 
         elif action == "cheatsheet":
             file_type = info.filetype if info else 0

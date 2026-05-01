@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LLM_HELPERS_PATH = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "llm_helpers.py"
-HOST_PATH = ROOT / "ida_mcp_stdio.py"
+HOST_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"
 
 
 NEW_ACTIONS = {

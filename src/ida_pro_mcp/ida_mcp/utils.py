@@ -1,12 +1,9 @@
-import fnmatch
-import difflib
 import json
 import os
 import re
 import struct
 import sys
 import tempfile
-from functools import lru_cache
 from typing import (
     Annotated,
     Any,
@@ -47,6 +44,22 @@ except ImportError:
     except ImportError:
         class IDAError(Exception):
             pass
+
+# Smart pattern matching — shared with host (no IDA deps)
+try:
+    from ida_pro_mcp.host.patterns import compile_smart_pattern, smart_match
+except ImportError:
+    try:
+        from ...host.patterns import compile_smart_pattern, smart_match
+    except ImportError:
+        def compile_smart_pattern(pattern, case_sensitive=False, **kwargs):
+            if not pattern:
+                return lambda _t: True
+            pl = pattern.lower()
+            return lambda _t, _p=pl: _p in _t.lower()
+
+        def smart_match(pattern, text, case_sensitive=False):
+            return compile_smart_pattern(pattern, case_sensitive)(text)
 
 # ============================================================================
 # TypedDict Definitions for API Parameters
@@ -750,297 +763,6 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
         "data": data[offset : offset + count],
         "next_offset": next_offset,
     }
-
-
-def _is_regex(pattern: str) -> bool:
-    """Detect if a pattern string looks like a regular expression.
-
-    Returns True when the pattern contains regex-specific metacharacters that
-    would not appear in a plain substring search.  Explicit ``/pattern/flags``
-    syntax is also recognised.
-
-    Glob-only wildcards (``*`` and ``?`` without other regex syntax) are *not*
-    treated as regex so that simple wildcard searches keep working via
-    ``fnmatch``.
-    """
-    if not pattern:
-        return False
-
-    # Explicit /pattern/flags notation
-    if pattern.startswith("/") and pattern.count("/") >= 2:
-        return True
-
-    # Characters / sequences that are strong regex indicators
-    _REGEX_INDICATORS = (
-        r"\d", r"\w", r"\s", r"\b", r"\D", r"\W", r"\S", r"\B",
-        r"\A", r"\Z",
-    )
-    for ind in _REGEX_INDICATORS:
-        if ind in pattern:
-            return True
-
-    # Backslash-escaped metacharacters (e.g. \., \(, \), \*, \+) are regex
-    if re.search(r"\\[.^$*+?{}()|[\]\\]", pattern):
-        return True
-
-    # Regex-only metacharacters (not glob wildcards)
-    _REGEX_META = set("^$+{}()|")
-    if _REGEX_META.intersection(pattern):
-        return True
-
-    # Character classes like [a-z]
-    if re.search(r"\[.+\]", pattern):
-        return True
-
-    # Quantifiers attached to a character e.g. a{2,4}, .+, .?
-    if re.search(r".\{[0-9]", pattern):
-        return True
-
-    return False
-
-
-_SEMANTIC_CANONICALS = {
-    # Search / discovery
-    "find": "search",
-    "lookup": "search",
-    "locate": "search",
-    "discover": "search",
-    "query": "search",
-    "match": "search",
-    # Decompilation / pseudocode
-    "decompiler": "decompile",
-    "decompiled": "decompile",
-    "pseudocode": "decompile",
-    "pseudo": "decompile",
-    "pcode": "decompile",
-    "hexrays": "decompile",
-    "ctree": "decompile",
-    # Function naming
-    "routine": "function",
-    "procedure": "function",
-    "proc": "function",
-    "method": "function",
-    "subroutine": "function",
-    # Data naming
-    "global": "data",
-    "variable": "data",
-    "memory": "data",
-    # Cross-reference naming
-    "xref": "reference",
-    "ref": "reference",
-    "refs": "reference",
-    "callsite": "reference",
-    "caller": "reference",
-    "callee": "reference",
-    # String naming
-    "literal": "string",
-    "text": "string",
-    # Import/symbol naming
-    "api": "import",
-    "symbol": "import",
-    "extern": "import",
-}
-# Ignore semantic fallback for very short one-word queries to reduce false positives.
-_SEMANTIC_SINGLE_TOKEN_MIN_LEN = 5
-# Conservative typo tolerance: catches small misspellings without broad overmatching.
-_SEMANTIC_FUZZY_CUTOFF = 0.86
-_SEMANTIC_CAMEL_BOUNDARY_1 = re.compile(r"([a-z])([A-Z])")
-_SEMANTIC_CAMEL_BOUNDARY_2 = re.compile(r"([A-Z]+)([A-Z][a-z])")
-_SMART_MATCH_MODE = str(os.environ.get("IDA_MCP_SMART_MATCH_MODE", "balanced")).strip().lower()
-if _SMART_MATCH_MODE not in {"off", "conservative", "balanced", "aggressive"}:
-    _SMART_MATCH_MODE = "balanced"
-_SMART_MATCH_MODE_DEFAULTS = {
-    "off": {"semantic_enabled": False, "fuzzy_cutoff": 1.0},
-    "conservative": {"semantic_enabled": True, "fuzzy_cutoff": 0.92},
-    "balanced": {"semantic_enabled": True, "fuzzy_cutoff": _SEMANTIC_FUZZY_CUTOFF},
-    "aggressive": {"semantic_enabled": True, "fuzzy_cutoff": 0.80},
-}
-
-
-def _resolve_optional_param(provided: Optional[Any], default: Any) -> Any:
-    return default if provided is None else provided
-
-
-def _normalize_semantic_token(token: str) -> str:
-    tok = token.lower().strip()
-    if not tok:
-        return tok
-    # Light stemming for noisy search tokens.
-    for suffix in ("ing", "ers", "ies", "ied", "er", "ed", "es", "s"):
-        if len(tok) > 4 and tok.endswith(suffix):
-            if suffix in ("ies", "ied"):
-                tok = tok[:-3] + "y"
-            else:
-                tok = tok[: -len(suffix)]
-            break
-    return _SEMANTIC_CANONICALS.get(tok, tok)
-
-
-def _semantic_tokenize(text: str) -> list[str]:
-    if not text:
-        return []
-    tokens: list[str] = []
-    for raw in re.findall(r"[A-Za-z0-9_]+", text):
-        expanded = _SEMANTIC_CAMEL_BOUNDARY_2.sub(r"\1 \2", raw)
-        expanded = _SEMANTIC_CAMEL_BOUNDARY_1.sub(r"\1 \2", expanded)
-        for part in expanded.replace("_", " ").split():
-            tok = _normalize_semantic_token(part)
-            if len(tok) >= 2:
-                tokens.append(tok)
-    return tokens
-
-
-def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_FUZZY_CUTOFF):
-    query_tokens = _semantic_tokenize(pattern)
-    if not query_tokens:
-        return None
-    # Keep semantic fallback conservative for short plain tokens.
-    if (
-        len(query_tokens) == 1
-        and len(query_tokens[0]) < _SEMANTIC_SINGLE_TOKEN_MIN_LEN
-        and " " not in pattern
-    ):
-        return None
-
-    query_set = set(query_tokens)
-    # For path/file-like queries with a delimiter and exactly two tokens
-    # (e.g. "test.exe"), require both tokens to reduce broad matches.
-    pathlike_query = len(query_set) == 2 and bool(re.search(r"[./\\:_-]", pattern))
-    if pathlike_query:
-        overlap_needed = 2
-    else:
-        overlap_needed = max(1, (len(query_set) + 1) // 2)
-    fuzzy_tokens = [tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN]
-
-    def _semantic_matches(text: str) -> bool:
-        text_tokens = set(_semantic_tokenize(text))
-        if not text_tokens:
-            return False
-
-        overlap = len(query_set.intersection(text_tokens))
-        if overlap >= overlap_needed:
-            return True
-
-        if not fuzzy_tokens:
-            return False
-        fuzzy_hits = 0
-        for qtok in fuzzy_tokens:
-            if difflib.get_close_matches(qtok, text_tokens, n=1, cutoff=fuzzy_cutoff):
-                fuzzy_hits += 1
-                if overlap + fuzzy_hits >= overlap_needed:
-                    return True
-        return False
-
-    return _semantic_matches
-
-
-def smart_match(pattern: str, text: str, case_sensitive: bool = False) -> bool:
-    """Match *text* against *pattern*, auto-detecting the match strategy.
-
-    1. ``/pattern/flags`` – explicit regex
-    2. Auto-detected regex (see :func:`_is_regex`) – compiled & searched
-    3. Glob wildcards (``*`` / ``?``) – ``fnmatch``
-    4. Plain substring containment
-    5. Semantic token fallback (auto, conservative)
-    """
-    if not pattern:
-        return True
-
-    compiled = compile_smart_pattern(pattern, case_sensitive)
-    return compiled(text)
-
-
-@lru_cache(maxsize=1024)
-def _compile_smart_pattern_cached(
-    pattern: str,
-    case_sensitive: bool,
-    semantic_enabled: bool,
-    fuzzy_cutoff: float,
-):
-    return _compile_smart_pattern_uncached(
-        pattern,
-        case_sensitive=case_sensitive,
-        semantic_enabled=semantic_enabled,
-        fuzzy_cutoff=fuzzy_cutoff,
-    )
-
-
-def _compile_smart_pattern_uncached(
-    pattern: str,
-    *,
-    case_sensitive: bool = False,
-    semantic_enabled: bool = True,
-    fuzzy_cutoff: float = _SEMANTIC_FUZZY_CUTOFF,
-):
-    """Return a *callable(text) -> bool* for the given pattern.
-
-    Compiling the pattern once and reusing the callable in a tight loop is
-    more efficient than calling :func:`smart_match` per item.
-    """
-    if not pattern:
-        return lambda _text: True
-
-    regex = None
-
-    # 1. Explicit /pattern/flags
-    if pattern.startswith("/") and pattern.count("/") >= 2:
-        last_slash = pattern.rfind("/")
-        body = pattern[1:last_slash]
-        flag_str = pattern[last_slash + 1:]
-        flags = 0
-        for ch in flag_str:
-            if ch == "i":
-                flags |= re.IGNORECASE
-            elif ch == "m":
-                flags |= re.MULTILINE
-            elif ch == "s":
-                flags |= re.DOTALL
-        try:
-            regex = re.compile(body, flags or (0 if case_sensitive else re.IGNORECASE))
-        except re.error:
-            regex = None
-
-    # 2. Auto-detected regex
-    elif _is_regex(pattern):
-        try:
-            regex = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
-        except re.error:
-            regex = None  # fall through to substring
-
-    if regex is not None:
-        return lambda _text, _re=regex: bool(_re.search(_text))
-
-    # 3. Glob wildcards
-    if "*" in pattern or "?" in pattern:
-        pat_lower = pattern.lower()
-        return lambda _text, _p=pat_lower: fnmatch.fnmatch(_text.lower(), _p)
-
-    # 4. Plain substring (+ semantic fallback)
-    if case_sensitive:
-        return lambda _text, _p=pattern: _p in _text
-
-    pat_lower = pattern.lower()
-    if not semantic_enabled:
-        return lambda _text, _p=pat_lower: _p in _text.lower()
-
-    semantic_match = _compile_semantic_matcher(pattern, fuzzy_cutoff=fuzzy_cutoff)
-    if semantic_match is None:
-        return lambda _text, _p=pat_lower: _p in _text.lower()
-    return lambda _text, _p=pat_lower, _sem=semantic_match: (_p in _text.lower()) or _sem(_text)
-
-
-def compile_smart_pattern(
-    pattern: str,
-    case_sensitive: bool = False,
-    *,
-    semantic_enabled: Optional[bool] = None,
-    fuzzy_cutoff: Optional[float] = None,
-):
-    defaults = _SMART_MATCH_MODE_DEFAULTS[_SMART_MATCH_MODE]
-    use_semantic = bool(_resolve_optional_param(semantic_enabled, defaults["semantic_enabled"]))
-    use_cutoff = float(_resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"]))
-    use_cutoff = max(0.0, min(1.0, use_cutoff))
-    return _compile_smart_pattern_cached(pattern, case_sensitive, use_semantic, use_cutoff)
 
 
 def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:

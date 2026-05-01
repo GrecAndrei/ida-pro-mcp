@@ -66,6 +66,18 @@ except (ImportError, ValueError):
         require_arg, require_one_of, validate_action, validate_count
     )
 
+# Centralized API categories (VOERA deduplication)
+try:
+    from ._api_categories import (
+        API_CATEGORIES, API_TO_CATEGORY, DANGEROUS_APIS,
+        TAG_CATEGORIES, API_TO_TAG, MAGIC_CONSTANTS,
+    )
+except ImportError:
+    from _api_categories import (  # type: ignore[import-not-found]
+        API_CATEGORIES, API_TO_CATEGORY, DANGEROUS_APIS,
+        TAG_CATEGORIES, API_TO_TAG, MAGIC_CONSTANTS,
+    )
+
 # Multi-architecture helpers
 try:
     from .arch_utils import (  # type: ignore[import-not-found]
@@ -113,6 +125,9 @@ __all__ = [
     "MCPError", "make_error", "handle_error", "ERROR_HINTS",
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
     "require_arg", "require_one_of", "validate_action", "validate_count",
+    # Centralized API categories
+    "API_CATEGORIES", "API_TO_CATEGORY", "DANGEROUS_APIS",
+    "TAG_CATEGORIES", "API_TO_TAG", "MAGIC_CONSTANTS",
     # Multi-architecture helpers
     "get_arch", "is_x86_family", "is_arm_family", "is_mips_family",
     "is_ppc_family", "is_riscv_family", "is_sparc_family",
