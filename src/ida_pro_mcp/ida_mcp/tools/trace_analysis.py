@@ -35,8 +35,11 @@ def trace_analysis(
             "anti_analysis_detect",
             "lifetime_map",
             "hybrid_callgraph_confidence",
+            "trace_entropy",
+            "api_sequence",
+            "loop_analysis",
         ],
-        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|runtime_taint_overlay|state_replay|path_unlock|coverage_debug_plan|exploitability_score|anti_analysis_detect|lifetime_map|hybrid_callgraph_confidence",
+        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|runtime_taint_overlay|state_replay|path_unlock|coverage_debug_plan|exploitability_score|anti_analysis_detect|lifetime_map|hybrid_callgraph_confidence|trace_entropy|api_sequence|loop_analysis",
     ],
     path: Annotated[Optional[str], "Path to trace file"] = None,
     addr: Annotated[Optional[str], "Function or address to analyze"] = None,
@@ -54,19 +57,24 @@ def trace_analysis(
     - basic_blocks_hit: Per-function block-level coverage analysis.
         Params: addr (optional - defaults to entry point)
     - execution_timeline_graph: Merge trace flow + APIs + coverage + breakpoints + memory events into a timeline graph.
-    - cross_run_diff: Compare two traces (run IDs or explicit lists) and report divergences.
-    - runtime_taint_overlay: Lightweight taint overlay from source addresses to potential sinks.
+    - cross_run_diff: Compare two traces (run IDs or explicit lists) and report divergences with semantic comparison.
+    - runtime_taint_overlay: Taint propagation through trace with source/sink labeling, register tracking, and distance metrics.
     - state_replay: Snapshot debugger state or compare current state to a stored snapshot.
     - path_unlock: Suggest concrete inputs and breakpoints to unlock uncovered/runtime-blocked paths.
     - coverage_debug_plan: Recommend next breakpoints/watchpoints to maximize novel coverage.
-    - exploitability_score: Rank suspicious runtime behavior using execution evidence.
-    - anti_analysis_detect: Detect anti-debug/anti-VM/timing/environment checks in observed execution.
+    - exploitability_score: Rank suspicious runtime behavior using execution evidence, crash proximity, and dangerous APIs.
+    - anti_analysis_detect: Detect anti-debug/anti-VM/timing/environment checks, debug register accesses, and VM instructions in traces.
     - lifetime_map: Build temporal alloc/free/use map and flag UAF/double-free candidates.
     - hybrid_callgraph_confidence: Reconcile static and dynamic edges with confidence tags.
+    - trace_entropy: Find high-entropy execution regions (crypto/packing) using address and instruction entropy.
+    - api_sequence: Extract ordered API call sequences from trace for behavioral analysis.
+    - loop_analysis: Detailed loop iteration counts, back-edge detection, hot spot identification, and nesting analysis.
     """
     try:
         import bisect
         import time
+        import math
+        import hashlib
         from collections import Counter, defaultdict
 
         def _parse_addrs(values):
@@ -127,11 +135,38 @@ def trace_analysis(
                 oldest = next(iter(_TRACE_STATE_SNAPSHOTS))
                 _TRACE_STATE_SNAPSHOTS.pop(oldest, None)
 
-        def load_trace(run_id: Optional[str] = None):
+        def _compress_trace(trace_list: list[int]) -> list[dict]:
+            """Run-length encode consecutive duplicate addresses for compact storage."""
+            if not trace_list:
+                return []
+            compressed = []
+            current = int(trace_list[0])
+            count = 1
+            for ea in trace_list[1:]:
+                ea = int(ea)
+                if ea == current:
+                    count += 1
+                else:
+                    compressed.append({"addr": current, "count": count})
+                    current = ea
+                    count = 1
+            compressed.append({"addr": current, "count": count})
+            return compressed
+
+        def _decompress_trace(compressed: list[dict]) -> list[int]:
+            out = []
+            for row in compressed:
+                out.extend([int(row["addr"])] * int(row.get("count", 1)))
+            return out
+
+        def load_trace(run_id: Optional[str] = None, compress: bool = False):
             nonlocal trace_data
             global _TRACE_CACHE, _TRACE_RUNS
             if trace_data and isinstance(trace_data, list):
-                _TRACE_CACHE = _parse_addrs(trace_data)
+                parsed = _parse_addrs(trace_data)
+                if compress:
+                    parsed = _decompress_trace(parsed) if parsed and isinstance(parsed[0], dict) else parsed
+                _TRACE_CACHE = parsed
                 _cache_run_trace(run_id, _TRACE_CACHE)
                 return list(_TRACE_CACHE)
             if path:
@@ -142,9 +177,17 @@ def trace_analysis(
                 with open(p, 'r') as f:
                     for line in f:
                         try:
-                            addrs.append(int(line.strip(), 0))
+                            val = line.strip()
+                            if val.startswith('{'):
+                                import json
+                                row = json.loads(val)
+                                addrs.extend([int(row["addr"])] * int(row.get("count", 1)))
+                            else:
+                                addrs.append(int(val, 0))
                         except Exception:
                             pass
+                if compress:
+                    addrs = _decompress_trace(addrs) if addrs and isinstance(addrs[0], dict) else addrs
                 _TRACE_CACHE = addrs
                 _cache_run_trace(run_id, _TRACE_CACHE)
                 return list(addrs)
@@ -173,6 +216,13 @@ def trace_analysis(
             except Exception:
                 return ""
 
+        def _ea_func_name(ea: int) -> str:
+            try:
+                f = ida_funcs.get_func(ea)
+                return idc.get_func_name(f.start_ea) if f else ""
+            except Exception:
+                return ""
+
         def _safe_debug_state():
             try:
                 import ida_dbg
@@ -195,11 +245,127 @@ def trace_analysis(
                     continue
             return {"available": True, "ip": ip, "regs": regs}
 
+        def _get_insn_mnemonic(ea: int) -> str:
+            try:
+                return idc.print_insn_mnem(ea) or ""
+            except Exception:
+                return ""
+
+        def _get_insn_bytes(ea: int, size: int = 16) -> bytes:
+            try:
+                return ida_bytes.get_bytes(ea, size) or b""
+            except Exception:
+                return b""
+
+        def _shannon_entropy(data: bytes) -> float:
+            if not data:
+                return 0.0
+            freq = Counter(data)
+            length = len(data)
+            entropy = 0.0
+            for count in freq.values():
+                p = count / length
+                if p > 0:
+                    entropy -= p * math.log2(p)
+            return entropy
+
+        def _windowed_entropy(values: list[int], window: int = 64) -> list[dict]:
+            if len(values) < window:
+                return []
+            regions = []
+            for i in range(0, len(values) - window + 1, window // 2):
+                chunk = values[i:i + window]
+                # Address transition entropy
+                diffs = [abs(int(chunk[j + 1]) - int(chunk[j])) for j in range(len(chunk) - 1)]
+                diff_bytes = b"".join(d.to_bytes(8, "little", signed=True) for d in diffs)
+                addr_entropy = _shannon_entropy(diff_bytes)
+                # Instruction byte entropy
+                insn_bytes = b""
+                for ea in chunk:
+                    insn_bytes += _get_insn_bytes(int(ea), 16)
+                insn_entropy = _shannon_entropy(insn_bytes)
+                regions.append({
+                    "start_idx": i,
+                    "end_idx": i + window,
+                    "addr_entropy": round(addr_entropy, 3),
+                    "insn_entropy": round(insn_entropy, 3),
+                    "avg_addr": hex(sum(int(x) for x in chunk) // len(chunk)),
+                })
+            return regions
+
+        def _get_api_calls_ordered(trace_list: list[int]) -> list[dict]:
+            apis = []
+            for idx, ea in enumerate(trace_list):
+                try:
+                    for xref in idautils.XrefsFrom(ea):
+                        if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                            callee = idc.get_name(xref.to)
+                            if callee and not callee.startswith("sub_"):
+                                category = API_TO_CATEGORY.get(callee, "unknown")
+                                apis.append({
+                                    "idx": idx,
+                                    "addr": hex(ea),
+                                    "api": callee,
+                                    "category": category,
+                                    "to": hex(xref.to),
+                                })
+                except Exception:
+                    pass
+            return apis
+
+        def _detect_back_edges(trace_list: list[int]) -> list[dict]:
+            """Detect loop back-edges by finding transitions to previously seen addresses within a function."""
+            loops = []
+            func_history = defaultdict(list)  # func_start -> list of (idx, ea)
+            for idx, ea in enumerate(trace_list):
+                try:
+                    f = ida_funcs.get_func(ea)
+                    fstart = int(f.start_ea) if f else None
+                except Exception:
+                    fstart = None
+                if fstart is None:
+                    continue
+                history = func_history[fstart]
+                # Find if we've been near this address before in the same function
+                for prev_idx, prev_ea in reversed(history[-20:]):
+                    if int(ea) == int(prev_ea) and idx - prev_idx > 1:
+                        loops.append({
+                            "func": _ea_name(fstart),
+                            "func_addr": hex(fstart),
+                            "back_edge_to": hex(ea),
+                            "back_edge_from": hex(trace_list[idx - 1]) if idx > 0 else None,
+                            "iteration_start_idx": prev_idx,
+                            "iteration_end_idx": idx,
+                            "iteration_length": idx - prev_idx,
+                        })
+                        break
+                history.append((idx, ea))
+            return loops
+
+        def _extract_dangerous_apis_in_trace(trace_list: list[int]) -> list[dict]:
+            dangerous = []
+            for idx, ea in enumerate(trace_list):
+                try:
+                    for xref in idautils.XrefsFrom(ea):
+                        if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                            callee = idc.get_name(xref.to)
+                            if callee and callee in DANGEROUS_APIS:
+                                dangerous.append({
+                                    "idx": idx,
+                                    "addr": hex(ea),
+                                    "api": callee,
+                                    "severity": DANGEROUS_APIS.get(callee, "medium"),
+                                })
+                except Exception:
+                    pass
+            return dangerous
+
         if action == "import_trace":
             run_id = kwargs.get("run_id")
+            compress = bool(kwargs.get("compress", False))
             if not path and not trace_data and not _TRACE_CACHE:
                 return make_error(MCPError.INVALID_ARGS, "path or trace_data required")
-            addrs = load_trace(run_id=str(run_id) if run_id is not None else None)
+            addrs = load_trace(run_id=str(run_id) if run_id is not None else None, compress=compress)
             result = {
                 "ok": True,
                 "path": path,
@@ -209,6 +375,10 @@ def trace_analysis(
             }
             if run_id is not None:
                 result["run_id"] = str(run_id)
+            if compress:
+                compressed = _compress_trace(addrs)
+                result["compressed_count"] = len(compressed)
+                result["compression_ratio"] = round(len(addrs) / max(len(compressed), 1), 2)
             return result
         
         elif action == "analyze_coverage":
@@ -288,15 +458,25 @@ def trace_analysis(
         elif action == "execution_timeline_graph":
             run_id = kwargs.get("run_id")
             timeline_limit = max(1, int(kwargs.get("timeline_limit", 2000)))
+            compress = bool(kwargs.get("compress", False))
             trace_list = _resolve_run_trace(str(run_id), load_trace(run_id=str(run_id) if run_id is not None else None))
             if not trace_list:
                 return {"ok": True, "timeline": [], "nodes": [], "edges": [], "count": 0, "note": "No trace data loaded."}
+
+            # Apply compression for long traces
+            if compress and len(trace_list) > timeline_limit:
+                compressed = _compress_trace(trace_list)
+                # Expand back to unique timeline events but preserve counts
+                trace_trimmed = []
+                for row in compressed[:timeline_limit]:
+                    trace_trimmed.append(row["addr"])
+            else:
+                trace_trimmed = trace_list[:timeline_limit]
 
             events = []
             nodes = []
             edges = []
             seen_nodes = set()
-            trace_trimmed = trace_list[:timeline_limit]
             hits = set(trace_trimmed)
             api_hits = []
             for idx, ea in enumerate(trace_trimmed):
@@ -354,6 +534,7 @@ def trace_analysis(
                 "count": len(events),
                 "trace_points": len(trace_trimmed),
                 "api_calls": len(api_hits),
+                "compressed": compress,
             }
 
         elif action == "cross_run_diff":
@@ -361,6 +542,7 @@ def trace_analysis(
             run_b = kwargs.get("run_b")
             raw_trace_a = kwargs.get("trace_a")
             raw_trace_b = kwargs.get("trace_b")
+            semantic = bool(kwargs.get("semantic", True))
             trace_a = _parse_addrs(raw_trace_a) if isinstance(raw_trace_a, list) else _resolve_run_trace(str(run_a) if run_a is not None else None)
             trace_b = _parse_addrs(raw_trace_b) if isinstance(raw_trace_b, list) else _resolve_run_trace(str(run_b) if run_b is not None else None)
             if not trace_a:
@@ -380,7 +562,8 @@ def trace_analysis(
             overlap = len(set_a & set_b)
             denom = max(len(set_a | set_b), 1)
             similarity = round(overlap / denom, 4)
-            return {
+
+            result = {
                 "ok": True,
                 "run_a": str(run_a) if run_a is not None else "trace_a",
                 "run_b": str(run_b) if run_b is not None else "trace_b",
@@ -396,44 +579,163 @@ def trace_analysis(
                 },
             }
 
+            if semantic:
+                # Function-level semantic diff
+                funcs_a = Counter()
+                funcs_b = Counter()
+                apis_a = []
+                apis_b = []
+                for ea in trace_a:
+                    fn = _ea_func_name(ea)
+                    if fn:
+                        funcs_a[fn] += 1
+                for ea in trace_b:
+                    fn = _ea_func_name(ea)
+                    if fn:
+                        funcs_b[fn] += 1
+                for idx, ea in enumerate(trace_a):
+                    for xref in idautils.XrefsFrom(ea):
+                        if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                            callee = idc.get_name(xref.to)
+                            if callee and not callee.startswith("sub_"):
+                                apis_a.append(callee)
+                for idx, ea in enumerate(trace_b):
+                    for xref in idautils.XrefsFrom(ea):
+                        if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                            callee = idc.get_name(xref.to)
+                            if callee and not callee.startswith("sub_"):
+                                apis_b.append(callee)
+
+                func_set_a = set(funcs_a.keys())
+                func_set_b = set(funcs_b.keys())
+                api_set_a = set(apis_a)
+                api_set_b = set(apis_b)
+
+                # Find first divergence point
+                divergence_idx = None
+                divergence_addr = None
+                for i in range(min(len(trace_a), len(trace_b))):
+                    if int(trace_a[i]) != int(trace_b[i]):
+                        divergence_idx = i
+                        divergence_addr = hex(trace_a[i])
+                        break
+
+                result["semantic"] = {
+                    "functions_only_a": sorted(func_set_a - func_set_b)[:100],
+                    "functions_only_b": sorted(func_set_b - func_set_a)[:100],
+                    "functions_common": sorted(func_set_a & func_set_b)[:100],
+                    "apis_only_a": sorted(api_set_a - api_set_b)[:100],
+                    "apis_only_b": sorted(api_set_b - api_set_a)[:100],
+                    "apis_common": sorted(api_set_a & api_set_b)[:100],
+                    "function_call_counts_a": dict(funcs_a.most_common(50)),
+                    "function_call_counts_b": dict(funcs_b.most_common(50)),
+                    "divergence_idx": divergence_idx,
+                    "divergence_addr": divergence_addr,
+                    "trace_a_length": len(trace_a),
+                    "trace_b_length": len(trace_b),
+                }
+            return result
+
         elif action == "runtime_taint_overlay":
             trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
             if not trace_list:
                 return {"ok": True, "tainted": [], "propagation": [], "note": "No trace data loaded."}
             sources = _parse_addrs(kwargs.get("taint_sources") or kwargs.get("sources") or [])
             sinks = set(_parse_addrs(kwargs.get("sink_addrs") or kwargs.get("sinks") or []))
+            source_labels = kwargs.get("source_labels") or {}
+            sink_labels = kwargs.get("sink_labels") or {}
             if not sources:
                 sources = [trace_list[0]]
             window = max(1, int(kwargs.get("propagation_window", 3)))
+            track_registers = bool(kwargs.get("track_registers", False))
 
-            tainted = set(sources)
+            tainted_addrs = set(sources)
+            tainted_regs = defaultdict(set)  # reg_name -> set of source ids
             propagation = []
+            source_map = {}  # tainted addr -> source addr
+            for s in sources:
+                source_map[s] = s
+
             for i, ea in enumerate(trace_list):
-                if ea in tainted:
+                if ea in tainted_addrs:
+                    current_source = source_map.get(ea, ea)
+                    # Forward propagation within window
                     for off in range(1, window + 1):
                         j = i + off
                         if j >= len(trace_list):
                             break
                         nxt = int(trace_list[j])
-                        if nxt not in tainted:
-                            tainted.add(nxt)
-                            propagation.append({"from": hex(ea), "to": hex(nxt), "distance": off})
+                        if nxt not in tainted_addrs:
+                            tainted_addrs.add(nxt)
+                            source_map[nxt] = current_source
+                            propagation.append({
+                                "from": hex(ea),
+                                "to": hex(nxt),
+                                "distance": off,
+                                "source": hex(current_source),
+                            })
+                    # Register-level tracking
+                    if track_registers:
+                        try:
+                            mnem = _get_insn_mnemonic(ea).upper()
+                            if any(m in mnem for m in MOV_MNEMONICS):
+                                # Simple heuristic: if instruction is a mov, propagate taint to destination register
+                                op0 = idc.print_operand(ea, 0)
+                                op1 = idc.print_operand(ea, 1)
+                                if op0 and op1:
+                                    tainted_regs[op0] = tainted_regs.get(op0, set()) | tainted_regs.get(op1, {ea})
+                        except Exception:
+                            pass
 
             overlays = []
-            for ea in sorted(tainted):
-                overlays.append({
+            sink_chains = []
+            for ea in sorted(tainted_addrs):
+                overlay = {
                     "addr": hex(ea),
                     "name": _ea_name(ea),
+                    "source": hex(source_map.get(ea, sources[0])),
                     "sink_reached": ea in sinks,
-                })
+                }
+                if ea in sinks:
+                    label = sink_labels.get(hex(ea), sink_labels.get(str(ea), ""))
+                    overlay["sink_label"] = label
+                    # Build chain from source to this sink
+                    chain = []
+                    current = ea
+                    visited = set()
+                    while current in source_map and current not in visited:
+                        visited.add(current)
+                        chain.append(hex(current))
+                        if current == source_map[current]:
+                            break
+                        current = source_map[current]
+                    chain.reverse()
+                    sink_chains.append({
+                        "sink": hex(ea),
+                        "sink_label": label,
+                        "chain": chain,
+                        "chain_length": len(chain),
+                    })
+                # Add source labels
+                if ea in sources:
+                    overlay["source_label"] = source_labels.get(hex(ea), source_labels.get(str(ea), "source"))
+                overlays.append(overlay)
+
             sink_hits = [x for x in overlays if x["sink_reached"]]
             return {
                 "ok": True,
                 "sources": [hex(x) for x in sources],
+                "source_labels": source_labels,
                 "tainted": overlays[:2000],
                 "propagation": propagation[:4000],
                 "sink_hits": sink_hits[:200],
-                "counts": {"tainted": len(overlays), "sink_hits": len(sink_hits)},
+                "sink_chains": sink_chains[:200],
+                "register_taint": {k: list(v)[:50] for k, v in tainted_regs.items()} if track_registers else {},
+                "counts": {
+                    "tainted": len(overlays),
+                    "sink_hits": len(sink_hits),
+                    "propagation_edges": len(propagation),
+                },
             }
 
         elif action == "state_replay":
@@ -536,20 +838,52 @@ def trace_analysis(
             trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
             sinks = _parse_addrs(kwargs.get("sinks") or kwargs.get("sink_addrs") or [])
             writes = kwargs.get("memory_writes") or []
+            crash_addr = kwargs.get("crash_addr")
             loops = Counter(trace_list).most_common(20)
             hot = sum(1 for _, c in loops if c > 5)
             sink_hits = sum(1 for ea in trace_list if ea in set(sinks))
             transition_count = len(_trace_pairs(trace_list))
+
+            # Dangerous APIs in trace
+            dangerous_apis = _extract_dangerous_apis_in_trace(trace_list)
+            dangerous_count = len(dangerous_apis)
+            critical_apis = [d for d in dangerous_apis if d.get("severity") == "critical"]
+            high_apis = [d for d in dangerous_apis if d.get("severity") == "high"]
+
+            # Crash proximity (closer to end = higher score)
+            crash_proximity = 0.0
+            if crash_addr:
+                try:
+                    crash_ea = int(str(crash_addr), 0)
+                    if crash_ea in trace_list:
+                        idx = trace_list.index(crash_ea)
+                        crash_proximity = (len(trace_list) - idx) / max(len(trace_list), 1) * 20.0
+                    else:
+                        crash_proximity = 5.0  # Crash not in trace but reported
+                except Exception:
+                    crash_proximity = 5.0
+
+            # Memory write pattern analysis
+            large_writes = sum(1 for w in writes if int(w.get("size", 1)) >= 256)
+            stack_writes = sum(1 for w in writes if any(seg for seg in [ida_segment.getseg(int(str(w.get("addr")), 0))] if seg and (seg.perm & ida_segment.SEGPERM_EXEC)))
+
             score = 0.0
-            score += min(30.0, hot * 3.0)
-            score += min(25.0, sink_hits * 5.0)
-            score += min(25.0, len(writes) * 2.0)
-            score += min(20.0, transition_count / 50.0)
+            score += min(20.0, hot * 2.0)
+            score += min(15.0, sink_hits * 3.0)
+            score += min(15.0, len(writes) * 1.5)
+            score += min(10.0, transition_count / 100.0)
+            score += min(15.0, dangerous_count * 3.0)
+            score += min(10.0, len(critical_apis) * 5.0 + len(high_apis) * 2.5)
+            score += crash_proximity
+            score += min(10.0, large_writes * 2.0)
+            score += min(5.0, stack_writes * 1.0)
+
             sev = "low"
             if score >= 70:
                 sev = "high"
             elif score >= 40:
                 sev = "medium"
+
             return {
                 "ok": True,
                 "score": round(min(100.0, score), 2),
@@ -559,21 +893,29 @@ def trace_analysis(
                     "hot_regions": hot,
                     "sink_hits": sink_hits,
                     "memory_writes": len(writes),
+                    "large_writes": large_writes,
                     "transitions": transition_count,
+                    "dangerous_apis": dangerous_count,
+                    "critical_apis": len(critical_apis),
+                    "high_apis": len(high_apis),
+                    "crash_proximity": round(crash_proximity, 2),
+                    "top_dangerous_apis": dangerous_apis[:20],
                 },
             }
 
         elif action == "anti_analysis_detect":
             trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
+            trace_set = set(trace_list)
             suspicious_apis = {
-                "debugger": ("IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess"),
-                "timing": ("QueryPerformanceCounter", "GetTickCount", "RDTSC"),
-                "environment": ("GetModuleHandle", "GetProcAddress", "GetAdaptersInfo"),
-                "vm": ("VBox", "vmware", "qemu", "wine"),
+                "debugger": ("IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess", "DebugActiveProcess"),
+                "timing": ("QueryPerformanceCounter", "GetTickCount", "GetTickCount64", "timeGetTime", "NtQueryPerformanceCounter"),
+                "environment": ("GetModuleHandle", "GetProcAddress", "GetAdaptersInfo", "GetSystemInfo", "GlobalMemoryStatusEx"),
+                "vm": ("VBox", "vmware", "qemu", "wine", "virtualbox", "xen"),
+                "process": ("CreateToolhelp32Snapshot", "Process32First", "Process32Next", "NtQuerySystemInformation"),
             }
             findings = []
             names = []
-            for ea in set(trace_list):
+            for ea in trace_set:
                 nm = _ea_name(ea)
                 if nm:
                     names.append(nm)
@@ -581,17 +923,84 @@ def trace_analysis(
             for family, patterns in suspicious_apis.items():
                 hits = [p for p in patterns if p.lower() in names_blob]
                 if hits:
-                    findings.append({"family": family, "hits": hits, "count": len(hits)})
+                    findings.append({"family": family, "hits": hits, "count": len(hits), "type": "api"})
+
+            # Instruction-level detection
+            timing_insns = []
+            debug_reg_insns = []
+            vm_insns = []
+            peb_checks = []
+            hw_bp_checks = []
+            for ea in trace_set:
+                try:
+                    mnem = _get_insn_mnemonic(ea).upper()
+                    # Timing checks
+                    if mnem in ("RDTSC", "RDTSCP"):
+                        timing_insns.append({"addr": hex(ea), "mnem": mnem, "type": "timing_insn"})
+                    # Debug register accesses
+                    ops = [idc.print_operand(ea, i) for i in range(2)]
+                    for op in ops:
+                        if op and any(dr in op.upper() for dr in ("DR0", "DR1", "DR2", "DR3", "DR6", "DR7")):
+                            debug_reg_insns.append({"addr": hex(ea), "mnem": mnem, "operand": op, "type": "debug_reg_access"})
+                            break
+                    # CPUID (VM detection leafs)
+                    if mnem == "CPUID":
+                        vm_insns.append({"addr": hex(ea), "mnem": mnem, "type": "cpuid", "note": "check for hypervisor leaf 0x40000000"})
+                    # PEB checks (common anti-debug: mov eax, fs:[30h]; cmp byte ptr [eax+2], 0)
+                    if mnem in MOV_MNEMONICS:
+                        disasm = idc.generate_disasm_line(ea, 0) or ""
+                        if "fs:[0x30]" in disasm or "gs:[0x60]" in disasm or "PEB" in disasm.upper():
+                            peb_checks.append({"addr": hex(ea), "mnem": mnem, "disasm": disasm, "type": "peb_access"})
+                    # Hardware breakpoint checks via CONTEXT.DebugRegisters
+                    disasm = idc.generate_disasm_line(ea, 0) or ""
+                    if any(x in disasm.lower() for x in ("debugreg", "context", "exception", "vectored")):
+                        hw_bp_checks.append({"addr": hex(ea), "mnem": mnem, "disasm": disasm, "type": "hw_bp_check"})
+                    # VM detection via IN/OUT instructions (e.g., VMWare backdoor)
+                    if mnem in ("IN", "OUT"):
+                        vm_insns.append({"addr": hex(ea), "mnem": mnem, "type": "io_port", "note": "potential VM backdoor"})
+                except Exception:
+                    pass
+
+            all_insn_findings = timing_insns + debug_reg_insns + vm_insns + peb_checks + hw_bp_checks
+            for f in all_insn_findings:
+                findings.append(f)
+
+            # Timing loop detection: tight RDTSC loops
+            if timing_insns:
+                for t in timing_insns:
+                    t_addr = int(t["addr"], 0)
+                    # Check if RDTSC is followed by another RDTSC or in a loop
+                    if t_addr in trace_list:
+                        idx = trace_list.index(t_addr)
+                        if idx > 0 and idx < len(trace_list) - 1:
+                            prev_dist = abs(int(trace_list[idx]) - int(trace_list[idx - 1]))
+                            next_dist = abs(int(trace_list[idx + 1]) - int(trace_list[idx]))
+                            if prev_dist < 32 or next_dist < 32:
+                                t["timing_loop"] = True
+
             confidence = "low"
-            if len(findings) >= 3:
+            api_families = len([f for f in findings if f.get("type") == "api"])
+            insn_families = len([f for f in findings if f.get("type") != "api"])
+            if api_families >= 3 or insn_families >= 5:
                 confidence = "high"
-            elif len(findings) >= 1:
+            elif api_families >= 1 or insn_families >= 2:
                 confidence = "medium"
+
             return {
                 "ok": True,
                 "confidence": confidence,
-                "findings": findings,
+                "findings": findings[:200],
                 "observed_symbol_count": len(names),
+                "timing_instructions": timing_insns[:50],
+                "debug_register_accesses": debug_reg_insns[:50],
+                "vm_instructions": vm_insns[:50],
+                "peb_checks": peb_checks[:50],
+                "hw_bp_checks": hw_bp_checks[:50],
+                "summary": {
+                    "api_families": api_families,
+                    "instruction_indicators": insn_families,
+                    "total_findings": len(findings),
+                },
             }
 
         elif action == "lifetime_map":
@@ -713,6 +1122,137 @@ def trace_analysis(
                     "dynamic_only edges may indicate indirect calls, vtables, thunk folding, or obfuscation",
                     "static_only edges may indicate dead code, gated paths, or unmet runtime conditions",
                 ],
+            }
+
+        elif action == "trace_entropy":
+            trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
+            if not trace_list:
+                return {"ok": True, "regions": [], "note": "No trace data loaded."}
+            window = max(16, int(kwargs.get("window", 64)))
+            threshold = float(kwargs.get("threshold", 6.5))
+            regions = _windowed_entropy(trace_list, window=window)
+            high_entropy = [r for r in regions if r.get("insn_entropy", 0) >= threshold or r.get("addr_entropy", 0) >= threshold]
+            # Sort by combined entropy
+            high_entropy.sort(key=lambda x: x.get("insn_entropy", 0) + x.get("addr_entropy", 0), reverse=True)
+            return {
+                "ok": True,
+                "window": window,
+                "threshold": threshold,
+                "regions": regions[:500],
+                "high_entropy_regions": high_entropy[:100],
+                "high_entropy_count": len(high_entropy),
+                "avg_insn_entropy": round(sum(r.get("insn_entropy", 0) for r in regions) / max(len(regions), 1), 3),
+                "avg_addr_entropy": round(sum(r.get("addr_entropy", 0) for r in regions) / max(len(regions), 1), 3),
+                "note": "High entropy regions may indicate packed, encrypted, or obfuscated code. Low entropy with high addr entropy may indicate crypto loops.",
+            }
+
+        elif action == "api_sequence":
+            trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
+            if not trace_list:
+                return {"ok": True, "sequences": [], "note": "No trace data loaded."}
+            max_gap = max(1, int(kwargs.get("max_gap", 10)))
+            min_length = max(2, int(kwargs.get("min_length", 2)))
+            apis = _get_api_calls_ordered(trace_list)
+            if not apis:
+                return {"ok": True, "sequences": [], "note": "No API calls found in trace."}
+
+            # Build contiguous sequences with gap tolerance
+            sequences = []
+            current_seq = [apis[0]]
+            for i in range(1, len(apis)):
+                gap = apis[i]["idx"] - apis[i - 1]["idx"]
+                if gap <= max_gap:
+                    current_seq.append(apis[i])
+                else:
+                    if len(current_seq) >= min_length:
+                        sequences.append(current_seq)
+                    current_seq = [apis[i]]
+            if len(current_seq) >= min_length:
+                sequences.append(current_seq)
+
+            # Summarize sequences into behavioral signatures
+            signatures = []
+            for seq in sequences:
+                sig = " -> ".join([s["api"] for s in seq])
+                categories = [s["category"] for s in seq]
+                signatures.append({
+                    "signature": sig,
+                    "length": len(seq),
+                    "start_idx": seq[0]["idx"],
+                    "end_idx": seq[-1]["idx"],
+                    "apis": [s["api"] for s in seq],
+                    "categories": categories,
+                    "dangerous_apis": [s["api"] for s in seq if s["api"] in DANGEROUS_APIS],
+                })
+
+            # Also extract n-grams for behavioral clustering
+            n = min(5, max(2, int(kwargs.get("ngram", 3))))
+            ngrams = Counter()
+            for seq in sequences:
+                api_names = [s["api"] for s in seq]
+                for i in range(len(api_names) - n + 1):
+                    ngrams[tuple(api_names[i:i + n])] += 1
+
+            return {
+                "ok": True,
+                "api_call_count": len(apis),
+                "sequences": signatures[:100],
+                "sequence_count": len(signatures),
+                "top_ngrams": [{"ngram": " -> ".join(ng), "count": c} for ng, c in ngrams.most_common(50)],
+                "dangerous_api_count": sum(1 for a in apis if a["api"] in DANGEROUS_APIS),
+                "behavioral_summary": {
+                    "categories_present": sorted(set(a["category"] for a in apis)),
+                    "unique_apis": len(set(a["api"] for a in apis)),
+                },
+            }
+
+        elif action == "loop_analysis":
+            trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
+            if not trace_list:
+                return {"ok": True, "loops": [], "note": "No trace data loaded."}
+            back_edges = _detect_back_edges(trace_list)
+            # Count iterations per loop by detecting consecutive back-edges
+            loop_stats = defaultdict(lambda: {"iterations": 0, "total_hits": 0, "max_depth": 0, "back_edges": []})
+            func_loop_chains = defaultdict(list)
+            for be in back_edges:
+                key = (be["func_addr"], be["back_edge_to"])
+                loop_stats[key]["back_edges"].append(be)
+                loop_stats[key]["iterations"] += 1
+                func_loop_chains[be["func_addr"]].append(be)
+
+            # Identify hot loops by total hits
+            addr_counter = Counter(trace_list)
+            hot_loops = []
+            for (func_addr, loop_addr), stats in loop_stats.items():
+                loop_ea = int(loop_addr, 0)
+                total_hits = addr_counter.get(loop_ea, 0)
+                # Estimate nesting: count how many different back-edge targets in same function
+                same_func_loops = [k for k in loop_stats if k[0] == func_addr]
+                nesting = len(same_func_loops)
+                hot_loops.append({
+                    "func": stats["back_edges"][0]["func"] if stats["back_edges"] else _ea_func_name(int(func_addr, 0)),
+                    "func_addr": func_addr,
+                    "loop_addr": loop_addr,
+                    "iterations": stats["iterations"],
+                    "total_hits": total_hits,
+                    "estimated_nesting": nesting,
+                    "avg_iteration_length": round(sum(be["iteration_length"] for be in stats["back_edges"]) / max(len(stats["back_edges"]), 1), 1),
+                })
+
+            hot_loops.sort(key=lambda x: x["total_hits"], reverse=True)
+
+            # Hot spots at function level
+            func_hits = Counter(_ea_func_name(ea) for ea in trace_list if _ea_func_name(ea))
+            top_funcs = [{"func": f, "hits": c} for f, c in func_hits.most_common(20)]
+
+            return {
+                "ok": True,
+                "loops": hot_loops[:100],
+                "loop_count": len(hot_loops),
+                "back_edge_count": len(back_edges),
+                "top_functions": top_funcs,
+                "trace_length": len(trace_list),
+                "unique_addresses": len(set(trace_list)),
             }
 
         else:
