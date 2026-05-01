@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.opencode-swarm/
 
 ida_mcp_cache/
 *.i64
