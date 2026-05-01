@@ -509,10 +509,13 @@ def code(
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     main_pseudo = str(cfunc) if cfunc else ""
                     main_proto = get_prototype(func)
-                    # Collect callers
+                    # Collect callers (limit xref scan to avoid hanging on heavily-referenced funcs)
                     callers_ctx = []
                     caller_addrs = set()
-                    for xref in idautils.CodeRefsTo(func.start_ea, 0):
+                    max_xrefs = chain_depth * 20
+                    for i, xref in enumerate(idautils.CodeRefsTo(func.start_ea, 0)):
+                        if i >= max_xrefs:
+                            break
                         caller_fn = ida_funcs.get_func(xref)
                         if caller_fn and caller_fn.start_ea not in caller_addrs:
                             caller_addrs.add(caller_fn.start_ea)
@@ -736,7 +739,9 @@ def code(
                             if not xref.iscode:
                                 s = idc.get_strlit_contents(xref.to)
                                 if s:
-                                    strings.append(f"{hex_ea(xref.to)}  {s.decode('utf-8', errors='replace')}")
+                                    if isinstance(s, bytes):
+                                        s = s.decode("utf-8", errors="replace")
+                                    strings.append(f"{hex_ea(xref.to)}  {s}")
                     info["strings"] = "\n".join(strings[:25])
                 except Exception:
                     info["strings"] = ""
@@ -907,7 +912,9 @@ def code(
                             # Check if string
                             s = idc.get_strlit_contents(xref.to)
                             if s:
-                                str_lines.append(f"{hex(xref.to)}  {s.decode('utf-8', errors='replace')}")
+                                if isinstance(s, bytes):
+                                    s = s.decode("utf-8", errors="replace")
+                                str_lines.append(f"{hex(xref.to)}  {s}")
                 results.append({"ok": True, "addr": addr, "strings": "\n".join(str_lines), "count": len(str_lines)})
 
             elif action == "diff_functions":

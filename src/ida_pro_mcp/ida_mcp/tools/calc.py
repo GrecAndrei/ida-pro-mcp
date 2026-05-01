@@ -220,16 +220,29 @@ def calc(
             except Exception:
                 return 8 if (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100) else 4
 
+        def _is_be():
+            try:
+                if hasattr(ida_ida, "inf_is_be"):
+                    return ida_ida.inf_is_be()
+            except Exception:
+                pass
+            try:
+                inf = idaapi.get_inf_structure()
+                return inf.is_be() if hasattr(inf, "is_be") else False
+            except Exception:
+                return False
+
         def read_int(ea, width, signed=False):
             data = ida_bytes.get_bytes(ea, width)
             if not data or len(data) != width:
                 raise ValueError(f"Could not read {width} bytes from {hex(ea)}")
             import struct
+            endian = ">" if _is_be() else "<"
             fmts = {
-                (1, False): "<B", (1, True): "<b",
-                (2, False): "<H", (2, True): "<h",
-                (4, False): "<I", (4, True): "<i",
-                (8, False): "<Q", (8, True): "<q",
+                (1, False): f"{endian}B", (1, True): f"{endian}b",
+                (2, False): f"{endian}H", (2, True): f"{endian}h",
+                (4, False): f"{endian}I", (4, True): f"{endian}i",
+                (8, False): f"{endian}Q", (8, True): f"{endian}q",
             }
             return struct.unpack(fmts[(width, signed)], data)[0]
 
@@ -238,7 +251,8 @@ def calc(
             if not data or len(data) != width:
                 raise ValueError(f"Could not read {width} bytes from {hex(ea)}")
             import struct
-            return struct.unpack("<f" if width == 4 else "<d", data)[0]
+            endian = ">" if _is_be() else "<"
+            return struct.unpack(f"{endian}f" if width == 4 else f"{endian}d", data)[0]
 
         def read_ptr(ea, width=None):
             width = width or ptr_size()
