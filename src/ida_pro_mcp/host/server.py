@@ -4912,17 +4912,26 @@ class IDAMCPServer:
                 if binary_path:
                     existing = self.session_mgr.find_session_by_path(binary_path)
                 if existing and not force_new:
-                    self.current_session = existing
-                    existing.update_access()
+                    # Update the REAL session through the manager, not the shallow copy
+                    update_kwargs = {"analysis_applied": False}
                     if analysis_options:
-                        existing.analysis_options.update(analysis_options)
-                        existing.analysis_applied = False
+                        merged_opts = dict(existing.analysis_options)
+                        merged_opts.update(analysis_options)
+                        update_kwargs["analysis_options"] = merged_opts
                     if ida_args is not None:
-                        existing.ida_args = ida_args
-                    self.session_mgr._save_metadata(existing)
+                        update_kwargs["ida_args"] = ida_args
+                    updated = self.session_mgr.update_session(
+                        existing.session_id, **update_kwargs
+                    )
+                    if updated is None:
+                        return make_error(
+                            MCPError.SESSION_NOT_FOUND,
+                            f"Session '{existing.session_id}' disappeared during reuse",
+                        )
+                    self.current_session = updated
                     return {
                         "ok": True,
-                        "session": existing.to_dict(),
+                        "session": updated.to_dict(),
                         "note": "Reusing existing session. Use force_new=true to create a new session.",
                     }
 
@@ -4986,41 +4995,22 @@ class IDAMCPServer:
                     result["port"] = runtime.get("port")
                 return {"ok": True, "session": result}
             if action == "list":
-                all_sessions = list(self.session_mgr.sessions.values())
-
-                # Filter by query (regex/glob/substring auto-detected)
-                q = args.get("query", "")
-                if q:
-                    matcher = compile_smart_pattern(q, case_sensitive=False)
-                    all_sessions = [
-                        s
-                        for s in all_sessions
-                        if matcher(f"{s.session_id} {s.binary_path} {s.idb_path}")
-                    ]
-
-                # Sort by last_accessed (most recent first)
-                all_sessions.sort(key=lambda s: s.last_accessed, reverse=True)
-
-                # Pagination
+                # Use locked manager method instead of direct dict access
                 limit = _bounded_int(
                     args.get("limit", 50), 50, min_value=0, max_value=MAX_LIST_LIMIT
                 )
                 offset = _bounded_int(
                     args.get("offset", 0), 0, min_value=0, max_value=MAX_LIST_OFFSET
                 )
-
-                total = len(all_sessions)
-                paginated = (
-                    all_sessions[offset : offset + limit]
-                    if limit > 0
-                    else all_sessions[offset:]
+                q = args.get("query", "")
+                result = self.session_mgr.list_sessions(
+                    query=q, offset=offset, limit=limit
                 )
 
-                # Include runtime status for each session
+                # Augment with runtime status
                 session_dicts = []
-                for s in paginated:
-                    d = s.to_dict()
-                    runtime = self.session_runtimes.get(s.session_id)
+                for d in result["sessions"]:
+                    runtime = self.session_runtimes.get(d["session_id"])
                     d["is_running"] = bool(
                         runtime
                         and runtime.get("process")
@@ -5031,7 +5021,7 @@ class IDAMCPServer:
                 return {
                     "ok": True,
                     "sessions": session_dicts,
-                    "total": total,
+                    "total": result["total"],
                     "count": len(session_dicts),
                     "offset": offset,
                     "limit": limit,
@@ -5143,8 +5133,18 @@ class IDAMCPServer:
                         return make_error(
                             MCPError.FILE_LOCKED, f"Failed to remove IDB: {e}"
                         )
-                session.analysis_options = analysis_options or {}
-                self.session_mgr._save_metadata(session)
+
+                # Update the REAL session via manager, not the deepcopy
+                self.session_mgr.update_session(
+                    sid, analysis_options=analysis_options or {}, analysis_applied=False
+                )
+                # Refetch so we have the canonical object for _start_server
+                session = self.session_mgr.get_session(sid)
+                if session is None:
+                    return make_error(
+                        MCPError.SESSION_NOT_FOUND,
+                        f"Session '{sid}' disappeared during rebuild",
+                    )
 
                 start_res = self._start_server(session)
                 if "error" in start_res:
