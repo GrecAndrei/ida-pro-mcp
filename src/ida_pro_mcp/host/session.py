@@ -476,6 +476,33 @@ class SessionManager:
                 copy.copy(s) for s in self.sessions.values() if "archived" in s.tags
             ]
 
+    def list_sessions(self, query: str = "", offset: int = 0, limit: int = 0) -> dict:
+        """Return session dicts under lock, with optional filtering and pagination.
+        
+        Returns a dict with keys: sessions, total, count, offset, limit.
+        """
+        with self._lock:
+            sessions = list(self.sessions.values())
+            if query:
+                matcher = compile_smart_pattern(query, case_sensitive=False)
+                sessions = [
+                    s for s in sessions
+                    if matcher(f"{s.session_id} {s.binary_path} {s.idb_path}")
+                ]
+            sessions.sort(key=lambda s: s.last_accessed, reverse=True)
+            total = len(sessions)
+            if limit > 0:
+                sessions = sessions[offset:offset + limit]
+            else:
+                sessions = sessions[offset:]
+            return {
+                "sessions": [s.to_dict() for s in sessions],
+                "total": total,
+                "count": len(sessions),
+                "offset": offset,
+                "limit": limit,
+            }
+
     def list_active(self) -> List[Session]:
         """List non-archived sessions."""
         with self._lock:
@@ -789,12 +816,19 @@ class SessionManager:
         return {"skills": {}, "q_table": {}, "activity_log": []}
 
     def _save_skills(self, sid: str, data: dict):
+        """Persist skills atomically (tmp + replace)."""
         path = self._get_skills_path(sid)
+        tmp = path + ".tmp"
         try:
-            with open(path, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save skills for {sid}: {e}")
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     def crystallize_skill(
         self,
@@ -942,6 +976,7 @@ class SessionManager:
 class BookmarkManager:
     def __init__(self, session_dir: str):
         self.session_dir = session_dir
+        self._lock = threading.RLock()
 
     def _get_path(self, sid: str) -> str:
         return os.path.join(self.session_dir, f"SID_{sid}_bookmarks.json")
@@ -952,172 +987,200 @@ class BookmarkManager:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
+            except Exception as e:
+                log_rpc(f"Failed to load bookmarks for {sid}: {e}")
                 return []
         return []
 
     def save(self, sid: str, bookmarks: List[dict]) -> dict:
+        """Persist bookmarks atomically (tmp + replace)."""
         path = self._get_path(sid)
+        tmp = path + ".tmp"
         try:
-            with open(path, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(bookmarks, f, indent=2)
+            os.replace(tmp, path)
             return {"ok": True}
         except Exception as e:
+            log_rpc(f"Failed to save bookmarks for {sid}: {e}")
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
             return make_error(MCPError.IO_ERROR, f"Failed to save bookmarks: {e}")
 
     def add(self, sid: str, data: dict) -> dict:
-        if not data.get("addr"):
-            return make_error(MCPError.INVALID_ARGS, "addr required")
-        bookmarks = self.load(sid)
-        max_id = max([b.get("id", 0) for b in bookmarks]) if bookmarks else 0
+        with self._lock:
+            if not data.get("addr"):
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            bookmarks = self.load(sid)
+            max_id = max([b.get("id", 0) for b in bookmarks]) if bookmarks else 0
 
-        tags = data.get("tags", [])
-        if isinstance(tags, str):
-            tags = [t.strip() for t in tags.split(",") if t.strip()]
+            tags = data.get("tags", [])
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",") if t.strip()]
 
-        new_bm = {
-            "id": max_id + 1,
-            "addr": data.get("addr"),
-            "name": data.get("name", f"Mark at {data.get('addr')}"),
-            "notes": data.get("notes", ""),
-            "category": data.get("category", "general"),
-            "priority": int(data.get("priority", 3)),
-            "tags": tags,
-            "timestamp": datetime.now().isoformat(),
-        }
+            new_bm = {
+                "id": max_id + 1,
+                "addr": data.get("addr"),
+                "name": data.get("name", f"Mark at {data.get('addr')}"),
+                "notes": data.get("notes", ""),
+                "category": data.get("category", "general"),
+                "priority": int(data.get("priority", 3)),
+                "tags": tags,
+                "timestamp": datetime.now().isoformat(),
+            }
 
-        for i, bm in enumerate(bookmarks):
-            if bm["addr"] == data.get("addr"):
-                new_bm["id"] = bm["id"]
-                bookmarks[i] = new_bm
-                res = self.save(sid, bookmarks)
-                if res.get("error"):
-                    return res
-                return {"ok": True, "updated": True, "bookmark": new_bm}
+            for i, bm in enumerate(bookmarks):
+                if bm["addr"] == data.get("addr"):
+                    new_bm["id"] = bm["id"]
+                    bookmarks[i] = new_bm
+                    res = self.save(sid, bookmarks)
+                    if res.get("error"):
+                        return res
+                    return {"ok": True, "updated": True, "bookmark": new_bm}
 
-        bookmarks.append(new_bm)
-        res = self.save(sid, bookmarks)
-        if res.get("error"):
-            return res
-        return {"ok": True, "bookmark": new_bm}
-
-    def list(self, sid: str, filters: dict) -> dict:
-        filters = filters or {}
-        bookmarks = self.load(sid)
-        f_cat = filters.get("category")
-        f_tag = filters.get("tag")
-        f_pri = filters.get("priority")
-        f_query = filters.get("query")
-
-        filtered = bookmarks
-        if f_cat:
-            cat_matcher = compile_smart_pattern(f_cat, case_sensitive=False)
-            filtered = [b for b in filtered if cat_matcher(b.get("category", ""))]
-        if f_tag:
-            tag_matcher = compile_smart_pattern(f_tag, case_sensitive=False)
-            filtered = [
-                b for b in filtered if any(tag_matcher(t) for t in b.get("tags", []))
-            ]
-        if f_pri:
-            filtered = [b for b in filtered if b.get("priority", 0) >= int(f_pri)]
-        if f_query:
-            q_matcher = compile_smart_pattern(f_query, case_sensitive=False)
-            filtered = [
-                b
-                for b in filtered
-                if q_matcher(b.get("name", ""))
-                or q_matcher(b.get("notes", ""))
-                or q_matcher(b.get("addr", ""))
-            ]
-
-        return {
-            "ok": True,
-            "bookmarks": filtered,
-            "total": len(bookmarks),
-            "count": len(filtered),
-        }
-
-    def delete(self, sid: str, data: dict) -> dict:
-        bid = data.get("id")
-        addr = data.get("addr")
-        if not bid and not addr:
-            return make_error(MCPError.INVALID_ARGS, "id or addr required")
-
-        bookmarks = self.load(sid)
-        original_len = len(bookmarks)
-        if bid:
-            bookmarks = [b for b in bookmarks if b.get("id") != int(bid)]
-        else:
-            bookmarks = [b for b in bookmarks if b.get("addr") != addr]
-
-        if len(bookmarks) < original_len:
+            bookmarks.append(new_bm)
             res = self.save(sid, bookmarks)
             if res.get("error"):
                 return res
-            return {"ok": True, "deleted": original_len - len(bookmarks)}
-        return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
+            return {"ok": True, "bookmark": new_bm}
 
-    def update(self, sid: str, data: dict) -> dict:
-        bid = data.get("id")
-        if not bid:
-            return make_error(MCPError.INVALID_ARGS, "id required")
+    def list(self, sid: str, filters: dict) -> dict:
+        with self._lock:
+            filters = filters or {}
+            bookmarks = self.load(sid)
+            f_cat = filters.get("category")
+            f_tag = filters.get("tag")
+            f_pri = filters.get("priority")
+            f_query = filters.get("query")
 
-        bookmarks = self.load(sid)
-        for i, bm in enumerate(bookmarks):
-            if bm.get("id") == int(bid):
-                for key in ["name", "notes", "category", "priority", "tags", "addr"]:
-                    if key in data:
-                        val = data[key]
-                        if key == "tags" and isinstance(val, str):
-                            val = [t.strip() for t in val.split(",") if t.strip()]
-                        bookmarks[i][key] = val
+            filtered = bookmarks
+            if f_cat:
+                cat_matcher = compile_smart_pattern(f_cat, case_sensitive=False)
+                filtered = [b for b in filtered if cat_matcher(b.get("category", ""))]
+            if f_tag:
+                tag_matcher = compile_smart_pattern(f_tag, case_sensitive=False)
+                filtered = [
+                    b for b in filtered if any(tag_matcher(t) for t in b.get("tags", []))
+                ]
+            if f_pri:
+                try:
+                    pri_val = int(f_pri)
+                    filtered = [b for b in filtered if b.get("priority", 0) >= pri_val]
+                except (ValueError, TypeError):
+                    pass
+            if f_query:
+                q_matcher = compile_smart_pattern(f_query, case_sensitive=False)
+                filtered = [
+                    b
+                    for b in filtered
+                    if q_matcher(b.get("name", ""))
+                    or q_matcher(b.get("notes", ""))
+                    or q_matcher(b.get("addr", ""))
+                ]
+
+            return {
+                "ok": True,
+                "bookmarks": filtered,
+                "total": len(bookmarks),
+                "count": len(filtered),
+            }
+
+    def delete(self, sid: str, data: dict) -> dict:
+        with self._lock:
+            bid = data.get("id")
+            addr = data.get("addr")
+            if not bid and not addr:
+                return make_error(MCPError.INVALID_ARGS, "id or addr required")
+
+            bookmarks = self.load(sid)
+            original_len = len(bookmarks)
+            if bid:
+                try:
+                    bid_int = int(bid)
+                except (ValueError, TypeError):
+                    return make_error(MCPError.INVALID_ARGS, f"id must be an integer, got: {bid}")
+                bookmarks = [b for b in bookmarks if b.get("id") != bid_int]
+            else:
+                bookmarks = [b for b in bookmarks if b.get("addr") != addr]
+
+            if len(bookmarks) < original_len:
                 res = self.save(sid, bookmarks)
                 if res.get("error"):
                     return res
-                return {"ok": True, "bookmark": bookmarks[i]}
-        return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
+                return {"ok": True, "deleted": original_len - len(bookmarks)}
+            return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
+
+    def update(self, sid: str, data: dict) -> dict:
+        with self._lock:
+            bid = data.get("id")
+            if not bid:
+                return make_error(MCPError.INVALID_ARGS, "id required")
+            try:
+                bid_int = int(bid)
+            except (ValueError, TypeError):
+                return make_error(MCPError.INVALID_ARGS, f"id must be an integer, got: {bid}")
+
+            bookmarks = self.load(sid)
+            for i, bm in enumerate(bookmarks):
+                if bm.get("id") == bid_int:
+                    for key in ["name", "notes", "category", "priority", "tags", "addr"]:
+                        if key in data:
+                            val = data[key]
+                            if key == "tags" and isinstance(val, str):
+                                val = [t.strip() for t in val.split(",") if t.strip()]
+                            bookmarks[i][key] = val
+                    res = self.save(sid, bookmarks)
+                    if res.get("error"):
+                        return res
+                    return {"ok": True, "bookmark": bookmarks[i]}
+            return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
     def clear(self, sid: str) -> dict:
-        res = self.save(sid, [])
-        if res.get("error"):
-            return res
-        return {"ok": True}
+        with self._lock:
+            res = self.save(sid, [])
+            if res.get("error"):
+                return res
+            return {"ok": True}
 
     def find(self, sid: str, query: str) -> dict:
-        bookmarks = self.load(sid)
-        matcher = compile_smart_pattern(query, case_sensitive=False)
-        results = []
-        for b in bookmarks:
-            if (
-                matcher(b.get("name", ""))
-                or matcher(b.get("notes", ""))
-                or any(matcher(t) for t in b.get("tags", []))
-                or matcher(b.get("addr", ""))
-                or matcher(b.get("category", ""))
-            ):
-                results.append(b)
-        return {"ok": True, "results": results, "count": len(results)}
+        with self._lock:
+            bookmarks = self.load(sid)
+            matcher = compile_smart_pattern(query, case_sensitive=False)
+            results = []
+            for b in bookmarks:
+                if (
+                    matcher(b.get("name", ""))
+                    or matcher(b.get("notes", ""))
+                    or any(matcher(t) for t in b.get("tags", []))
+                    or matcher(b.get("addr", ""))
+                    or matcher(b.get("category", ""))
+                ):
+                    results.append(b)
+            return {"ok": True, "results": results, "count": len(results)}
 
     def export(self, sid: str) -> dict:
-        bookmarks = self.load(sid)
-        if not bookmarks:
-            return {"ok": True, "report": "No bookmarks found."}
+        with self._lock:
+            bookmarks = self.load(sid)
+            if not bookmarks:
+                return {"ok": True, "report": "No bookmarks found."}
 
-        lines = [f"# Forensic Research Report - Session {sid}", ""]
-        for b in sorted(bookmarks, key=lambda x: x.get("priority", 3)):
-            prio = "⭐" * (6 - b.get("priority", 3))
-            lines.append(f"## [{b['id']}] {b['name']} @ {b['addr']} {prio}")
-            lines.append(f"- **Category**: {b.get('category', 'general')}")
-            if b.get("tags"):
-                lines.append(f"- **Tags**: {', '.join(b['tags'])}")
-            lines.append(f"- **Time**: {b.get('timestamp')}")
-            lines.append("")
-            lines.append(b.get("notes", "No notes provided."))
-            lines.append("")
-            lines.append("---")
-            lines.append("")
+            lines = [f"# Forensic Research Report - Session {sid}", ""]
+            for b in sorted(bookmarks, key=lambda x: x.get("priority", 3)):
+                prio = "*" * (6 - b.get("priority", 3))
+                lines.append(f"## [{b['id']}] {b['name']} @ {b['addr']} {prio}")
+                lines.append(f"- **Category**: {b.get('category', 'general')}")
+                if b.get("tags"):
+                    lines.append(f"- **Tags**: {', '.join(b['tags'])}")
+                lines.append(f"- **Time**: {b.get('timestamp')}")
+                lines.append("")
+                lines.append(b.get("notes", "No notes provided."))
+                lines.append("")
+                lines.append("---")
+                lines.append("")
 
-        return {"ok": True, "report": "\n".join(lines)}
+            return {"ok": True, "report": "\n".join(lines)}
 
 
 
