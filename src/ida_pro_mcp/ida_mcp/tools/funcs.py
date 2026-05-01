@@ -395,6 +395,120 @@ def _funcs_impl(
                 info["stack_frame"] = get_stack_frame_variables_internal(fn.start_ea, raise_error=False)
             return {"ok": True, "function": info}
 
+        elif action == "metrics":
+            ea, err = validate_addr(addr)
+            if err: return err
+            fn = ida_funcs.get_func(ea)
+            if not fn:
+                func = ida_funcs.get_func(ea)
+                if func:
+                    fn = func
+                else:
+                    return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
+            # Compute metrics
+            insn_count = 0
+            bb_count = 0
+            call_count = 0
+            ret_count = 0
+            jump_count = 0
+            cond_jump_count = 0
+            try:
+                fc = idaapi.FlowChart(fn)
+                bb_count = sum(1 for _ in fc)
+                for b in fc:
+                    head = b.start_ea
+                    while head < b.end_ea and head != idaapi.BADADDR:
+                        insn_count += 1
+                        mnem = (idc.print_insn_mnem(head) or "").lower()
+                        if mnem in ("call", "bl", "blx"):
+                            call_count += 1
+                        elif mnem in ("ret", "retn", "bx", "jr", "blr"):
+                            ret_count += 1
+                        elif mnem.startswith("j") or mnem.startswith("b"):
+                            jump_count += 1
+                            if mnem in ("jz", "je", "jnz", "jne", "ja", "jb", "jg", "jl", "jbe", "jge", "jle", "jc", "jnc"):
+                                cond_jump_count += 1
+                        head = idc.next_head(head, fn.end_ea)
+            except Exception:
+                pass
+            # Cyclomatic complexity
+            cyclomatic = max(1, bb_count + 1)
+            try:
+                edges = 0
+                fc = idaapi.FlowChart(fn)
+                for b in fc:
+                    for s in b.succs():
+                        edges += 1
+                cyclomatic = edges - bb_count + 2
+                if cyclomatic < 1:
+                    cyclomatic = 1
+            except Exception:
+                pass
+            size = fn.end_ea - fn.start_ea
+            return {
+                "ok": True,
+                "function": ida_funcs.get_func_name(fn.start_ea),
+                "addr": hex(fn.start_ea),
+                "metrics": {
+                    "size_bytes": size,
+                    "instruction_count": insn_count,
+                    "basic_block_count": bb_count,
+                    "cyclomatic_complexity": cyclomatic,
+                    "call_count": call_count,
+                    "return_count": ret_count,
+                    "jump_count": jump_count,
+                    "conditional_jump_count": cond_jump_count,
+                    "calls_per_instruction": round(call_count / max(1, insn_count), 4),
+                    "density": round(insn_count / max(1, size), 4),
+                },
+            }
+
+        elif action == "find_similar":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err: return err
+            target_fn = ida_funcs.get_func(ea)
+            if not target_fn:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            target_bytes = ida_bytes.get_bytes(target_fn.start_ea, target_fn.end_ea - target_fn.start_ea) or b""
+            target_size = len(target_bytes)
+            target_insn_count = sum(1 for _ in idautils.FuncItems(target_fn.start_ea))
+            results = []
+            for func_ea in idautils.Functions():
+                if func_ea == target_fn.start_ea:
+                    continue
+                fn = ida_funcs.get_func(func_ea)
+                if not fn:
+                    continue
+                size = fn.end_ea - fn.start_ea
+                if abs(size - target_size) > max(size, target_size) * 0.5:
+                    continue
+                func_bytes = ida_bytes.get_bytes(fn.start_ea, size) or b""
+                if not func_bytes:
+                    continue
+                # Simple similarity: instruction count ratio + byte similarity
+                insn_count = sum(1 for _ in idautils.FuncItems(func_ea))
+                insn_sim = 1.0 - abs(insn_count - target_insn_count) / max(insn_count, target_insn_count, 1)
+                # Byte-level similarity (ignoring addresses in operands)
+                min_len = min(len(target_bytes), len(func_bytes))
+                if min_len == 0:
+                    continue
+                matches = sum(1 for i in range(min_len) if target_bytes[i] == func_bytes[i])
+                byte_sim = matches / min_len
+                score = round((insn_sim * 0.4 + byte_sim * 0.6) * 100, 2)
+                if score >= (kwargs.get("min_score") or 60.0):
+                    results.append({
+                        "addr": hex(func_ea),
+                        "name": ida_funcs.get_func_name(func_ea),
+                        "score": score,
+                        "size": hex(size),
+                        "instructions": insn_count,
+                    })
+            results.sort(key=lambda x: -x["score"])
+            limit = kwargs.get("limit") or 20
+            return {"ok": True, "target": hex(target_fn.start_ea), "similar_functions": results[:limit], "count": len(results)}
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
@@ -413,8 +527,8 @@ def _funcs_write_dispatch(**kwargs):
 
 @tool
 def funcs(
-    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info"],
-                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info"],
+    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar"],
+                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name"] = None,
@@ -449,6 +563,10 @@ def funcs(
       Query supports regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.
       Returns compact text: "addr  size  name [prototype]" per line.
     - info: Detailed info about a single function.
+    - metrics: Compute complexity metrics (cyclomatic complexity, instruction count,
+      basic blocks, call/return/jump counts, density).
+    - find_similar: Find functions with similar bytecode patterns to the function at `addr`.
+      Returns ranked list with similarity scores.
     """
     call_kwargs = {
         "action": action,
