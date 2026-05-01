@@ -335,7 +335,8 @@ def code(
     action: Annotated[Literal[
         "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
         "callees", "callers", "blocks", "analyze", "callgraph", "export",
-        "find_paths", "strings_in_func", "diff_functions", "semantic_decompile", "decomp_dataflow"
+        "find_paths", "strings_in_func", "diff_functions", "semantic_decompile", "decomp_dataflow",
+        "decompile_chain"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,  # Alias for compatibility
@@ -426,6 +427,11 @@ def code(
     decomp_dataflow - Build decompiler-derived variable dependency graph
         Params: addrs (REQUIRED)
         Returns: [{addr, function, dataflow: {nodes, edges, top_hubs, ...}}]
+
+    decompile_chain - Decompile function with caller/callee context
+        Params: addrs (REQUIRED), max_depth (default 2 for callers/callees count)
+        Returns: [{addr, function, pseudocode, callers_context: [{addr, name, pseudocode}], callees_context: [{addr, name, pseudocode}]}]
+        Best for: Understanding a function within its call graph neighborhood.
     """
     try:
         # Support both addr (singular) and addrs (plural) for compatibility
@@ -485,7 +491,73 @@ def code(
                         })
                 except Exception as e:
                     results.append({"addr": addr, "error": str(e)})
-            
+
+            elif action == "decompile_chain":
+                func = idaapi.get_func(ea)
+                if not func:
+                    prev_func = _get_prev_func(ea)
+                    next_func = _get_next_func(ea)
+                    suggestion = ""
+                    if prev_func:
+                        suggestion = f" Try {hex_ea(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
+                    elif next_func:
+                        suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
+                    results.append({"addr": addr, "error": f"No function at {hex_ea(ea)}.{suggestion}"})
+                    continue
+                chain_depth = max(1, min(max_depth, 5))
+                try:
+                    cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
+                    main_pseudo = str(cfunc) if cfunc else ""
+                    main_proto = get_prototype(func)
+                    # Collect callers
+                    callers_ctx = []
+                    caller_addrs = set()
+                    for xref in idautils.CodeRefsTo(func.start_ea, 0):
+                        caller_fn = ida_funcs.get_func(xref)
+                        if caller_fn and caller_fn.start_ea not in caller_addrs:
+                            caller_addrs.add(caller_fn.start_ea)
+                            ccfunc, _ = _decompile_with_diagnostics(caller_fn.start_ea)
+                            if ccfunc:
+                                callers_ctx.append({
+                                    "addr": hex_ea(caller_fn.start_ea),
+                                    "name": ida_funcs.get_func_name(caller_fn.start_ea),
+                                    "pseudocode": str(ccfunc),
+                                })
+                            if len(callers_ctx) >= chain_depth:
+                                break
+                    # Collect callees
+                    callees_ctx = []
+                    callee_addrs = set()
+                    for item in idautils.FuncItems(func.start_ea):
+                        for ref in idautils.CodeRefsFrom(item, 0):
+                            callee_fn = ida_funcs.get_func(ref)
+                            if callee_fn and callee_fn.start_ea not in callee_addrs:
+                                callee_addrs.add(callee_fn.start_ea)
+                                ccfunc, _ = _decompile_with_diagnostics(callee_fn.start_ea)
+                                if ccfunc:
+                                    callees_ctx.append({
+                                        "addr": hex_ea(callee_fn.start_ea),
+                                        "name": ida_funcs.get_func_name(callee_fn.start_ea),
+                                        "pseudocode": str(ccfunc),
+                                    })
+                                if len(callees_ctx) >= chain_depth:
+                                    break
+                        if len(callees_ctx) >= chain_depth:
+                            break
+                    results.append({
+                        "ok": True,
+                        "addr": hex_ea(func.start_ea),
+                        "name": ida_funcs.get_func_name(func.start_ea),
+                        "prototype": main_proto,
+                        "pseudocode": main_pseudo,
+                        "callers_context": callers_ctx,
+                        "callees_context": callees_ctx,
+                        "caller_count": len(caller_addrs),
+                        "callee_count": len(callee_addrs),
+                    })
+                except Exception as e:
+                    results.append({"addr": addr, "error": str(e)})
+
             elif action == "disasm":
                 func = idaapi.get_func(ea)
                 end_ea = None
