@@ -4,10 +4,119 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import time
+from collections import OrderedDict
+
 
 # ============================================================================
-# 9. DEBUG - Debugger operations
+# DEBUG - Debugger operations
 # ============================================================================
+
+# Cache for register snapshots (used by reg_diff)
+_REG_SNAPSHOTS: OrderedDict[str, dict] = OrderedDict()
+_MAX_REG_SNAPSHOTS = 8
+
+
+def _wait_for_suspend(timeout_ms: int = 3000):
+    try:
+        import ida_dbg
+    except Exception:
+        return None
+    wait_fn = getattr(ida_dbg, "wait_for_next_event", None)
+    if not callable(wait_fn):
+        return None
+    mask = getattr(ida_dbg, "WFNE_SUSP", None)
+    if mask is None:
+        mask = getattr(ida_dbg, "WFNE_ANY", 0)
+    try:
+        return wait_fn(mask, timeout_ms)
+    except Exception:
+        return None
+
+
+def _debug_state():
+    try:
+        import ida_dbg
+    except Exception:
+        return False, False, None, None
+    is_on = bool(getattr(ida_dbg, "is_debugger_on", lambda: False)())
+    state = None
+    state_name = None
+    get_state = getattr(ida_dbg, "get_process_state", None)
+    if callable(get_state):
+        try:
+            state = get_state()
+        except Exception:
+            state = None
+    if state is not None:
+        for name in dir(ida_dbg):
+            if not name.startswith("DSTATE_"):
+                continue
+            val = getattr(ida_dbg, name, None)
+            if isinstance(val, int) and val == state:
+                state_name = name
+                break
+    inactive = {
+        getattr(ida_dbg, "DSTATE_NOTASK", None),
+        getattr(ida_dbg, "DSTATE_END", None),
+        getattr(ida_dbg, "DSTATE_PROC_EXIT", None),
+    }
+    inactive.discard(None)
+    active = is_on or (state is not None and state not in inactive)
+    return active, is_on, state, state_name
+
+
+def _debug_active():
+    return _debug_state()[0]
+
+
+def _get_reg_dict(tid=None):
+    """Get registers as a plain dict."""
+    import ida_dbg
+    import ida_idd
+    target_tid = tid if tid is not None else ida_dbg.get_current_thread()
+    dbg = ida_idd.get_dbg()
+    if not dbg:
+        return {}
+    regvals = ida_dbg.get_reg_vals(target_tid)
+    if not regvals:
+        return {}
+    regs = {}
+    for i, rv in enumerate(regvals):
+        if i < dbg.nregs:
+            reg_info = dbg.regs(i)
+            if not reg_info:
+                continue
+            name = reg_info.name
+            try:
+                val = rv.pyval(reg_info.dtype)
+                regs[name] = val if isinstance(val, int) else str(val)
+            except Exception:
+                regs[name] = None
+    return regs
+
+
+def _read_dbg_ptr(ea: int, size: int):
+    """Read a pointer from debugged memory."""
+    import ida_dbg
+    raw = ida_dbg.read_dbg_memory(ea, size)
+    if not raw or len(raw) < size:
+        return None
+    return int.from_bytes(raw[:size], "little")
+
+
+def _get_ptr_size():
+    """Get pointer size for current architecture."""
+    try:
+        if hasattr(idaapi, "get_inf_structure"):
+            return 8 if idaapi.get_inf_structure().is_64bit() else 4
+    except Exception:
+        pass
+    try:
+        return 8 if idaapi.inf_is_64bit() else 4
+    except Exception:
+        return 4
+
 
 @tool
 @unsafe
@@ -15,22 +124,25 @@ except ImportError:
 def debug(
     action: Annotated[Literal[
         "start", "stop", "continue", "step_into", "step_over", "run_to", "run_until",
-        "breakpoints", "add_bp", "del_bp", "enable_bp",
-        "regs", "set_reg", "threads", "modules", "callstack", "read_mem", "write_mem"
+        "breakpoints", "add_bp", "del_bp", "enable_bp", "add_hw_bp", "add_watch",
+        "regs", "set_reg", "reg_diff", "snapshot_regs", "threads", "modules", "callstack",
+        "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map"
     ], "Action"],
-    addr: Annotated[Optional[str], "Address (for run_to/run_until)"] = None,
+    addr: Annotated[Optional[str], "Address (for run_to/run_until/bp/watch)"] = None,
     condition: Annotated[Optional[str], "Python expression for run_until (e.g. 'cpu.rax == 5')"] = None,
-    reg: Annotated[Optional[str], "Register name (for set_reg)"] = None,
+    reg: Annotated[Optional[str], "Register name (for set_reg/reg_diff)"] = None,
     value: Annotated[Optional[Union[str, int]], "Register value (for set_reg)"] = None,
-    size: Annotated[int, "Size for read_mem"] = 16,
-    data: Annotated[Optional[str], "Hex data for write_mem"] = None,
+    size: Annotated[int, "Size for read_mem/stack_dump"] = 16,
+    data: Annotated[Optional[str], "Hex data for write_mem or pattern for search_mem"] = None,
     enabled: Annotated[bool, "Enable/disable for enable_bp"] = True,
     tid: Annotated[Optional[int], "Thread ID for regs/threads"] = None,
+    snapshot_name: Annotated[Optional[str], "Name for register snapshot (for snapshot_regs/reg_diff)"] = None,
+    access_type: Annotated[Literal["read", "write", "rw", "execute"], "Watchpoint access type (for add_watch)"] = "write",
     **kwargs
 ) -> dict:
     """
-    Debugger control: process state, breakpoints, registers, memory.
-    
+    Debugger control: process state, breakpoints, watchpoints, registers, memory.
+
     Actions:
     - start: Launch the debugger/process.
     - stop: Terminate the process.
@@ -41,60 +153,24 @@ def debug(
     - breakpoints: List current breakpoints.
     - add_bp/del_bp: Add or remove software breakpoints.
     - enable_bp: Enable/disable an existing breakpoint.
+    - add_hw_bp: Add a hardware breakpoint at `addr`.
+    - add_watch: Add a memory watchpoint at `addr` with `access_type`.
     - regs: Get current register values.
     - set_reg: Set a register value (requires active debugger).
+    - snapshot_regs: Save current register state with a name.
+    - reg_diff: Compare current registers to a named snapshot.
     - threads: List all process threads.
     - modules: List all loaded modules.
     - callstack: Get the current thread's call stack.
     - read_mem/write_mem: Read/write memory in the debugged process.
+    - search_mem: Search for a byte pattern in debugged memory.
+    - stack_dump: Dump the current stack (RSP/ESP-based).
+    - mem_map: Show memory map of the debugged process.
     """
     try:
         import ida_dbg
         import ida_idd
-        import time
 
-        def _wait_for_suspend(timeout_ms: int = 3000):
-            wait_fn = getattr(ida_dbg, "wait_for_next_event", None)
-            if not callable(wait_fn):
-                return None
-            mask = getattr(ida_dbg, "WFNE_SUSP", None)
-            if mask is None:
-                mask = getattr(ida_dbg, "WFNE_ANY", 0)
-            try:
-                return wait_fn(mask, timeout_ms)
-            except Exception:
-                return None
-
-        def _debug_state():
-            is_on = bool(getattr(ida_dbg, "is_debugger_on", lambda: False)())
-            state = None
-            state_name = None
-            get_state = getattr(ida_dbg, "get_process_state", None)
-            if callable(get_state):
-                try:
-                    state = get_state()
-                except Exception:
-                    state = None
-            if state is not None:
-                for name in dir(ida_dbg):
-                    if not name.startswith("DSTATE_"):
-                        continue
-                    val = getattr(ida_dbg, name, None)
-                    if isinstance(val, int) and val == state:
-                        state_name = name
-                        break
-            inactive = {
-                getattr(ida_dbg, "DSTATE_NOTASK", None),
-                getattr(ida_dbg, "DSTATE_END", None),
-                getattr(ida_dbg, "DSTATE_PROC_EXIT", None),
-            }
-            inactive.discard(None)
-            active = is_on or (state is not None and state not in inactive)
-            return active, is_on, state, state_name
-
-        def _debug_active():
-            return _debug_state()[0]
-        
         if action == "start":
             started = bool(ida_dbg.start_process())
             if not started and _debug_active():
@@ -140,76 +216,80 @@ def debug(
                 "state": state,
                 "state_name": state_name,
             }
-        
+
         elif action == "stop":
-            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.exit_process()
             return {"ok": True}
-        
+
         elif action == "continue":
-            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.continue_process()
             return {"ok": True}
-        
+
         elif action == "step_into":
-            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.step_into()
             return {"ok": True}
-        
+
         elif action == "step_over":
-            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not _debug_active():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ida_dbg.step_over()
             return {"ok": True}
-        
+
         elif action == "run_to":
-            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
-            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            if not _debug_active():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
             ea, err = validate_addr(addr)
-            if err: return err
+            if err:
+                return err
             ida_dbg.run_to(ea)
             return {"ok": True, "addr": hex(ea)}
 
         elif action == "run_until":
-            # Autopilot debugging loop
-            if not _debug_active(): return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
-            
+            if not _debug_active():
+                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+
             target_ea = None
             if addr:
                 target_ea, err = validate_addr(addr)
-                if err: return err
+                if err:
+                    return err
 
-            # We limit steps to prevent infinite loops (e.g. 500 steps max per call)
             max_steps = 500
             steps = 0
-            
-            # Simple wrapper to eval python expression with access to ida_dbg
+
+            class CPU:
+                def __getattr__(self, name):
+                    return ida_dbg.get_reg_val(name)
+
             def check_condition(expr):
-                # Expose a simple 'cpu' object for registers
-                class CPU:
-                    def __getattr__(self, name):
-                        return ida_dbg.get_reg_val(name)
                 return eval(expr, {"cpu": CPU(), "ida_dbg": ida_dbg, "idc": idc})
 
             while steps < max_steps:
                 ida_dbg.step_over()
-                ida_dbg.wait_for_next_event(ida_dbg.WFNE_SUSP, -1) # Wait until step finishes
+                ida_dbg.wait_for_next_event(ida_dbg.WFNE_SUSP, -1)
                 steps += 1
-                
-                # Check Address
+
                 curr_ea = ida_dbg.get_ip_val()
                 if target_ea and curr_ea == target_ea:
                     return {"ok": True, "reason": "address_reached", "addr": hex(curr_ea), "steps": steps}
-                
-                # Check Condition
+
                 if condition:
                     try:
                         if check_condition(condition):
                             return {"ok": True, "reason": "condition_met", "addr": hex(curr_ea), "steps": steps}
                     except Exception as e:
                         return make_error(MCPError.IDA_ERROR, f"Condition error: {e}")
-            
+
             return {"ok": True, "reason": "step_limit_reached", "addr": hex(ida_dbg.get_ip_val()), "steps": steps}
-        
+
         elif action == "breakpoints":
             bps = []
             for i in range(ida_dbg.get_bpt_qty()):
@@ -217,36 +297,74 @@ def debug(
                 if ida_dbg.getn_bpt(i, bpt):
                     bps.append({"addr": hex(bpt.ea), "enabled": bpt.is_enabled(), "type": bpt.type})
             return {"ok": True, "breakpoints": bps}
-        
+
         elif action == "add_bp":
-            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_code=True)
-            if err: return err
-            if ida_dbg.add_bpt(ea, 0, 0): return {"ok": True, "addr": hex(ea)}
+            if err:
+                return err
+            if ida_dbg.add_bpt(ea, 0, 0):
+                return {"ok": True, "addr": hex(ea)}
             return make_error(MCPError.IDA_ERROR, "Failed to add breakpoint")
-        
+
         elif action == "del_bp":
-            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
-            if err: return err
-            if ida_dbg.del_bpt(ea): return {"ok": True, "addr": hex(ea)}
+            if err:
+                return err
+            if ida_dbg.del_bpt(ea):
+                return {"ok": True, "addr": hex(ea)}
             return make_error(MCPError.IDA_ERROR, "Failed to delete breakpoint")
-        
+
         elif action == "enable_bp":
-            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
-            if err: return err
-            if ida_dbg.enable_bpt(ea, enabled): return {"ok": True, "addr": hex(ea), "enabled": enabled}
+            if err:
+                return err
+            if ida_dbg.enable_bpt(ea, enabled):
+                return {"ok": True, "addr": hex(ea), "enabled": enabled}
             return make_error(MCPError.IDA_ERROR, "Failed to enable/disable breakpoint")
-        
+
+        elif action == "add_hw_bp":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_code=True)
+            if err:
+                return err
+            # Hardware breakpoint type 1 = execute
+            hw_type = kwargs.get("hw_type", 1)
+            hw_size = kwargs.get("hw_size", 0)
+            if ida_dbg.add_bpt(ea, hw_size, hw_type):
+                return {"ok": True, "addr": hex(ea), "type": "hardware", "hw_type": hw_type}
+            return make_error(MCPError.IDA_ERROR, "Failed to add hardware breakpoint")
+
+        elif action == "add_watch":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            watch_size = kwargs.get("watch_size", 4)
+            # Map access_type to IDA hw breakpoint type
+            type_map = {"read": 2, "write": 3, "rw": 4, "execute": 1}
+            hw_type = type_map.get(access_type, 3)
+            if ida_dbg.add_bpt(ea, watch_size, hw_type):
+                return {"ok": True, "addr": hex(ea), "type": "watchpoint", "access": access_type, "size": watch_size}
+            return make_error(MCPError.IDA_ERROR, "Failed to add watchpoint")
+
         elif action == "regs":
             if not _debug_active():
                 _wait_for_suspend(1200)
             err = check_debugger(require_active=True)
-            if err: return err
+            if err:
+                return err
             target_tid = tid if tid is not None else ida_dbg.get_current_thread()
             dbg = ida_idd.get_dbg()
-            if not dbg: return make_error(MCPError.IDA_ERROR, "No debugger info")
+            if not dbg:
+                return make_error(MCPError.IDA_ERROR, "No debugger info")
             regvals = ida_dbg.get_reg_vals(target_tid)
             if not regvals:
                 _wait_for_suspend(1200)
@@ -259,29 +377,74 @@ def debug(
                 )
             regs = {}
             for i, rv in enumerate(regvals):
-                 if i < dbg.nregs:
-                     reg_info = dbg.regs(i)
-                     if not reg_info: continue
-                     name = reg_info.name
-                     try:
-                         val = rv.pyval(reg_info.dtype)
-                         regs[name] = hex(val) if isinstance(val, int) else str(val)
-                     except Exception: regs[name] = "?"
+                if i < dbg.nregs:
+                    reg_info = dbg.regs(i)
+                    if not reg_info:
+                        continue
+                    name = reg_info.name
+                    try:
+                        val = rv.pyval(reg_info.dtype)
+                        regs[name] = hex(val) if isinstance(val, int) else str(val)
+                    except Exception:
+                        regs[name] = "?"
             return {"ok": True, "registers": regs, "tid": target_tid}
 
         elif action == "set_reg":
-            if not reg or value is None: return make_error(MCPError.INVALID_ARGS, "reg and value required")
+            if not reg or value is None:
+                return make_error(MCPError.INVALID_ARGS, "reg and value required")
             err = check_debugger(require_active=True)
-            if err: return err
-            
+            if err:
+                return err
             val = int(str(value), 0) if isinstance(value, str) else value
             if ida_dbg.set_reg_val(reg, val):
                 return {"ok": True, "reg": reg, "value": hex(val)}
             return make_error(MCPError.IDA_ERROR, f"Failed to set register {reg}")
 
+        elif action == "snapshot_regs":
+            err = check_debugger(require_active=True)
+            if err:
+                return err
+            name = snapshot_name or f"snap_{int(time.time())}"
+            regs = _get_reg_dict(tid)
+            global _REG_SNAPSHOTS
+            _REG_SNAPSHOTS[name] = {
+                "regs": regs,
+                "timestamp": time.time(),
+                "tid": tid or ida_dbg.get_current_thread(),
+            }
+            while len(_REG_SNAPSHOTS) > _MAX_REG_SNAPSHOTS:
+                _REG_SNAPSHOTS.popitem(last=False)
+            return {"ok": True, "snapshot_name": name, "reg_count": len(regs)}
+
+        elif action == "reg_diff":
+            err = check_debugger(require_active=True)
+            if err:
+                return err
+            if not snapshot_name:
+                return make_error(MCPError.INVALID_ARGS, "snapshot_name required for reg_diff")
+            global _REG_SNAPSHOTS
+            old = _REG_SNAPSHOTS.get(snapshot_name)
+            if not old:
+                available = list(_REG_SNAPSHOTS.keys())
+                return make_error(
+                    MCPError.NOT_FOUND,
+                    f"Snapshot '{snapshot_name}' not found",
+                    hint=f"Available snapshots: {available}",
+                )
+            current = _get_reg_dict(tid)
+            diffs = {}
+            for reg_name in set(current.keys()) | set(old["regs"].keys()):
+                old_val = old["regs"].get(reg_name)
+                new_val = current.get(reg_name)
+                if old_val != new_val:
+                    diffs[reg_name] = {"old": hex(old_val) if isinstance(old_val, int) else old_val,
+                                       "new": hex(new_val) if isinstance(new_val, int) else new_val}
+            return {"ok": True, "snapshot": snapshot_name, "diffs": diffs, "changed_count": len(diffs)}
+
         elif action == "threads":
             err = check_debugger(require_active=True)
-            if err: return err
+            if err:
+                return err
             threads = []
             for i in range(ida_dbg.get_thread_qty()):
                 tid_val = ida_dbg.getn_thread(i)
@@ -291,27 +454,30 @@ def debug(
 
         elif action == "modules":
             err = check_debugger(require_active=True)
-            if err: return err
+            if err:
+                return err
             modules = []
             mod = ida_idd.modinfo_t()
             if ida_dbg.get_first_module(mod):
                 while True:
                     modules.append({"name": mod.name, "base": hex(mod.base), "size": hex(mod.size)})
-                    if not ida_dbg.get_next_module(mod): break
+                    if not ida_dbg.get_next_module(mod):
+                        break
             return {"ok": True, "modules": modules}
-        
+
         elif action == "callstack":
             err = check_debugger(require_active=True)
-            if err: return err
-            if hasattr(ida_dbg, 'collect_stack_trace'):
+            if err:
+                return err
+            if hasattr(ida_dbg, "collect_stack_trace"):
                 stack = []
                 frames = ida_dbg.collect_stack_trace(ida_dbg.get_current_thread())
                 if frames:
                     for frame in frames:
                         stack.append({"addr": hex(frame.ea), "func": idc.get_name(frame.ea) or ""})
                 return {"ok": True, "callstack": stack}
-            # Fallback frame-walk for runtimes without collect_stack_trace().
-            ptr_size = 8 if (hasattr(idaapi, "get_inf_structure") and idaapi.get_inf_structure().is_64bit()) else 4
+            # Fallback frame-walk
+            ptr_size = _get_ptr_size()
             fp_names = ["RBP", "EBP", "X29", "FP"]
             fp_val = None
             fp_name = None
@@ -336,12 +502,6 @@ def debug(
             if fp_val is None:
                 return {"ok": True, "callstack": stack, "note": "Frame-pointer fallback unavailable (no frame register)."}
 
-            def _read_ptr(ea: int):
-                raw = ida_dbg.read_dbg_memory(ea, ptr_size)
-                if not raw or len(raw) < ptr_size:
-                    return None
-                return int.from_bytes(raw[:ptr_size], "little")
-
             visited_fp = set()
             cur_fp = int(fp_val)
             max_frames = 64
@@ -349,8 +509,8 @@ def debug(
                 if cur_fp in visited_fp or cur_fp == 0:
                     break
                 visited_fp.add(cur_fp)
-                next_fp = _read_ptr(cur_fp)
-                ret_ea = _read_ptr(cur_fp + ptr_size)
+                next_fp = _read_dbg_ptr(cur_fp, ptr_size)
+                ret_ea = _read_dbg_ptr(cur_fp + ptr_size, ptr_size)
                 if not isinstance(ret_ea, int) or ret_ea == 0 or ret_ea == idaapi.BADADDR:
                     break
                 stack.append(
@@ -370,34 +530,127 @@ def debug(
                 "mode": "frame_pointer_fallback",
                 "frame_register": fp_name,
             }
-        
+
         elif action == "read_mem":
             err = check_debugger(require_active=True)
-            if err: return err
-            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            if err:
+                return err
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
-            if err: return err
-            data = ida_dbg.read_dbg_memory(ea, size)
-            if data: return {"ok": True, "addr": hex(ea), "data": " ".join(f"{b:02x}" for b in data)}
+            if err:
+                return err
+            mem_data = ida_dbg.read_dbg_memory(ea, size)
+            if mem_data:
+                return {"ok": True, "addr": hex(ea), "data": " ".join(f"{b:02x}" for b in mem_data)}
             return make_error(MCPError.IDA_ERROR, "Failed to read memory")
-        
+
         elif action == "write_mem":
             err = check_debugger(require_active=True)
-            if err: return err
-            if not addr or not data: return make_error(MCPError.INVALID_ARGS, "addr and data required")
+            if err:
+                return err
+            if not addr or not data:
+                return make_error(MCPError.INVALID_ARGS, "addr and data required")
             ea, err = validate_addr(addr)
-            if err: return err
-            try: bytes_data = bytes.fromhex(data.replace(" ", ""))
-            except Exception: return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
-            if ida_dbg.write_dbg_memory(ea, bytes_data): return {"ok": True, "addr": hex(ea), "size": len(bytes_data)}
+            if err:
+                return err
+            try:
+                bytes_data = bytes.fromhex(data.replace(" ", ""))
+            except Exception:
+                return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
+            if ida_dbg.write_dbg_memory(ea, bytes_data):
+                return {"ok": True, "addr": hex(ea), "size": len(bytes_data)}
             return make_error(MCPError.IDA_ERROR, "Failed to write memory")
-        
+
+        elif action == "search_mem":
+            err = check_debugger(require_active=True)
+            if err:
+                return err
+            if not addr or not data:
+                return make_error(MCPError.INVALID_ARGS, "addr and data (pattern) required")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            search_size = kwargs.get("search_size", 0x10000)
+            try:
+                pattern = bytes.fromhex(data.replace(" ", ""))
+            except ValueError:
+                pattern = data.encode("utf-8", errors="replace")
+            mem_data = ida_dbg.read_dbg_memory(ea, search_size)
+            if not mem_data:
+                return make_error(MCPError.IDA_ERROR, "Failed to read memory for search")
+            hits = []
+            idx = mem_data.find(pattern)
+            while idx != -1:
+                hits.append(hex(ea + idx))
+                if len(hits) >= 100:
+                    break
+                idx = mem_data.find(pattern, idx + 1)
+            return {"ok": True, "pattern": data, "hits": hits, "count": len(hits), "region": f"{hex(ea)}-{hex(ea + search_size)}"}
+
+        elif action == "stack_dump":
+            err = check_debugger(require_active=True)
+            if err:
+                return err
+            ptr_size = _get_ptr_size()
+            sp_names = ["RSP", "ESP", "XSP", "SP"]
+            sp_val = None
+            sp_name = None
+            for candidate in sp_names:
+                try:
+                    reg_v = ida_dbg.get_reg_val(candidate)
+                except Exception:
+                    reg_v = None
+                if isinstance(reg_v, int) and reg_v != 0:
+                    sp_val = reg_v
+                    sp_name = candidate
+                    break
+            if sp_val is None:
+                return make_error(MCPError.IDA_ERROR, "Could not find stack pointer register")
+            dump = []
+            for offset in range(0, size * ptr_size, ptr_size):
+                ptr = _read_dbg_ptr(sp_val + offset, ptr_size)
+                if ptr is not None:
+                    name = idc.get_name(ptr) or ""
+                    dump.append(f"{hex(sp_val + offset)}  {hex(ptr)}  {name}")
+                else:
+                    dump.append(f"{hex(sp_val + offset)}  ???")
+            return {"ok": True, "sp_register": sp_name, "sp": hex(sp_val), "dump": dump}
+
+        elif action == "mem_map":
+            err = check_debugger(require_active=True)
+            if err:
+                return err
+            regions = []
+            try:
+                # Try to use ida_dbg.get_memory_info if available
+                get_mem_info = getattr(ida_dbg, "get_memory_info", None)
+                if callable(get_mem_info):
+                    info = get_mem_info()
+                    for r in info:
+                        regions.append({
+                            "start": hex(r.start_ea) if hasattr(r, "start_ea") else hex(r[0]),
+                            "end": hex(r.end_ea) if hasattr(r, "end_ea") else hex(r[1]),
+                            "name": r.name if hasattr(r, "name") else "",
+                            "perms": f"{'r' if r.perm & 1 else '-'}{'w' if r.perm & 2 else '-'}{'x' if r.perm & 4 else '-'}" if hasattr(r, "perm") else "???",
+                        })
+            except Exception:
+                pass
+            if not regions:
+                # Fallback: use segments
+                for seg_ea in idautils.Segments():
+                    seg = idaapi.getseg(seg_ea)
+                    if seg:
+                        perms = f"{'r' if seg.perm & idaapi.SEGPERM_READ else '-'}{'w' if seg.perm & idaapi.SEGPERM_WRITE else '-'}{'x' if seg.perm & idaapi.SEGPERM_EXEC else '-'}"
+                        regions.append({
+                            "start": hex(seg.start_ea),
+                            "end": hex(seg.end_ea),
+                            "name": ida_segment.get_segm_name(seg),
+                            "perms": perms,
+                        })
+            return {"ok": True, "regions": regions, "count": len(regions)}
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
-
-
-# ============================================================================
-# 10. FUNCS - Function management
-# ============================================================================
