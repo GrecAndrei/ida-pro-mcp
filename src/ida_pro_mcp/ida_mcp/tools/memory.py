@@ -48,11 +48,25 @@ def _extract_strings(data, min_len=4):
     return strings
 
 
+def _is_be():
+    try:
+        if hasattr(ida_ida, "inf_is_be"):
+            return ida_ida.inf_is_be()
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure()
+        return inf.is_be() if hasattr(inf, "is_be") else False
+    except Exception:
+        return False
+
+
 def _find_pointers(data, start_ea):
     """Find all valid pointers in a byte sequence."""
     is_64 = idaapi.inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
     ptr_size = 8 if is_64 else 4
-    fmt = "<Q" if is_64 else "<I"
+    endian = ">" if _is_be() else "<"
+    fmt = f"{endian}Q" if is_64 else f"{endian}I"
     import struct
     pointers = []
     for i in range(0, len(data) - ptr_size + 1, ptr_size):
@@ -154,9 +168,12 @@ def memory(
             elif type == "string":
                 s = idc.get_strlit_contents(ea, -1, 0)
                 if s:
-                    if len(s) > 65536:
-                        s = s[:65536]
-                    value = s.decode("utf-8", errors="replace")
+                    if isinstance(s, bytes):
+                        if len(s) > 65536:
+                            s = s[:65536]
+                        value = s.decode("utf-8", errors="replace")
+                    else:
+                        value = s[:65536] if len(s) > 65536 else s
                 else:
                     value = None
             else:
@@ -178,7 +195,13 @@ def memory(
             except ValueError:
                 return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
             ida_bytes.patch_bytes(ea, bytes_data)
-            return {"ok": True, "addr": addr, "size": len(bytes_data), "data": data}
+            return {
+                "ok": True,
+                "addr": addr,
+                "size": len(bytes_data),
+                "data": data,
+                "note": "This patched the IDA database, not live process memory. Use debug(action='write_mem') for debugger memory writes.",
+            }
 
         elif action == "hexdump":
             if size > MAX_HEXDUMP_SIZE:
@@ -282,7 +305,8 @@ def memory(
         elif action == "struct_walk":
             is_64 = idaapi.inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
             ptr_size = 8 if is_64 else 4
-            fmt = "<Q" if is_64 else "<I"
+            endian = ">" if _is_be() else "<"
+            fmt = f"{endian}Q" if is_64 else f"{endian}I"
             import struct
             visited = set()
             nodes = []
