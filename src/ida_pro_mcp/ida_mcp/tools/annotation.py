@@ -9,137 +9,20 @@ except ImportError:
 # ANNOTATION - Intelligent Bulk Annotation for LLMs
 # ============================================================================
 
-# Dangerous APIs that warrant warning comments
-_DANGEROUS_APIS = {
-    "strcpy": "unbounded copy - use strncpy/strlcpy",
-    "strcat": "unbounded concat - use strncat/strlcat",
-    "sprintf": "unbounded format - use snprintf",
-    "gets": "no bounds checking - use fgets",
-    "scanf": "no bounds checking - use fgets+sscanf",
-    "vsprintf": "unbounded format - use vsnprintf",
-    "wcscpy": "unbounded wide copy - use wcsncpy",
-    "wcscat": "unbounded wide concat - use wcsncat",
-    "lstrcpy": "unbounded copy - use StringCchCopy",
-    "lstrcpyA": "unbounded copy - use StringCchCopyA",
-    "lstrcpyW": "unbounded copy - use StringCchCopyW",
-    "lstrcat": "unbounded concat - use StringCchCat",
-    "lstrcatA": "unbounded concat - use StringCchCatA",
-    "lstrcatW": "unbounded concat - use StringCchCatW",
-    "memcpy": "verify size parameter - potential overflow",
-    "memmove": "verify size parameter - potential overflow",
-    "RtlCopyMemory": "verify size parameter - potential overflow",
-    "VirtualAlloc": "check for RWX permissions (PAGE_EXECUTE_READWRITE)",
-    "VirtualProtect": "check for RWX permissions - code injection indicator",
-    "CreateRemoteThread": "remote thread creation - injection technique",
-    "WriteProcessMemory": "remote memory write - injection technique",
-    "NtWriteVirtualMemory": "remote memory write - injection technique",
-    "ShellExecute": "command execution - check for user-controlled input",
-    "ShellExecuteA": "command execution - check for user-controlled input",
-    "ShellExecuteW": "command execution - check for user-controlled input",
-    "WinExec": "command execution - check for user-controlled input",
-    "system": "shell command execution - check for injection",
-    "popen": "shell command execution - check for injection",
-    "exec": "process execution - check for injection",
-    "execl": "process execution - check for injection",
-    "execv": "process execution - check for injection",
-    "execve": "process execution - check for injection",
-    "LoadLibrary": "dynamic library loading - check source",
-    "LoadLibraryA": "dynamic library loading - check source",
-    "LoadLibraryW": "dynamic library loading - check source",
-    "GetProcAddress": "dynamic API resolution - evasion technique",
-    "URLDownloadToFile": "file download - check URL source",
-    "URLDownloadToFileA": "file download - check URL source",
-    "InternetReadFile": "network read - validate buffer size",
-    "RegSetValueEx": "registry modification - persistence indicator",
-    "RegSetValueExA": "registry modification - persistence indicator",
-    "RegSetValueExW": "registry modification - persistence indicator",
-    "SetWindowsHookEx": "global hook - keylogger/injection indicator",
-    "SetWindowsHookExA": "global hook - keylogger/injection indicator",
-    "SetWindowsHookExW": "global hook - keylogger/injection indicator",
-    "NtCreateThreadEx": "thread creation - injection technique",
-    "RtlCreateUserThread": "thread creation - injection technique",
-    "AdjustTokenPrivileges": "privilege escalation",
-    "ImpersonateLoggedOnUser": "privilege escalation via impersonation",
-}
-
-# Well-known magic constants
-_MAGIC_CONSTANTS = {
-    0x5A4D: "IMAGE_DOS_SIGNATURE ('MZ')",
-    0x4550: "IMAGE_NT_SIGNATURE ('PE')",
-    0x014C: "IMAGE_FILE_MACHINE_I386",
-    0x8664: "IMAGE_FILE_MACHINE_AMD64",
-    0xAA64: "IMAGE_FILE_MACHINE_ARM64",
-    0xFEEDFACE: "MH_MAGIC (Mach-O 32-bit)",
-    0xFEEDFACF: "MH_MAGIC_64 (Mach-O 64-bit)",
-    0x464C457F: "ELF_MAGIC",
-    0xDEADBEEF: "common debug marker",
-    0xCAFEBABE: "Java class / universal binary magic",
-    0xD00DFEED: "device tree blob magic",
-    0x80000000: "GENERIC_READ / sign bit",
-    0x40000000: "GENERIC_WRITE",
-    0x20000000: "GENERIC_EXECUTE",
-    0x10000000: "GENERIC_ALL",
-    0xC0000000: "GENERIC_READ | GENERIC_WRITE",
-    0x00000001: "FILE_SHARE_READ / TRUE",
-    0x00000002: "FILE_SHARE_WRITE",
-    0x00000003: "OPEN_EXISTING",
-    0x00000004: "OPEN_ALWAYS / FILE_SHARE_DELETE",
-    0x00000005: "TRUNCATE_EXISTING",
-    0x00000040: "PAGE_EXECUTE_READWRITE",
-    0x00000080: "FILE_ATTRIBUTE_NORMAL",
-    0x00001000: "MEM_COMMIT / PAGE_SIZE",
-    0x00002000: "MEM_RESERVE",
-    0x00004000: "MEM_DECOMMIT",
-    0x00008000: "MEM_RELEASE",
-    0xFFFFFFFF: "INVALID_HANDLE_VALUE (-1)",
-    0x0200: "WM_CHAR",
-    0x0100: "WM_KEYDOWN",
-    0x0101: "WM_KEYUP",
-    0x000F: "WM_PAINT",
-    0x0010: "WM_CLOSE",
-    0x0002: "WM_DESTROY",
-    0x0012: "WM_QUIT",
-    0x0111: "WM_COMMAND",
-    0x0400: "WM_USER",
-    0x8000: "MEM_RELEASE / INTERNET_FLAG_RELOAD",
-    0x1F0FFF: "PROCESS_ALL_ACCESS",
-    0x001F03FF: "THREAD_ALL_ACCESS",
-}
-
-# Function tag categories based on API patterns
-_TAG_CATEGORIES = {
-    "crypto": ["CryptAcquireContext", "CryptCreateHash", "CryptEncrypt", "CryptDecrypt",
-               "BCryptOpenAlgorithmProvider", "BCryptEncrypt", "BCryptDecrypt",
-               "EVP_EncryptInit", "EVP_DecryptInit", "AES_encrypt", "AES_decrypt",
-               "SHA256", "SHA1", "MD5_Init", "HMAC"],
-    "network": ["socket", "connect", "send", "recv", "bind", "listen", "accept",
-                "WSAStartup", "InternetOpen", "HttpOpenRequest", "HttpSendRequest",
-                "WinHttpOpen", "curl_easy_init", "getaddrinfo", "gethostbyname"],
-    "file_io": ["CreateFile", "ReadFile", "WriteFile", "DeleteFile", "CopyFile",
-                "fopen", "fread", "fwrite", "open", "read", "write", "stat"],
-    "process": ["CreateProcess", "OpenProcess", "CreateThread", "CreateRemoteThread",
-                "fork", "exec", "system", "ShellExecute", "TerminateProcess"],
-    "registry": ["RegOpenKey", "RegOpenKeyEx", "RegSetValueEx", "RegQueryValueEx",
-                 "RegCreateKeyEx", "RegDeleteKey", "RegDeleteValue"],
-    "memory": ["VirtualAlloc", "VirtualProtect", "HeapAlloc", "malloc", "calloc",
-               "mmap", "mprotect", "VirtualFree", "HeapFree"],
-    "string_ops": ["strcpy", "strcat", "strlen", "strcmp", "sprintf", "strstr",
-                   "wcslen", "wcscpy", "MultiByteToWideChar", "WideCharToMultiByte"],
-    "ui": ["CreateWindow", "MessageBox", "ShowWindow", "DialogBox", "SendMessage",
-           "GetMessage", "DispatchMessage"],
-    "anti_debug": ["IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-                   "NtQueryInformationProcess", "OutputDebugString"],
-    "persistence": ["RegSetValueEx", "CreateService", "RegCreateKeyEx",
-                    "SetWindowsHookEx", "schtasks"],
-    "evasion": ["GetProcAddress", "LoadLibrary", "VirtualProtect",
-                "NtUnmapViewOfSection", "NtWriteVirtualMemory"],
-}
-
-# Build reverse lookup
-_API_TO_TAG = {}
-for _tag, _apis in _TAG_CATEGORIES.items():
-    for _api in _apis:
-        _API_TO_TAG.setdefault(_api.lower(), []).append(_tag)
+try:
+    from ._api_categories import (
+        DANGEROUS_APIS as _DANGEROUS_APIS,
+        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
+        TAG_CATEGORIES as _TAG_CATEGORIES,
+        API_TO_TAG as _API_TO_TAG,
+    )
+except ImportError:
+    from _api_categories import (
+        DANGEROUS_APIS as _DANGEROUS_APIS,
+        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
+        TAG_CATEGORIES as _TAG_CATEGORIES,
+        API_TO_TAG as _API_TO_TAG,
+    )  # type: ignore[import-not-found]
 
 
 def _get_func_callees_with_addr(func_ea):
@@ -182,13 +65,70 @@ def _strip_api_suffix(name):
     return name
 
 
+# ============================================================================
+# VOERA: Neuro-Symbolic Governance Layer for Annotations
+# ============================================================================
+
+def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_type: str) -> dict:
+    """Deterministic symbolic rule-check before annotation commit.
+    
+    Returns {"approved": bool, "violations": list[str], "redacted_comment": str}
+    """
+    violations = []
+    redacted = proposed_comment
+    
+    # Rule 1: Prevent contradictions (claiming "safe" when dangerous APIs present)
+    lower = proposed_comment.lower()
+    if any(kw in lower for kw in ("safe", "secure", "harmless", "no risk")):
+        fn = ida_funcs.get_func(addr)
+        if fn:
+            for head in idautils.Heads(fn.start_ea, fn.end_ea):
+                for xref in idautils.CodeRefsFrom(head, 0):
+                    callee = idc.get_func_name(xref) or ""
+                    if callee in _DANGEROUS_APIS:
+                        violations.append(f"Claimed safe but calls dangerous API: {callee}")
+                        break
+                if violations:
+                    break
+    
+    # Rule 2: Prevent misleading renames (calling something "main" when it lacks main signature)
+    if action_type == "rename_suggestion":
+        if "main" in lower:
+            # Simple heuristic: main should have argc/argv or no args
+            tif = ida_typeinf.tinfo_t()
+            if ida_nalt.get_tinfo(tif, addr):
+                fi = idaapi.func_type_data_t()
+                if tif.get_func_details(fi):
+                    argc = fi.size()
+                    if argc > 3:
+                        violations.append("Suggested 'main' but function has >3 arguments")
+    
+    # Rule 3: Redact potential PII/sensitive data patterns from comments
+    pii_patterns = [
+        (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), "SSN"),
+        (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), "email"),
+        (re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'), "IP address"),
+        (re.compile(r'\b[a-f0-9]{32,64}\b'), "hash/secret"),
+    ]
+    for pattern, pii_type in pii_patterns:
+        if pattern.search(redacted):
+            redacted = pattern.sub(f"[{pii_type}_REDACTED]", redacted)
+            violations.append(f"PII detected and redacted: {pii_type}")
+    
+    return {
+        "approved": len(violations) == 0,
+        "violations": violations,
+        "redacted_comment": redacted,
+    }
+
+
 @tool
 @idawrite
 def annotation(
     action: Annotated[Literal["auto_comment", "label_loops", "label_branches",
                                "mark_dangerous", "annotate_constants",
                                "tag_functions", "document_args",
-                               "mark_error_paths", "propagate_names", "cleanup"],
+                               "mark_error_paths", "propagate_names", "cleanup", "validate"],
                       "Annotation action"],
     addr: Annotated[Optional[str], "Function address to annotate"] = None,
     limit: Annotated[int, "Max annotations to add"] = 100,
@@ -243,6 +183,11 @@ def annotation(
     cleanup - Remove auto-generated annotations by prefix marker.
         Params: addr (optional, all functions if omitted), prefix, dry_run
         Returns: {removed, count}
+
+    validate - Neuro-symbolic governance check for a proposed annotation.
+        Params: addr (required), value (proposed comment text)
+        Returns: {approved, violations, redacted_comment}
+        Use before committing annotations to catch contradictions, PII, and misleading claims.
     """
     try:
         # ----------------------------------------------------------------
@@ -767,6 +712,29 @@ def annotation(
 
             return {"ok": True, "removed": "\n".join(str(x) for x in removed),
                     "count": len(removed), "dry_run": dry_run}
+
+        # ----------------------------------------------------------------
+        # ACTION: validate (Neuro-Symbolic Governance)
+        # ----------------------------------------------------------------
+        elif action == "validate":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for validate")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            proposed = kwargs.get("value", "")
+            if not proposed:
+                return make_error(MCPError.INVALID_ARGS, "value (proposed comment) required for validate")
+            
+            result = _governance_check_proposed_comment(ea, proposed, "comment")
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "approved": result["approved"],
+                "violations": result["violations"],
+                "redacted_comment": result["redacted_comment"],
+                "original_comment": proposed,
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

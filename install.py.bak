@@ -624,23 +624,11 @@ def setup_virtualenv(install_path: Path):
         return False
 
 
-def _load_client_configs():
-    """Load MCP client configuration paths from JSON data file."""
-    script_dir = Path(__file__).parent.resolve()
-    data_path = script_dir / "client_configs.json"
-    if not data_path.exists():
-        # Fallback: look next to the script
-        data_path = Path(os.path.dirname(os.path.abspath(__file__))) / "client_configs.json"
-    with open(data_path, "r", encoding="utf-8") as f:
-        return json.load(f)["clients"]
-
-
 def get_mcp_config_paths():
     """Get all known MCP client config file paths"""
     home = Path.home()
     appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
     xdg_config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
-    is_windows = os.name == "nt"
 
     def pick_path(candidates):
         """Prefer an existing candidate, otherwise use the first as default."""
@@ -649,41 +637,93 @@ def get_mcp_config_paths():
                 return c
         return candidates[0]
 
-    def resolve(path_template: str):
-        return Path(path_template.replace("{home}", str(home)).replace("{appdata}", str(appdata)).replace("{xdg_config}", str(xdg_config)))
+    opencode_override = os.environ.get("OPENCODE_CONFIG")
+    opencode_override_path = (
+        Path(opencode_override).expanduser() if opencode_override else None
+    )
 
-    raw = _load_client_configs()
-    configs = {}
-    for name, meta in raw.items():
-        paths = meta.get("paths", [])
-        pick_existing = meta.get("pick_existing", False)
-        env_override = meta.get("env_override")
-        env_fallback = meta.get("env_fallback")
+    copilot_path = (
+        xdg_config / "copilot" / "mcp-config.json"
+        if "XDG_CONFIG_HOME" in os.environ
+        else home / ".copilot" / "mcp-config.json"
+    )
+    opencode_path = opencode_override_path or (
+        xdg_config / "opencode" / "opencode.json"
+    )
 
-        if env_override:
-            override = os.environ.get(env_override)
-            if override:
-                configs[name] = Path(override).expanduser()
-                continue
+    configs = {
+        # --- Priority Clients ---
+        "Gemini CLI": pick_path([home / ".gemini" / "settings.json"]),
+        "Antigravity": pick_path(
+            [home / ".gemini" / "antigravity" / "mcp_config.json"]
+        ),
+        "Claude Code": pick_path([home / ".claude.json"]),
+        "Codex": pick_path([home / ".codex" / "config.toml"]),  # TOML (official path)
+        "Copilot CLI": pick_path([copilot_path]),
+        "OpenCode": pick_path([opencode_path]),  # JSON/JSONC format
+        # --- Other Clients ---
+        "Claude Desktop": appdata / "Claude" / "claude_desktop_config.json",
+        "Cursor": appdata
+        / "Cursor"
+        / "User"
+        / "globalStorage"
+        / "cursor.mcp"
+        / "config.json",
+        "VS Code": appdata
+        / "Code"
+        / "User"
+        / "globalStorage"
+        / "github.copilot"
+        / "mcp.json",
+        "Windsurf": home / ".windsurf" / "mcp_config.json",
+        "Cline": appdata
+        / "Code"
+        / "User"
+        / "globalStorage"
+        / "saoudrizwan.claude-dev"
+        / "settings"
+        / "cline_mcp_settings.json",
+        "Roo Code": appdata
+        / "Code"
+        / "User"
+        / "globalStorage"
+        / "rooveterinaryinc.roo-cline"
+        / "settings"
+        / "mcp_settings.json",
+    }
 
-        if isinstance(paths, dict):
-            path_str = paths.get("windows", "") if is_windows else paths.get("unix", "")
-            configs[name] = resolve(path_str)
-        elif isinstance(paths, list):
-            candidates = [resolve(p) for p in paths]
-            if env_fallback:
-                if env_fallback in os.environ:
-                    # Use the XDG-style candidate (first one referencing xdg_config)
-                    xdg_candidates = [c for c in candidates if str(xdg_config) in str(c)]
-                    configs[name] = xdg_candidates[0] if xdg_candidates else candidates[0]
-                else:
-                    # Use the fallback candidate (non-xdg)
-                    fallback = [c for c in candidates if str(xdg_config) not in str(c)]
-                    configs[name] = fallback[0] if fallback else candidates[-1]
-                continue
-            configs[name] = pick_path(candidates) if pick_existing else candidates[0]
-        else:
-            configs[name] = resolve(paths)
+    # Linux/macOS adjustments for GUI/editor clients
+    if os.name != "nt":
+        configs["Claude Desktop"] = xdg_config / "Claude" / "claude_desktop_config.json"
+        configs["VS Code"] = (
+            xdg_config
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "github.copilot"
+            / "mcp.json"
+        )
+        # Linux/macOS Cursor commonly uses ~/.cursor/mcp.json
+        configs["Cursor"] = home / ".cursor" / "mcp.json"
+        # Linux/macOS Cline/Roo locations under XDG config
+        configs["Cline"] = (
+            xdg_config
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "saoudrizwan.claude-dev"
+            / "settings"
+            / "cline_mcp_settings.json"
+        )
+        configs["Roo Code"] = (
+            xdg_config
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "rooveterinaryinc.roo-cline"
+            / "settings"
+            / "mcp_settings.json"
+        )
 
     return configs
 

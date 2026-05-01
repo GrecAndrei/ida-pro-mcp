@@ -33,6 +33,7 @@ class MCPError:
     UNKNOWN = "UNKNOWN_ERROR"
     INVALID_ARGS = "INVALID_ARGS"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
+    NOT_FOUND = "NOT_FOUND"
     TOOL_NOT_FOUND = "TOOL_NOT_FOUND"
     ACTION_NOT_FOUND = "ACTION_NOT_FOUND"
     MISSING_REQUIRED_ARG = "MISSING_REQUIRED_ARG"
@@ -187,6 +188,7 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.UNKNOWN: "An unexpected error occurred. Check the traceback for details and retry.",
     MCPError.INVALID_ARGS: "Check the tool description for valid parameters and retry.",
     MCPError.NOT_IMPLEMENTED: "This action is not available. Use a different action or tool.",
+    MCPError.NOT_FOUND: "The requested item was not found. Verify the identifier and retry.",
     MCPError.TOOL_NOT_FOUND: "The tool name is wrong. Call tools/list to see available tools.",
     MCPError.ACTION_NOT_FOUND: "The action is not valid for this tool. Check the tool description for valid actions.",
     MCPError.MISSING_REQUIRED_ARG: "A required parameter is missing. Check the error details for which one.",

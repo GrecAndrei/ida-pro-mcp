@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def nav(
-    action: Annotated[Literal["goto", "cursor", "interesting"],
-                      "Action: goto|cursor|interesting"],
+    action: Annotated[Literal["goto", "cursor", "interesting", "semantic_goto"],
+                      "Action: goto|cursor|interesting|semantic_goto"],
     addr: Annotated[Optional[str], "Address to navigate to"] = None,
     **kwargs
 ) -> dict:
@@ -24,6 +24,9 @@ def nav(
     - goto: Get detailed analysis context for an address.
     - cursor: Get current pseudo-cursor position (screen ea).
     - interesting: Find high-value triage points (crypto, syscalls, anti-debug).
+    - semantic_goto: Navigate by natural language intent (e.g., "main", "network handler", "decryptor").
+        Params: addr (natural language query describing the target)
+        Returns: {addr, name, score, matched_by, note}
     """
     try:
         if action == "goto":
@@ -61,6 +64,98 @@ def nav(
                     curr = idc.next_head(curr, seg.end_ea)
                     if curr == idaapi.BADADDR: break
             return {"ok": True, "findings": findings}
+
+        elif action == "semantic_goto":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr (natural language query) required for semantic_goto")
+            query = str(addr).lower().strip()
+            
+            # Score candidates by semantic relevance
+            candidates = []
+            
+            # Check entry points first
+            import ida_entry
+            for i in range(ida_entry.get_entry_qty()):
+                ordinal = ida_entry.get_entry_ordinal(i)
+                ea = ida_entry.get_entry(ordinal)
+                name = ida_entry.get_entry_name(ordinal) or ""
+                score = 0
+                if query in name.lower():
+                    score += 100
+                if "main" in query and "main" in name.lower():
+                    score += 200
+                if "start" in query and "start" in name.lower():
+                    score += 150
+                if score > 0:
+                    candidates.append({"addr": ea, "name": name, "score": score, "matched_by": "entry_point"})
+            
+            # Check all functions
+            for func_ea in idautils.Functions():
+                fname = idc.get_func_name(func_ea) or ""
+                score = 0
+                matched_by = []
+                
+                # Name matching
+                if query in fname.lower():
+                    score += 80
+                    matched_by.append("name")
+                
+                # Semantic intent matching
+                intent_map = {
+                    "main": ["main", "winmain", "dllmain", "entry", "start"],
+                    "init": ["init", "setup", "initialize", "constructor", "ctor"],
+                    "network": ["network", "socket", "connect", "http", "recv", "send", "server", "client"],
+                    "crypto": ["crypto", "encrypt", "decrypt", "hash", "aes", "rsa", "sha", "md5"],
+                    "file": ["file", "read", "write", "open", "save", "load"],
+                    "registry": ["registry", "regopen", "regset", "regquery"],
+                    "debug": ["debug", "trace", "log", "assert"],
+                    "string": ["string", "strcpy", "strlen", "sprintf", "format"],
+                    "memory": ["memory", "malloc", "free", "alloc", "memcpy"],
+                    "thread": ["thread", "create_thread", "mutex", "lock", "sync"],
+                    "gui": ["gui", "window", "dialog", "messagebox", "menu"],
+                    "decode": ["decode", "decrypt", "uncompress", "decompress", "unpack"],
+                    "encode": ["encode", "encrypt", "compress", "pack", "serialize"],
+                }
+                
+                for intent, keywords in intent_map.items():
+                    if intent in query:
+                        for kw in keywords:
+                            if kw in fname.lower():
+                                score += 60
+                                matched_by.append(f"intent:{intent}")
+                                break
+                
+                # API category matching
+                try:
+                    from .classify import _classify_func
+                except ImportError:
+                    from classify import _classify_func  # type: ignore[import-not-found]
+                
+                cat, _, _ = _classify_func(func_ea)
+                if cat in query:
+                    score += 40
+                    matched_by.append(f"category:{cat}")
+                
+                if score > 0:
+                    candidates.append({"addr": func_ea, "name": fname, "score": score, "matched_by": matched_by})
+            
+            if not candidates:
+                return make_error(MCPError.NOT_FOUND, f"No function matches semantic query: '{query}'", "Try a more specific query or use search(action='find', pattern=...)")
+            
+            # Sort by score descending
+            candidates.sort(key=lambda x: -x["score"])
+            top = candidates[0]
+            
+            return {
+                "ok": True,
+                "query": query,
+                "addr": hex(top["addr"]),
+                "name": top["name"],
+                "score": top["score"],
+                "matched_by": top["matched_by"],
+                "alternatives": [{"addr": hex(c["addr"]), "name": c["name"], "score": c["score"]} for c in candidates[1:5]],
+                "note": "Semantic navigation resolved the query to the best-matching function. Use alternatives if this is not the intended target.",
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

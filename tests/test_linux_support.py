@@ -158,7 +158,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
                     f,
                 )
 
-            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+            with patch("ida_pro_mcp.host.server.time.time", return_value=1000.0):
                 server._adopt_or_cleanup_stale_runtime_leases()
 
             server._kill_stale_pid.assert_called_once_with(4242)
@@ -180,7 +180,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
                     f,
                 )
 
-            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+            with patch("ida_pro_mcp.host.server.time.time", return_value=1000.0):
                 server._adopt_or_cleanup_stale_runtime_leases()
 
             server._kill_stale_pid.assert_not_called()
@@ -214,7 +214,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
                     f,
                 )
 
-            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+            with patch("ida_pro_mcp.host.server.time.time", return_value=1000.0):
                 server._cleanup_stale_runtime_leases()
 
             server._kill_stale_pid.assert_not_called()
@@ -236,7 +236,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
                     f,
                 )
 
-            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+            with patch("ida_pro_mcp.host.server.time.time", return_value=1000.0):
                 server._cleanup_stale_runtime_leases()
 
             self.assertTrue(os.path.exists(lease_path))
@@ -261,7 +261,7 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
                     f,
                 )
 
-            with patch("ida_mcp_stdio.time.time", return_value=1000.0):
+            with patch("ida_pro_mcp.host.server.time.time", return_value=1000.0):
                 server._cleanup_stale_runtime_leases()
 
             server._kill_stale_pid.assert_not_called()

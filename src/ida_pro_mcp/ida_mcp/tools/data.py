@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def data(
-    action: Annotated[Literal["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query"],
-                      "Action: functions|globals|strings|imports|exports|lookup|bulk_query"],
+    action: Annotated[Literal["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix"],
+                      "Action: functions|globals|strings|imports|exports|lookup|bulk_query|capability_matrix"],
     query: Annotated[Optional[str], "Filter pattern or name/address for lookup (regex/glob/substring/semantic auto-detected)"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
@@ -58,6 +58,10 @@ def data(
     bulk_query - Execute multiple queries in one call
         Params: items (list of {kind, query, offset, count, include_prototype, include_xrefs, min_size, named_only})
         Returns: {results: [{index, kind, result}]}
+
+    capability_matrix - Build a binary capability matrix from imports and function classifications.
+        Returns: {matrix: {category: count}, top_categories, risk_indicators, note}
+        Use for: Quick triage and malware capability assessment.
     """
     try:
         if action == "functions":
@@ -381,6 +385,83 @@ def data(
                 res = data(**sub_args)
                 results.append({"index": i, "kind": kind, "result": res})
             return {"ok": True, "results": results, "count": len(results)}
+
+        elif action == "capability_matrix":
+            # Build capability matrix from imports and function API usage
+            matrix = {cat: 0 for cat in API_CATEGORIES}
+            risk_indicators = []
+            
+            # Analyze imports
+            imports = {}
+            def imp_cb(ea, name, ordinal):
+                if name:
+                    imports[name] = ea
+                return True
+            nimps = ida_nalt.get_import_module_qty()
+            for i in range(nimps):
+                ida_nalt.enum_import_names(i, imp_cb)
+            
+            for name in imports:
+                low = name.lower()
+                for cat, apis in API_CATEGORIES.items():
+                    for api in apis:
+                        if api.lower() in low:
+                            matrix[cat] += 1
+                            break
+                # Risk indicators
+                if low in DANGEROUS_APIS or any(low.endswith(s) for s in ("A", "W", "@plt", "@PLT") if low[:-len(s)] in DANGEROUS_APIS):
+                    risk_indicators.append(name)
+            
+            # Analyze functions for API calls (sample first 200)
+            func_count = 0
+            for func_ea in idautils.Functions():
+                if func_count >= 200:
+                    break
+                func_count += 1
+                fn = ida_funcs.get_func(func_ea)
+                if not fn:
+                    continue
+                for head in idautils.Heads(fn.start_ea, fn.end_ea):
+                    for xref in idautils.CodeRefsFrom(head, 0):
+                        callee = idc.get_func_name(xref) or ""
+                        if callee:
+                            low = callee.lower()
+                            for cat, apis in API_CATEGORIES.items():
+                                for api in apis:
+                                    if api.lower() in low:
+                                        matrix[cat] += 1
+                                        break
+                            if low in DANGEROUS_APIS:
+                                risk_indicators.append(callee)
+            
+            # Sort categories by count
+            sorted_cats = sorted(matrix.items(), key=lambda x: -x[1])
+            top_categories = [f"{cat}:{count}" for cat, count in sorted_cats if count > 0][:10]
+            
+            # Determine binary type heuristic
+            binary_type = "unknown"
+            if matrix.get("network", 0) > 5 and matrix.get("crypto", 0) > 2:
+                binary_type = "malware_or_security_tool"
+            elif matrix.get("network", 0) > 10:
+                binary_type = "server_or_network_app"
+            elif matrix.get("ui", 0) > 10:
+                binary_type = "gui_application"
+            elif matrix.get("file_io", 0) > 10 and matrix.get("string_ops", 0) > 5:
+                binary_type = "utility"
+            elif matrix.get("crypto", 0) > 5:
+                binary_type = "crypto_tool"
+            elif matrix.get("process", 0) > 5:
+                binary_type = "system_tool"
+            
+            return {
+                "ok": True,
+                "matrix": {k: v for k, v in sorted_cats if v > 0},
+                "top_categories": top_categories,
+                "binary_type_heuristic": binary_type,
+                "risk_indicators": sorted(set(risk_indicators))[:20],
+                "total_imports": len(imports),
+                "note": "Capability matrix derived from import analysis and function API call patterns. Use for quick triage.",
+            }
         
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

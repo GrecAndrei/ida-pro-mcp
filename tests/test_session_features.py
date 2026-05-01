@@ -6,6 +6,12 @@ and all 31 new SessionManager methods + their _execute_tool handlers.
 """
 import os
 import sys
+
+# Add project dirs to path BEFORE importing project modules
+_project_root = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, _project_root)
+sys.path.insert(0, os.path.join(_project_root, "src"))
+
 import json
 import tempfile
 import shutil
@@ -14,10 +20,8 @@ import copy
 import unittest
 import threading
 from unittest.mock import patch
+import ida_pro_mcp.host.session
 import ida_mcp_stdio
-
-# Add parent dir to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from ida_mcp_stdio import (
     SessionManager,
@@ -1027,7 +1031,7 @@ class TestDuplicateSIDCollision(unittest.TestCase):
                 self.hex = hex_value
 
         with patch.object(
-            ida_mcp_stdio.uuid,
+            ida_pro_mcp.host.session.uuid,
             "uuid4",
             side_effect=[_FakeUUID(existing_prefix), _FakeUUID(fresh_prefix)],
         ):
