@@ -86,7 +86,7 @@ def _migrate_legacy_runtime_dir(target_dir: str):
             if os.path.exists(dst):
                 continue
             if os.path.isdir(src):
-                shutil.copytree(src, dst)
+                shutil.copytree(src, dst, dirs_exist_ok=True)
             else:
                 shutil.copy2(src, dst)
     except Exception:
@@ -153,6 +153,7 @@ MAX_NAME_LEN = 256
 SESSION_ID_RE = re.compile(r"^[A-Z0-9]{8}$")
 MAX_SESSION_ID_RETRIES = 1024
 MAX_SNAPSHOT_ID_RETRIES = 128
+MAX_SNAPSHOTS_PER_SESSION = 50
 MAX_WIKI_RESULTS = 200
 
 _POINTER_NOTE_SIGNAL_TOOLS_STRONG = {"calc", "memory"}
@@ -208,10 +209,16 @@ WIKI_SEMANTIC_GROUPS: tuple[tuple[str, ...], ...] = (
 )
 
 
+_log_file_handle = None
+
+
 def log_rpc(msg):
+    global _log_file_handle
     try:
-        with open(BRIDGE_LOG, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+        if _log_file_handle is None:
+            _log_file_handle = open(BRIDGE_LOG, "a", encoding="utf-8")
+        _log_file_handle.write(f"[{datetime.now().isoformat()}] {msg}\n")
+        _log_file_handle.flush()
     except Exception:
         pass
 

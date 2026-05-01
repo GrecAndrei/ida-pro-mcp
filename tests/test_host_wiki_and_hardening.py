@@ -654,7 +654,14 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[1]
-        cls.search_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search.py").read_text(encoding="utf-8")
+        search_pkg = root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search"
+        if search_pkg.is_dir():
+            parts = []
+            for f in sorted(search_pkg.glob("*.py")):
+                parts.append(f.read_text(encoding="utf-8"))
+            cls.search_source = "\n".join(parts)
+        else:
+            cls.search_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search.py").read_text(encoding="utf-8")
         cls.calc_source = (root / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "calc.py").read_text(encoding="utf-8")
         cls.stdio_source = (root / "ida_mcp_stdio.py").read_text(encoding="utf-8")
         cls.schemas_source = (root / "src" / "ida_pro_mcp" / "host" / "schemas.py").read_text(encoding="utf-8")

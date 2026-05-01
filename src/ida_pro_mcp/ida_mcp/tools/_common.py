@@ -38,7 +38,7 @@ try:
         parse_address, normalize_list_input, normalize_dict_list,
         get_function, get_prototype, get_image_size, looks_like_address,
         get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
-        _is_regex, smart_match, compile_smart_pattern, resolve_symbol,
+        smart_match, compile_smart_pattern, resolve_symbol,
     )
     from ida_mcp.error_handling import (
         MCPError, make_error, handle_error, ERROR_HINTS,
@@ -58,7 +58,7 @@ except (ImportError, ValueError):
         parse_address, normalize_list_input, normalize_dict_list,
         get_function, get_prototype, get_image_size, looks_like_address,
         get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
-        _is_regex, smart_match, compile_smart_pattern, resolve_symbol,
+        smart_match, compile_smart_pattern, resolve_symbol,
     )
     from error_handling import (  # type: ignore[import-not-found]
         MCPError, make_error, handle_error, ERROR_HINTS,
@@ -120,7 +120,7 @@ __all__ = [
     "parse_address", "normalize_list_input", "normalize_dict_list",
     "get_function", "get_prototype", "get_image_size", "looks_like_address",
     "get_stack_frame_variables_internal", "get_type_by_name", "hex_ea", "hex_size",
-    "_is_regex", "smart_match", "compile_smart_pattern", "resolve_symbol",
+    "smart_match", "compile_smart_pattern", "resolve_symbol",
     # Error handling
     "MCPError", "make_error", "handle_error", "ERROR_HINTS",
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
