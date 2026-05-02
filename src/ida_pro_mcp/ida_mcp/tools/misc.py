@@ -7,13 +7,15 @@ except ImportError:
 
 @tool
 def misc(
-    action: Literal["python", "idc", "load_sig", "cache_stats", "read_file", "write_file"] = "python",
+    action: Literal["python", "idc", "load_sig", "cache_stats", "read_file", "write_file", "plugin_list", "plugin_run", "health"] = "python",
     expr: Optional[str] = None,
     code: Optional[str] = None,
     name: Optional[str] = None,
     path: Annotated[Optional[str], "File path for read_file/write_file"] = None,
     content: Annotated[Optional[str], "Content to write for write_file"] = None,
     encoding: Annotated[Optional[str], "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data."] = None,
+    arg: Annotated[Optional[int], "Plugin argument for plugin_run"] = None,
+    verbose: Annotated[Optional[bool], "Include per-runtime details for health action."] = None,
 ) -> Any:
     """
     Miscellaneous utility tools for IDA.
@@ -27,6 +29,9 @@ def misc(
       or hex-encoded bytes if encoding='binary'. Params: path, encoding (optional)
     - write_file: Write content to a file on the host filesystem. Writes text (utf-8 by default)
       or decodes hex content if encoding='binary'. Params: path, content, encoding (optional)
+    - plugin_list: List discovered IDA plugins (filesystem-based)
+    - plugin_run: Run an IDA plugin by name. Params: name, arg (optional)
+    - health: Return host/IDA diagnostics. Params: verbose (optional)
     """
     if action == "python":
         # Support both 'expr' and 'code' for backward compatibility
@@ -115,6 +120,76 @@ def misc(
                 return {"ok": True, "path": resolved, "size": len(content), "encoding": enc}
         except ValueError as ve:
             return {"error": True, "message": f"Invalid hex content for binary mode: {ve}"}
+        except Exception:
+            return {"error": True, "message": traceback.format_exc()}
+    if action == "plugin_list":
+        try:
+            import ida_loader
+            import pathlib
+            plugin_dirs = []
+            try:
+                idadir = os.environ.get("IDADIR")
+                if idadir:
+                    plugin_dirs.append(os.path.join(idadir, "plugins"))
+            except Exception:
+                pass
+            try:
+                idausr = os.environ.get("IDAUSR") or os.path.join(pathlib.Path.home(), ".idapro")
+                plugin_dirs.append(os.path.join(str(idausr), "plugins"))
+            except Exception:
+                pass
+            discovered = []
+            seen = set()
+            exts = (".py", ".pyc", ".p64", ".plw", ".dll", ".so", ".dylib")
+            for d in plugin_dirs:
+                if not d or not os.path.isdir(d):
+                    continue
+                try:
+                    for entry in os.listdir(d):
+                        if not entry.lower().endswith(exts):
+                            continue
+                        full = os.path.join(d, entry)
+                        key = os.path.realpath(full)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        discovered.append({"name": entry, "path": full})
+                except Exception:
+                    continue
+            return {
+                "ok": True,
+                "plugins": sorted(discovered, key=lambda x: x["name"].lower()),
+                "count": len(discovered),
+                "note": "Filesystem-based plugin listing (runtime enumeration API not available in this IDA build).",
+            }
+        except Exception:
+            return {"error": True, "message": traceback.format_exc()}
+    if action == "plugin_run":
+        if not name:
+            return {"error": True, "message": "name required"}
+        try:
+            import ida_loader
+            plugin = ida_loader.find_plugin(name, True)
+            if plugin in (None, -1):
+                return {"error": True, "message": f"Plugin not found: {name}"}
+            if ida_loader.run_plugin(plugin, arg or 0):
+                return {"ok": True, "name": name}
+            return {"error": True, "message": f"Failed to run plugin: {name}"}
+        except Exception:
+            return {"error": True, "message": traceback.format_exc()}
+    if action == "health":
+        try:
+            import platform
+            info = {
+                "ok": True,
+                "ida_version": idaapi.get_kernel_version(),
+                "python_version": platform.python_version(),
+                "platform": platform.platform(),
+            }
+            if verbose:
+                info["ida_path"] = idaapi.get_ida_subdir("") or ""
+                info["cwd"] = os.getcwd()
+            return info
         except Exception:
             return {"error": True, "message": traceback.format_exc()}
     return {"error": True, "message": f"Unknown action: {action}"}

@@ -70,9 +70,13 @@ def symbols(
             }
         
         elif action == "apply":
-            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr)
-            if err: return err
+            if not addr:
+                ea = idaapi.get_screen_ea()
+                if ea == idaapi.BADADDR:
+                    return make_error(MCPError.INVALID_ARGS, "addr required")
+            else:
+                ea, err = validate_addr(addr)
+                if err: return err
             
             tif = ida_typeinf.tinfo_t()
             # In IDA 9, use get_tinfo or similar

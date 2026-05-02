@@ -301,10 +301,10 @@ def segments(
             if not end:
                 return make_error(MCPError.INVALID_ARGS,
                                   "Parameter 'end' is required to specify the ending address of the new segment")
-            s_ea, err = validate_addr(start)
+            s_ea, err = parse_address_safe(start)
             if err:
                 return err
-            e_ea, err = validate_addr(end)
+            e_ea, err = parse_address_safe(end)
             if err:
                 return err
             if s_ea >= e_ea:
@@ -332,7 +332,7 @@ def segments(
             if not start:
                 return make_error(MCPError.INVALID_ARGS,
                                   "Parameter 'start' is required — provide any address inside the segment to delete")
-            s_ea, err = validate_addr(start)
+            s_ea, err = parse_address_safe(start)
             if err:
                 return err
             seg = idaapi.getseg(s_ea)
@@ -449,7 +449,7 @@ def segments(
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment at source address {start}")
 
-            result = idaapi.move_segm(s_ea, t_ea, 0)
+            result = idaapi.move_segm(seg, t_ea, 0)
             if result == idaapi.MOVE_SEGM_OK:
                 return {"ok": True, "old": hex(s_ea), "new": hex(t_ea)}
 

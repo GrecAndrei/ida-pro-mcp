@@ -83,7 +83,6 @@ TOOLS = [
     "hooks",
     # Documentation and YARA
     "wiki",
-    "yara_hunt",
     # --- New LLM-optimized tools ---
     # Security & vulnerability analysis
     "threat_hunt",
@@ -401,7 +400,6 @@ TOOL_DESCRIPTIONS = {
     "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     # Documentation and YARA
     "wiki": "Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.",
-    "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
     "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
@@ -747,7 +745,6 @@ TOOL_ACTIONS = {
     ],
     # Documentation and YARA
     "wiki": ["list_topics", "read", "search", "semantic_search", "sections", "index"],
-    "yara_hunt": ["scan", "compile", "list_rules"],
     # --- New LLM-optimized tools ---
     "threat_hunt": [
         "run",
@@ -2248,7 +2245,6 @@ _TOOL_CATEGORY_SECURITY = {
     "compare",
     "classify",
     "summarize",
-    "yara_hunt",
 }
 _TOOL_CATEGORY_COMPAT = {"plugins", "xfer_analysis"}
 

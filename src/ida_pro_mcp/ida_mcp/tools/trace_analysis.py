@@ -368,7 +368,7 @@ def trace_analysis(
         if action == "import_trace":
             run_id = kwargs.get("run_id")
             compress = bool(kwargs.get("compress", False))
-            if not path and not trace_data and not _TRACE_CACHE:
+            if not path and trace_data is None and not _TRACE_CACHE:
                 return make_error(MCPError.INVALID_ARGS, "path or trace_data required")
             addrs = load_trace(run_id=str(run_id) if run_id is not None else None, compress=compress)
             result = {
@@ -564,16 +564,18 @@ def trace_analysis(
             run_b = kwargs.get("run_b")
             raw_trace_a = kwargs.get("trace_a")
             raw_trace_b = kwargs.get("trace_b")
+            compare_with = kwargs.get("compare_with")
             semantic = bool(kwargs.get("semantic", True))
+            has_trace_a = raw_trace_a is not None or run_a is not None
+            has_trace_b = raw_trace_b is not None or run_b is not None or compare_with is not None
+            if not has_trace_a or not has_trace_b:
+                return make_error(MCPError.INVALID_ARGS, "cross_run_diff requires two traces (run IDs or trace_a/trace_b)")
             trace_a = _parse_addrs(raw_trace_a) if isinstance(raw_trace_a, list) else _resolve_run_trace(str(run_a) if run_a is not None else None)
             trace_b = _parse_addrs(raw_trace_b) if isinstance(raw_trace_b, list) else _resolve_run_trace(str(run_b) if run_b is not None else None)
             if not trace_a:
                 trace_a = load_trace(run_id=str(run_a) if run_a is not None else None)
             if not trace_b:
-                compare_with = kwargs.get("compare_with")
                 trace_b = _resolve_run_trace(str(compare_with) if compare_with is not None else None)
-            if not trace_a or not trace_b:
-                return make_error(MCPError.INVALID_ARGS, "cross_run_diff requires two traces (run IDs or trace_a/trace_b)")
 
             set_a, set_b = set(trace_a), set(trace_b)
             pairs_a, pairs_b = _trace_pairs(trace_a), _trace_pairs(trace_b)
