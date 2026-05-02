@@ -70,6 +70,7 @@ __all__ = [
     "blackboard",
     "filter",
     "governance",
+    "mbagcn",
 ]
 
 # Mapping from tool name to module name (when they differ)
