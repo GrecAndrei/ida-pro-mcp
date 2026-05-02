@@ -2269,6 +2269,19 @@ class IDAMCPServer:
                     except Exception:
                         pass
                     
+                    # Phase 7: C2 risk scoring (ML-powered, deterministic)
+                    try:
+                        c2_res = self._execute_tool("string_ops", {
+                            "action": "score_c2",
+                            "addr": addr,
+                        })
+                        if isinstance(c2_res, dict) and c2_res.get("ok"):
+                            c2_risk = c2_res.get("c2_risk")
+                            if isinstance(c2_risk, dict) and c2_risk.get("overall_score", 0) > 0:
+                                ghost_results["c2_risk"] = c2_risk
+                    except Exception:
+                        pass
+                    
                     if ghost_results:
                         compacted["_inline"] = ghost_results
             except Exception:

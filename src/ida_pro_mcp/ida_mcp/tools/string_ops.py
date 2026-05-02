@@ -537,6 +537,244 @@ def _find_crypto_addrs(strings, limit):
 
 
 # ============================================================================
+# ML-Powered C2 Scoring (deterministic, no training data needed)
+# ============================================================================
+
+# Known dangerous API triads with weighted C2 relevance scores.
+# Format: (triad_name, {api_names...}, score)
+_DANGEROUS_API_TRIADS = [
+    ("process_hollowing", {"CreateProcessW", "CreateProcessA", "NtUnmapViewOfSection",
+     "WriteProcessMemory", "SetThreadContext", "ResumeThread"}, 0.95),
+    ("process_injection", {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}, 0.90),
+    ("reflective_dll", {"NtAllocateVirtualMemory", "NtWriteVirtualMemory",
+     "NtProtectVirtualMemory", "LdrLoadDll"}, 0.85),
+    ("atom_bombing", {"GlobalAddAtom", "GlobalGetAtomName", "NtQueueApcThread"}, 0.82),
+    ("registry_persistence", {"RegCreateKeyExW", "RegCreateKeyExA", "RegSetValueExW",
+     "RegSetValueExA"}, 0.80),
+    ("service_install", {"OpenSCManagerW", "OpenSCManagerA", "CreateServiceW",
+     "CreateServiceA", "StartServiceW", "StartServiceA"}, 0.85),
+    ("scheduled_task", {"CoCreateInstance", "ITaskScheduler", "NewWorkItem", "SetAccountInformation"}, 0.78),
+    ("startup_folder", {"SHGetSpecialFolderPathW", "SHGetSpecialFolderPathA",
+     "CopyFileW", "CopyFileA", "CreateShortcut"}, 0.72),
+    ("wmi_persistence", {"IWbemServices", "ExecMethod", "__InstanceCreationEvent"}, 0.76),
+    ("anti_debug", {"IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+     "NtQueryInformationProcess", "OutputDebugStringW"}, 0.70),
+    ("anti_vm", {"__cpuid", "__vmx_vmcall", "EnumServicesStatusExW",
+     "CreateToolhelp32Snapshot", "Process32FirstW"}, 0.75),
+    ("anti_sandbox", {"GetTickCount", "Sleep", "SleepEx", "NtDelayExecution",
+     "GetCursorPos", "GetSystemMetrics"}, 0.68),
+    ("c2_http", {"WinHttpOpen", "WinHttpConnect", "WinHttpOpenRequest",
+     "WinHttpSendRequest", "InternetOpenW", "InternetOpenA", "InternetConnectW",
+     "HttpOpenRequestW", "HttpSendRequestW"}, 0.88),
+    ("c2_dns", {"DnsQuery_W", "DnsQuery_A", "DnsQueryExW", "getaddrinfo"}, 0.72),
+    ("c2_raw_socket", {"socket", "connect", "send", "recv", "WSASocketW",
+     "WSAConnect", "WSASend", "WSARecv"}, 0.82),
+    ("keylogger", {"SetWindowsHookExW", "SetWindowsHookExA", "GetAsyncKeyState",
+     "GetKeyState", "GetKeyboardState", "MapVirtualKeyW"}, 0.74),
+    ("credential_dump", {"LsaOpenPolicy", "LsaRetrievePrivateData", "SamConnect",
+     "SamOpenDomain", "SamOpenUser", "CredEnumerateW", "CryptUnprotectData"}, 0.83),
+    ("screen_capture", {"CreateCompatibleDC", "CreateCompatibleBitmap", "BitBlt",
+     "GetDC", "GetWindowDC"}, 0.62),
+    ("clipboard", {"OpenClipboard", "GetClipboardData", "EmptyClipboard"}, 0.58),
+    ("token_manipulation", {"OpenProcessToken", "DuplicateTokenEx",
+     "SetThreadToken", "ImpersonateLoggedOnUser", "AdjustTokenPrivileges"}, 0.80),
+]
+
+# Suspicious strings that indicate malware behavior (keyword pattern + weight)
+_SUSPICIOUS_STRING_KEYWORDS = {
+    "c2": [
+        (re.compile(rb'https?://[^\s\x00]{4,}', re.IGNORECASE), 0.90, "c2_url"),
+        (re.compile(rb'[a-z0-9]{8,}\.(?:dyndns|no-ip|duckdns|ngrok|serveo|localhost\.run|\.onion)\b', re.IGNORECASE), 0.85, "ddns_onion"),
+        (re.compile(rb'(?:beacon|c2|heartbeat|checkin|callback|polling|command|task)\.php', re.IGNORECASE), 0.82, "c2_endpoint"),
+        (re.compile(rb'(?:CobaltStrike|Cobalt_Strike|beacon\.dll|beacon\.x64\.dll|beacon\.x86\.dll)', re.IGNORECASE), 0.88, "cobalt_strike"),
+        (re.compile(rb'(?:meterpreter|metasploit|reverse_tcp|reverse_http|bind_tcp)', re.IGNORECASE), 0.88, "metasploit"),
+    ],
+    "persistence": [
+        (re.compile(rb'(?:CurrentVersion\\Run|Software\\Microsoft\\Windows\\CurrentVersion\\Run)', re.IGNORECASE), 0.82, "registry_run"),
+        (re.compile(rb'(?:\\Start Menu\\Programs\\Startup)', re.IGNORECASE), 0.78, "startup_folder"),
+        (re.compile(rb'schtasks\s+/create', re.IGNORECASE), 0.80, "schtasks"),
+        (re.compile(rb'SYSTEM\\CurrentControlSet\\Services', re.IGNORECASE), 0.82, "service_install"),
+    ],
+    "evasion": [
+        (re.compile(rb'(?:vmware|vbox|qemu|virtualbox|xen|hyper-v|sandbox|cwsandbox|fakenet)', re.IGNORECASE), 0.74, "vm_check"),
+        (re.compile(rb'(?:\\\\.\\\\(?:HGFS|VBox|vmci|GlobalVM)', re.IGNORECASE), 0.76, "vm_driver"),
+        (re.compile(rb'(?:IsDebuggerPresent|DebugActiveProcess|CheckRemoteDebugger)', re.IGNORECASE), 0.78, "anti_debug_str"),
+    ],
+    "injection": [
+        (re.compile(rb'(?:CreateProcess.*SUSPENDED|CREATE_SUSPENDED)', re.IGNORECASE), 0.76, "suspended_process"),
+        (re.compile(rb'(?:VirtualAlloc.*PAGE_EXECUTE|VirtualProtect.*PAGE_EXECUTE)', re.IGNORECASE), 0.82, "rwx_alloc"),
+    ],
+}
+
+
+def _collect_all_imports():
+    """Collect all imported API names into a set (lowercased)."""
+    apis = set()
+    try:
+        for mod_idx in range(ida_nalt.get_import_module_qty()):
+            module = ida_nalt.get_import_module_name(mod_idx)
+            if not module:
+                continue
+            mod_ea = ida_nalt.get_import_module_name(mod_idx)
+            # Enumerate entries in this module
+            def _enum_imports(module_name):
+                import enum
+                try:
+                    return idaapi.enum_import_names(mod_idx, None)
+                except Exception:
+                    return []
+            entries = _enum_imports(mod_idx) if hasattr(idaapi, 'enum_import_names') else []
+            if not entries and hasattr(idautils, 'Entries'):
+                try:
+                    for idx in range(ida_nalt.get_import_module_qty()):
+                        ida_nalt.enum_import_names(idx, lambda ea, name, ord: apis.add(name.lower()) and True if name else False)
+                except Exception:
+                    pass
+            if entries:
+                for entry in entries:
+                    if isinstance(entry, tuple):
+                        apis.add(str(entry[-1] if isinstance(entry[-1], str) else entry[0]).lower())
+    except Exception:
+        pass
+    # Fallback: scan all named items for known DLL patterns
+    if not apis:
+        try:
+            for ea in idautils.Names():
+                name = idc.get_name(ea[0] if isinstance(ea, tuple) else ea)
+                if name and any(dll in name.lower() for dll in ('kernel32', 'advapi32', 'user32', 'wininet',
+                    'winhttp', 'ws2_32', 'ntdll', 'shell32', 'ole32', 'gdi32', 'urlmon')):
+                    apis.add(name.lower().lstrip('_'))
+        except Exception:
+            pass
+    return apis
+
+
+def _detect_api_triads(apis):
+    """Score import table against known dangerous API triads. Returns list of findings."""
+    findings = []
+    apis_lower = {a.lower() for a in apis}
+    for triad_name, triad_apis, weight in _DANGEROUS_API_TRIADS:
+        matched = [a for a in triad_apis if a.lower() in apis_lower]
+        if len(matched) >= max(2, len(triad_apis) // 2):
+            score = weight * (len(matched) / len(triad_apis))
+            findings.append({
+                "technique": triad_name,
+                "matched_apis": matched,
+                "total_in_triad": len(triad_apis),
+                "score": round(score, 3),
+                "severity": "critical" if score >= 0.85 else "high" if score >= 0.70 else "medium",
+            })
+    findings.sort(key=lambda f: f["score"], reverse=True)
+    return findings
+
+
+def _score_strings_c2(all_strings):
+    """
+    StringSifter-style string ranking for C2 relevance.
+    Scores each string on: type match weight, entropy, length, keyword presence.
+    Returns ranked list of (score, ea, text, category).
+    """
+    ranked = []
+    for s_ea, raw, _st in all_strings:
+        if not raw or len(raw) < 3:
+            continue
+        text = _text_or_repr(raw)
+        raw_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")
+        best_score = 0.0
+        best_cat = "general"
+        for category, patterns in _SUSPICIOUS_STRING_KEYWORDS.items():
+            for pat, weight, label in patterns:
+                if pat.search(raw_bytes):
+                    score = weight
+                    if score > best_score:
+                        best_score = score
+                        best_cat = label
+        if best_score >= 0.60:
+            ranked.append((best_score, s_ea, text[:120], best_cat))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return ranked
+
+
+def _c2_family_guess(api_findings, string_scores):
+    """Guess likely C2 framework based on API triads and strings."""
+    families = []
+    all_evidence = " ".join(
+        f.get("technique", "") for f in api_findings
+    ) + " " + " ".join(
+        s[3] for s in string_scores
+    )
+    all_evidence_lower = all_evidence.lower()
+    if "cobalt" in all_evidence_lower or ("process_hollowing" in all_evidence_lower and "c2_http" in all_evidence_lower):
+        families.append({"family": "Cobalt Strike", "confidence": 0.85 if "cobalt" in all_evidence_lower else 0.65})
+    if "meterpreter" in all_evidence_lower or "metasploit" in all_evidence_lower:
+        families.append({"family": "Metasploit/Meterpreter", "confidence": 0.82})
+    if "c2_http" in all_evidence_lower and "screen_capture" in all_evidence_lower:
+        families.append({"family": "AgentTesla/AsyncRAT style", "confidence": 0.55})
+    if "credential_dump" in all_evidence_lower:
+        if "keylogger" in all_evidence_lower:
+            families.append({"family": "Infostealer (generic)", "confidence": 0.62})
+    if "reflective_dll" in all_evidence_lower and "c2_raw_socket" in all_evidence_lower:
+        families.append({"family": "TrickBot/Emotet style", "confidence": 0.58})
+    if "anti_debug" in all_evidence_lower and "anti_vm" in all_evidence_lower and "anti_sandbox" in all_evidence_lower:
+        families.append({"family": "Banking trojan (generic)", "confidence": 0.55})
+    if not families:
+        families.append({"family": "Unknown/unclassified", "confidence": 0.30})
+    return families
+
+
+def _compile_c2_report(all_strings, addr_scope=None):
+    """
+    Full C2 risk report: API triads + string scoring + IOC extraction + family guess.
+    Deterministic, no ML model weights needed.
+    """
+    apis = _collect_all_imports()
+    api_findings = _detect_api_triads(apis)
+    string_scores = _score_strings_c2(all_strings)
+    c2_iocs = _find_c2(all_strings, limit=80)
+    family_guesses = _c2_family_guess(api_findings, string_scores)
+
+    # Aggregate category scores
+    category_scores = {}
+    for f in api_findings:
+        cat = f["technique"].rsplit("_", 1)[0] if "_" in f["technique"] else f["technique"]
+        category_scores.setdefault(cat, []).append(f["score"])
+
+    for s in string_scores:
+        cat = s[3] if s[3] not in ("cobalt_strike", "metasploit", "c2_url", "c2_endpoint",
+            "ddns_onion", "registry_run", "startup_folder", "schtasks", "service_install",
+            "vm_check", "vm_driver", "anti_debug_str", "suspended_process", "rwx_alloc") else s[3].rsplit("_", 1)[0] if "_" in s[3] else "c2"
+        category_scores.setdefault(cat, []).append(s[0])
+
+    # Compile breakdown
+    breakdown = {}
+    overall_sum = 0.0
+    overall_count = 0
+    for cat in ("injection", "persistence", "evasion", "c2", "credential"):
+        scores = category_scores.get(cat, [])
+        if scores:
+            avg = sum(scores) / len(scores)
+            breakdown[cat] = round(min(avg, 1.0), 3)
+            overall_sum += avg
+            overall_count += len(scores)
+    overall = round(min(overall_sum / max(overall_count, 1), 1.0), 3) if overall_count else 0.0
+
+    # Boost overall if any critical API triad found
+    if any(f["severity"] == "critical" for f in api_findings):
+        overall = min(overall + 0.15, 1.0)
+
+    return {
+        "overall_score": overall,
+        "breakdown": breakdown,
+        "api_findings": api_findings[:12],
+        "top_strings": [{"score": s[0], "addr": hex(s[1]), "text": s[2], "category": s[3]}
+                        for s in string_scores[:20]],
+        "c2_family_guess": family_guesses,
+        "ioc_count": len(c2_iocs),
+        "api_count": len(apis),
+    }
+
+
+# ============================================================================
 # Main Tool
 # ============================================================================
 
@@ -547,7 +785,8 @@ def string_ops(
         "decode_all", "find_urls", "find_paths", "find_registry", "find_ips", "find_emails",
         "find_commands", "encoding_stats", "multilingual", "suspicious", "find_xrefs",
         "find_stack_strings", "find_base64", "find_api_keys", "find_configs", "find_c2",
-        "find_databases", "find_crypto_addrs", "entropy_rank"
+        "find_databases", "find_crypto_addrs", "entropy_rank",
+        "score_c2", "indicators", "persistence", "evasion", "ioc_extract",
     ], "String operations action"],
     addr: Annotated[Optional[str], "Function or address scope"] = None,
     limit: Annotated[int, "Max results"] = 50,
@@ -578,6 +817,11 @@ def string_ops(
     - find_databases: Detect database connection strings (MongoDB, Redis, SQL)
     - find_crypto_addrs: Detect cryptocurrency addresses (Bitcoin)
     - entropy_rank: Rank strings by Shannon entropy to find encrypted/obfuscated data
+    - score_c2: ML-powered C2 risk assessment (API triad scoring + StringSifter string ranking + IOC extraction + family guess)
+    - indicators: Alias for score_c2 (C2 behavior pattern detection)
+    - persistence: Alias for score_c2 (persistence mechanism detection)
+    - evasion: Alias for score_c2 (anti-debug/anti-VM/anti-analysis detection)
+    - ioc_extract: Alias for score_c2 (structured IOC extraction)
     """
     try:
         all_strings = _iter_strings(limit=limit * 10)
@@ -725,6 +969,10 @@ def string_ops(
         elif action == "entropy_rank":
             hits = _entropy_rank(all_strings, limit, min_entropy=min_entropy)
             return {"ok": True, "entropy_ranked": "\n".join(hits), "count": len(hits)}
+
+        elif action in ("score_c2", "indicators", "persistence", "evasion", "ioc_extract"):
+            report = _compile_c2_report(all_strings, addr)
+            return {"ok": True, "c2_risk": report, "total_apis": report["api_count"]}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
