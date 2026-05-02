@@ -2109,7 +2109,16 @@ class IDAMCPServer:
                     pseudo_key = "pseudocode" if "pseudocode" in compacted else "output"
                     if pseudo_key in compacted and isinstance(compacted[pseudo_key], str):
                         addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                        digest = digest_decompiled(compacted[pseudo_key], func_addr=addr)
+                        # Try to get SchemaBoot attributes for richer classification
+                        schema_attrs = None
+                        try:
+                            if addr and hasattr(self, '_insight_index') and self._insight_index:
+                                func_data = self._insight_index.get_function(addr) if hasattr(self._insight_index, 'get_function') else None
+                                if func_data:
+                                    schema_attrs = func_data
+                        except Exception:
+                            pass
+                        digest = digest_decompiled(compacted[pseudo_key], func_addr=addr, schema_attrs=schema_attrs)
                         if digest and any(digest.values()):
                             compacted["_digest"] = digest
             except Exception:
@@ -2133,10 +2142,13 @@ class IDAMCPServer:
             # ---- Ghost Chain Inlining ----
             try:
                 addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                if tool_name == "code" and addr and opts.get("action") in ("decompile", "semantic_decompile"):
+                ghost_action = str(opts.get("action", ""))
+                if tool_name == "code" and addr and ghost_action in ("decompile", "semantic_decompile"):
                     from .response_enrichment import GHOST_CHAINS
                     ghost_results = {}
-                    ghost_key = (tool_name, str(opts.get("action", "")))
+                    ghost_key = (tool_name, ghost_action)
+                    
+                    # Phase 1: Basic companions (callers, callees, strings)
                     for ghost_tool, ghost_args_template in GHOST_CHAINS.get(ghost_key, []):
                         ghost_args = dict(ghost_args_template)
                         for k, v in ghost_args.items():
@@ -2147,7 +2159,6 @@ class IDAMCPServer:
                             ghost_res = self._execute_tool(ghost_tool, ghost_args)
                             if isinstance(ghost_res, dict) and ghost_res.get("ok"):
                                 key_name = ghost_args.get("action", ghost_tool)
-                                # Simplify for inlining
                                 if "callers" in key_name:
                                     items = ghost_res.get("callers", ghost_res.get("matches", ghost_res.get("results", [])))
                                     ghost_results["callers"] = items[:5] if isinstance(items, list) else str(items)[:200]
@@ -2164,6 +2175,69 @@ class IDAMCPServer:
                                     ghost_results[key_name] = str(ghost_res)[:200]
                         except Exception:
                             pass
+                    
+                    # Phase 2: BridgeRAG multi-hop relation discovery
+                    try:
+                        bridge_res = self._execute_tool("bridgerag", {
+                            "action": "bridges",
+                            "func_ea": addr,
+                            "bridge_types": ["apis", "strings"],
+                        })
+                        if isinstance(bridge_res, dict) and bridge_res.get("ok"):
+                            bridges = bridge_res.get("bridges", {})
+                            if bridges:
+                                ghost_results["bridge_entities"] = {
+                                    "apis": bridges.get("apis", [])[:5],
+                                    "strings": bridges.get("strings", [])[:5],
+                                    "note": "Shared APIs/strings with other functions. Use bridgerag.search for full discovery."
+                                }
+                    except Exception:
+                        pass
+                    
+                    # Phase 3: MbaGCN structural similarity
+                    try:
+                        mbagcn_res = self._execute_tool("mbagcn", {
+                            "action": "similar",
+                            "addr": addr,
+                            "top_k": 3,
+                        })
+                        if isinstance(mbagcn_res, dict) and mbagcn_res.get("ok"):
+                            similar = mbagcn_res.get("results", [])
+                            if similar:
+                                ghost_results["structurally_similar"] = [
+                                    {"addr": s.get("ea", ""), "name": s.get("name", ""),
+                                     "similarity": s.get("similarity", 0)}
+                                    for s in similar[:3]
+                                ]
+                                ghost_results["structurally_similar_note"] = (
+                                    "These functions have similar CFG structure. They may share behavior. "
+                                    "Use code.decompile on them to investigate."
+                                )
+                    except Exception:
+                        pass
+                    
+                    # Phase 4: InsightIndex behavior-tag discovery
+                    try:
+                        idx = getattr(self, '_insight_index', None)
+                        if idx and hasattr(idx, 'query_by_tags'):
+                            # Try to get tags for this function
+                            func_attrs = idx.get_function(addr) if hasattr(idx, 'get_function') else None
+                            tags = func_attrs.get("behavior_tags", []) if func_attrs else []
+                            if not tags:
+                                # Fall back to L2 global facts
+                                if hasattr(self, '_global_facts'):
+                                    tags = []
+                            if tags:
+                                related = idx.query_by_tags(tags[:3], mode="or") if hasattr(idx, 'query_by_tags') else []
+                                if related:
+                                    ghost_results["same_behavior_tags"] = {
+                                        "tags": tags,
+                                        "functions": [str(r)[:80] for r in related[:5]],
+                                        "note": "Other functions with the same behavior tags. May be part of the same component."
+                                    }
+                    except Exception:
+                        pass
+                    
                     if ghost_results:
                         compacted["_inline"] = ghost_results
             except Exception:
@@ -4975,6 +5049,7 @@ class IDAMCPServer:
         
         # ---- Silent Tool Rerouting ----
         action = args.get("action", "")
+        reroute_applied = False
         try:
             from .auto_nudge import get_reroute
             reroute = get_reroute(tool_name, str(action) if action else "", args)
@@ -4984,6 +5059,15 @@ class IDAMCPServer:
                 tool_name = new_tool
                 args = new_args
                 action = new_args.get("action", "")
+                reroute_applied = True
+                # Wire MemRL feedback: mark this reroute as successful
+                try:
+                    from .auto_nudge import record_tool_call as nudge_record
+                    idb_key = (self.current_session.idb_path if self.current_session else "")
+                    nudge_record(idb_key, "_reroute", f"{tool_name}.{action}", 
+                                addr=args.get("addr"), query=args.get("query"))
+                except Exception:
+                    pass
         except Exception:
             pass
         
