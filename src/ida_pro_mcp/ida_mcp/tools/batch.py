@@ -1,7 +1,7 @@
 """
 Batch tool - Execute multiple tool calls in a single request.
 Reduces round-trips for LLMs that need to perform several operations.
-Supports dependency resolution, result piping, conditional execution, templates, and dry-run.
+Supports dependency resolution, result piping, conditional execution, templates, dry-run, and macro DSL.
 """
 
 try:
@@ -10,6 +10,300 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 import importlib
+import json
+import re
+from typing import Any, Dict, List
+
+
+# =============================================================================
+# Macro DSL Interpreter (embedded into batch to avoid standalone duplication)
+# =============================================================================
+
+def _macro_get_path(data: Any, path: str) -> Any:
+    if not path or path == ".":
+        return data
+    current = data
+    for part in path.split("."):
+        part = part.strip()
+        if not part:
+            continue
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.isdigit():
+            idx = int(part)
+            current = current[idx] if 0 <= idx < len(current) else None
+        else:
+            return None
+        if current is None:
+            return None
+    return current
+
+
+def _macro_eval_cond(item: Any, expr: str) -> bool:
+    expr = expr.strip()
+    m = re.match(r"(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)", expr)
+    if not m:
+        val = _macro_get_path(item, expr)
+        return bool(val) if val is not None else False
+    left_path, op, right_raw = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    left_val = _macro_get_path(item, left_path)
+    right_raw = right_raw.strip('"\'')
+    try:
+        right_val = int(right_raw)
+    except ValueError:
+        try:
+            right_val = float(right_raw)
+        except ValueError:
+            right_val = right_raw
+    if left_val is None:
+        return False
+    try:
+        if op == "==":
+            return str(left_val) == str(right_val)
+        elif op == "!=":
+            return str(left_val) != str(right_val)
+        elif op == "<":
+            return float(left_val) < float(right_val)
+        elif op == ">":
+            return float(left_val) > float(right_val)
+        elif op == "<=":
+            return float(left_val) <= float(right_val)
+        elif op == ">=":
+            return float(left_val) >= float(right_val)
+    except (ValueError, TypeError):
+        return False
+    return False
+
+
+def _macro_apply_pipe_op(data: Any, op: str) -> Any:
+    op = op.strip()
+    if op == "count":
+        return len(data) if isinstance(data, (list, dict, str)) else 0
+    elif op.startswith("first(") and op.endswith(")"):
+        n = int(op[6:-1])
+        if isinstance(data, list):
+            return data[:n]
+        return data
+    elif op.startswith("sort(") and op.endswith(")"):
+        key = op[5:-1]
+        desc = key.startswith("-")
+        if desc:
+            key = key[1:]
+        if isinstance(data, list):
+            try:
+                return sorted(data, key=lambda x: (_macro_get_path(x, key) or 0), reverse=desc)
+            except Exception:
+                return data
+        return data
+    elif op == "unique":
+        if isinstance(data, list):
+            seen = []
+            uniq = []
+            for x in data:
+                k = json.dumps(x, sort_keys=True, separators=(",", ":"))
+                if k not in seen:
+                    seen.append(k)
+                    uniq.append(x)
+            return uniq
+        return data
+    elif op.startswith("pluck(") and op.endswith(")"):
+        key = op[6:-1]
+        if isinstance(data, list):
+            return [_macro_get_path(x, key) for x in data]
+        return _macro_get_path(data, key)
+    elif op == "reverse":
+        if isinstance(data, list):
+            return list(reversed(data))
+        return data
+    elif op.startswith("filter(") and op.endswith(")"):
+        cond = op[7:-1]
+        if isinstance(data, list):
+            return [x for x in data if _macro_eval_cond(x, cond)]
+        return data
+    elif op.startswith("group_by(") and op.endswith(")"):
+        key = op[9:-1]
+        if isinstance(data, list):
+            groups: Dict[str, List] = {}
+            for x in data:
+                k = str(_macro_get_path(x, key) or "null")
+                groups.setdefault(k, []).append(x)
+            return groups
+        return data
+    return data
+
+
+class MacroDSLInterpreter:
+    """Simple deterministic interpreter for the macro DSL."""
+
+    def __init__(self):
+        self.vars: Dict[str, Any] = {"_": None}
+        self.results: List[Dict] = []
+        self.tools_registry: Dict[str, Any] = {}
+
+    def _get_tool(self, name: str):
+        if not isinstance(name, str) or not name.replace("_", "").isalnum():
+            return None
+        if name not in self.tools_registry:
+            try:
+                mod = importlib.import_module(f".{name}", package=__package__)
+                self.tools_registry[name] = getattr(mod, name)
+            except (ImportError, AttributeError):
+                self.tools_registry[name] = None
+        return self.tools_registry[name]
+
+    def run(self, script: str) -> Dict:
+        lines = [l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#")]
+        for line in lines:
+            self._execute_line(line)
+        return {
+            "ok": True,
+            "results": self.results,
+            "vars": {k: v for k, v in self.vars.items() if not k.startswith("_")},
+        }
+
+    def _execute_line(self, line: str):
+        if line.startswith("return "):
+            expr = line[7:].strip()
+            self.vars["_"] = self._eval_expr(expr)
+            return
+        if line.startswith("set "):
+            m = re.match(r"set\s+(\w+)\s*=\s+(.+)", line)
+            if m:
+                var_name, expr = m.group(1), m.group(2).strip()
+                self.vars[var_name] = self._eval_expr(expr)
+                return
+        if line.startswith("filter "):
+            m = re.match(r"filter\s+(\w+)\s+where\s+(.+)", line)
+            if m:
+                var_name, cond = m.group(1), m.group(2)
+                data = self.vars.get(var_name, [])
+                if isinstance(data, list):
+                    self.vars[var_name] = [x for x in data if _macro_eval_cond(x, cond)]
+                return
+        if line.startswith("for "):
+            m = re.match(r"for\s+(\w+)\s+in\s+(\w+):\s*(.+)", line)
+            if m:
+                item_var, list_var, stmt = m.group(1), m.group(2), m.group(3).strip()
+                data = self.vars.get(list_var, [])
+                out = []
+                for item in data:
+                    self.vars[item_var] = item
+                    result = self._eval_expr(stmt)
+                    out.append(result)
+                self.vars["_"] = out
+                return
+        if line.startswith("if "):
+            m = re.match(r"if\s+(.+):\s*(.+)", line)
+            if m:
+                cond, stmt = m.group(1), m.group(2).strip()
+                if self._eval_cond(cond):
+                    self._eval_expr(stmt)
+                return
+        self.vars["_"] = self._eval_expr(line)
+
+    def _eval_expr(self, expr: str) -> Any:
+        expr = expr.strip()
+        if "|" in expr:
+            parts = [p.strip() for p in expr.split("|")]
+            current = self._eval_expr(parts[0])
+            for op in parts[1:]:
+                current = _macro_apply_pipe_op(current, op)
+            return current
+        tool_match = re.match(r"(\w+)\((.*)\)", expr)
+        if tool_match:
+            tool_name, args_str = tool_match.group(1), tool_match.group(2)
+            args = self._parse_args(args_str)
+            tool_func = self._get_tool(tool_name)
+            if tool_func is None:
+                result = make_error(MCPError.TOOL_NOT_FOUND, f"Tool '{tool_name}' not found")
+            else:
+                try:
+                    result = tool_func(**args)
+                except Exception as e:
+                    result = make_error("TOOL_ERROR", f"{tool_name} failed: {e}")
+            self.results.append({"tool": tool_name, "args": args, "result": result})
+            return result
+        if expr in self.vars:
+            return self.vars[expr]
+        try:
+            return json.loads(expr)
+        except json.JSONDecodeError:
+            pass
+        if (expr.startswith('"') and expr.endswith('"')) or (expr.startswith("'") and expr.endswith("'")):
+            return expr[1:-1]
+        return expr
+
+    def _parse_args(self, args_str: str) -> Dict[str, Any]:
+        args = {}
+        if not args_str.strip():
+            return args
+        tokens = []
+        current = ""
+        in_quote = False
+        quote_char = None
+        for c in args_str:
+            if c in ('"', "'") and not in_quote:
+                in_quote = True
+                quote_char = c
+                current += c
+            elif c == quote_char and in_quote:
+                in_quote = False
+                quote_char = None
+                current += c
+            elif c == "," and not in_quote:
+                tokens.append(current.strip())
+                current = ""
+            else:
+                current += c
+        if current.strip():
+            tokens.append(current.strip())
+        for token in tokens:
+            if "=" not in token:
+                continue
+            k, v = token.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            try:
+                v = json.loads(v)
+            except json.JSONDecodeError:
+                pass
+            args[k] = v
+        return args
+
+    def _eval_cond(self, cond: str) -> bool:
+        cond = cond.strip()
+        m = re.match(r"(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)", cond)
+        if not m:
+            val = self.vars.get(cond)
+            return bool(val) if val is not None else False
+        left, op, right_raw = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+        left_val = self.vars.get(left)
+        if left_val is None:
+            return False
+        right_raw = right_raw.strip('"\'')
+        try:
+            right_val = int(right_raw)
+        except ValueError:
+            try:
+                right_val = float(right_raw)
+            except ValueError:
+                right_val = right_raw
+        try:
+            if op == "==":
+                return str(left_val) == str(right_val)
+            elif op == "!=":
+                return str(left_val) != str(right_val)
+            elif op == "<":
+                return float(left_val) < float(right_val)
+            elif op == ">":
+                return float(left_val) > float(right_val)
+            elif op == "<=":
+                return float(left_val) <= float(right_val)
+            elif op == ">=":
+                return float(left_val) >= float(right_val)
+        except (ValueError, TypeError):
+            return False
+        return False
 
 
 # Predefined batch templates for common RE workflows
@@ -187,30 +481,41 @@ def _check_condition(call, results):
 @tool
 @idaread
 def batch(
-    calls: Annotated[list[dict], "List of tool calls: [{tool: str, action: str, ...params}]"],
+    calls: Annotated[list[dict], "List of tool calls: [{tool: str, action: str, ...params}]"] = None,
     stop_on_error: Annotated[bool, "Stop executing remaining calls if one fails"] = False,
     dry_run: Annotated[bool, "Validate all calls without executing"] = False,
     template: Annotated[Optional[str], "Use a predefined template (analyze_function, find_vulns_quick, map_binary, deep_function_audit, crypto_hunt, c2_investigation)"] = None,
     template_vars: Annotated[Optional[dict], "Variables for template expansion (e.g., {addr: '0x401000'})"] = None,
+    script: Annotated[Optional[str], "Macro DSL script for complex multi-step workflows. Alternative to 'calls'."] = None,
     **kwargs
 ) -> dict:
     """
     Execute multiple tool calls in a single request.
 
     Supports dependency resolution, result piping, conditional execution,
-    predefined templates, and dry-run validation.
+    predefined templates, dry-run validation, and macro DSL scripting.
 
-    Each item in `calls` should be a dict with at least:
-      - tool: The tool name (e.g. "code", "data", "search")
-      - action: The action to perform
-      - ...additional parameters for that tool
+    JSON Mode (calls):
+      Each item in `calls` should be a dict with at least:
+        - tool: The tool name (e.g. "code", "data", "search")
+        - action: The action to perform
+        - ...additional parameters for that tool
 
-    Advanced features:
-      - depends_on: [int] or int — indices of calls that must complete first.
-      - pipe_from: int — index of call whose output feeds into this call.
-      - pipe_field: str — field name to extract from piped result (default: auto-detect).
-      - if_result: {"index": int, "field": str, "op": "eq|ne|gt|lt|contains|exists", "value": any}
-        — conditionally execute based on a previous result.
+      Advanced features:
+        - depends_on: [int] or int — indices of calls that must complete first.
+        - pipe_from: int — index of call whose output feeds into this call.
+        - pipe_field: str — field name to extract from piped result (default: auto-detect).
+        - if_result: {"index": int, "field": str, "op": "eq|ne|gt|lt|contains|exists", "value": any}
+          — conditionally execute based on a previous result.
+
+    DSL Mode (script):
+      Provide a macro script instead of calls for complex workflows with
+      variables, loops, conditionals, and pipes.
+
+      set targets = search(action="bytes", pattern="48 89 5C 24")
+      filter targets where size > 100
+      for t in targets: code(action="decompile", addr=t.addr)
+      return _
 
     Templates:
       - analyze_function: decompile + strings + xrefs for a function
@@ -227,13 +532,34 @@ def batch(
 
         batch(template="analyze_function", template_vars={"addr": "0x401000"})
 
-        batch(calls=[
-            {"tool": "search", "action": "find", "pattern": "malloc"},
-            {"tool": "code", "action": "decompile", "pipe_from": 0, "addr": "$pipe"},
-        ])
+        batch(script='''
+            set imports = data(action="imports")
+            imports | pluck(name) | unique | count
+            return _
+        ''')
 
     Returns a list of results, one per call, in the execution order.
     """
+    if script and script.strip():
+        if dry_run:
+            lines = [l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#")]
+            detected = []
+            for line in lines:
+                m = re.search(r"(\w+)\(", line)
+                if m:
+                    detected.append(m.group(1))
+            return {
+                "ok": True,
+                "dry_run": True,
+                "mode": "script",
+                "lines": len(lines),
+                "tool_calls_detected": detected,
+            }
+        interpreter = MacroDSLInterpreter()
+        result = interpreter.run(script)
+        result["final"] = interpreter.vars.get("_")
+        return result
+
     if not calls and not template:
         return make_error(MCPError.INVALID_ARGS, "calls list or template is required")
 
