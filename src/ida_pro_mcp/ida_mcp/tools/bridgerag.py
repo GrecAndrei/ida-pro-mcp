@@ -145,21 +145,107 @@ class BridgeRAGSearch:
     # Hop-2: Candidate retrieval via bridges
     # ------------------------------------------------------------------
 
+    def _tripartite_score(
+        self,
+        seed_attrs: Dict,
+        bridge_attrs: Dict,
+        candidate_attrs: Dict,
+    ) -> float:
+        """
+        Tripartite judge: s(q, b, c) = conditional utility of candidate c
+        given query q and bridge b.
+        
+        Returns score in [0, 1].
+        """
+        score = 0.0
+        
+        # Bridge overlap: how many bridge entities does candidate share?
+        shared_apis = set(bridge_attrs.get("apis", [])) & set(candidate_attrs.get("apis", []))
+        shared_strings = set(bridge_attrs.get("strings", [])) & set(candidate_attrs.get("strings", []))
+        score += len(shared_apis) * 0.15
+        score += len(shared_strings) * 0.08
+        
+        # Structural similarity
+        seed_size = seed_attrs.get("size", 0)
+        cand_size = candidate_attrs.get("size", 0)
+        if seed_size > 0 and cand_size > 0:
+            size_ratio = min(seed_size, cand_size) / max(seed_size, cand_size)
+            score += size_ratio * 0.1
+        
+        # Complexity match
+        seed_cc = seed_attrs.get("cyclomatic_complexity", 0)
+        cand_cc = candidate_attrs.get("cyclomatic_complexity", 0)
+        if seed_cc > 0:
+            cc_ratio = min(seed_cc, cand_cc) / max(seed_cc, cand_cc)
+            score += cc_ratio * 0.1
+        
+        # Segment affinity
+        if seed_attrs.get("segment") == candidate_attrs.get("segment"):
+            score += 0.05
+        
+        return min(score, 1.0)
+
+    def _pit_fusion(
+        self,
+        judge_scores: List[float],
+        bridge_scores: List[float],
+        alpha: float = 0.1,
+    ) -> List[float]:
+        """
+        Percentile-rank (PIT) fusion of tripartite judge scores and bridge similarity.
+        
+        F(i) = (1 - alpha) * PIT_judge(i) + alpha * PIT_bridge(i)
+        """
+        def _pit(scores: List[float]) -> List[float]:
+            if not scores:
+                return []
+            sorted_idx = np.argsort(scores)
+            ranks = np.empty_like(sorted_idx, dtype=float)
+            ranks[sorted_idx] = np.linspace(0.0, 1.0, len(scores))
+            return ranks.tolist()
+        
+        pit_judge = _pit(judge_scores)
+        pit_bridge = _pit(bridge_scores)
+        
+        fused = []
+        for i in range(len(judge_scores)):
+            f = (1 - alpha) * pit_judge[i] + alpha * pit_bridge[i]
+            fused.append(f)
+        return fused
+
     def search_via_bridges(
         self,
         bridges: Dict[str, List[str]],
         top_k: int = 20,
         exclude_ea: Optional[int] = None,
+        seed_ea: Optional[int] = None,
     ) -> List[Dict]:
         """
         Find functions that share bridge entities with the seed.
-        Scored by weighted bridge overlap.
+        Uses tripartite judging + PIT fusion for ranking.
         """
         if not bridges or not any(bridges.values()):
             return []
 
         conn = self._conn()
         cur = conn.cursor()
+
+        # Get seed attributes for tripartite judging
+        seed_attrs = {}
+        if seed_ea is not None:
+            cur.execute(
+                "SELECT name, segment, size, entropy, cyclomatic_complexity, api_count, string_count FROM function_attrs WHERE ea = ?",
+                (seed_ea,)
+            )
+            row = cur.fetchone()
+            if row:
+                seed_attrs = {
+                    "name": row[0], "segment": row[1], "size": row[2],
+                    "entropy": row[3], "cyclomatic_complexity": row[4],
+                    "api_count": row[5], "string_count": row[6],
+                    "apis": bridges.get("apis", []),
+                    "strings": bridges.get("strings", []),
+                }
 
         # Collect all candidate EAs that match any bridge
         candidate_eas: Set[int] = set()
@@ -179,7 +265,7 @@ class BridgeRAGSearch:
                 if exclude_ea is not None and ea == exclude_ea:
                     continue
                 candidate_eas.add(ea)
-                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 2.0  # APIs are strong bridges
+                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 2.0
 
         if string_bridges:
             placeholders = ",".join("?" * len(string_bridges))
@@ -192,7 +278,7 @@ class BridgeRAGSearch:
                 if exclude_ea is not None and ea == exclude_ea:
                     continue
                 candidate_eas.add(ea)
-                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 1.0  # Strings are weaker bridges
+                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 1.0
 
         if not candidate_eas:
             conn.close()
@@ -211,36 +297,52 @@ class BridgeRAGSearch:
             tuple(candidate_eas),
         )
 
-        results: List[Dict] = []
+        candidates = []
         for row in cur.fetchall():
             ea = row[0]
-            score = bridge_scores.get(ea, 0.0)
-            # Bonus for high structural complexity (more likely to be related)
-            score += row[7] * 0.1  # cyclomatic_complexity
-            score += row[8] * 0.05  # api_count
-            results.append(
-                {
-                    "ea": hex(ea),
-                    "name": row[1],
-                    "segment": row[2],
-                    "size": row[3],
-                    "entropy": row[4],
-                    "bb_count": row[5],
-                    "call_count": row[6],
-                    "cyclomatic_complexity": row[7],
-                    "api_count": row[8],
-                    "string_count": row[9],
-                    "xref_count": row[10],
-                    "has_loops": bool(row[11]),
-                    "is_thunk": bool(row[12]),
-                    "is_library": bool(row[13]),
-                    "bridge_score": round(score, 2),
-                }
-            )
+            cand_attrs = {
+                "name": row[1], "segment": row[2], "size": row[3],
+                "entropy": row[4], "bb_count": row[5], "call_count": row[6],
+                "cyclomatic_complexity": row[7], "api_count": row[8],
+                "string_count": row[9], "xref_count": row[10],
+                "has_loops": bool(row[11]), "is_thunk": bool(row[12]),
+                "is_library": bool(row[13]),
+            }
+            
+            # Tripartite judging
+            judge_score = self._tripartite_score(seed_attrs, seed_attrs, cand_attrs) if seed_attrs else 0.5
+            
+            # Bridge overlap score
+            bscore = bridge_scores.get(ea, 0.0)
+            bscore += row[7] * 0.1  # cyclomatic complexity bonus
+            bscore += row[8] * 0.05  # api count bonus
+            
+            candidates.append({
+                "ea": hex(ea),
+                "attrs": cand_attrs,
+                "judge_score": judge_score,
+                "bridge_score": bscore,
+            })
 
         conn.close()
-        results.sort(key=lambda x: x["bridge_score"], reverse=True)
-        return results[:top_k]
+
+        # PIT fusion
+        judge_scores = [c["judge_score"] for c in candidates]
+        bridge_scores_list = [c["bridge_score"] for c in candidates]
+        fused_scores = self._pit_fusion(judge_scores, bridge_scores_list, alpha=0.1)
+        
+        for i, c in enumerate(candidates):
+            c["fused_score"] = round(fused_scores[i], 4)
+            # Merge attrs into result
+            result = dict(c["attrs"])
+            result["ea"] = c["ea"]
+            result["tripartite_score"] = round(c["judge_score"], 4)
+            result["bridge_score"] = round(c["bridge_score"], 2)
+            result["fused_score"] = c["fused_score"]
+            candidates[i] = result
+
+        candidates.sort(key=lambda x: x["fused_score"], reverse=True)
+        return candidates[:top_k]
 
     # ------------------------------------------------------------------
     # Full pipeline: query -> bridges -> candidates
@@ -301,8 +403,8 @@ class BridgeRAGSearch:
             max_bridges=15,
         )
 
-        # Step 3: Retrieve candidates
-        candidates = self.search_via_bridges(bridges, top_k=top_k, exclude_ea=top_seed["ea"])
+        # Step 3: Retrieve candidates with tripartite judging
+        candidates = self.search_via_bridges(bridges, top_k=top_k, exclude_ea=top_seed["ea"], seed_ea=top_seed["ea"])
 
         # Step 4: Additional hops (simplified: extract bridges from top candidate and expand)
         if hops > 2 and candidates:
