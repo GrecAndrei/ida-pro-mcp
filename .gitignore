@@ -15,3 +15,7 @@ ida_mcp_cache/
 *.mcp.lock
 *.drcov
 *.binexport
+
+# Planning artifacts — preserve but don't commit
+GAP_ANALYSIS.md
+*.plan.md
