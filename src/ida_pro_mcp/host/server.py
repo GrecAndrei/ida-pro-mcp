@@ -89,7 +89,8 @@ from .config import (
 )
 from .context_density import ContextDensityOptimizer
 from .errors import MCPError, make_error
-from .patterns import compile_smart_pattern, smart_match
+from .patterns import compile_smart_pattern, smart_match, GlobalFactsDatabase
+from .insight_index import InsightIndex
 from .session import Session, SessionManager, BookmarkManager
 from .schemas import (
     TOOLS,
@@ -316,6 +317,13 @@ class IDAMCPServer:
             max_code_preview=CONTEXT_DENSITY_MAX_CODE_PREVIEW,
             max_hex_preview=CONTEXT_DENSITY_MAX_HEX_PREVIEW,
             max_xref_items=CONTEXT_DENSITY_MAX_XREF_ITEMS,
+        )
+        # VOERA L1 / L2 memory tiers
+        self._insight_index = InsightIndex(
+            persistence_path=os.path.join(self.cache_dir, "insight_index.json")
+        )
+        self._global_facts = GlobalFactsDatabase(
+            db_path=os.path.join(self.cache_dir, "global_facts.db")
         )
         self._register_lifecycle_handlers()
         self._start_runtime_lease_heartbeat()
@@ -584,6 +592,17 @@ class IDAMCPServer:
         self._shutdown_requested = True
         self._stop_runtime_lease_heartbeat()
         self._cleanup_all_runtimes()
+        # Persist VOERA memory tiers
+        try:
+            if hasattr(self, "_insight_index"):
+                self._insight_index.save()
+        except Exception as e:
+            log_rpc(f"Failed to save insight index: {e}")
+        try:
+            if hasattr(self, "_global_facts"):
+                self._global_facts.close()
+        except Exception as e:
+            log_rpc(f"Failed to close global facts DB: {e}")
 
     def _ida_binary_names(self) -> List[str]:
         if sys.platform == "win32":
@@ -2250,6 +2269,15 @@ class IDAMCPServer:
                     apply_res = self._apply_session_options(session, runtime)
                     if apply_res.get("error"):
                         return apply_res
+                    # Trigger automatic L1 index rebuild on binary load
+                    try:
+                        self._send_rpc_raw(
+                            {"tool": "schemaboot", "args": {"action": "ingest"}},
+                            server_port,
+                            timeout=60.0,
+                        )
+                    except Exception as e:
+                        log_rpc(f"Auto schemaboot ingest failed (non-fatal): {e}")
                     return {
                         "ok": True,
                         "idb_path": session.idb_path,
@@ -6159,7 +6187,12 @@ class IDAMCPServer:
             }
         if m == "resources/read":
             uri = p.get("uri", "")
-            resolver = ResourceResolver(lambda name, kwargs: self._execute_tool(name, kwargs))
+            resolver = ResourceResolver(
+                lambda name, kwargs: self._execute_tool(name, kwargs),
+                insight_index=self._insight_index,
+                global_facts=self._global_facts,
+                session_mgr=self.session_mgr,
+            )
             resource = resolver.read(uri)
             if resource is None:
                 return {

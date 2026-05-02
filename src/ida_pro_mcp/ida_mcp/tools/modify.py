@@ -9,6 +9,19 @@ try:
 except ImportError:
     from cybercane import evaluate_operation  # type: ignore[import-not-found]
 
+try:
+    from .memrl import emit_memrl_suggestion, REWARD_ACCEPT, REWARD_PARTIAL, REWARD_REJECT
+except ImportError:
+    try:
+        from memrl import emit_memrl_suggestion, REWARD_ACCEPT, REWARD_PARTIAL, REWARD_REJECT  # type: ignore[import-not-found]
+    except ImportError:
+        # No-op fallback if MemRL not available
+        def emit_memrl_suggestion(*args, **kwargs):  # type: ignore
+            return ""
+        REWARD_ACCEPT = 1.0
+        REWARD_PARTIAL = 0.5
+        REWARD_REJECT = -0.5
+
 
 # ============================================================================
 # 7. MODIFY - Rename, comments, set type
@@ -56,6 +69,44 @@ def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
     return metadata
 
 
+# ---------------------------------------------------------------------------
+# MemRL feedback helper
+# ---------------------------------------------------------------------------
+
+def _apply_memrl_feedback(suggestion_id: str, feedback_type: str) -> dict:
+    """Apply a feedback signal to a MemRL suggestion.
+
+    Maps human-readable feedback types to reward values:
+
+        'accept'  -> +1.0
+        'partial' -> +0.5
+        'skip'    ->  0.0
+        'reject'  -> -0.5
+
+    Uses the MemRLBank directly. Returns {"ok": True/False, ...}.
+    """
+    reward_map = {
+        "accept": REWARD_ACCEPT,
+        "partial": REWARD_PARTIAL,
+        "reject": REWARD_REJECT,
+        "skip": 0.0,
+    }
+    reward = reward_map.get(feedback_type)
+    if reward is None:
+        return {"ok": False, "error": f"Unknown feedback type: {feedback_type}"}
+
+    try:
+        from .memrl import MemRLBank
+    except ImportError:
+        try:
+            from memrl import MemRLBank  # type: ignore[import-not-found]
+        except ImportError:
+            return {"ok": False, "error": "MemRLBank not available"}
+
+    bank = MemRLBank()
+    return bank.process_feedback(suggestion_id, reward)
+
+
 @tool
 @idawrite
 def modify(
@@ -71,6 +122,10 @@ def modify(
     comment_type: Annotated[Literal["regular", "repeatable", "anterior", "posterior"],
                             "Comment type (for action=comment)"] = "regular",
     governed: Annotated[bool, "Enable CyberCane neuro-symbolic governance pre-check"] = True,
+    feedback: Annotated[Optional[Literal["accept", "reject", "partial", "skip"]],
+                         "Optional feedback signal to MemRL after this operation"] = None,
+    memrl_suggestion_id: Annotated[Optional[str],
+                                    "Suggestion ID from a prior MemRL ingest for feedback attribution"] = None,
     **kwargs
 ) -> dict:
     """
@@ -91,6 +146,13 @@ def modify(
     - governed: If True (default), run CyberCane governance pre-check before
       committing. Blocks dangerous patches, redacts PII, warns on misleading
       renames. Set to False to bypass (not recommended).
+    - feedback: Optional feedback signal to MemRL:
+        'accept' = +1.0 (analyst accepted suggestion)
+        'partial' = +0.5 (analyst made minor edits)
+        'reject' = -0.5 (analyst rejected suggestion)
+        'skip' = 0.0 (suggestion ignored)
+    - memrl_suggestion_id: If provided, the feedback is applied to this
+      specific MemRL suggestion instead of creating a new one.
     """
     try:
         # Support multiple parameter names for compatibility
@@ -169,6 +231,18 @@ def modify(
                 result = {"ok": True, "addr": addr, "name": value}
                 if gov_warnings:
                     result["governance_warnings"] = gov_warnings
+                # Auto-ingest suggestion to MemRL
+                try:
+                    sug_id = emit_memrl_suggestion(
+                        "modify", "rename", addr, value
+                    )
+                    if sug_id:
+                        result["memrl_suggestion_id"] = sug_id
+                except Exception:
+                    pass
+                # Apply explicit feedback if provided
+                if feedback and memrl_suggestion_id:
+                    _apply_memrl_feedback(memrl_suggestion_id, feedback)
                 return result
             return make_error(MCPError.IDA_ERROR, "Failed to rename", "Check if name is valid C identifier and not duplicate")
 
@@ -192,6 +266,18 @@ def modify(
             result = {"ok": True, "addr": addr, "comment_type": comment_type, "comment": value}
             if gov_warnings:
                 result["governance_warnings"] = gov_warnings
+            # Auto-ingest suggestion to MemRL
+            try:
+                sug_id = emit_memrl_suggestion(
+                    "modify", "comment", addr, value
+                )
+                if sug_id:
+                    result["memrl_suggestion_id"] = sug_id
+            except Exception:
+                pass
+            # Apply explicit feedback if provided
+            if feedback and memrl_suggestion_id:
+                _apply_memrl_feedback(memrl_suggestion_id, feedback)
             return result
 
         elif action == "set_type":
@@ -202,6 +288,18 @@ def modify(
                 result = {"ok": True, "addr": addr, "type": str(tif)}
                 if gov_warnings:
                     result["governance_warnings"] = gov_warnings
+                # Auto-ingest suggestion to MemRL
+                try:
+                    sug_id = emit_memrl_suggestion(
+                        "modify", "set_type", addr, value
+                    )
+                    if sug_id:
+                        result["memrl_suggestion_id"] = sug_id
+                except Exception:
+                    pass
+                # Apply explicit feedback if provided
+                if feedback and memrl_suggestion_id:
+                    _apply_memrl_feedback(memrl_suggestion_id, feedback)
                 return result
             return make_error(MCPError.IDA_ERROR, "Failed to apply type", "Check if type is compatible with address")
 
@@ -251,6 +349,18 @@ def modify(
                 result = {"ok": True, "addr": addr, "total_size": total_size, "instructions": patched, "count": len(patched)}
             if gov_warnings:
                 result["governance_warnings"] = gov_warnings
+            # Auto-ingest suggestion to MemRL
+            try:
+                sug_id = emit_memrl_suggestion(
+                    "modify", "patch_asm", addr, "; ".join(instructions)
+                )
+                if sug_id:
+                    result["memrl_suggestion_id"] = sug_id
+            except Exception:
+                pass
+            # Apply explicit feedback if provided
+            if feedback and memrl_suggestion_id:
+                _apply_memrl_feedback(memrl_suggestion_id, feedback)
             return result
 
         else:

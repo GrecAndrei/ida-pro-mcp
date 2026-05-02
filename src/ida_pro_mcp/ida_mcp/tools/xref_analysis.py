@@ -320,6 +320,7 @@ def xref_analysis(
     addrs: Annotated[Optional[str], "Comma-separated addresses for multi-function actions"] = None,
     depth: Annotated[int, "Max search depth"] = 10,
     limit: Annotated[int, "Max results"] = 50,
+    max_items: Annotated[Optional[int], "Alias for limit (max results)"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     include_items: Annotated[bool, "Include structured items array"] = False,
     direction: Annotated[Literal["forward", "backward", "both"], "Traversal direction for influence/dependency_graph"] = "forward",
@@ -343,6 +344,8 @@ def xref_analysis(
     Use `include_items=true` to include structured objects in `items`.
     """
     try:
+        if max_items is not None:
+            limit = max_items
         limit = _sanitize_limit(limit)
         offset = _sanitize_offset(offset)
         depth = _sanitize_depth(depth)

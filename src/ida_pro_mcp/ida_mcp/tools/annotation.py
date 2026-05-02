@@ -10,6 +10,16 @@ try:
 except ImportError:
     from cybercane import evaluate_operation  # type: ignore[import-not-found]
 
+try:
+    from .memrl import emit_memrl_suggestion
+except ImportError:
+    try:
+        from memrl import emit_memrl_suggestion  # type: ignore[import-not-found]
+    except ImportError:
+        # No-op fallback if MemRL not available
+        def emit_memrl_suggestion(*args, **kwargs):  # type: ignore
+            return ""
+
 
 # ============================================================================
 # ANNOTATION - Intelligent Bulk Annotation for LLMs
@@ -741,7 +751,7 @@ def annotation(
                 return make_error(MCPError.INVALID_ARGS, "value (proposed comment) required for validate")
             
             result = _governance_check_proposed_comment(ea, proposed, "comment")
-            return {
+            response = {
                 "ok": True,
                 "addr": hex(ea),
                 "approved": result["approved"],
@@ -749,6 +759,16 @@ def annotation(
                 "redacted_comment": result["redacted_comment"],
                 "original_comment": proposed,
             }
+            # Log the validation to MemRL as a suggestion
+            try:
+                sug_id = emit_memrl_suggestion(
+                    "annotation", "validate", addr, proposed
+                )
+                if sug_id:
+                    response["memrl_suggestion_id"] = sug_id
+            except Exception:
+                pass
+            return response
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

@@ -1,0 +1,5095 @@
+{
+  "file": "/home/grec-alexander/Downloads/ida-pro-mcp/tests/data/test_binary.exe",
+  "md5": "9e60393da455f93b0ec32cf124432651",
+  "base_address": "0x140000000",
+  "functions": [
+    {
+      "addr": "0x140001008",
+      "name": "??$Write@U?$_tlgWrapperByRef@$0BA@@@U?$_tlgWrapperByVal@$07@@@?$_tlgWriteTemplate@$$A6AJPEBU_tlgProvider_t@@PEBXPEBU_GUID@@2IPEAU_EVENT_DATA_DESCRIPTOR@@@Z$1?_tlgWriteTransfer_EventWriteTransfer@@YAJ0122I3@ZPEBU2@PEBU2@@@SAJPEBU_tlgProvider_t@@PEBXPEBU_GUID@@2AEBU?$_tlgWrapperByRef@$0BA@@@AEBU?$_tlgWrapperByVal@$07@@@Z",
+      "size": 134
+    },
+    {
+      "addr": "0x140001094",
+      "name": "??$Write@U?$_tlgWrapperByRef@$0BA@@@U?$_tlgWrapperByVal@$07@@U?$_tlgWrapSz@G@@U3@U2@U?$_tlgWrapperByVal@$03@@U4@@?$_tlgWriteTemplate@$$A6AJPEBU_tlgProvider_t@@PEBXPEBU_GUID@@2IPEAU_EVENT_DATA_DESCRIPTOR@@@Z$1?_tlgWriteTransfer_EventWriteTransfer@@YAJ0122I3@ZPEBU2@PEBU2@@@SAJPEBU_tlgProvider_t@@PEBXPEBU_GUID@@2AEBU?$_tlgWrapperByRef@$0BA@@@AEBU?$_tlgWrapperByVal@$07@@AEBU?$_tlgWrapSz@G@@54AEBU?$_tlgWrapperByVal@$03@@6@Z",
+      "size": 289
+    },
+    {
+      "addr": "0x1400011bc",
+      "name": "??$Write@U?$_tlgWrapperByRef@$0BA@@@U?$_tlgWrapperByVal@$07@@U?$_tlgWrapperByVal@$03@@@?$_tlgWriteTemplate@$$A6AJPEBU_tlgProvider_t@@PEBXPEBU_GUID@@2IPEAU_EVENT_DATA_DESCRIPTOR@@@Z$1?_tlgWriteTransfer_EventWriteTransfer@@YAJ0122I3@ZPEBU2@PEBU2@@@SAJPEBU_tlgProvider_t@@PEBXPEBU_GUID@@2AEBU?$_tlgWrapperByRef@$0BA@@@AEBU?$_tlgWrapperByVal@$07@@AEBU?$_tlgWrapperByVal@$03@@@Z",
+      "size": 150
+    },
+    {
+      "addr": "0x140001260",
+      "name": "_tlgEnableCallback",
+      "size": 116
+    },
+    {
+      "addr": "0x1400012dc",
+      "name": "_tlgWriteTransfer_EventWriteTransfer",
+      "size": 158
+    },
+    {
+      "addr": "0x140001380",
+      "name": "wil::details::_dynamic_initializer_for__g_enabledStateManager__",
+      "size": 12
+    },
+    {
+      "addr": "0x1400013a0",
+      "name": "wil::details::_dynamic_initializer_for__g_featureStateManager__",
+      "size": 151
+    },
+    {
+      "addr": "0x140001440",
+      "name": "wil::details::_dynamic_initializer_for__g_header_init_InitializeResultHeader__",
+      "size": 43
+    },
+    {
+      "addr": "0x140001480",
+      "name": "wil::details::_dynamic_initializer_for__g_header_init_InitializeStagingHeaderInternalApi__",
+      "size": 71
+    },
+    {
+      "addr": "0x1400014d0",
+      "name": "wil::details::_dynamic_initializer_for__g_header_init_InitializeStagingSRUMFeatureReporting__",
+      "size": 15
+    },
+    {
+      "addr": "0x1400014f0",
+      "name": "wil::details::_dynamic_initializer_for__g_header_init_WilInitialize_ResultMacros_DesktopOrSystem__",
+      "size": 99
+    },
+    {
+      "addr": "0x140001560",
+      "name": "wil::details::_dynamic_initializer_for__g_processLocalData__",
+      "size": 12
+    },
+    {
+      "addr": "0x140001580",
+      "name": "wil::details::_dynamic_atexit_destructor_for__g_threadFailureCallbacks__",
+      "size": 12
+    },
+    {
+      "addr": "0x1400015a0",
+      "name": "_dynamic_initializer_for__dismissButtonImageList__",
+      "size": 12
+    },
+    {
+      "addr": "0x1400015c0",
+      "name": "_dynamic_initializer_for__dismissString__",
+      "size": 12
+    },
+    {
+      "addr": "0x1400015e0",
+      "name": "_dynamic_initializer_for__launchButtonString__",
+      "size": 12
+    },
+    {
+      "addr": "0x140001600",
+      "name": "_dynamic_initializer_for__messageFont__",
+      "size": 12
+    },
+    {
+      "addr": "0x140001620",
+      "name": "_dynamic_initializer_for__messageString__",
+      "size": 12
+    },
+    {
+      "addr": "0x140001640",
+      "name": "_dynamic_initializer_for__szFileName__",
+      "size": 12
+    },
+    {
+      "addr": "0x140001660",
+      "name": "_dynamic_atexit_destructor_for__restartHandler__",
+      "size": 12
+    },
+    {
+      "addr": "0x140001680",
+      "name": "wil::details::_dynamic_initializer_for__g_header_init_WilInitialize_ResultMacros_DesktopOrSystem_SuppressPrivateApiUse__",
+      "size": 43
+    },
+    {
+      "addr": "0x1400016c0",
+      "name": "initialize_legacy_wide_specifiers",
+      "size": 29
+    },
+    {
+      "addr": "0x1400016e4",
+      "name": "__local_stdio_printf_options",
+      "size": 8
+    },
+    {
+      "addr": "0x1400016f4",
+      "name": "__local_stdio_scanf_options",
+      "size": 8
+    },
+    {
+      "addr": "0x140001710",
+      "name": "initialize_msvcrt_compatibility",
+      "size": 29
+    },
+    {
+      "addr": "0x140001740",
+      "name": "pre_c_initialization",
+      "size": 161
+    },
+    {
+      "addr": "0x1400017f0",
+      "name": "post_pgo_initialization",
+      "size": 16
+    },
+    {
+      "addr": "0x140001810",
+      "name": "pre_cpp_initialization",
+      "size": 25
+    },
+    {
+      "addr": "0x140001830",
+      "name": "__scrt_common_main_seh",
+      "size": 368
+    },
+    {
+      "addr": "0x1400019e0",
+      "name": "__security_check_cookie",
+      "size": 30
+    },
+    {
+      "addr": "0x140001a04",
+      "name": "__scrt_acquire_startup_lock",
+      "size": 57
+    },
+    {
+      "addr": "0x140001a44",
+      "name": "__scrt_initialize_crt",
+      "size": 58
+    },
+    {
+      "addr": "0x140001a84",
+      "name": "__scrt_initialize_onexit_tables",
+      "size": 139
+    },
+    {
+      "addr": "0x140001b18",
+      "name": "__scrt_is_nonwritable_in_current_image",
+      "size": 152
+    },
+    {
+      "addr": "0x140001bb8",
+      "name": "__scrt_release_startup_lock",
+      "size": 36
+    },
+    {
+      "addr": "0x140001be4",
+      "name": "__scrt_uninitialize_crt",
+      "size": 41
+    },
+    {
+      "addr": "0x140001c14",
+      "name": "_onexit",
+      "size": 58
+    },
+    {
+      "addr": "0x140001c54",
+      "name": "atexit",
+      "size": 23
+    },
+    {
+      "addr": "0x140001c74",
+      "name": "??3@YAXPEAX_K@Z",
+      "size": 5
+    },
+    {
+      "addr": "0x140001c80",
+      "name": "??2@YAPEAX_KAEBUnothrow_t@std@@@Z",
+      "size": 28
+    },
+    {
+      "addr": "0x140001ca4",
+      "name": "__raise_securityfailure",
+      "size": 52
+    },
+    {
+      "addr": "0x140001ce0",
+      "name": "__report_gsfailure",
+      "size": 210
+    },
+    {
+      "addr": "0x140001db8",
+      "name": "__report_rangecheckfailure",
+      "size": 19
+    },
+    {
+      "addr": "0x140001dd4",
+      "name": "__report_securityfailure",
+      "size": 156
+    },
+    {
+      "addr": "0x140001e78",
+      "name": "capture_current_context",
+      "size": 126
+    },
+    {
+      "addr": "0x140001efc",
+      "name": "capture_previous_context",
+      "size": 131
+    },
+    {
+      "addr": "0x140001f88",
+      "name": "__security_init_cookie",
+      "size": 177
+    },
+    {
+      "addr": "0x140002040",
+      "name": "_get_startup_argv_mode",
+      "size": 6
+    },
+    {
+      "addr": "0x14000204c",
+      "name": "__scrt_initialize_winrt",
+      "size": 3
+    },
+    {
+      "addr": "0x140002058",
+      "name": "_get_startup_file_mode",
+      "size": 6
+    },
+    {
+      "addr": "0x140002064",
+      "name": "?__scrt_initialize_type_info@@YAXXZ",
+      "size": 14
+    },
+    {
+      "addr": "0x140002078",
+      "name": "__scrt_stub_for_acrt_uninitialize",
+      "size": 3
+    },
+    {
+      "addr": "0x140002090",
+      "name": "_guard_check_icall_nop",
+      "size": 3
+    },
+    {
+      "addr": "0x14000209c",
+      "name": "__scrt_initialize_default_local_stdio_options",
+      "size": 27
+    },
+    {
+      "addr": "0x1400020c0",
+      "name": "__scrt_get_dyn_tls_init_callback",
+      "size": 8
+    },
+    {
+      "addr": "0x1400020d0",
+      "name": "__scrt_get_dyn_tls_dtor_callback",
+      "size": 8
+    },
+    {
+      "addr": "0x1400020e0",
+      "name": "__crt_debugger_hook",
+      "size": 8
+    },
+    {
+      "addr": "0x1400020f0",
+      "name": "__scrt_fastfail",
+      "size": 352
+    },
+    {
+      "addr": "0x140002258",
+      "name": "__scrt_get_show_window_mode",
+      "size": 58
+    },
+    {
+      "addr": "0x140002298",
+      "name": "__scrt_initialize_mta",
+      "size": 5
+    },
+    {
+      "addr": "0x1400022a4",
+      "name": "__scrt_is_managed_app",
+      "size": 81
+    },
+    {
+      "addr": "0x1400022fc",
+      "name": "__scrt_set_unhandled_exception_filter",
+      "size": 14
+    },
+    {
+      "addr": "0x140002310",
+      "name": "__scrt_unhandled_exception_filter",
+      "size": 91
+    },
+    {
+      "addr": "0x140002374",
+      "name": "_RTC_Initialize",
+      "size": 59
+    },
+    {
+      "addr": "0x1400023c0",
+      "name": "_RTC_Terminate",
+      "size": 59
+    },
+    {
+      "addr": "0x140002408",
+      "name": "__isa_available_init",
+      "size": 428
+    },
+    {
+      "addr": "0x1400025bc",
+      "name": "__scrt_is_ucrt_dll_in_use",
+      "size": 12
+    },
+    {
+      "addr": "0x1400025d0",
+      "name": "??3@YAXPEAX@Z",
+      "size": 5
+    },
+    {
+      "addr": "0x1400025dc",
+      "name": "??2@YAPEAX_K@Z",
+      "size": 60
+    },
+    {
+      "addr": "0x140002620",
+      "name": "??0bad_alloc@std@@QEAA@AEBV01@@Z",
+      "size": 60
+    },
+    {
+      "addr": "0x140002664",
+      "name": "??0bad_alloc@std@@QEAA@XZ",
+      "size": 30
+    },
+    {
+      "addr": "0x140002688",
+      "name": "??0bad_array_new_length@std@@QEAA@AEBV01@@Z",
+      "size": 60
+    },
+    {
+      "addr": "0x1400026cc",
+      "name": "??0bad_array_new_length@std@@QEAA@XZ",
+      "size": 30
+    },
+    {
+      "addr": "0x1400026f0",
+      "name": "??0exception@std@@QEAA@AEBV01@@Z",
+      "size": 50
+    },
+    {
+      "addr": "0x140002728",
+      "name": "??1bad_array_new_length@std@@UEAA@XZ",
+      "size": 19
+    },
+    {
+      "addr": "0x140002750",
+      "name": "??_Ebad_alloc@std@@UEAAPEAXI@Z",
+      "size": 61
+    },
+    {
+      "addr": "0x140002794",
+      "name": "?__scrt_throw_std_bad_alloc@@YAXXZ",
+      "size": 32
+    },
+    {
+      "addr": "0x1400027bc",
+      "name": "?__scrt_throw_std_bad_array_new_length@@YAXXZ",
+      "size": 32
+    },
+    {
+      "addr": "0x1400027f0",
+      "name": "?what@exception@std@@UEBAPEBDXZ",
+      "size": 18
+    },
+    {
+      "addr": "0x140002820",
+      "name": "??_Gtype_info@@UEAAPEAXI@Z",
+      "size": 38
+    },
+    {
+      "addr": "0x14000284c",
+      "name": "_initterm_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002858",
+      "name": "_initterm_e_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002864",
+      "name": "_c_exit_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002870",
+      "name": "_register_thread_local_exe_atexit_callback_0",
+      "size": 6
+    },
+    {
+      "addr": "0x14000287c",
+      "name": "__C_specific_handler_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002888",
+      "name": "__p__commode",
+      "size": 6
+    },
+    {
+      "addr": "0x140002894",
+      "name": "_o___std_exception_copy_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028a0",
+      "name": "_o___std_exception_destroy_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028ac",
+      "name": "_o___stdio_common_vswprintf_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028b8",
+      "name": "_o__callnewh_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028c4",
+      "name": "_o__cexit_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028d0",
+      "name": "_configthreadlocale",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028dc",
+      "name": "_o__configure_wide_argv_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028e8",
+      "name": "_crt_atexit",
+      "size": 6
+    },
+    {
+      "addr": "0x1400028f4",
+      "name": "_o__exit_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002900",
+      "name": "_o__get_wide_winmain_command_line_0",
+      "size": 6
+    },
+    {
+      "addr": "0x14000290c",
+      "name": "_initialize_onexit_table",
+      "size": 6
+    },
+    {
+      "addr": "0x140002918",
+      "name": "_o__initialize_wide_environment_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002924",
+      "name": "_invalid_parameter_noinfo",
+      "size": 6
+    },
+    {
+      "addr": "0x140002930",
+      "name": "_purecall",
+      "size": 6
+    },
+    {
+      "addr": "0x14000293c",
+      "name": "_o__register_onexit_function_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002948",
+      "name": "_seh_filter_exe",
+      "size": 6
+    },
+    {
+      "addr": "0x140002954",
+      "name": "_set_app_type",
+      "size": 6
+    },
+    {
+      "addr": "0x140002960",
+      "name": "_o__set_fmode_0",
+      "size": 6
+    },
+    {
+      "addr": "0x14000296c",
+      "name": "_o__set_new_mode_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002978",
+      "name": "_o_exit_0",
+      "size": 6
+    },
+    {
+      "addr": "0x140002984",
+      "name": "free",
+      "size": 6
+    },
+    {
+      "addr": "0x140002990",
+      "name": "_o_malloc_0",
+      "size": 6
+    },
+    {
+      "addr": "0x14000299c",
+      "name": "_o_terminate_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400029a8",
+      "name": "__CxxFrameHandler3_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400029b4",
+      "name": "__current_exception_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400029c0",
+      "name": "__current_exception_context_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400029cc",
+      "name": "memset_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400029d8",
+      "name": "_CxxThrowException_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400029e4",
+      "name": "_vsnwprintf",
+      "size": 98
+    },
+    {
+      "addr": "0x140002a4c",
+      "name": "_vscwprintf",
+      "size": 71
+    },
+    {
+      "addr": "0x140002a93",
+      "name": "__tailMerge_advapi32_dll",
+      "size": 121
+    },
+    {
+      "addr": "0x140002b12",
+      "name": "__imp_load_DuplicateEncryptionInfoFile",
+      "size": 12
+    },
+    {
+      "addr": "0x140002b24",
+      "name": "__imp_load_DecryptFileW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002b30",
+      "name": "__tailMerge_comdlg32_dll",
+      "size": 121
+    },
+    {
+      "addr": "0x140002baf",
+      "name": "__imp_load_CommDlgExtendedError",
+      "size": 12
+    },
+    {
+      "addr": "0x140002bc1",
+      "name": "__imp_load_ChooseFontW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002bd3",
+      "name": "__imp_load_PageSetupDlgW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002be5",
+      "name": "__imp_load_PrintDlgExW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002bf7",
+      "name": "__imp_load_FindTextW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002c09",
+      "name": "__imp_load_ReplaceTextW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002c1b",
+      "name": "__imp_load_GetOpenFileNameW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002c2d",
+      "name": "__imp_load_GetSaveFileNameW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002c3f",
+      "name": "__imp_load_GetFileTitleW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002c4b",
+      "name": "__tailMerge_propsys_dll",
+      "size": 121
+    },
+    {
+      "addr": "0x140002cca",
+      "name": "__imp_load_PSGetPropertyDescriptionListFromString",
+      "size": 12
+    },
+    {
+      "addr": "0x140002cdc",
+      "name": "__imp_load_PropVariantToStringVectorAlloc",
+      "size": 12
+    },
+    {
+      "addr": "0x140002ce8",
+      "name": "__tailMerge_shell32_dll",
+      "size": 121
+    },
+    {
+      "addr": "0x140002d67",
+      "name": "__imp_load_SHCreateItemFromParsingName",
+      "size": 12
+    },
+    {
+      "addr": "0x140002d79",
+      "name": "__imp_load_ShellExecuteW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002d8b",
+      "name": "__imp_load_ShellAboutW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002d9d",
+      "name": "__imp_load_DragQueryFileW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002daf",
+      "name": "__imp_load_DragFinish",
+      "size": 12
+    },
+    {
+      "addr": "0x140002dc1",
+      "name": "__imp_load_SHAddToRecentDocs",
+      "size": 12
+    },
+    {
+      "addr": "0x140002dd3",
+      "name": "__imp_load_DragAcceptFiles",
+      "size": 12
+    },
+    {
+      "addr": "0x140002de5",
+      "name": "__imp_load_SHGetKnownFolderPath",
+      "size": 12
+    },
+    {
+      "addr": "0x140002df1",
+      "name": "__tailMerge_winspool_drv",
+      "size": 121
+    },
+    {
+      "addr": "0x140002e70",
+      "name": "__imp_load_OpenPrinterW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002e82",
+      "name": "__imp_load_GetPrinterDriverW",
+      "size": 12
+    },
+    {
+      "addr": "0x140002e94",
+      "name": "__imp_load_ClosePrinter",
+      "size": 12
+    },
+    {
+      "addr": "0x140002ea0",
+      "name": "__tailMerge_urlmon_dll",
+      "size": 121
+    },
+    {
+      "addr": "0x140002f1f",
+      "name": "__imp_load_FindMimeFromData",
+      "size": 12
+    },
+    {
+      "addr": "0x140002f40",
+      "name": "?_lambda_invoker_cdecl_@_lambda_152aa9d2a3a0648fa2fa7fcef514b376_@@CA@PEAX@Z",
+      "size": 31
+    },
+    {
+      "addr": "0x140002f70",
+      "name": "?_lambda_invoker_cdecl_@_lambda_1ad7ecfab602a777ecf020873216a663_@@CA@PEAX@Z",
+      "size": 28
+    },
+    {
+      "addr": "0x140002fa0",
+      "name": "?_lambda_invoker_cdecl_@_lambda_5035b992506f4af81a770c5842624510_@@CA@PEAU_TP_CALLBACK_INSTANCE@@PEAXPEAU_TP_TIMER@@@Z",
+      "size": 118
+    },
+    {
+      "addr": "0x140003020",
+      "name": "?_lambda_invoker_cdecl_@_lambda_d51448ba32f8ef42e59400edd4566183_@@CA@PEAU_TP_CALLBACK_INSTANCE@@PEAXPEAU_TP_TIMER@@@Z",
+      "size": 140
+    },
+    {
+      "addr": "0x1400030c0",
+      "name": "?_lambda_invoker_cdecl_@_lambda_fee8cea507d2413a58be13acfb66740a_@@CA@PEAX@Z",
+      "size": 5
+    },
+    {
+      "addr": "0x1400030cc",
+      "name": "??$ReportFailure_Base@$00$0A@@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
+      "size": 5
+    },
+    {
+      "addr": "0x1400030d8",
+      "name": "??$ReportFailure_Base@$01$0A@@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
+      "size": 59
+    },
+    {
+      "addr": "0x14000311c",
+      "name": "??$ReportFailure_Base@$02$0A@@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
+      "size": 36
+    },
+    {
+      "addr": "0x140003148",
+      "name": "??$ReportFailure_GetLastError@$02@details@wil@@YAKPEAXIPEBD110@Z",
+      "size": 119
+    },
+    {
+      "addr": "0x1400031c8",
+      "name": "??$ReportFailure_GetLastErrorHr@$00@details@wil@@YAJPEAXIPEBD110@Z",
+      "size": 190
+    },
+    {
+      "addr": "0x14000328c",
+      "name": "??$ReportFailure_Hr@$00@details@wil@@YAXPEAXIPEBD110J@Z",
+      "size": 75
+    },
+    {
+      "addr": "0x1400032e0",
+      "name": "??$ReportFailure_Hr@$01@details@wil@@YAXPEAXIPEBD110J@Z",
+      "size": 88
+    },
+    {
+      "addr": "0x140003340",
+      "name": "??$ReportFailure_Hr@$02@details@wil@@YAXPEAXIPEBD110J@Z",
+      "size": 83
+    },
+    {
+      "addr": "0x14000339c",
+      "name": "??$ReportFailure_NoReturn@$02@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
+      "size": 626
+    },
+    {
+      "addr": "0x140003614",
+      "name": "??$ReportFailure_Return@$00@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
+      "size": 670
+    },
+    {
+      "addr": "0x1400038b8",
+      "name": "??$ReportFailure_Return@$01@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
+      "size": 277
+    },
+    {
+      "addr": "0x1400039d4",
+      "name": "??0UsageIndexes@details_abi@wil@@QEAA@XZ",
+      "size": 182
+    },
+    {
+      "addr": "0x140003a94",
+      "name": "??1?$ThreadLocalStorage@PEAVThreadFailureCallbackHolder@details@wil@@@details_abi@wil@@QEAA@XZ",
+      "size": 115
+    },
+    {
+      "addr": "0x140003b10",
+      "name": "??1?$ThreadLocalStorage@UThreadLocalData@details_abi@wil@@@details_abi@wil@@QEAA@XZ",
+      "size": 124
+    },
+    {
+      "addr": "0x140003b94",
+      "name": "??1EnabledStateManager@details@wil@@QEAA@XZ",
+      "size": 305
+    },
+    {
+      "addr": "0x140003ccc",
+      "name": "??1FeatureStateData@details_abi@wil@@QEAA@XZ",
+      "size": 223
+    },
+    {
+      "addr": "0x140003db4",
+      "name": "??1FeatureStateManager@details@wil@@QEAA@XZ",
+      "size": 469
+    },
+    {
+      "addr": "0x140003f90",
+      "name": "??1SemaphoreValue@details_abi@wil@@QEAA@XZ",
+      "size": 97
+    },
+    {
+      "addr": "0x140003ff8",
+      "name": "??1ThreadLocalData@details_abi@wil@@QEAA@XZ",
+      "size": 186
+    },
+    {
+      "addr": "0x1400040b8",
+      "name": "??1UsageIndexes@details_abi@wil@@QEAA@XZ",
+      "size": 169
+    },
+    {
+      "addr": "0x140004170",
+      "name": "??R?$__func@V_lambda_8db0ce862824541f40dfb767113f1e28_@@$$A6A_NPEAX_K01I@Z@__function@wistd@@UEAA_N$$QEAPEAX$$QEA_K01$$QEAI@Z",
+      "size": 96
+    },
+    {
+      "addr": "0x1400041e0",
+      "name": "??_G?$__base@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAPEAXI@Z",
+      "size": 44
+    },
+    {
+      "addr": "0x140004220",
+      "name": "??_E?$__func@V_lambda_8db0ce862824541f40dfb767113f1e28_@@$$A6A_NPEAX_K01I@Z@__function@wistd@@UEAAPEAXI@Z",
+      "size": 44
+    },
+    {
+      "addr": "0x140004254",
+      "name": "?Acquire@?$ProcessLocalStorageData@UProcessLocalData@details_abi@wil@@@details_abi@wil@@SAJPEBDPEAPEAV123@@Z",
+      "size": 1056
+    },
+    {
+      "addr": "0x14000467c",
+      "name": "?Acquire@?$ProcessLocalStorageData@VFeatureStateData@details_abi@wil@@@details_abi@wil@@SAJPEBDPEAPEAV123@@Z",
+      "size": 1081
+    },
+    {
+      "addr": "0x140004abc",
+      "name": "?CreateFromPointer@SemaphoreValue@details_abi@wil@@QEAAJPEBGPEAX@Z",
+      "size": 452
+    },
+    {
+      "addr": "0x140004c90",
+      "name": "?DebugBreak@details@wil@@YAXXZ",
+      "size": 7
+    },
+    {
+      "addr": "0x140004ca4",
+      "name": "?EnsureStateData@FeatureStateManager@details@wil@@AEAA_NXZ",
+      "size": 217
+    },
+    {
+      "addr": "0x140004d84",
+      "name": "?EnsureSubscribedToFeatureConfigurationChanges@details@wil@@YAIXZ",
+      "size": 216
+    },
+    {
+      "addr": "0x140004e64",
+      "name": "?EnsureTimerUnderLock@FeatureStateManager@details@wil@@AEAAXXZ",
+      "size": 168
+    },
+    {
+      "addr": "0x140004f14",
+      "name": "?FailFast_Unexpected@in1diag3@details@wil@@YAXPEAXIPEBD@Z",
+      "size": 32
+    },
+    {
+      "addr": "0x140004f3c",
+      "name": "?FindInsertionPointOrIncrement@RawUsageIndex@details_abi@wil@@AEAAPEAEAEAUUsageIndexProperty@23@PEAEPEAX_KI@Z",
+      "size": 726
+    },
+    {
+      "addr": "0x140005220",
+      "name": "?FormatNtStatusMsg@details@wil@@YAXJPEAGK@Z",
+      "size": 122
+    },
+    {
+      "addr": "0x1400052a0",
+      "name": "?FromResult@ResultStatus@details@wil@@SA?AU123@J@Z",
+      "size": 34
+    },
+    {
+      "addr": "0x1400052d0",
+      "name": "?GetContextAndNotifyFailure@details@wil@@YAXPEAUFailureInfo@2@PEAD_K@Z",
+      "size": 350
+    },
+    {
+      "addr": "0x140005440",
+      "name": "?GetCurrentModuleName@details@wil@@YAPEBDXZ",
+      "size": 61
+    },
+    {
+      "addr": "0x140005484",
+      "name": "?GetFailureLogString@wil@@YAJPEAG_KAEBUFailureInfo@1@@Z",
+      "size": 705
+    },
+    {
+      "addr": "0x14000574c",
+      "name": "?GetLastErrorFail@details@wil@@YAKPEAXIPEBD110@Z",
+      "size": 101
+    },
+    {
+      "addr": "0x1400057b8",
+      "name": "?GetLastErrorFailHr@details@wil@@YAJXZ",
+      "size": 82
+    },
+    {
+      "addr": "0x140005810",
+      "name": "?GetModuleInformation@details@wil@@YA_NPEAXPEAIPEAD_K@Z",
+      "size": 315
+    },
+    {
+      "addr": "0x140005954",
+      "name": "?GetThreadContext@ThreadFailureCallbackHolder@details@wil@@SA_NPEAUFailureInfo@3@PEAV123@PEAD_K@Z",
+      "size": 242
+    },
+    {
+      "addr": "0x140005a4c",
+      "name": "?GetThreadLocalDataCache@details_abi@wil@@YAPEAUThreadLocalData@12@_N@Z",
+      "size": 197
+    },
+    {
+      "addr": "0x140005b18",
+      "name": "?GetValueFromSemaphore@SemaphoreValue@details_abi@wil@@CAJPEAXPEAJ@Z",
+      "size": 384
+    },
+    {
+      "addr": "0x140005ca0",
+      "name": "?HrToNtStatus@details@wil@@YAJJ@Z",
+      "size": 457
+    },
+    {
+      "addr": "0x140005e70",
+      "name": "?IsFeatureConfigured@details@wil@@YA_NPEAUwil_FeatureState@@I_NW4wil_FeatureStore@@PEAH@Z",
+      "size": 214
+    },
+    {
+      "addr": "0x140005f4c",
+      "name": "?LogFailure@details@wil@@YAXPEAXIPEBD110W4FailureType@2@AEBUResultStatus@12@PEBG_NPEAG_KPEAD7PEAUFailureInfo@2@@Z",
+      "size": 775
+    },
+    {
+      "addr": "0x14000625c",
+      "name": "?LogStringPrintf@details@wil@@YAPEAGPEAGPEBG1ZZ",
+      "size": 119
+    },
+    {
+      "addr": "0x1400062e0",
+      "name": "?MicrosoftInternalNotifyFailure@details@wil@@YAXPEAUFailureInfo@2@@Z",
+      "size": 281
+    },
+    {
+      "addr": "0x140006400",
+      "name": "?NtStatusToHr@details@wil@@YAJJ@Z",
+      "size": 86
+    },
+    {
+      "addr": "0x14000645c",
+      "name": "?OnSignaled@SubscriptionList@details_abi@wil@@QEAAXAEAVsrwlock@3@@Z",
+      "size": 286
+    },
+    {
+      "addr": "0x140006580",
+      "name": "?OnStateChange@EnabledStateManager@details@wil@@QEAAXXZ",
+      "size": 138
+    },
+    {
+      "addr": "0x140006610",
+      "name": "?ProcessHeapAlloc@details@wil@@YAPEAXK_K@Z",
+      "size": 183
+    },
+    {
+      "addr": "0x1400066d0",
+      "name": "?QueueBackgroundSRUMUsageReporting@FeatureStateManager@details@wil@@QEAAXIGI@Z",
+      "size": 321
+    },
+    {
+      "addr": "0x140006818",
+      "name": "?Read@UsageIndexProperty@details_abi@wil@@QEAA_NAEAPEAEPEAE@Z",
+      "size": 292
+    },
+    {
+      "addr": "0x140006944",
+      "name": "?Record@UsageIndexes@details_abi@wil@@QEAAXXZ",
+      "size": 263
+    },
+    {
+      "addr": "0x140006a54",
+      "name": "?RecordCachedUsageUnderLock@EnabledStateManager@details@wil@@AEAAXXZ",
+      "size": 460
+    },
+    {
+      "addr": "0x140006c28",
+      "name": "?RecordException@details@wil@@YAHJ@Z",
+      "size": 22
+    },
+    {
+      "addr": "0x140006c50",
+      "name": "?RecordFailFast@details@wil@@YAHJ@Z",
+      "size": 12
+    },
+    {
+      "addr": "0x140006c64",
+      "name": "?RecordFeatureUsage@FeatureStateManager@details@wil@@QEAAXIW4wil_details_ServiceReportingKind@@_K@Z",
+      "size": 322
+    },
+    {
+      "addr": "0x140006dac",
+      "name": "?RecordLog@details@wil@@YAHJ@Z",
+      "size": 22
+    },
+    {
+      "addr": "0x140006dcc",
+      "name": "?RecordReturn@details@wil@@YAHJ@Z",
+      "size": 22
+    },
+    {
+      "addr": "0x140006df0",
+      "name": "?RecordSRUMFeatureUsage@details@wil@@YAXIII@Z",
+      "size": 46
+    },
+    {
+      "addr": "0x140006e24",
+      "name": "?RecordUsage@?$UsageIndex@W4wil_details_ServiceReportingKind@@I$01@details_abi@wil@@QEAA_NW4wil_details_ServiceReportingKind@@II@Z",
+      "size": 47
+    },
+    {
+      "addr": "0x140006e5c",
+      "name": "?RecordUsage@?$UsageIndex@W4wil_details_ServiceReportingKind@@I$0A@@details_abi@wil@@QEAA_NW4wil_details_ServiceReportingKind@@II@Z",
+      "size": 50
+    },
+    {
+      "addr": "0x140006e94",
+      "name": "?RecordUsage@FeatureStateData@details_abi@wil@@QEAAXXZ",
+      "size": 154
+    },
+    {
+      "addr": "0x140006f34",
+      "name": "?RecordUsage@RawUsageIndex@details_abi@wil@@QEAA_NPEAX_K01I@Z",
+      "size": 367
+    },
+    {
+      "addr": "0x1400070ac",
+      "name": "?RecordUsageInternal@RawUsageIndex@details_abi@wil@@AEAA_NPEAX_K01I@Z",
+      "size": 1003
+    },
+    {
+      "addr": "0x1400074a0",
+      "name": "?RecordWnfUsageIndex@details_abi@wil@@YAXPEBU__WIL__WNF_STATE_NAME@@_KAEBVRawUsageIndex@12@@Z",
+      "size": 941
+    },
+    {
+      "addr": "0x140007854",
+      "name": "?Release@?$ProcessLocalStorageData@UProcessLocalData@details_abi@wil@@@details_abi@wil@@QEAAXXZ",
+      "size": 394
+    },
+    {
+      "addr": "0x1400079e4",
+      "name": "?Release@?$ProcessLocalStorageData@VFeatureStateData@details_abi@wil@@@details_abi@wil@@QEAAXXZ",
+      "size": 534
+    },
+    {
+      "addr": "0x140007c00",
+      "name": "?Return_GetLastError@in1diag3@details@wil@@YAJPEAXIPEBD@Z",
+      "size": 25
+    },
+    {
+      "addr": "0x140007c20",
+      "name": "?Return_Hr@in1diag3@details@wil@@YAXPEAXIPEBDJ@Z",
+      "size": 30
+    },
+    {
+      "addr": "0x140007c50",
+      "name": "?RtlDllShutdownInProgress@details@wil@@YAEXZ",
+      "size": 108
+    },
+    {
+      "addr": "0x140007cd0",
+      "name": "?RtlNtStatusToDosErrorNoTeb@details@wil@@YAKJ@Z",
+      "size": 121
+    },
+    {
+      "addr": "0x140007d50",
+      "name": "?Set@ThreadLocalFailureInfo@details_abi@wil@@QEAAXAEBUFailureInfo@3@I@Z",
+      "size": 591
+    },
+    {
+      "addr": "0x140007fa8",
+      "name": "?SetBuffer@RawUsageIndex@details_abi@wil@@QEAAXPEAX_K1@Z",
+      "size": 300
+    },
+    {
+      "addr": "0x1400080dc",
+      "name": "?SetLastError@ThreadLocalData@details_abi@wil@@QEAAXAEBUFailureInfo@3@@Z",
+      "size": 252
+    },
+    {
+      "addr": "0x1400081e0",
+      "name": "?StringCchCatW@@YAJPEAG_KPEBG@Z",
+      "size": 206
+    },
+    {
+      "addr": "0x1400082b4",
+      "name": "?StringCchCopyW@@YAJPEAG_KPEBG@Z",
+      "size": 106
+    },
+    {
+      "addr": "0x140008328",
+      "name": "?StringCchPrintfW@@YAJPEAG_KPEBGZZ",
+      "size": 108
+    },
+    {
+      "addr": "0x14000839c",
+      "name": "?SubscribeFeatureStateCacheToConfigurationChanges@details@wil@@YAXPEATwil_details_FeatureStateCache@@W4wil_FeatureChangeTime@@I@Z",
+      "size": 159
+    },
+    {
+      "addr": "0x140008444",
+      "name": "?SubscribeToEnabledStateChanges@FeatureStateManager@details@wil@@QEAAXPEAPEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@P6AXPEAX@Z1@Z",
+      "size": 265
+    },
+    {
+      "addr": "0x140008554",
+      "name": "?SubscribeToUsageFlush@FeatureStateManager@details@wil@@QEAAXPEAPEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@P6AXPEAX@Z@Z",
+      "size": 286
+    },
+    {
+      "addr": "0x140008678",
+      "name": "?SubscribeUnderLock@SubscriptionList@details_abi@wil@@QEAAXPEAPEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@P6AXPEAX@Z1@Z",
+      "size": 146
+    },
+    {
+      "addr": "0x140008710",
+      "name": "?Swap@RawUsageIndex@details_abi@wil@@QEAAXAEAV123@@Z",
+      "size": 236
+    },
+    {
+      "addr": "0x140008804",
+      "name": "?TryGetValueInternal@SemaphoreValue@details_abi@wil@@CAJPEBG_NPEA_KPEA_N@Z",
+      "size": 734
+    },
+    {
+      "addr": "0x140008ae8",
+      "name": "?UnregisterWilFeatureConfigurationChange@details@wil@@YAXPEAX@Z",
+      "size": 108
+    },
+    {
+      "addr": "0x140008b5c",
+      "name": "?Unsubscribe@SubscriptionList@details_abi@wil@@QEAAXAEAVsrwlock@3@PEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@@Z",
+      "size": 152
+    },
+    {
+      "addr": "0x140008c00",
+      "name": "?WilApiImpl_GetFeatureEnabledState@details@wil@@YA?AW4FEATURE_ENABLED_STATE@@IW4FEATURE_CHANGE_TIME@@PEAH@Z",
+      "size": 102
+    },
+    {
+      "addr": "0x140008c70",
+      "name": "?WilApiImpl_RecordFeatureUsage@details@wil@@YAXIIIPEBD@Z",
+      "size": 314
+    },
+    {
+      "addr": "0x140008db0",
+      "name": "?WilApiImpl_SubscribeFeatureStateChangeNotification@details@wil@@YAXPEAPEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@P6AXPEAX@Z1@Z",
+      "size": 45
+    },
+    {
+      "addr": "0x140008df0",
+      "name": "?WilApiImpl_UnsubscribeFeatureStateChangeNotification@details@wil@@YAXPEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@@Z",
+      "size": 79
+    },
+    {
+      "addr": "0x140008e48",
+      "name": "?WilApi_RecordFeatureUsageReports@details@wil@@YAXPEAU__WIL_RTL_FEATURE_USAGE_DATA@@_K@Z",
+      "size": 87
+    },
+    {
+      "addr": "0x140008eb0",
+      "name": "?WilDynamicLoadRaiseFailFastException@details@wil@@YAXPEAU_EXCEPTION_RECORD@@PEAU_CONTEXT@@K@Z",
+      "size": 101
+    },
+    {
+      "addr": "0x140008f1c",
+      "name": "?WilFailFast@details@wil@@YAXAEBUFailureInfo@2@@Z",
+      "size": 167
+    },
+    {
+      "addr": "0x140008fcc",
+      "name": "?WilRaiseFailFastException@details@wil@@YAXPEAU_EXCEPTION_RECORD@@PEAU_CONTEXT@@K@Z",
+      "size": 36
+    },
+    {
+      "addr": "0x140008ff8",
+      "name": "?Write@UsageIndexProperty@details_abi@wil@@QEBA_NAEAPEAEPEAE@Z",
+      "size": 259
+    },
+    {
+      "addr": "0x140009104",
+      "name": "?_FailFastImmediate_Unexpected@in1diag3@details@wil@@YAXXZ",
+      "size": 7
+    },
+    {
+      "addr": "0x14000910b",
+      "name": "nullsub_1",
+      "size": 1
+    },
+    {
+      "addr": "0x140009114",
+      "name": "?_FailFast_GetLastError@in1diag3@details@wil@@YAXPEAXIPEBD@Z",
+      "size": 20
+    },
+    {
+      "addr": "0x140009130",
+      "name": "?_FailFast_Unexpected@in1diag3@details@wil@@YAXPEAXIPEBD@Z",
+      "size": 20
+    },
+    {
+      "addr": "0x140009150",
+      "name": "?__move@?$__func@V_lambda_8db0ce862824541f40dfb767113f1e28_@@$$A6A_NPEAX_K01I@Z@__function@wistd@@UEAAXPEAV?$__base@$$A6A_NPEAX_K01I@Z@23@@Z",
+      "size": 29
+    },
+    {
+      "addr": "0x140009180",
+      "name": "?destroy@?$__func@V_lambda_832c4623155ece419fff6642a81e874e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAXXZ",
+      "size": 3
+    },
+    {
+      "addr": "0x14000918c",
+      "name": "?push_back@heap_buffer@details_abi@wil@@QEAA_NPEBX_K@Z",
+      "size": 158
+    },
+    {
+      "addr": "0x140009230",
+      "name": "?reserve@heap_buffer@details_abi@wil@@QEAA_N_K@Z",
+      "size": 234
+    },
+    {
+      "addr": "0x140009320",
+      "name": "?reset@?$unique_storage@U?$resource_policy@PEAU_TP_TIMER@@P6AXPEAU1@@Z$1?Destroy@?$DestroyThreadPoolTimer@USystemThreadPoolMethods@details@wil@@$0A@@details@wil@@SAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAU1@PEAU1@$0A@$$T@details@wil@@@details@wil@@QEAAXPEAU_TP_TIMER@@@Z",
+      "size": 145
+    },
+    {
+      "addr": "0x1400093b8",
+      "name": "?reset@?$unique_storage@U?$resource_policy@PEAXP6AXPEAX@_E$1?CloseHandle@details@wil@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAXPEAX$0A@$$T@details@wil@@@details@wil@@QEAAXPEAX@Z",
+      "size": 122
+    },
+    {
+      "addr": "0x140009438",
+      "name": "?wil_details_WriteSRUMWnfUsageBuffer@@YAJPEAV?$heap_vector@Uwil_details_FeatureUsageSRUM@@@details_abi@wil@@@Z",
+      "size": 493
+    },
+    {
+      "addr": "0x14000962c",
+      "name": "memcpy_s",
+      "size": 150
+    },
+    {
+      "addr": "0x1400096c8",
+      "name": "wil_QueryFeatureState",
+      "size": 358
+    },
+    {
+      "addr": "0x140009840",
+      "name": "wil_StagingConfig_LogStagedFeatureUsage",
+      "size": 156
+    },
+    {
+      "addr": "0x1400098e4",
+      "name": "wil_details_NtQueryWnfStateData",
+      "size": 161
+    },
+    {
+      "addr": "0x14000998c",
+      "name": "wil_details_NtUpdateWnfStateData",
+      "size": 180
+    },
+    {
+      "addr": "0x140009a48",
+      "name": "??$?0PEBG@HStringReference@Wrappers@WRL@Microsoft@@QEAA@AEBQEBGUDummy@Details@23@@Z",
+      "size": 122
+    },
+    {
+      "addr": "0x140009ac8",
+      "name": "??$IID_PPV_ARGS_Helper@V?$ComPtr@UIAsyncInfo@@@WRL@Microsoft@@@@YAPEAPEAXV?$ComPtrRef@V?$ComPtr@UIAsyncInfo@@@WRL@Microsoft@@@Details@WRL@Microsoft@@@Z",
+      "size": 43
+    },
+    {
+      "addr": "0x140009afc",
+      "name": "??$WaitForCompletion@PEAU?$IAsyncOperation@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@@details@wil@@YAJPEAU?$IAsyncOperation@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@KPEA_N@Z",
+      "size": 626
+    },
+    {
+      "addr": "0x140009d74",
+      "name": "??$make_unique_string_nothrow@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@wil@@YA?AV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@PEBG_K@Z",
+      "size": 289
+    },
+    {
+      "addr": "0x140009e9c",
+      "name": "??0?$ImplementsHelper@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00U?$ImplementsMarker@VFtmBase@WRL@Microsoft@@@Details@23@@Details@WRL@Microsoft@@QEAA@XZ",
+      "size": 177
+    },
+    {
+      "addr": "0x140009f54",
+      "name": "??1?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@QEAA@XZ",
+      "size": 30
+    },
+    {
+      "addr": "0x140009f78",
+      "name": "??1?$unique_storage@U?$resource_policy@PEAUHDC__@@P6AXUpaint_dc@wil@@@_E$1?close@23@SAX0@ZU?$integral_constant@_K$0A@@wistd@@U23@PEAU1@$0A@$$T@details@wil@@@details@wil@@QEAA@XZ",
+      "size": 112
+    },
+    {
+      "addr": "0x140009ff0",
+      "name": "??4?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@QEAAAEAV01@$$QEAV01@@Z",
+      "size": 128
+    },
+    {
+      "addr": "0x14000a080",
+      "name": "??_G?$RuntimeClass@U?$RuntimeClassFlags@$01@WRL@Microsoft@@U?$IAsyncOperationCompletedHandler@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@VFtmBase@23@@WRL@Microsoft@@UEAAPEAXI@Z",
+      "size": 82
+    },
+    {
+      "addr": "0x14000a0e0",
+      "name": "??_GCompletionDelegate@?1???$WaitForCompletion@PEAU?$IAsyncOperation@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@@details@wil@@YAJPEAU?$IAsyncOperation@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@KPEA_N@Z@UEAAPEAXI@Z",
+      "size": 123
+    },
+    {
+      "addr": "0x14000a164",
+      "name": "?ActivateBanner@@YAJ_N@Z",
+      "size": 938
+    },
+    {
+      "addr": "0x14000a520",
+      "name": "?AddRef@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAKXZ",
+      "size": 41
+    },
+    {
+      "addr": "0x14000a550",
+      "name": "?AddRef@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAKXZ",
+      "size": 9
+    },
+    {
+      "addr": "0x14000a560",
+      "name": "?BannerWndProc@@YA_JPEAUHWND__@@I_K_J@Z",
+      "size": 763
+    },
+    {
+      "addr": "0x14000a864",
+      "name": "?CreateDismissButtonImageList@@YAPEAU_IMAGELIST@@HH@Z",
+      "size": 347
+    },
+    {
+      "addr": "0x14000a9d0",
+      "name": "?DisconnectObject@FtmBase@WRL@Microsoft@@UEAAJK@Z",
+      "size": 27
+    },
+    {
+      "addr": "0x14000a9f4",
+      "name": "?DismissBanner@@YAXXZ",
+      "size": 101
+    },
+    {
+      "addr": "0x14000aa60",
+      "name": "?DismissButtonWndProc@@YA_JPEAUHWND__@@I_K_J11@Z",
+      "size": 143
+    },
+    {
+      "addr": "0x14000ab00",
+      "name": "?GetMarshalSizeMax@FtmBase@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAXK1KPEAK@Z",
+      "size": 86
+    },
+    {
+      "addr": "0x14000ab60",
+      "name": "?GetUnmarshalClass@FtmBase@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAXK1KPEAU4@@Z",
+      "size": 86
+    },
+    {
+      "addr": "0x14000abc0",
+      "name": "?Invoke@CompletionDelegate@?1???$WaitForCompletion@PEAU?$IAsyncOperation@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@@details@wil@@YAJPEAU?$IAsyncOperation@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@KPEA_N@Z@UEAAJ0W4AsyncStatus@56ABI@@@Z",
+      "size": 52
+    },
+    {
+      "addr": "0x14000abfc",
+      "name": "?LayoutBanner@@YAXXZ",
+      "size": 1165
+    },
+    {
+      "addr": "0x14000b090",
+      "name": "?LayoutNotepadWindow@@YAXXZ",
+      "size": 91
+    },
+    {
+      "addr": "0x14000b100",
+      "name": "?MarshalInterface@FtmBase@WRL@Microsoft@@UEAAJPEAUIStream@@AEBU_GUID@@PEAXK2K@Z",
+      "size": 84
+    },
+    {
+      "addr": "0x14000b160",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 214
+    },
+    {
+      "addr": "0x14000b240",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 9
+    },
+    {
+      "addr": "0x14000b250",
+      "name": "?RaiseException@Details@WRL@Microsoft@@YAXJK@Z",
+      "size": 17
+    },
+    {
+      "addr": "0x14000b270",
+      "name": "?Release@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAKXZ",
+      "size": 98
+    },
+    {
+      "addr": "0x14000b2e0",
+      "name": "?Release@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAKXZ",
+      "size": 9
+    },
+    {
+      "addr": "0x14000b2f0",
+      "name": "?ReleaseMarshalData@FtmBase@WRL@Microsoft@@UEAAJPEAUIStream@@@Z",
+      "size": 27
+    },
+    {
+      "addr": "0x14000b314",
+      "name": "?TryCreateStoreBanner@@YAJH@Z",
+      "size": 166
+    },
+    {
+      "addr": "0x14000b3c0",
+      "name": "?TryEnableAndDisplayStoreBannerAsync@@YAIPEAX@Z",
+      "size": 1106
+    },
+    {
+      "addr": "0x14000b820",
+      "name": "?UnmarshalInterface@FtmBase@WRL@Microsoft@@UEAAJPEAUIStream@@AEBU_GUID@@PEAPEAX@Z",
+      "size": 38
+    },
+    {
+      "addr": "0x14000b84c",
+      "name": "??$AdaptFixedSizeToAllocatedResult@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6APEAXPEAX@Z$1?LocalFree@@YAPEAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@$0BAA@@wil@@YAJAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6APEAXPEAX@Z$1?LocalFree@@YAPEAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@V?$function@$$A6AJPEAG_KPEA_K@Z@wistd@@@Z",
+      "size": 630
+    },
+    {
+      "addr": "0x14000bac8",
+      "name": "??$AdaptFixedSizeToAllocatedResult@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@$0IA@@wil@@YAJAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@V?$function@$$A6AJPEAG_KPEA_K@Z@wistd@@@Z",
+      "size": 615
+    },
+    {
+      "addr": "0x14000bd38",
+      "name": "??$make_unique_string_nothrow@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6APEAXPEAX@Z$1?LocalFree@@YAPEAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@wil@@YA?AV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6APEAXPEAX@Z$1?LocalFree@@YAPEAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@PEBG_K@Z",
+      "size": 291
+    },
+    {
+      "addr": "0x14000be64",
+      "name": "??0?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@QEAA@$$QEAV01@@Z",
+      "size": 14
+    },
+    {
+      "addr": "0x14000be7c",
+      "name": "??4?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6APEAXPEAX@Z$1?LocalFree@@YAPEAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@QEAAAEAV01@$$QEAV01@@Z",
+      "size": 128
+    },
+    {
+      "addr": "0x14000bf10",
+      "name": "??R?$__func@V_lambda_3b2e0a520180fee943e15932e0d5e8f1_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAJ$$QEAPEAG$$QEA_K$$QEAPEA_K@Z",
+      "size": 93
+    },
+    {
+      "addr": "0x14000bf80",
+      "name": "??R?$__func@V_lambda_f626c3109e34ea59201b5e3806fed71e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAJ$$QEAPEAG$$QEA_K$$QEAPEA_K@Z",
+      "size": 200
+    },
+    {
+      "addr": "0x14000c050",
+      "name": "??R?$function@$$A6AJPEAG_KPEA_K@Z@wistd@@QEBAJPEAG_KPEA_K@Z",
+      "size": 64
+    },
+    {
+      "addr": "0x14000c0a0",
+      "name": "??_E?$__func@V_lambda_3b2e0a520180fee943e15932e0d5e8f1_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAPEAXI@Z",
+      "size": 44
+    },
+    {
+      "addr": "0x14000c0e0",
+      "name": "??_G?$__func@V_lambda_f626c3109e34ea59201b5e3806fed71e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAPEAXI@Z",
+      "size": 44
+    },
+    {
+      "addr": "0x14000c114",
+      "name": "?AddEncodingComboBox@@YAJPEAUIFileDialogCustomize@@_N@Z",
+      "size": 440
+    },
+    {
+      "addr": "0x14000c2d4",
+      "name": "?AlertBox@@YAHPEAUHWND__@@PEBG11I@Z",
+      "size": 374
+    },
+    {
+      "addr": "0x14000c450",
+      "name": "?CheckSave@@YAHXZ",
+      "size": 714
+    },
+    {
+      "addr": "0x14000c720",
+      "name": "?CheckSaveTaskDlgBox@@YAHPEBG@Z",
+      "size": 394
+    },
+    {
+      "addr": "0x14000c8b0",
+      "name": "?ClearEnterprisePolicyAndSetCurrentMode@@YAXW4EdpAppMode@@@Z",
+      "size": 137
+    },
+    {
+      "addr": "0x14000c940",
+      "name": "DetermineFileTypeEncoding",
+      "size": 355
+    },
+    {
+      "addr": "0x14000caac",
+      "name": "?FreeGlobal@@YAXXZ",
+      "size": 69
+    },
+    {
+      "addr": "0x14000caf8",
+      "name": "?GotoAndScrollInView@@YAXH@Z",
+      "size": 108
+    },
+    {
+      "addr": "0x14000cb70",
+      "name": "?GotoDlgProc@@YA_JPEAUHWND__@@I_K_J@Z",
+      "size": 566
+    },
+    {
+      "addr": "0x14000cdb0",
+      "name": "?IdentityRevokedCallback@@YAXXZ",
+      "size": 58
+    },
+    {
+      "addr": "0x14000cdf0",
+      "name": "InitLegacyOpenSaveEncodingComboBox",
+      "size": 432
+    },
+    {
+      "addr": "0x14000cfa8",
+      "name": "?InvokeLegacyOpenDialog@@YAJAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@Z",
+      "size": 618
+    },
+    {
+      "addr": "0x14000d218",
+      "name": "?InvokeLegacySaveDialog@@YAJPEBGAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@Z",
+      "size": 603
+    },
+    {
+      "addr": "0x14000d47c",
+      "name": "?InvokeOpenDialog@@YAJPEAUHWND__@@PEAPEAG@Z",
+      "size": 342
+    },
+    {
+      "addr": "0x14000d5d8",
+      "name": "?InvokeSaveDialog@@YAJPEAUHWND__@@PEBGPEAPEAGPEAPEAUIFileSaveDialog@@@Z",
+      "size": 737
+    },
+    {
+      "addr": "0x14000d8c0",
+      "name": "?IsDocumentModified@@YA_NXZ",
+      "size": 89
+    },
+    {
+      "addr": "0x14000d920",
+      "name": "?IsElevated@@YAHXZ",
+      "size": 133
+    },
+    {
+      "addr": "0x14000d9ac",
+      "name": "?NPCommand@@YAHPEAUHWND__@@_K_J@Z",
+      "size": 3524
+    },
+    {
+      "addr": "0x14000e778",
+      "name": "?NPSize@@YAXHH@Z",
+      "size": 247
+    },
+    {
+      "addr": "0x14000e880",
+      "name": "?NPWndProc@@YA_JPEAUHWND__@@I_K_J@Z",
+      "size": 2060
+    },
+    {
+      "addr": "0x14000f0a0",
+      "name": "?NpLegacyOpenDialogHookProc@@YA_KPEAUHWND__@@I_K_J@Z",
+      "size": 87
+    },
+    {
+      "addr": "0x14000f100",
+      "name": "?NpLegacySaveDialogHookProc@@YA_KPEAUHWND__@@I_K_J@Z",
+      "size": 201
+    },
+    {
+      "addr": "0x14000f1d0",
+      "name": "?NpResetMenu@@YAXPEAUHWND__@@@Z",
+      "size": 783
+    },
+    {
+      "addr": "0x14000f4e8",
+      "name": "?PageSetupDlgInLogicalPixels@@YAHPEAUtagPSDW@@@Z",
+      "size": 81
+    },
+    {
+      "addr": "0x14000f540",
+      "name": "?SetApplicationEnterpriseMode@@YAHPEBG@Z",
+      "size": 398
+    },
+    {
+      "addr": "0x14000f6d4",
+      "name": "ShowOpenSaveDialog",
+      "size": 367
+    },
+    {
+      "addr": "0x14000f84c",
+      "name": "?SignalCommDlgError@@YAHXZ",
+      "size": 186
+    },
+    {
+      "addr": "0x14000f910",
+      "name": "?TextSelectionChangedFunc@@YAXPEAUHWINEVENTHOOK__@@KPEAUHWND__@@JJKK@Z",
+      "size": 7
+    },
+    {
+      "addr": "0x14000f920",
+      "name": "?UpdateStatusBar@@YAX_N@Z",
+      "size": 417
+    },
+    {
+      "addr": "0x14000fac8",
+      "name": "?UpdateStatusBarLineInfo@@YAX_N@Z",
+      "size": 305
+    },
+    {
+      "addr": "0x14000fc00",
+      "name": "?UpdateStatusBarWrapText@@YAXPEBG@Z",
+      "size": 133
+    },
+    {
+      "addr": "0x14000fc8c",
+      "name": "?UpdateStatusBarZoom@@YAX_N@Z",
+      "size": 215
+    },
+    {
+      "addr": "0x14000fd6c",
+      "name": "?UpdateTitle@@YAXXZ",
+      "size": 512
+    },
+    {
+      "addr": "0x14000ff80",
+      "name": "?__move@?$__func@V_lambda_3b2e0a520180fee943e15932e0d5e8f1_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
+      "size": 19
+    },
+    {
+      "addr": "0x14000ffa0",
+      "name": "?__move@?$__func@V_lambda_f626c3109e34ea59201b5e3806fed71e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
+      "size": 20
+    },
+    {
+      "addr": "0x14000ffbc",
+      "name": "?doDrop@@YAX_KPEAUHWND__@@@Z",
+      "size": 325
+    },
+    {
+      "addr": "0x140010108",
+      "name": "wWinMain",
+      "size": 927
+    },
+    {
+      "addr": "0x1400104b0",
+      "name": "?InsertDateTime@@YAXH@Z",
+      "size": 529
+    },
+    {
+      "addr": "0x1400106c8",
+      "name": "?IsLocaleBidi@@YAHK@Z",
+      "size": 90
+    },
+    {
+      "addr": "0x140010728",
+      "name": "??$AdaptFixedSizeToAllocatedResult@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@$0BAA@@wil@@YAJAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@V?$function@$$A6AJPEAG_KPEA_K@Z@wistd@@@Z",
+      "size": 630
+    },
+    {
+      "addr": "0x1400109a4",
+      "name": "??$GetFullPathNameW@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@$0BAA@@wil@@YAJPEBGAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@PEAPEBG@Z",
+      "size": 66
+    },
+    {
+      "addr": "0x1400109f0",
+      "name": "??R?$__func@V_lambda_c909c53304c88111c314d24cb7117bac_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAJ$$QEAPEAG$$QEA_K$$QEAPEA_K@Z",
+      "size": 106
+    },
+    {
+      "addr": "0x140010a60",
+      "name": "?AlertUser_FileFail@@YAXPEBG@Z",
+      "size": 211
+    },
+    {
+      "addr": "0x140010b3c",
+      "name": "?AnsiWriteFile@@YAHPEAXIK0K@Z",
+      "size": 332
+    },
+    {
+      "addr": "0x140010c90",
+      "name": "?GetContentType@@YAXPEBGPEAG@Z",
+      "size": 388
+    },
+    {
+      "addr": "0x140010e1c",
+      "name": "?GetFileSizeFromFilePath@@YAIPEBG@Z",
+      "size": 84
+    },
+    {
+      "addr": "0x140010e78",
+      "name": "?LoadFile@@YA_NAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@W4_NP_FILETYPE@@_N@Z",
+      "size": 2383
+    },
+    {
+      "addr": "0x1400117d0",
+      "name": "?New@@YAXH@Z",
+      "size": 443
+    },
+    {
+      "addr": "0x140011994",
+      "name": "?RestoreFmt@@YAXXZ",
+      "size": 80
+    },
+    {
+      "addr": "0x1400119ec",
+      "name": "?ReverseEndian@@YAXPEAGPEBGK@Z",
+      "size": 50
+    },
+    {
+      "addr": "0x140011a28",
+      "name": "?SaveFile@@YA_NPEAUHWND__@@AEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@_NPEBG@Z",
+      "size": 2055
+    },
+    {
+      "addr": "0x140012238",
+      "name": "?SetEdpPolicyForFile@@YAHPEBG@Z",
+      "size": 429
+    },
+    {
+      "addr": "0x1400123f0",
+      "name": "?__clone@?$__func@V_lambda_c909c53304c88111c314d24cb7117bac_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEBAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
+      "size": 19
+    },
+    {
+      "addr": "0x140012410",
+      "name": "?_lambda_invoker_cdecl_@_lambda_0374aa0a5d1201b2358c6bce99369c58_@@CA@PEAU_TP_CALLBACK_INSTANCE@@PEAXPEAU_TP_TIMER@@@Z",
+      "size": 81
+    },
+    {
+      "addr": "0x140012470",
+      "name": "?_lambda_invoker_cdecl_@_lambda_aa194dc0bf891154933407eb98fb868a_@@CA@PEAX@Z",
+      "size": 76
+    },
+    {
+      "addr": "0x1400124c4",
+      "name": "?CreateEditControl@@YAPEAUHWND__@@HHJPEAUHINSTANCE__@@@Z",
+      "size": 90
+    },
+    {
+      "addr": "0x140012530",
+      "name": "?EnumProc@@YAHPEBUtagLOGFONTW@@PEBUtagTEXTMETRICW@@K_J@Z",
+      "size": 10
+    },
+    {
+      "addr": "0x140012544",
+      "name": "?GetCachedFeatureEnabledState@?$FeatureImpl@U__WilFeatureTraits_Feature_NotepadBanner@@@details@wil@@AEAA?ATwil_details_FeatureStateCache@@XZ",
+      "size": 363
+    },
+    {
+      "addr": "0x1400126b8",
+      "name": "?GetFileName@@YAPEBGPEBGAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@Z",
+      "size": 664
+    },
+    {
+      "addr": "0x140012958",
+      "name": "?GetGlobals@@YAXXZ",
+      "size": 1287
+    },
+    {
+      "addr": "0x140012e68",
+      "name": "?InitStrings@@YAHPEAUHINSTANCE__@@@Z",
+      "size": 529
+    },
+    {
+      "addr": "0x140013080",
+      "name": "?NPInit@@YAHPEAUHINSTANCE__@@0PEBGH@Z",
+      "size": 45183
+    },
+    {
+      "addr": "0x14001e108",
+      "name": "NPRegister",
+      "size": 216
+    },
+    {
+      "addr": "0x14001e1e8",
+      "name": "?ProcessRestartManagerOption@@YA_NPEBG@Z",
+      "size": 174
+    },
+    {
+      "addr": "0x14001e29c",
+      "name": "?ProcessSetupOption@@YAHPEBG@Z",
+      "size": 564
+    },
+    {
+      "addr": "0x14001e4d8",
+      "name": "?ProcessShellOptions@@YAHPEBGH@Z",
+      "size": 584
+    },
+    {
+      "addr": "0x14001e730",
+      "name": "?ProtectionStatusChangedCallback@@YAXXZ",
+      "size": 66
+    },
+    {
+      "addr": "0x14001e778",
+      "name": "?QueueBackgroundUsageReporting@EnabledStateManager@details@wil@@QEAAXIPEAUwil_details_FeatureReportingCache@@@Z",
+      "size": 303
+    },
+    {
+      "addr": "0x14001e8b0",
+      "name": "?RegGetInt@@YAKPEAUHKEY__@@PEBGK@Z",
+      "size": 96
+    },
+    {
+      "addr": "0x14001e918",
+      "name": "?RegGetIntSaveDefault@@YAKPEAUHKEY__@@PEBGK@Z",
+      "size": 214
+    },
+    {
+      "addr": "0x14001e9f4",
+      "name": "?RegGetString@@YAXPEAUHKEY__@@PEBG1PEAGH@Z",
+      "size": 134
+    },
+    {
+      "addr": "0x14001ea80",
+      "name": "?RegWriteInt@@YAXPEAUHKEY__@@PEBGH@Z",
+      "size": 50
+    },
+    {
+      "addr": "0x14001eab8",
+      "name": "?RegWriteString@@YAXPEAUHKEY__@@PEBG1H@Z",
+      "size": 109
+    },
+    {
+      "addr": "0x14001eb2c",
+      "name": "?ReportUsage@?$FeatureImpl@U__WilFeatureTraits_Feature_NotepadBanner@@@details@wil@@QEAAX_NW4ReportingKind@3@_K@Z",
+      "size": 211
+    },
+    {
+      "addr": "0x14001ec08",
+      "name": "?ReportUsageToServiceDirect@details@wil@@YAHPEAUwil_details_FeatureReportingCache@@IHHW4wil_details_ServiceReportingKind@@I_KE@Z",
+      "size": 459
+    },
+    {
+      "addr": "0x14001eddc",
+      "name": "?SaveGlobals@@YAXXZ",
+      "size": 1071
+    },
+    {
+      "addr": "0x14001f214",
+      "name": "?SetEditControl@@YAXPEAUHWND__@@@Z",
+      "size": 255
+    },
+    {
+      "addr": "0x14001f31c",
+      "name": "?SetStatusWindowPartSizes@@YAXH@Z",
+      "size": 342
+    },
+    {
+      "addr": "0x14001f478",
+      "name": "lstrncmpi",
+      "size": 109
+    },
+    {
+      "addr": "0x14001f4ec",
+      "name": "wil_details_FeatureReporting_RecordUsageInCache",
+      "size": 736
+    },
+    {
+      "addr": "0x14001f7d4",
+      "name": "?ForwardScan@@YAPEBGPEBGH0_NPEAH@Z",
+      "size": 104
+    },
+    {
+      "addr": "0x14001f844",
+      "name": "?GetSelectedText@@YA_NPEAGK@Z",
+      "size": 217
+    },
+    {
+      "addr": "0x14001f924",
+      "name": "?NpReCreate@@YAHJ@Z",
+      "size": 867
+    },
+    {
+      "addr": "0x14001fc90",
+      "name": "?OpenUrl@@YAXPEBG@Z",
+      "size": 46
+    },
+    {
+      "addr": "0x14001fcc4",
+      "name": "?ReverseScan@@YAPEBGPEBGH0_NPEAH@Z",
+      "size": 111
+    },
+    {
+      "addr": "0x14001fd3c",
+      "name": "?Search@@YA_NPEBG_N@Z",
+      "size": 707
+    },
+    {
+      "addr": "0x140020010",
+      "name": "?AbortDlgProc@@YA_JPEAUHWND__@@I_K_J@Z",
+      "size": 319
+    },
+    {
+      "addr": "0x140020160",
+      "name": "?AbortProc@@YAHPEAUHDC__@@H@Z",
+      "size": 171
+    },
+    {
+      "addr": "0x140020214",
+      "name": "?GetNonDefPrinterDC@@YAPEAUHDC__@@XZ",
+      "size": 368
+    },
+    {
+      "addr": "0x14002038c",
+      "name": "?GetPrinterDC@@YAPEAUHDC__@@XZ",
+      "size": 259
+    },
+    {
+      "addr": "0x140020498",
+      "name": "?GetPrinterDCviaDialog@@YAPEAUHDC__@@XZ",
+      "size": 277
+    },
+    {
+      "addr": "0x1400205b4",
+      "name": "?NpPrintGivenDC@@YAHPEAUHDC__@@@Z",
+      "size": 2394
+    },
+    {
+      "addr": "0x140020f20",
+      "name": "?PageSetupHookProc@@YA_KPEAUHWND__@@I_K_J@Z",
+      "size": 282
+    },
+    {
+      "addr": "0x140021040",
+      "name": "?PrintHeaderFooter@@YAHPEAUHDC__@@H@Z",
+      "size": 475
+    },
+    {
+      "addr": "0x140021224",
+      "name": "?PrintIt@@YAXW4_PRINT_DIALOG_TYPE@@@Z",
+      "size": 330
+    },
+    {
+      "addr": "0x140021374",
+      "name": "?TranslateString@@YAXPEBG@Z",
+      "size": 1217
+    },
+    {
+      "addr": "0x14002183c",
+      "name": "?HeapBufferReplaceAll@@YAHPEBGHHH@Z",
+      "size": 454
+    },
+    {
+      "addr": "0x140021a08",
+      "name": "?ReplaceAll@@YAHXZ",
+      "size": 448
+    },
+    {
+      "addr": "0x140021bd0",
+      "name": "?ReplaceSel@@YAHH@Z",
+      "size": 380
+    },
+    {
+      "addr": "0x140021d54",
+      "name": "??$str_printf_nothrow@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@wil@@YAJAEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@PEBGZZ",
+      "size": 360
+    },
+    {
+      "addr": "0x140021ec4",
+      "name": "??0RestartHandler@@QEAA@$$QEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@Z",
+      "size": 228
+    },
+    {
+      "addr": "0x140021fb0",
+      "name": "??1RestartHandler@@UEAA@XZ",
+      "size": 68
+    },
+    {
+      "addr": "0x140022000",
+      "name": "??R?$__func@V_lambda_832c4623155ece419fff6642a81e874e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAJ$$QEAPEAG$$QEA_K$$QEAPEA_K@Z",
+      "size": 96
+    },
+    {
+      "addr": "0x140022070",
+      "name": "??_ERestartHandler@@UEAAPEAXI@Z",
+      "size": 53
+    },
+    {
+      "addr": "0x1400220ac",
+      "name": "?GenerateRestartIdentifier@@YA?AV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@XZ",
+      "size": 295
+    },
+    {
+      "addr": "0x1400221dc",
+      "name": "?GetRestartIdentifierFromRestartManagerCommandLine@@YA?AV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@PEBG@Z",
+      "size": 187
+    },
+    {
+      "addr": "0x1400222a0",
+      "name": "?GetRestartManagerCommandLineArgs@@YA?AV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@PEBG@Z",
+      "size": 154
+    },
+    {
+      "addr": "0x140022340",
+      "name": "?ShouldSupportRestartManager@RestartHandler@@QEBA_NXZ",
+      "size": 348
+    },
+    {
+      "addr": "0x1400224a4",
+      "name": "?TryAutosaveOpenedDocument@RestartHandler@@QEAA_NXZ",
+      "size": 1085
+    },
+    {
+      "addr": "0x1400228e8",
+      "name": "?TryRestoreAutosavedDocument@RestartHandler@@QEAA_NXZ",
+      "size": 1349
+    },
+    {
+      "addr": "0x140022e40",
+      "name": "?__clone@?$__func@V_lambda_832c4623155ece419fff6642a81e874e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEBAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
+      "size": 11
+    },
+    {
+      "addr": "0x140022e54",
+      "name": "?TraceFileEncodingSelection@@YAXW4_NP_FILETYPE@@@Z",
+      "size": 142
+    },
+    {
+      "addr": "0x140022ee8",
+      "name": "?TraceFileExit@@YAXPEAU_NP_EventCountInfo@@IHH@Z",
+      "size": 792
+    },
+    {
+      "addr": "0x140023208",
+      "name": "?TraceFileOpenComplete@@YAXPEAU_NP_FileInfo@@@Z",
+      "size": 220
+    },
+    {
+      "addr": "0x1400232ec",
+      "name": "?TraceFileOpenStart@@YAXXZ",
+      "size": 120
+    },
+    {
+      "addr": "0x14002336c",
+      "name": "?TraceFileSaveComplete@@YAXPEAU_NP_FileInfo@@H@Z",
+      "size": 339
+    },
+    {
+      "addr": "0x1400234c8",
+      "name": "?TraceFileSaveStart@@YAXXZ",
+      "size": 120
+    },
+    {
+      "addr": "0x140023548",
+      "name": "?TraceFreshWindow@@YAXH@Z",
+      "size": 169
+    },
+    {
+      "addr": "0x1400235f8",
+      "name": "?TraceLaunchComplete@@YAXH@Z",
+      "size": 132
+    },
+    {
+      "addr": "0x140023684",
+      "name": "?TraceLaunchStart@@YAXXZ",
+      "size": 120
+    },
+    {
+      "addr": "0x140023704",
+      "name": "?TracePageSetupUpdated@@YAXH@Z",
+      "size": 132
+    },
+    {
+      "addr": "0x140023790",
+      "name": "?TraceSearchBing@@YAXW4SearchBingEntryPoint@@H@Z",
+      "size": 305
+    },
+    {
+      "addr": "0x1400238c8",
+      "name": "?TraceTimeDateInvoked@@YAXH@Z",
+      "size": 132
+    },
+    {
+      "addr": "0x140023954",
+      "name": "?TraceViewHelp@@YAXXZ",
+      "size": 120
+    },
+    {
+      "addr": "0x1400239d4",
+      "name": "_tlgDefineProvider_annotation__Tlgg_NotepadTraceProviderProv",
+      "size": 3
+    },
+    {
+      "addr": "0x1400239e0",
+      "name": "?IsTextUTF8@@YAHPEBDH@Z",
+      "size": 80
+    },
+    {
+      "addr": "0x140023a38",
+      "name": "?CloseProcessInformation@@YAXPEAU_PROCESS_INFORMATION@@@Z",
+      "size": 66
+    },
+    {
+      "addr": "0x140023a80",
+      "name": "?GetCentennialNotepadAppExecutionAliasPath@@YAXPEAGH@Z",
+      "size": 119
+    },
+    {
+      "addr": "0x140023b00",
+      "name": "?LaunchCentennialNotepadApp@@YA_NPEBG@Z",
+      "size": 272
+    },
+    {
+      "addr": "0x140023c18",
+      "name": "ClearAccessibilityName",
+      "size": 107
+    },
+    {
+      "addr": "0x140023c8c",
+      "name": "SetAccessibilityName",
+      "size": 149
+    },
+    {
+      "addr": "0x140023d28",
+      "name": "?CreateFindReplaceDlg@@YAPEAUHWND__@@PEAUtagFINDREPLACEW@@I@Z",
+      "size": 340
+    },
+    {
+      "addr": "0x140023e90",
+      "name": "?FindReplaceDlgProc@@YA_JPEAUHWND__@@I_K_J@Z",
+      "size": 1074
+    },
+    {
+      "addr": "0x1400242c8",
+      "name": "?FindResourceExFallback@@YAPEAUHRSRC__@@PEAUHINSTANCE__@@PEBG1G@Z",
+      "size": 81
+    },
+    {
+      "addr": "0x140024320",
+      "name": "?GetFileTitleWithFallback@@YAFPEBGPEAGG@Z",
+      "size": 216
+    },
+    {
+      "addr": "0x140024400",
+      "name": "?InitControlsWithFlags@@YAXPEAUHWND__@@PEAUtagFINDREPLACEW@@I@Z",
+      "size": 972
+    },
+    {
+      "addr": "0x1400247d4",
+      "name": "?NotifyFindReplaceAccessibleResult@@YAXPEAUHWND__@@IPEAUtagFINDREPLACEW@@@Z",
+      "size": 214
+    },
+    {
+      "addr": "0x1400248b0",
+      "name": "?NotifyFindReplaceAccessibleResultText@@YAXPEAUHWND__@@PEBG@Z",
+      "size": 109
+    },
+    {
+      "addr": "0x140024924",
+      "name": "?SetupOK@@YAHPEAUtagFINDREPLACEW@@I@Z",
+      "size": 193
+    },
+    {
+      "addr": "0x1400249ec",
+      "name": "?UpdateTextAndFlags@@YAXPEAUHWND__@@PEAUtagFINDREPLACEW@@KI@Z",
+      "size": 261
+    },
+    {
+      "addr": "0x140024af8",
+      "name": "??$MemoryAllocT@K@@YAPEAK_K@Z",
+      "size": 46
+    },
+    {
+      "addr": "0x140024b2c",
+      "name": "??$MemoryAllocT@PEAG@@YAPEAPEAG_K@Z",
+      "size": 41
+    },
+    {
+      "addr": "0x140024b5c",
+      "name": "??1?$SP_HLOCAL@E@@QEAA@XZ",
+      "size": 40
+    },
+    {
+      "addr": "0x140024b8c",
+      "name": "?Reset@?$SP@GV?$SP_MEM@G@@@@QEAAXXZ",
+      "size": 69
+    },
+    {
+      "addr": "0x140024bd8",
+      "name": "??1SH_HANDLE@@QEAA@XZ",
+      "size": 40
+    },
+    {
+      "addr": "0x140024c08",
+      "name": "??4?$SP_HLOCAL@E@@QEAAAEAV0@V?$CTypeWrapper@PEAE@@@Z",
+      "size": 73
+    },
+    {
+      "addr": "0x140024c58",
+      "name": "??4?$SP_MEM@K@@QEAAAEAV0@V?$CTypeWrapper@PEAK@@@Z",
+      "size": 103
+    },
+    {
+      "addr": "0x140024cd0",
+      "name": "?GetSysColor@WARBIRD_DELAY_LOAD@@YAKH@Z",
+      "size": 29
+    },
+    {
+      "addr": "0x140024cf4",
+      "name": "?CheckToBreakOnFailure@?$CBreakOnFailureT@VCEmptyType@@@@SAXJ@Z",
+      "size": 25
+    },
+    {
+      "addr": "0x140024d20",
+      "name": "?SetBkMode@WARBIRD_DELAY_LOAD@@YAHPEAUHDC__@@H@Z",
+      "size": 3
+    },
+    {
+      "addr": "0x140024d2c",
+      "name": "?MemoryFree@@YAXPEAX@Z",
+      "size": 46
+    },
+    {
+      "addr": "0x140024d60",
+      "name": "?MulDiv@WARBIRD_DELAY_LOAD@@YAHHHH@Z",
+      "size": 4
+    },
+    {
+      "addr": "0x140024d6c",
+      "name": "StringCchLengthW",
+      "size": 70
+    },
+    {
+      "addr": "0x140024dbc",
+      "name": "??$WaitForCompletion@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@U?$IAsyncOperation@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@23@@@YAJPEAU?$IAsyncOperation@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@PEAX@Z",
+      "size": 639
+    },
+    {
+      "addr": "0x140025044",
+      "name": "??$WaitForCompletion@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@U?$IAsyncOperation@PEAVStorageFile@Storage@Windows@@@23@@@YAJPEAU?$IAsyncOperation@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@PEAX@Z",
+      "size": 639
+    },
+    {
+      "addr": "0x1400252cc",
+      "name": "wil::details::ScopeExitFn__lambda_439596f496b5e4b583b2e1ea237297f5___::_ScopeExitFn__lambda_439596f496b5e4b583b2e1ea237297f5___",
+      "size": 98
+    },
+    {
+      "addr": "0x140025340",
+      "name": "Microsoft::WRL::Details::DelegateArgTraits_long_(__cdecl_Windows::Foundation::IEventHandler_impl_IInspectable___::_)(IInspectable___IInspectable__)_::DelegateInvokeHelper_Windows::Foundation::IEventHandler_IInspectable_____lambda_d52fcddf69344b912edf41646ca01091___1_IInspectable___IInspectable___::_scalar_deleting_destructor_",
+      "size": 36
+    },
+    {
+      "addr": "0x140025370",
+      "name": "Microsoft::WRL::Details::DelegateArgTraits_long_(__cdecl_Windows::Foundation::IEventHandler_impl_Windows::Foundation::Internal::AggregateType_Windows::Security::EnterpriseData::ProtectedContentRevokedEventArgs___Windows::Security::EnterpriseData::IProtectedContentRevokedEventArgs_____::_)(IInspectable___Windows::Security::EnterpriseData::IProtectedContentRevokedEventArgs__)_::DelegateInvokeHelper_Windows::Foundation::IEventHandler_Windows::Security::EnterpriseData::ProtectedContentRevokedEventArgs_____lambda_09e9acfc031088f896b844c6192de7f3___1_IInspectable___Windows::Security::EnterpriseData::IProtectedContentRevokedEventArgs___::_scalar_deleting_destructor_",
+      "size": 71
+    },
+    {
+      "addr": "0x1400253c0",
+      "name": "??_G?$RuntimeClass@U?$RuntimeClassFlags@$01@WRL@Microsoft@@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@VFtmBase@23@@WRL@Microsoft@@UEAAPEAXI@Z",
+      "size": 77
+    },
+    {
+      "addr": "0x140025420",
+      "name": "??_G?$RuntimeClass@U?$RuntimeClassFlags@$01@WRL@Microsoft@@U?$IEventHandler@PEAVProtectedContentRevokedEventArgs@EnterpriseData@Security@Windows@@@Foundation@Windows@@@WRL@Microsoft@@UEAAPEAXI@Z",
+      "size": 36
+    },
+    {
+      "addr": "0x140025450",
+      "name": "??_EFTMEventDelegate@?1???$WaitForCompletion@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@U?$IAsyncOperation@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@23@@@YAJPEAU?$IAsyncOperation@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@PEAX@Z@EEAAPEAXI@Z",
+      "size": 114
+    },
+    {
+      "addr": "0x1400254d0",
+      "name": "??_GFTMEventDelegate@?1???$WaitForCompletion@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@U?$IAsyncOperation@PEAVStorageFile@Storage@Windows@@@23@@@YAJPEAU?$IAsyncOperation@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@PEAX@Z@EEAAPEAXI@Z",
+      "size": 114
+    },
+    {
+      "addr": "0x140025550",
+      "name": "?AddRef@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IEventHandler@PEAVProtectedContentRevokedEventArgs@EnterpriseData@Security@Windows@@@Foundation@Windows@@@Details@WRL@Microsoft@@UEAAKXZ",
+      "size": 41
+    },
+    {
+      "addr": "0x140025580",
+      "name": "?EnsureStackSnapshot@?$DelegateTraits@$0?0@WRL@Microsoft@@SAXJ@Z",
+      "size": 82
+    },
+    {
+      "addr": "0x1400255d8",
+      "name": "?GetFileProtectionInfoSync@@YAJPEBGPEAPEAUIFileProtectionInfo@EnterpriseData@Security@Windows@@@Z",
+      "size": 502
+    },
+    {
+      "addr": "0x1400257d4",
+      "name": "?IStorage_GetStorageFileFromPath@@YAJPEBGPEAPEAUIStorageFile@Storage@Windows@@@Z",
+      "size": 357
+    },
+    {
+      "addr": "0x140025940",
+      "name": "Microsoft::WRL::Details::DelegateArgTraits_long_(__cdecl_Windows::Foundation::IEventHandler_impl_IInspectable___::_)(IInspectable___IInspectable__)_::DelegateInvokeHelper_Windows::Foundation::IEventHandler_IInspectable_____lambda_d52fcddf69344b912edf41646ca01091___1_IInspectable___IInspectable___::Invoke",
+      "size": 21
+    },
+    {
+      "addr": "0x140025960",
+      "name": "Microsoft::WRL::Details::DelegateArgTraits_long_(__cdecl_Windows::Foundation::IEventHandler_impl_Windows::Foundation::Internal::AggregateType_Windows::Security::EnterpriseData::ProtectedContentRevokedEventArgs___Windows::Security::EnterpriseData::IProtectedContentRevokedEventArgs_____::_)(IInspectable___Windows::Security::EnterpriseData::IProtectedContentRevokedEventArgs__)_::DelegateInvokeHelper_Windows::Foundation::IEventHandler_Windows::Security::EnterpriseData::ProtectedContentRevokedEventArgs_____lambda_09e9acfc031088f896b844c6192de7f3___1_IInspectable___Windows::Security::EnterpriseData::IProtectedContentRevokedEventArgs___::Invoke",
+      "size": 463
+    },
+    {
+      "addr": "0x140025b40",
+      "name": "?Invoke@FTMEventDelegate@?1???$WaitForCompletion@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@U?$IAsyncOperation@PEAVStorageFile@Storage@Windows@@@23@@@YAJPEAU?$IAsyncOperation@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@W4tagCOWAIT_FLAGS@@PEAX@Z@UEAAJ0W4AsyncStatus@34ABI@@@Z",
+      "size": 32
+    },
+    {
+      "addr": "0x140025b70",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 214
+    },
+    {
+      "addr": "0x140025c50",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 9
+    },
+    {
+      "addr": "0x140025c60",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 214
+    },
+    {
+      "addr": "0x140025d40",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 9
+    },
+    {
+      "addr": "0x140025d50",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IEventHandler@PEAUIInspectable@@@Foundation@Windows@@@Details@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 120
+    },
+    {
+      "addr": "0x140025dd0",
+      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IEventHandler@PEAVProtectedContentRevokedEventArgs@EnterpriseData@Security@Windows@@@Foundation@Windows@@@Details@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAPEAX@Z",
+      "size": 120
+    },
+    {
+      "addr": "0x140025e50",
+      "name": "?Release@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IEventHandler@PEAVProtectedContentRevokedEventArgs@EnterpriseData@Security@Windows@@@Foundation@Windows@@@Details@WRL@Microsoft@@UEAAKXZ",
+      "size": 98
+    },
+    {
+      "addr": "0x140025eb8",
+      "name": "ClipboardServer_GetEnterpriseId",
+      "size": 681
+    },
+    {
+      "addr": "0x140026168",
+      "name": "DetermineEdpAppModeFromFileProtectionStatus",
+      "size": 458
+    },
+    {
+      "addr": "0x140026338",
+      "name": "FileProtectionManager_ProtectFileSync",
+      "size": 757
+    },
+    {
+      "addr": "0x140026634",
+      "name": "FileSaveDialog_GetSelectedEnterpriseId",
+      "size": 409
+    },
+    {
+      "addr": "0x1400267d4",
+      "name": "ProtectionPolicyManager_ClearProcessUIPolicy",
+      "size": 212
+    },
+    {
+      "addr": "0x1400268b0",
+      "name": "ProtectionPolicyManager_GetEnforcementLevel",
+      "size": 425
+    },
+    {
+      "addr": "0x140026a60",
+      "name": "ProtectionPolicyManager_IsProtectionEnabled",
+      "size": 220
+    },
+    {
+      "addr": "0x140026b44",
+      "name": "ProtectionPolicyManager_RegisterForEnterpriseIdRevoked",
+      "size": 667
+    },
+    {
+      "addr": "0x140026de8",
+      "name": "ProtectionPolicyManager_RegisterForProtectionPolicyChanged",
+      "size": 412
+    },
+    {
+      "addr": "0x140026f8c",
+      "name": "ProtectionPolicyManager_UnregisterForEnterpriseIdRevoked",
+      "size": 285
+    },
+    {
+      "addr": "0x1400270b0",
+      "name": "ProtectionPolicyManager_UnregisterForProtectionPolicyChanged",
+      "size": 282
+    },
+    {
+      "addr": "0x1400271d0",
+      "name": "__delayLoadHelper2",
+      "size": 61
+    },
+    {
+      "addr": "0x140027214",
+      "name": "__GSHandlerCheck",
+      "size": 29
+    },
+    {
+      "addr": "0x140027238",
+      "name": "__GSHandlerCheckCommon",
+      "size": 91
+    },
+    {
+      "addr": "0x14002729c",
+      "name": "__GSHandlerCheck_SEH",
+      "size": 133
+    },
+    {
+      "addr": "0x140027340",
+      "name": "_alloca_probe",
+      "size": 78
+    },
+    {
+      "addr": "0x140027394",
+      "name": "wcscmp_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400273a0",
+      "name": "memcmp_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400273ac",
+      "name": "memcpy_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400273b8",
+      "name": "memmove_0",
+      "size": 6
+    },
+    {
+      "addr": "0x1400273e0",
+      "name": "_guard_dispatch_icall",
+      "size": 6
+    },
+    {
+      "addr": "0x140027400",
+      "name": "_guard_dispatch_icall_nop",
+      "size": 2
+    },
+    {
+      "addr": "0x140027420",
+      "name": "_guard_xfg_dispatch_icall_nop",
+      "size": 6
+    },
+    {
+      "addr": "0x14002746e",
+      "name": "_operator_new_::_1_::catch$0",
+      "size": 27
+    },
+    {
+      "addr": "0x140027490",
+      "name": "wil::details::_dynamic_atexit_destructor_for__g_enabledStateManager__",
+      "size": 73
+    },
+    {
+      "addr": "0x1400274e0",
+      "name": "wil::details::_dynamic_atexit_destructor_for__g_featureStateManager__",
+      "size": 80
+    },
+    {
+      "addr": "0x140027540",
+      "name": "wil::details::_dynamic_atexit_destructor_for__g_processLocalData__",
+      "size": 27
+    },
+    {
+      "addr": "0x140027570",
+      "name": "wil::details::_dynamic_atexit_destructor_for__g_threadFailureCallbacks___0",
+      "size": 12
+    },
+    {
+      "addr": "0x140027590",
+      "name": "_dynamic_atexit_destructor_for__dismissButtonImageList__",
+      "size": 34
+    },
+    {
+      "addr": "0x1400275c0",
+      "name": "_dynamic_atexit_destructor_for__dismissString__",
+      "size": 34
+    },
+    {
+      "addr": "0x1400275f0",
+      "name": "_dynamic_atexit_destructor_for__launchButtonString__",
+      "size": 34
+    },
+    {
+      "addr": "0x140027620",
+      "name": "_dynamic_atexit_destructor_for__messageFont__",
+      "size": 34
+    },
+    {
+      "addr": "0x140027650",
+      "name": "_dynamic_atexit_destructor_for__messageString__",
+      "size": 34
+    },
+    {
+      "addr": "0x140027680",
+      "name": "_dynamic_atexit_destructor_for__restartHandler___0",
+      "size": 46
+    },
+    {
+      "addr": "0x1400276c0",
+      "name": "_dynamic_atexit_destructor_for__szFileName__",
+      "size": 34
+    },
+    {
+      "addr": "0x140028010",
+      "name": "_guard_dispatch_icall$thunk$10345483385596137414",
+      "size": 5
+    }
+  ],
+  "strings": [
+    {
+      "addr": "0x140000200",
+      "value": ".text"
+    },
+    {
+      "addr": "0x140000228",
+      "value": "fothk"
+    },
+    {
+      "addr": "0x140000250",
+      "value": ".rdata"
+    },
+    {
+      "addr": "0x140000278",
+      "value": ".data"
+    },
+    {
+      "addr": "0x1400002a0",
+      "value": ".pdata"
+    },
+    {
+      "addr": "0x1400002c8",
+      "value": ".didat"
+    },
+    {
+      "addr": "0x1400002f0",
+      "value": ".rsrc"
+    },
+    {
+      "addr": "0x140000318",
+      "value": ".reloc"
+    },
+    {
+      "addr": "0x14002a7c0",
+      "value": "Unknown exception"
+    },
+    {
+      "addr": "0x14002a7d8",
+      "value": "bad allocation"
+    },
+    {
+      "addr": "0x14002a7e8",
+      "value": "bad array new length"
+    },
+    {
+      "addr": "0x14002a800",
+      "value": "ADVAPI32.dll"
+    },
+    {
+      "addr": "0x14002a810",
+      "value": "COMDLG32.dll"
+    },
+    {
+      "addr": "0x14002a820",
+      "value": "PROPSYS.dll"
+    },
+    {
+      "addr": "0x14002a830",
+      "value": "SHELL32.dll"
+    },
+    {
+      "addr": "0x14002a890",
+      "value": "WINSPOOL.DRV"
+    },
+    {
+      "addr": "0x14002a8a0",
+      "value": "urlmon.dll"
+    },
+    {
+      "addr": "0x14002a8b0",
+      "value": "Exception"
+    },
+    {
+      "addr": "0x14002a8c0",
+      "value": "ReturnNt"
+    },
+    {
+      "addr": "0x14002a8d0",
+      "value": "ReturnHr"
+    },
+    {
+      "addr": "0x14002a8dc",
+      "value": "LogNt"
+    },
+    {
+      "addr": "0x14002a8e4",
+      "value": "LogHr"
+    },
+    {
+      "addr": "0x14002a8f0",
+      "value": "FailFast"
+    },
+    {
+      "addr": "0x14002aa30",
+      "value": "RtlDisownModuleHeapAllocation"
+    },
+    {
+      "addr": "0x14002aa70",
+      "value": "RaiseFailFastException"
+    },
+    {
+      "addr": "0x14002aa90",
+      "value": "onecore\\internal\\sdk\\inc\\wil\\opensource\\wil\\resource.h"
+    },
+    {
+      "addr": "0x14002aad8",
+      "value": "WilError_03"
+    },
+    {
+      "addr": "0x14002aae8",
+      "value": "RtlNtStatusToDosErrorNoTeb"
+    },
+    {
+      "addr": "0x14002ab08",
+      "value": "RtlDllShutdownInProgress"
+    },
+    {
+      "addr": "0x14002ab28",
+      "value": "WilFailureNotifyWatchers"
+    },
+    {
+      "addr": "0x14002ab48",
+      "value": "RtlQueryFeatureConfiguration"
+    },
+    {
+      "addr": "0x14002ab68",
+      "value": "RtlRegisterFeatureConfigurationChangeNotification"
+    },
+    {
+      "addr": "0x14002aba0",
+      "value": "RtlUnregisterFeatureConfigurationChangeNotification"
+    },
+    {
+      "addr": "0x14002abd8",
+      "value": "RtlNotifyFeatureUsage"
+    },
+    {
+      "addr": "0x14002abf0",
+      "value": "LogStagedFeatureUsage"
+    },
+    {
+      "addr": "0x14002ac08",
+      "value": "NtQueryWnfStateData"
+    },
+    {
+      "addr": "0x14002ac20",
+      "value": "NtUpdateWnfStateData"
+    },
+    {
+      "addr": "0x14002ac38",
+      "value": "onecore\\internal\\sdk\\inc\\wil/Staging.h"
+    },
+    {
+      "addr": "0x14002ac60",
+      "value": "WilStaging_02"
+    },
+    {
+      "addr": "0x14002ad08",
+      "value": "onecore\\internal\\sdk\\inc\\wil\\opensource\\wil\\winrt.h"
+    },
+    {
+      "addr": "0x14002ae18",
+      "value": "shell\\osshell\\accesory\\notepad\\banner.cpp"
+    },
+    {
+      "addr": "0x14002b0b0",
+      "value": "shell\\osshell\\accesory\\notepad\\notepad.cpp"
+    },
+    {
+      "addr": "0x14002b198",
+      "value": "shell\\osshell\\accesory\\notepad\\filesystemhelpers.h"
+    },
+    {
+      "addr": "0x14002b1d0",
+      "value": "onecore\\internal\\sdk\\inc\\wil\\opensource/wil/win32_helpers.h"
+    },
+    {
+      "addr": "0x14002b2e0",
+      "value": "onecore\\internal\\sdk\\inc\\wil\\opensource/wil/filesystem.h"
+    },
+    {
+      "addr": "0x14002ba68",
+      "value": "shell\\osshell\\accesory\\notepad\\nprestart.cpp"
+    },
+    {
+      "addr": "0x14002bc40",
+      "value": "comdlg32.dll"
+    },
+    {
+      "addr": "0x14002bcb4",
+      "value": "`o~\rZ"
+    },
+    {
+      "addr": "0x14002bccd",
+      "value": "oLW\\f"
+    },
+    {
+      "addr": "0x14002bdfc",
+      "value": "\n\na& "
+    },
+    {
+      "addr": "0x14002bef8",
+      "value": "f4Og|"
+    },
+    {
+      "addr": "0x14002bffc",
+      "value": "X\\?E/5"
+    },
+    {
+      "addr": "0x14002c069",
+      "value": "l6s+o"
+    },
+    {
+      "addr": "0x14002c14c",
+      "value": "sQPI[5T"
+    },
+    {
+      "addr": "0x14002c1f5",
+      "value": "bgOne"
+    },
+    {
+      "addr": "0x14002c21c",
+      "value": "m]#0D"
+    },
+    {
+      "addr": "0x14002c262",
+      "value": ";\tM_d"
+    },
+    {
+      "addr": "0x14002c298",
+      "value": "Da6N^"
+    },
+    {
+      "addr": "0x14002c2ca",
+      "value": "@W=7A="
+    },
+    {
+      "addr": "0x14002c3e0",
+      "value": "d|BNeU"
+    },
+    {
+      "addr": "0x14002c610",
+      "value": ",B>DY"
+    },
+    {
+      "addr": "0x14002c642",
+      "value": "Vving1"
+    },
+    {
+      "addr": "0x14002c7b4",
+      "value": "l\nx'u8\u000bJ"
+    },
+    {
+      "addr": "0x14002c82c",
+      "value": "gxI3!'"
+    },
+    {
+      "addr": "0x14002c8aa",
+      "value": "ew0hp"
+    },
+    {
+      "addr": "0x14002c91e",
+      "value": "WAxK0i"
+    },
+    {
+      "addr": "0x14002c93b",
+      "value": "FWph?r"
+    },
+    {
+      "addr": "0x14002cc3d",
+      "value": "'R{=f"
+    },
+    {
+      "addr": "0x14002ccca",
+      "value": "xv#?H"
+    },
+    {
+      "addr": "0x14002ccd7",
+      "value": "7T})gW"
+    },
+    {
+      "addr": "0x14002cd1d",
+      "value": "%UM;%"
+    },
+    {
+      "addr": "0x14002cdba",
+      "value": "\bhwp1p0"
+    },
+    {
+      "addr": "0x14002ced4",
+      "value": "+dBVY"
+    },
+    {
+      "addr": "0x14002cee6",
+      "value": "Ly^X`"
+    },
+    {
+      "addr": "0x14002d092",
+      "value": "r\n3aC"
+    },
+    {
+      "addr": "0x14002d30e",
+      "value": "hgtlCm"
+    },
+    {
+      "addr": "0x14002d31d",
+      "value": "^BNQ,^"
+    },
+    {
+      "addr": "0x14002d342",
+      "value": "z?801i:It6"
+    },
+    {
+      "addr": "0x14002d5d5",
+      "value": "$>b~t"
+    },
+    {
+      "addr": "0x14002d656",
+      "value": "1o?-XfF"
+    },
+    {
+      "addr": "0x14002d674",
+      "value": "$(SQO"
+    },
+    {
+      "addr": "0x14002d6c3",
+      "value": "rY&'K"
+    },
+    {
+      "addr": "0x14002d724",
+      "value": "VY$[X"
+    },
+    {
+      "addr": "0x14002d74b",
+      "value": "VG2/iI"
+    },
+    {
+      "addr": "0x14002d8dd",
+      "value": "S~=5p"
+    },
+    {
+      "addr": "0x14002da8b",
+      "value": "sT{\n/w'`"
+    },
+    {
+      "addr": "0x14002db9c",
+      "value": "bWti^"
+    },
+    {
+      "addr": "0x14002dbd9",
+      "value": "ul%G1"
+    },
+    {
+      "addr": "0x14002dc72",
+      "value": "byjA`"
+    },
+    {
+      "addr": "0x14002dc7e",
+      "value": "w9X!P/"
+    },
+    {
+      "addr": "0x14002e0a0",
+      "value": "NtQuerySystemInformation"
+    },
+    {
+      "addr": "0x14002e0c0",
+      "value": "shell\\osshell\\accesory\\common\\edpapphelper\\edpapphelper.cpp"
+    },
+    {
+      "addr": "0x14002e7df",
+      "value": "EncodingSelection"
+    },
+    {
+      "addr": "0x14002e7f1",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002e7fc",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002e80b",
+      "value": "\nEncoding"
+    },
+    {
+      "addr": "0x14002e825",
+      "value": "PageSetupUpdated"
+    },
+    {
+      "addr": "0x14002e836",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002e841",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002e850",
+      "value": "\nHasHeaderOrFooter"
+    },
+    {
+      "addr": "0x14002e873",
+      "value": "ViewHelp"
+    },
+    {
+      "addr": "0x14002e87c",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002e887",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002e8a6",
+      "value": "TimeDateInvoked"
+    },
+    {
+      "addr": "0x14002e8b6",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002e8c1",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002e8d0",
+      "value": "\nIsLogEntry"
+    },
+    {
+      "addr": "0x14002e8ec",
+      "value": "SearchBingInvoked"
+    },
+    {
+      "addr": "0x14002e8fe",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002e909",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002e918",
+      "value": "\nentrypoint"
+    },
+    {
+      "addr": "0x14002e925",
+      "value": "hasQueryText"
+    },
+    {
+      "addr": "0x14002e942",
+      "value": "FreshWindow"
+    },
+    {
+      "addr": "0x14002e94e",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002e959",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002e968",
+      "value": "\nIsAdminMode"
+    },
+    {
+      "addr": "0x14002e985",
+      "value": "AppExit"
+    },
+    {
+      "addr": "0x14002e98d",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002e998",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002e9a7",
+      "value": "\nFileNewCount"
+    },
+    {
+      "addr": "0x14002e9b6",
+      "value": "FileSaveCount"
+    },
+    {
+      "addr": "0x14002e9c5",
+      "value": "FileSaveAsCount"
+    },
+    {
+      "addr": "0x14002e9d6",
+      "value": "FilePrintCount"
+    },
+    {
+      "addr": "0x14002e9e6",
+      "value": "EditUndoCount"
+    },
+    {
+      "addr": "0x14002e9f5",
+      "value": "EditCutCount"
+    },
+    {
+      "addr": "0x14002ea03",
+      "value": "EditCopyCount"
+    },
+    {
+      "addr": "0x14002ea12",
+      "value": "EditPasteCount"
+    },
+    {
+      "addr": "0x14002ea22",
+      "value": "EditDeleteCount"
+    },
+    {
+      "addr": "0x14002ea33",
+      "value": "EditFindCount"
+    },
+    {
+      "addr": "0x14002ea42",
+      "value": "EditReplaceCount"
+    },
+    {
+      "addr": "0x14002ea54",
+      "value": "EditGotoCount"
+    },
+    {
+      "addr": "0x14002ea63",
+      "value": "FormatFontCount"
+    },
+    {
+      "addr": "0x14002ea74",
+      "value": "EdpFileOpenCount"
+    },
+    {
+      "addr": "0x14002ea86",
+      "value": "EdpFileSaveCount"
+    },
+    {
+      "addr": "0x14002ea98",
+      "value": "EdpPasteToNoContextCount"
+    },
+    {
+      "addr": "0x14002eab2",
+      "value": "EdpFileOpenAttemptFailCount"
+    },
+    {
+      "addr": "0x14002eacf",
+      "value": "FileSize"
+    },
+    {
+      "addr": "0x14002ead8",
+      "value": "\bIsWordWrap"
+    },
+    {
+      "addr": "0x14002eae4",
+      "value": "\rStatusBarVisibility"
+    },
+    {
+      "addr": "0x14002eb09",
+      "value": "SaveComplete"
+    },
+    {
+      "addr": "0x14002eb16",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002eb21",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002eb40",
+      "value": "SaveComplete"
+    },
+    {
+      "addr": "0x14002eb4d",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002eb58",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002eb67",
+      "value": "\nContentType"
+    },
+    {
+      "addr": "0x14002eb75",
+      "value": "FileExtension"
+    },
+    {
+      "addr": "0x14002eb84",
+      "value": "FileSize"
+    },
+    {
+      "addr": "0x14002eb8d",
+      "value": "\nIsNetworkPath"
+    },
+    {
+      "addr": "0x14002eb9c",
+      "value": "\rEncoding"
+    },
+    {
+      "addr": "0x14002ebb6",
+      "value": "SaveStart"
+    },
+    {
+      "addr": "0x14002ebc0",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002ebcb",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002ebea",
+      "value": "FileOpenComplete"
+    },
+    {
+      "addr": "0x14002ebfb",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002ec06",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002ec15",
+      "value": "\nContentType"
+    },
+    {
+      "addr": "0x14002ec23",
+      "value": "FileExtension"
+    },
+    {
+      "addr": "0x14002ec32",
+      "value": "FileSize"
+    },
+    {
+      "addr": "0x14002ec3b",
+      "value": "\nIsNetworkPath"
+    },
+    {
+      "addr": "0x14002ec4a",
+      "value": "\rEncoding"
+    },
+    {
+      "addr": "0x14002ec64",
+      "value": "FileOpenStart"
+    },
+    {
+      "addr": "0x14002ec72",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002ec7d",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002ec9c",
+      "value": "LaunchNotepadComplete"
+    },
+    {
+      "addr": "0x14002ecb2",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002ecbd",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002eccc",
+      "value": "\nIsAdminMode"
+    },
+    {
+      "addr": "0x14002ece9",
+      "value": "LaunchNotepadStart"
+    },
+    {
+      "addr": "0x14002ecfc",
+      "value": "SessionId"
+    },
+    {
+      "addr": "0x14002ed07",
+      "value": "SequenceNumber"
+    },
+    {
+      "addr": "0x14002ed2a",
+      "value": "Microsoft.Notepad"
+    },
+    {
+      "addr": "0x14002ed68",
+      "value": "notepad.pdb"
+    },
+    {
+      "addr": "0x14002ed80",
+      "value": ".text"
+    },
+    {
+      "addr": "0x14002ed90",
+      "value": ".text$di"
+    },
+    {
+      "addr": "0x14002eda4",
+      "value": ".text$mn"
+    },
+    {
+      "addr": "0x14002edb8",
+      "value": ".text$mn$00"
+    },
+    {
+      "addr": "0x14002edcc",
+      "value": ".text$x"
+    },
+    {
+      "addr": "0x14002eddc",
+      "value": ".text$yd"
+    },
+    {
+      "addr": "0x14002edf0",
+      "value": "fogrp"
+    },
+    {
+      "addr": "0x14002ee00",
+      "value": ".rdata$brc"
+    },
+    {
+      "addr": "0x14002ee14",
+      "value": ".idata$5"
+    },
+    {
+      "addr": "0x14002ee28",
+      "value": ".00cfg"
+    },
+    {
+      "addr": "0x14002ee38",
+      "value": ".CRT$XCA"
+    },
+    {
+      "addr": "0x14002ee4c",
+      "value": ".CRT$XCAA"
+    },
+    {
+      "addr": "0x14002ee60",
+      "value": ".CRT$XCU"
+    },
+    {
+      "addr": "0x14002ee74",
+      "value": ".CRT$XCZ"
+    },
+    {
+      "addr": "0x14002ee88",
+      "value": ".CRT$XIA"
+    },
+    {
+      "addr": "0x14002ee9c",
+      "value": ".CRT$XIAA"
+    },
+    {
+      "addr": "0x14002eeb0",
+      "value": ".CRT$XIAC"
+    },
+    {
+      "addr": "0x14002eec4",
+      "value": ".CRT$XIC"
+    },
+    {
+      "addr": "0x14002eed8",
+      "value": ".CRT$XIZ"
+    },
+    {
+      "addr": "0x14002eeec",
+      "value": ".CRT$XPA"
+    },
+    {
+      "addr": "0x14002ef00",
+      "value": ".CRT$XPZ"
+    },
+    {
+      "addr": "0x14002ef14",
+      "value": ".CRT$XTA"
+    },
+    {
+      "addr": "0x14002ef28",
+      "value": ".CRT$XTZ"
+    },
+    {
+      "addr": "0x14002ef3c",
+      "value": ".gehcont"
+    },
+    {
+      "addr": "0x14002ef50",
+      "value": ".gfids"
+    },
+    {
+      "addr": "0x14002ef60",
+      "value": ".giats"
+    },
+    {
+      "addr": "0x14002ef70",
+      "value": ".rdata"
+    },
+    {
+      "addr": "0x14002ef80",
+      "value": ".rdata$r"
+    },
+    {
+      "addr": "0x14002ef94",
+      "value": ".rdata$voltmd"
+    },
+    {
+      "addr": "0x14002efac",
+      "value": ".rdata$zETW0"
+    },
+    {
+      "addr": "0x14002efc4",
+      "value": ".rdata$zETW1"
+    },
+    {
+      "addr": "0x14002efdc",
+      "value": ".rdata$zETW2"
+    },
+    {
+      "addr": "0x14002eff4",
+      "value": ".rdata$zETW9"
+    },
+    {
+      "addr": "0x14002f00c",
+      "value": ".rdata$zzzdbg"
+    },
+    {
+      "addr": "0x14002f024",
+      "value": ".rtc$IAA"
+    },
+    {
+      "addr": "0x14002f038",
+      "value": ".rtc$IZZ"
+    },
+    {
+      "addr": "0x14002f04c",
+      "value": ".rtc$TAA"
+    },
+    {
+      "addr": "0x14002f060",
+      "value": ".rtc$TZZ"
+    },
+    {
+      "addr": "0x14002f074",
+      "value": ".xdata"
+    },
+    {
+      "addr": "0x14002f084",
+      "value": ".xdata$x"
+    },
+    {
+      "addr": "0x14002f098",
+      "value": ".didat$2"
+    },
+    {
+      "addr": "0x14002f0ac",
+      "value": ".didat$3"
+    },
+    {
+      "addr": "0x14002f0c0",
+      "value": ".didat$4"
+    },
+    {
+      "addr": "0x14002f0d4",
+      "value": ".didat$6"
+    },
+    {
+      "addr": "0x14002f0e8",
+      "value": ".didat$7"
+    },
+    {
+      "addr": "0x14002f0fc",
+      "value": ".idata$2"
+    },
+    {
+      "addr": "0x14002f110",
+      "value": ".idata$3"
+    },
+    {
+      "addr": "0x14002f124",
+      "value": ".idata$4"
+    },
+    {
+      "addr": "0x14002f138",
+      "value": ".idata$6"
+    },
+    {
+      "addr": "0x14002f14c",
+      "value": ".data$brc"
+    },
+    {
+      "addr": "0x14002f160",
+      "value": ".data$r$brc"
+    },
+    {
+      "addr": "0x14002f174",
+      "value": ".data$rs$brc"
+    },
+    {
+      "addr": "0x14002f18c",
+      "value": ".data"
+    },
+    {
+      "addr": "0x14002f1ac",
+      "value": ".pdata"
+    },
+    {
+      "addr": "0x14002f1bc",
+      "value": ".didat$5"
+    },
+    {
+      "addr": "0x14002f1d0",
+      "value": ".rsrc$01"
+    },
+    {
+      "addr": "0x14002f1e4",
+      "value": ".rsrc$02"
+    },
+    {
+      "addr": "0x14002f21c",
+      "value": "B?TD?%"
+    },
+    {
+      "addr": "0x1400304ca",
+      "value": "DuplicateEncryptionInfoFile"
+    },
+    {
+      "addr": "0x1400304e8",
+      "value": "DecryptFileW"
+    },
+    {
+      "addr": "0x1400304f8",
+      "value": "CommDlgExtendedError"
+    },
+    {
+      "addr": "0x140030510",
+      "value": "ChooseFontW"
+    },
+    {
+      "addr": "0x14003051e",
+      "value": "PageSetupDlgW"
+    },
+    {
+      "addr": "0x14003052e",
+      "value": "PrintDlgExW"
+    },
+    {
+      "addr": "0x14003053c",
+      "value": "FindTextW"
+    },
+    {
+      "addr": "0x140030548",
+      "value": "ReplaceTextW"
+    },
+    {
+      "addr": "0x140030558",
+      "value": "GetOpenFileNameW"
+    },
+    {
+      "addr": "0x14003056c",
+      "value": "GetSaveFileNameW"
+    },
+    {
+      "addr": "0x140030580",
+      "value": "GetFileTitleW"
+    },
+    {
+      "addr": "0x140030590",
+      "value": "PSGetPropertyDescriptionListFromString"
+    },
+    {
+      "addr": "0x1400305ba",
+      "value": "PropVariantToStringVectorAlloc"
+    },
+    {
+      "addr": "0x1400305dc",
+      "value": "SHCreateItemFromParsingName"
+    },
+    {
+      "addr": "0x1400305fa",
+      "value": "ShellExecuteW"
+    },
+    {
+      "addr": "0x14003060a",
+      "value": "ShellAboutW"
+    },
+    {
+      "addr": "0x140030618",
+      "value": "DragQueryFileW"
+    },
+    {
+      "addr": "0x14003062a",
+      "value": "DragFinish"
+    },
+    {
+      "addr": "0x140030638",
+      "value": "SHAddToRecentDocs"
+    },
+    {
+      "addr": "0x14003064c",
+      "value": "DragAcceptFiles"
+    },
+    {
+      "addr": "0x14003065e",
+      "value": "SHGetKnownFolderPath"
+    },
+    {
+      "addr": "0x140030676",
+      "value": "OpenPrinterW"
+    },
+    {
+      "addr": "0x140030686",
+      "value": "GetPrinterDriverW"
+    },
+    {
+      "addr": "0x14003069a",
+      "value": "ClosePrinter"
+    },
+    {
+      "addr": "0x1400306aa",
+      "value": "FindMimeFromData"
+    },
+    {
+      "addr": "0x14003183a",
+      "value": "CreateFontIndirectW"
+    },
+    {
+      "addr": "0x140031850",
+      "value": "CreateCompatibleDC"
+    },
+    {
+      "addr": "0x140031866",
+      "value": "SelectObject"
+    },
+    {
+      "addr": "0x140031876",
+      "value": "GetTextExtentPoint32W"
+    },
+    {
+      "addr": "0x14003188e",
+      "value": "CreateSolidBrush"
+    },
+    {
+      "addr": "0x1400318a2",
+      "value": "SetBkColor"
+    },
+    {
+      "addr": "0x1400318b0",
+      "value": "DeleteObject"
+    },
+    {
+      "addr": "0x1400318c0",
+      "value": "DeleteDC"
+    },
+    {
+      "addr": "0x1400318cc",
+      "value": "GetDeviceCaps"
+    },
+    {
+      "addr": "0x1400318dc",
+      "value": "GetTextFaceW"
+    },
+    {
+      "addr": "0x1400318ec",
+      "value": "EnumFontsW"
+    },
+    {
+      "addr": "0x1400318fa",
+      "value": "TextOutW"
+    },
+    {
+      "addr": "0x140031906",
+      "value": "SetMapMode"
+    },
+    {
+      "addr": "0x140031914",
+      "value": "SetViewportExtEx"
+    },
+    {
+      "addr": "0x140031928",
+      "value": "SetWindowExtEx"
+    },
+    {
+      "addr": "0x14003193a",
+      "value": "LPtoDP"
+    },
+    {
+      "addr": "0x140031944",
+      "value": "SetBkMode"
+    },
+    {
+      "addr": "0x140031950",
+      "value": "GetTextMetricsW"
+    },
+    {
+      "addr": "0x140031962",
+      "value": "EndPage"
+    },
+    {
+      "addr": "0x14003196c",
+      "value": "AbortDoc"
+    },
+    {
+      "addr": "0x140031978",
+      "value": "EndDoc"
+    },
+    {
+      "addr": "0x140031982",
+      "value": "SetAbortProc"
+    },
+    {
+      "addr": "0x140031992",
+      "value": "StartDocW"
+    },
+    {
+      "addr": "0x14003199e",
+      "value": "StartPage"
+    },
+    {
+      "addr": "0x1400319aa",
+      "value": "CreateDCW"
+    },
+    {
+      "addr": "0x1400319b4",
+      "value": "GDI32.dll"
+    },
+    {
+      "addr": "0x1400319c0",
+      "value": "GetClientRect"
+    },
+    {
+      "addr": "0x1400319d0",
+      "value": "DestroyWindow"
+    },
+    {
+      "addr": "0x1400319e0",
+      "value": "GetDpiForWindow"
+    },
+    {
+      "addr": "0x1400319f2",
+      "value": "SystemParametersInfoForDpi"
+    },
+    {
+      "addr": "0x140031a10",
+      "value": "SendMessageW"
+    },
+    {
+      "addr": "0x140031a20",
+      "value": "MoveWindow"
+    },
+    {
+      "addr": "0x140031a2e",
+      "value": "GetDC"
+    },
+    {
+      "addr": "0x140031a36",
+      "value": "ReleaseDC"
+    },
+    {
+      "addr": "0x140031a42",
+      "value": "PostMessageW"
+    },
+    {
+      "addr": "0x140031a52",
+      "value": "LoadStringW"
+    },
+    {
+      "addr": "0x140031a60",
+      "value": "RegisterClassExW"
+    },
+    {
+      "addr": "0x140031a74",
+      "value": "CreateWindowExW"
+    },
+    {
+      "addr": "0x140031a86",
+      "value": "PostQuitMessage"
+    },
+    {
+      "addr": "0x140031a98",
+      "value": "BeginPaint"
+    },
+    {
+      "addr": "0x140031aa6",
+      "value": "EndPaint"
+    },
+    {
+      "addr": "0x140031ab2",
+      "value": "FillRect"
+    },
+    {
+      "addr": "0x140031abe",
+      "value": "DrawTextW"
+    },
+    {
+      "addr": "0x140031aca",
+      "value": "DrawFocusRect"
+    },
+    {
+      "addr": "0x140031ada",
+      "value": "DefWindowProcW"
+    },
+    {
+      "addr": "0x140031aec",
+      "value": "TrackMouseEvent"
+    },
+    {
+      "addr": "0x140031afe",
+      "value": "InvalidateRect"
+    },
+    {
+      "addr": "0x140031b10",
+      "value": "DestroyIcon"
+    },
+    {
+      "addr": "0x140031b1e",
+      "value": "SetThreadDpiAwarenessContext"
+    },
+    {
+      "addr": "0x140031b3e",
+      "value": "DialogBoxParamW"
+    },
+    {
+      "addr": "0x140031b50",
+      "value": "LoadIconW"
+    },
+    {
+      "addr": "0x140031b5c",
+      "value": "GetFocus"
+    },
+    {
+      "addr": "0x140031b68",
+      "value": "MessageBoxW"
+    },
+    {
+      "addr": "0x140031b76",
+      "value": "ShowWindow"
+    },
+    {
+      "addr": "0x140031b84",
+      "value": "SetCursor"
+    },
+    {
+      "addr": "0x140031b90",
+      "value": "SetActiveWindow"
+    },
+    {
+      "addr": "0x140031ba2",
+      "value": "EnableMenuItem"
+    },
+    {
+      "addr": "0x140031bb4",
+      "value": "IsIconic"
+    },
+    {
+      "addr": "0x140031bc0",
+      "value": "SetFocus"
+    },
+    {
+      "addr": "0x140031bcc",
+      "value": "MessageBeep"
+    },
+    {
+      "addr": "0x140031bda",
+      "value": "GetForegroundWindow"
+    },
+    {
+      "addr": "0x140031bf0",
+      "value": "GetDlgCtrlID"
+    },
+    {
+      "addr": "0x140031c00",
+      "value": "SetWindowPos"
+    },
+    {
+      "addr": "0x140031c10",
+      "value": "RedrawWindow"
+    },
+    {
+      "addr": "0x140031c20",
+      "value": "GetKeyboardLayout"
+    },
+    {
+      "addr": "0x140031c34",
+      "value": "CharNextW"
+    },
+    {
+      "addr": "0x140031c40",
+      "value": "SetWinEventHook"
+    },
+    {
+      "addr": "0x140031c52",
+      "value": "GetMessageW"
+    },
+    {
+      "addr": "0x140031c60",
+      "value": "TranslateAcceleratorW"
+    },
+    {
+      "addr": "0x140031c78",
+      "value": "IsDialogMessageW"
+    },
+    {
+      "addr": "0x140031c8c",
+      "value": "TranslateMessage"
+    },
+    {
+      "addr": "0x140031ca0",
+      "value": "DispatchMessageW"
+    },
+    {
+      "addr": "0x140031cb4",
+      "value": "UnhookWinEvent"
+    },
+    {
+      "addr": "0x140031cc6",
+      "value": "SetWindowTextW"
+    },
+    {
+      "addr": "0x140031cd8",
+      "value": "GetMenu"
+    },
+    {
+      "addr": "0x140031ce2",
+      "value": "GetSubMenu"
+    },
+    {
+      "addr": "0x140031cf0",
+      "value": "OpenClipboard"
+    },
+    {
+      "addr": "0x140031d00",
+      "value": "IsClipboardFormatAvailable"
+    },
+    {
+      "addr": "0x140031d1e",
+      "value": "CloseClipboard"
+    },
+    {
+      "addr": "0x140031d30",
+      "value": "CheckMenuItem"
+    },
+    {
+      "addr": "0x140031d40",
+      "value": "SetDlgItemTextW"
+    },
+    {
+      "addr": "0x140031d52",
+      "value": "GetDlgItemTextW"
+    },
+    {
+      "addr": "0x140031d64",
+      "value": "EndDialog"
+    },
+    {
+      "addr": "0x140031d70",
+      "value": "SendDlgItemMessageW"
+    },
+    {
+      "addr": "0x140031d86",
+      "value": "SetScrollPos"
+    },
+    {
+      "addr": "0x140031d96",
+      "value": "UpdateWindow"
+    },
+    {
+      "addr": "0x140031da6",
+      "value": "GetWindowPlacement"
+    },
+    {
+      "addr": "0x140031dbc",
+      "value": "SetWindowPlacement"
+    },
+    {
+      "addr": "0x140031dd2",
+      "value": "CharUpperW"
+    },
+    {
+      "addr": "0x140031de0",
+      "value": "GetSystemMenu"
+    },
+    {
+      "addr": "0x140031df0",
+      "value": "LoadAcceleratorsW"
+    },
+    {
+      "addr": "0x140031e04",
+      "value": "SetWindowLongW"
+    },
+    {
+      "addr": "0x140031e16",
+      "value": "MonitorFromWindow"
+    },
+    {
+      "addr": "0x140031e2a",
+      "value": "RegisterWindowMessageW"
+    },
+    {
+      "addr": "0x140031e44",
+      "value": "LoadCursorW"
+    },
+    {
+      "addr": "0x140031e52",
+      "value": "LoadImageW"
+    },
+    {
+      "addr": "0x140031e60",
+      "value": "GetWindowTextLengthW"
+    },
+    {
+      "addr": "0x140031e78",
+      "value": "GetWindowLongW"
+    },
+    {
+      "addr": "0x140031e8a",
+      "value": "PeekMessageW"
+    },
+    {
+      "addr": "0x140031e9a",
+      "value": "GetWindowTextW"
+    },
+    {
+      "addr": "0x140031eac",
+      "value": "EnableWindow"
+    },
+    {
+      "addr": "0x140031ebc",
+      "value": "CreateDialogParamW"
+    },
+    {
+      "addr": "0x140031ed2",
+      "value": "DrawTextExW"
+    },
+    {
+      "addr": "0x140031ee0",
+      "value": "IsWindow"
+    },
+    {
+      "addr": "0x140031eec",
+      "value": "CreateDialogIndirectParamW"
+    },
+    {
+      "addr": "0x140031f0a",
+      "value": "GetPropW"
+    },
+    {
+      "addr": "0x140031f16",
+      "value": "SetPropW"
+    },
+    {
+      "addr": "0x140031f22",
+      "value": "GetDlgItem"
+    },
+    {
+      "addr": "0x140031f30",
+      "value": "RemovePropW"
+    },
+    {
+      "addr": "0x140031f3e",
+      "value": "CheckDlgButton"
+    },
+    {
+      "addr": "0x140031f50",
+      "value": "CheckRadioButton"
+    },
+    {
+      "addr": "0x140031f64",
+      "value": "IsDlgButtonChecked"
+    },
+    {
+      "addr": "0x140031f7a",
+      "value": "NotifyWinEvent"
+    },
+    {
+      "addr": "0x140031f8a",
+      "value": "USER32.dll"
+    },
+    {
+      "addr": "0x140031f98",
+      "value": "wcsnlen"
+    },
+    {
+      "addr": "0x140031fa2",
+      "value": "_initterm"
+    },
+    {
+      "addr": "0x140031fae",
+      "value": "_initterm_e"
+    },
+    {
+      "addr": "0x140031fbc",
+      "value": "_c_exit"
+    },
+    {
+      "addr": "0x140031fc6",
+      "value": "_register_thread_local_exe_atexit_callback"
+    },
+    {
+      "addr": "0x140031ff2",
+      "value": "api-ms-win-crt-string-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032014",
+      "value": "api-ms-win-crt-runtime-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032038",
+      "value": "__C_specific_handler"
+    },
+    {
+      "addr": "0x140032050",
+      "value": "wcschr"
+    },
+    {
+      "addr": "0x14003205a",
+      "value": "wcsrchr"
+    },
+    {
+      "addr": "0x140032064",
+      "value": "_o___p__commode"
+    },
+    {
+      "addr": "0x140032076",
+      "value": "_o___std_exception_copy"
+    },
+    {
+      "addr": "0x140032090",
+      "value": "_o___std_exception_destroy"
+    },
+    {
+      "addr": "0x1400320ae",
+      "value": "_o___stdio_common_vswprintf"
+    },
+    {
+      "addr": "0x1400320cc",
+      "value": "_o__beginthreadex"
+    },
+    {
+      "addr": "0x1400320e0",
+      "value": "_o__callnewh"
+    },
+    {
+      "addr": "0x1400320f0",
+      "value": "_o__cexit"
+    },
+    {
+      "addr": "0x1400320fc",
+      "value": "_o__configthreadlocale"
+    },
+    {
+      "addr": "0x140032116",
+      "value": "_o__configure_wide_argv"
+    },
+    {
+      "addr": "0x140032130",
+      "value": "_o__crt_atexit"
+    },
+    {
+      "addr": "0x140032142",
+      "value": "_o__errno"
+    },
+    {
+      "addr": "0x14003214e",
+      "value": "_o__exit"
+    },
+    {
+      "addr": "0x14003215a",
+      "value": "_o__get_wide_winmain_command_line"
+    },
+    {
+      "addr": "0x14003217e",
+      "value": "_o__initialize_onexit_table"
+    },
+    {
+      "addr": "0x14003219c",
+      "value": "_o__initialize_wide_environment"
+    },
+    {
+      "addr": "0x1400321be",
+      "value": "_o__invalid_parameter_noinfo"
+    },
+    {
+      "addr": "0x1400321de",
+      "value": "_o__purecall"
+    },
+    {
+      "addr": "0x1400321ee",
+      "value": "_o__register_onexit_function"
+    },
+    {
+      "addr": "0x14003220e",
+      "value": "_o__seh_filter_exe"
+    },
+    {
+      "addr": "0x140032224",
+      "value": "_o__set_app_type"
+    },
+    {
+      "addr": "0x140032238",
+      "value": "_o__set_fmode"
+    },
+    {
+      "addr": "0x140032248",
+      "value": "_o__set_new_mode"
+    },
+    {
+      "addr": "0x14003225c",
+      "value": "_o__wcsicmp"
+    },
+    {
+      "addr": "0x14003226a",
+      "value": "_o__wtol"
+    },
+    {
+      "addr": "0x140032276",
+      "value": "_o_exit"
+    },
+    {
+      "addr": "0x140032280",
+      "value": "_o_free"
+    },
+    {
+      "addr": "0x14003228a",
+      "value": "_o_iswdigit"
+    },
+    {
+      "addr": "0x140032298",
+      "value": "_o_malloc"
+    },
+    {
+      "addr": "0x1400322a4",
+      "value": "_o_terminate"
+    },
+    {
+      "addr": "0x1400322b4",
+      "value": "__CxxFrameHandler3"
+    },
+    {
+      "addr": "0x1400322ca",
+      "value": "__current_exception"
+    },
+    {
+      "addr": "0x1400322e0",
+      "value": "__current_exception_context"
+    },
+    {
+      "addr": "0x1400322fe",
+      "value": "memset"
+    },
+    {
+      "addr": "0x140032308",
+      "value": "_CxxThrowException"
+    },
+    {
+      "addr": "0x14003231c",
+      "value": "api-ms-win-crt-private-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032340",
+      "value": "GetModuleFileNameA"
+    },
+    {
+      "addr": "0x140032356",
+      "value": "CreateSemaphoreExW"
+    },
+    {
+      "addr": "0x14003236c",
+      "value": "HeapFree"
+    },
+    {
+      "addr": "0x140032378",
+      "value": "SetLastError"
+    },
+    {
+      "addr": "0x140032388",
+      "value": "EnterCriticalSection"
+    },
+    {
+      "addr": "0x1400323a0",
+      "value": "ReleaseSemaphore"
+    },
+    {
+      "addr": "0x1400323b4",
+      "value": "GetModuleHandleExW"
+    },
+    {
+      "addr": "0x1400323ca",
+      "value": "LeaveCriticalSection"
+    },
+    {
+      "addr": "0x1400323e2",
+      "value": "InitializeCriticalSectionEx"
+    },
+    {
+      "addr": "0x140032400",
+      "value": "WaitForThreadpoolTimerCallbacks"
+    },
+    {
+      "addr": "0x140032422",
+      "value": "WaitForSingleObject"
+    },
+    {
+      "addr": "0x140032438",
+      "value": "GetCurrentThreadId"
+    },
+    {
+      "addr": "0x14003244e",
+      "value": "ReleaseMutex"
+    },
+    {
+      "addr": "0x14003245e",
+      "value": "FormatMessageW"
+    },
+    {
+      "addr": "0x140032470",
+      "value": "GetLastError"
+    },
+    {
+      "addr": "0x140032480",
+      "value": "ReleaseSRWLockExclusive"
+    },
+    {
+      "addr": "0x14003249a",
+      "value": "OutputDebugStringW"
+    },
+    {
+      "addr": "0x1400324b0",
+      "value": "CloseThreadpoolTimer"
+    },
+    {
+      "addr": "0x1400324c8",
+      "value": "AcquireSRWLockExclusive"
+    },
+    {
+      "addr": "0x1400324e2",
+      "value": "WaitForSingleObjectEx"
+    },
+    {
+      "addr": "0x1400324fa",
+      "value": "OpenSemaphoreW"
+    },
+    {
+      "addr": "0x14003250c",
+      "value": "CloseHandle"
+    },
+    {
+      "addr": "0x14003251a",
+      "value": "SetThreadpoolTimer"
+    },
+    {
+      "addr": "0x140032530",
+      "value": "ReleaseSRWLockShared"
+    },
+    {
+      "addr": "0x140032548",
+      "value": "CreateThreadpoolTimer"
+    },
+    {
+      "addr": "0x140032560",
+      "value": "HeapAlloc"
+    },
+    {
+      "addr": "0x14003256c",
+      "value": "GetProcAddress"
+    },
+    {
+      "addr": "0x14003257e",
+      "value": "CreateMutexExW"
+    },
+    {
+      "addr": "0x140032590",
+      "value": "AcquireSRWLockShared"
+    },
+    {
+      "addr": "0x1400325a8",
+      "value": "DeleteCriticalSection"
+    },
+    {
+      "addr": "0x1400325c0",
+      "value": "GetCurrentProcessId"
+    },
+    {
+      "addr": "0x1400325d6",
+      "value": "GetProcessHeap"
+    },
+    {
+      "addr": "0x1400325e8",
+      "value": "GetModuleHandleW"
+    },
+    {
+      "addr": "0x1400325fc",
+      "value": "DebugBreak"
+    },
+    {
+      "addr": "0x14003260a",
+      "value": "IsDebuggerPresent"
+    },
+    {
+      "addr": "0x14003261e",
+      "value": "CoTaskMemFree"
+    },
+    {
+      "addr": "0x14003262e",
+      "value": "RegSetKeyValueW"
+    },
+    {
+      "addr": "0x140032640",
+      "value": "MulDiv"
+    },
+    {
+      "addr": "0x14003264a",
+      "value": "PathFileExistsW"
+    },
+    {
+      "addr": "0x14003265c",
+      "value": "RaiseException"
+    },
+    {
+      "addr": "0x14003266e",
+      "value": "WindowsCreateStringReference"
+    },
+    {
+      "addr": "0x14003268e",
+      "value": "CoTaskMemAlloc"
+    },
+    {
+      "addr": "0x1400326a0",
+      "value": "RegGetValueW"
+    },
+    {
+      "addr": "0x1400326b0",
+      "value": "RoGetActivationFactory"
+    },
+    {
+      "addr": "0x1400326ca",
+      "value": "CreateEventExW"
+    },
+    {
+      "addr": "0x1400326dc",
+      "value": "CoWaitForMultipleHandles"
+    },
+    {
+      "addr": "0x1400326f8",
+      "value": "SetEvent"
+    },
+    {
+      "addr": "0x140032704",
+      "value": "CoCreateFreeThreadedMarshaler"
+    },
+    {
+      "addr": "0x140032724",
+      "value": "GlobalFree"
+    },
+    {
+      "addr": "0x140032732",
+      "value": "GetLocaleInfoW"
+    },
+    {
+      "addr": "0x140032744",
+      "value": "CreateFileW"
+    },
+    {
+      "addr": "0x140032752",
+      "value": "ReadFile"
+    },
+    {
+      "addr": "0x14003275e",
+      "value": "GetACP"
+    },
+    {
+      "addr": "0x140032768",
+      "value": "CoCreateInstance"
+    },
+    {
+      "addr": "0x14003277c",
+      "value": "PathIsFileSpecW"
+    },
+    {
+      "addr": "0x14003278e",
+      "value": "SHStrDupW"
+    },
+    {
+      "addr": "0x14003279a",
+      "value": "OpenProcessToken"
+    },
+    {
+      "addr": "0x1400327ae",
+      "value": "GetCurrentProcess"
+    },
+    {
+      "addr": "0x1400327c2",
+      "value": "GetTokenInformation"
+    },
+    {
+      "addr": "0x1400327d8",
+      "value": "GetCommandLineW"
+    },
+    {
+      "addr": "0x1400327ea",
+      "value": "HeapSetInformation"
+    },
+    {
+      "addr": "0x140032800",
+      "value": "CoInitializeEx"
+    },
+    {
+      "addr": "0x140032812",
+      "value": "CoUninitialize"
+    },
+    {
+      "addr": "0x140032824",
+      "value": "LocalFree"
+    },
+    {
+      "addr": "0x140032830",
+      "value": "LocalAlloc"
+    },
+    {
+      "addr": "0x14003283e",
+      "value": "FindFirstFileW"
+    },
+    {
+      "addr": "0x140032850",
+      "value": "FindClose"
+    },
+    {
+      "addr": "0x14003285c",
+      "value": "FoldStringW"
+    },
+    {
+      "addr": "0x14003286a",
+      "value": "K32GetModuleFileNameExW"
+    },
+    {
+      "addr": "0x140032884",
+      "value": "GetModuleFileNameW"
+    },
+    {
+      "addr": "0x14003289a",
+      "value": "GetUserDefaultUILanguage"
+    },
+    {
+      "addr": "0x1400328b6",
+      "value": "GetLocalTime"
+    },
+    {
+      "addr": "0x1400328c6",
+      "value": "GetDateFormatW"
+    },
+    {
+      "addr": "0x1400328d8",
+      "value": "GetTimeFormatW"
+    },
+    {
+      "addr": "0x1400328ea",
+      "value": "WideCharToMultiByte"
+    },
+    {
+      "addr": "0x140032900",
+      "value": "WriteFile"
+    },
+    {
+      "addr": "0x14003290c",
+      "value": "GetFileAttributesW"
+    },
+    {
+      "addr": "0x140032922",
+      "value": "LocalLock"
+    },
+    {
+      "addr": "0x14003292e",
+      "value": "LocalUnlock"
+    },
+    {
+      "addr": "0x14003293c",
+      "value": "DeleteFileW"
+    },
+    {
+      "addr": "0x14003294a",
+      "value": "SetEndOfFile"
+    },
+    {
+      "addr": "0x14003295a",
+      "value": "PathFindExtensionW"
+    },
+    {
+      "addr": "0x140032970",
+      "value": "GetFileAttributesExW"
+    },
+    {
+      "addr": "0x140032988",
+      "value": "GetFileInformationByHandle"
+    },
+    {
+      "addr": "0x1400329a6",
+      "value": "CreateFileMappingW"
+    },
+    {
+      "addr": "0x1400329bc",
+      "value": "MapViewOfFile"
+    },
+    {
+      "addr": "0x1400329cc",
+      "value": "MultiByteToWideChar"
+    },
+    {
+      "addr": "0x1400329e2",
+      "value": "LocalReAlloc"
+    },
+    {
+      "addr": "0x1400329f2",
+      "value": "UnmapViewOfFile"
+    },
+    {
+      "addr": "0x140032a04",
+      "value": "GetFullPathNameW"
+    },
+    {
+      "addr": "0x140032a18",
+      "value": "RegSetValueExW"
+    },
+    {
+      "addr": "0x140032a2a",
+      "value": "RegQueryValueExW"
+    },
+    {
+      "addr": "0x140032a3e",
+      "value": "RegCreateKeyW"
+    },
+    {
+      "addr": "0x140032a4e",
+      "value": "RegCloseKey"
+    },
+    {
+      "addr": "0x140032a5c",
+      "value": "RegOpenKeyExW"
+    },
+    {
+      "addr": "0x140032a6c",
+      "value": "LocalSize"
+    },
+    {
+      "addr": "0x140032a78",
+      "value": "GetStartupInfoW"
+    },
+    {
+      "addr": "0x140032a8a",
+      "value": "GetDpiForMonitor"
+    },
+    {
+      "addr": "0x140032a9e",
+      "value": "lstrcmpiW"
+    },
+    {
+      "addr": "0x140032aaa",
+      "value": "FindNLSString"
+    },
+    {
+      "addr": "0x140032aba",
+      "value": "GlobalLock"
+    },
+    {
+      "addr": "0x140032ac8",
+      "value": "GlobalUnlock"
+    },
+    {
+      "addr": "0x140032ad8",
+      "value": "GlobalAlloc"
+    },
+    {
+      "addr": "0x140032ae6",
+      "value": "RegCreateKeyExW"
+    },
+    {
+      "addr": "0x140032af8",
+      "value": "RegDeleteKeyExW"
+    },
+    {
+      "addr": "0x140032b0a",
+      "value": "RegQueryInfoKeyW"
+    },
+    {
+      "addr": "0x140032b1e",
+      "value": "RegEnumValueW"
+    },
+    {
+      "addr": "0x140032b2e",
+      "value": "SetCurrentDirectoryW"
+    },
+    {
+      "addr": "0x140032b46",
+      "value": "GetDiskFreeSpaceExW"
+    },
+    {
+      "addr": "0x140032b5c",
+      "value": "CreateDirectoryW"
+    },
+    {
+      "addr": "0x140032b70",
+      "value": "CoCreateGuid"
+    },
+    {
+      "addr": "0x140032b80",
+      "value": "RegisterApplicationRestart"
+    },
+    {
+      "addr": "0x140032b9e",
+      "value": "GetCurrentDirectoryW"
+    },
+    {
+      "addr": "0x140032bb6",
+      "value": "EventSetInformation"
+    },
+    {
+      "addr": "0x140032bcc",
+      "value": "EventRegister"
+    },
+    {
+      "addr": "0x140032bdc",
+      "value": "EventUnregister"
+    },
+    {
+      "addr": "0x140032bee",
+      "value": "EventWriteTransfer"
+    },
+    {
+      "addr": "0x140032c04",
+      "value": "IsTextUnicode"
+    },
+    {
+      "addr": "0x140032c14",
+      "value": "CreateProcessW"
+    },
+    {
+      "addr": "0x140032c26",
+      "value": "FindResourceExW"
+    },
+    {
+      "addr": "0x140032c38",
+      "value": "LockResource"
+    },
+    {
+      "addr": "0x140032c48",
+      "value": "FindResourceW"
+    },
+    {
+      "addr": "0x140032c58",
+      "value": "LoadResource"
+    },
+    {
+      "addr": "0x140032c68",
+      "value": "GetModuleHandleA"
+    },
+    {
+      "addr": "0x140032c7c",
+      "value": "RtlCaptureContext"
+    },
+    {
+      "addr": "0x140032c90",
+      "value": "RtlLookupFunctionEntry"
+    },
+    {
+      "addr": "0x140032caa",
+      "value": "RtlVirtualUnwind"
+    },
+    {
+      "addr": "0x140032cbe",
+      "value": "UnhandledExceptionFilter"
+    },
+    {
+      "addr": "0x140032cda",
+      "value": "SetUnhandledExceptionFilter"
+    },
+    {
+      "addr": "0x140032cf8",
+      "value": "TerminateProcess"
+    },
+    {
+      "addr": "0x140032d0c",
+      "value": "IsProcessorFeaturePresent"
+    },
+    {
+      "addr": "0x140032d28",
+      "value": "QueryPerformanceCounter"
+    },
+    {
+      "addr": "0x140032d42",
+      "value": "GetSystemTimeAsFileTime"
+    },
+    {
+      "addr": "0x140032d5c",
+      "value": "InitializeSListHead"
+    },
+    {
+      "addr": "0x140032d72",
+      "value": "GetProcessMitigationPolicy"
+    },
+    {
+      "addr": "0x140032d90",
+      "value": "FreeLibrary"
+    },
+    {
+      "addr": "0x140032d9e",
+      "value": "PropVariantClear"
+    },
+    {
+      "addr": "0x140032db2",
+      "value": "WindowsCreateString"
+    },
+    {
+      "addr": "0x140032dc8",
+      "value": "SetRestrictedErrorInfo"
+    },
+    {
+      "addr": "0x140032de2",
+      "value": "CompareStringOrdinal"
+    },
+    {
+      "addr": "0x140032dfa",
+      "value": "RoGetMatchingRestrictedErrorInfo"
+    },
+    {
+      "addr": "0x140032e1e",
+      "value": "WindowsDeleteString"
+    },
+    {
+      "addr": "0x140032e34",
+      "value": "WindowsGetStringRawBuffer"
+    },
+    {
+      "addr": "0x140032e4e",
+      "value": "api-ms-win-core-libraryloader-l1-2-0.dll"
+    },
+    {
+      "addr": "0x140032e78",
+      "value": "api-ms-win-core-synch-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032e9a",
+      "value": "api-ms-win-core-heap-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032eba",
+      "value": "api-ms-win-core-errorhandling-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032ee4",
+      "value": "api-ms-win-core-threadpool-l1-2-0.dll"
+    },
+    {
+      "addr": "0x140032f0a",
+      "value": "api-ms-win-core-processthreads-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032f34",
+      "value": "api-ms-win-core-localization-l1-2-0.dll"
+    },
+    {
+      "addr": "0x140032f5c",
+      "value": "api-ms-win-core-debug-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032f7e",
+      "value": "api-ms-win-core-handle-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032fa0",
+      "value": "api-ms-win-core-com-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140032fc0",
+      "value": "api-ms-win-core-registry-l1-1-1.dll"
+    },
+    {
+      "addr": "0x140032fe4",
+      "value": "api-ms-win-core-largeinteger-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003300c",
+      "value": "api-ms-win-core-shlwapi-legacy-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140033036",
+      "value": "api-ms-win-core-winrt-string-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003305e",
+      "value": "api-ms-win-core-registry-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140033082",
+      "value": "api-ms-win-core-winrt-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400330a4",
+      "value": "api-ms-win-core-heap-l2-1-0.dll"
+    },
+    {
+      "addr": "0x1400330c4",
+      "value": "api-ms-win-core-file-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400330e4",
+      "value": "api-ms-win-shcore-obsolete-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003310a",
+      "value": "api-ms-win-security-base-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003312e",
+      "value": "api-ms-win-core-processenvironment-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003315c",
+      "value": "api-ms-win-core-string-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003317e",
+      "value": "api-ms-win-core-psapi-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400331a0",
+      "value": "api-ms-win-core-localization-obsolete-l1-2-0.dll"
+    },
+    {
+      "addr": "0x1400331d2",
+      "value": "api-ms-win-core-sysinfo-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400331f6",
+      "value": "api-ms-win-core-datetime-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003321a",
+      "value": "api-ms-win-shcore-path-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003323c",
+      "value": "api-ms-win-core-memory-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003325e",
+      "value": "api-ms-win-core-registry-l2-1-0.dll"
+    },
+    {
+      "addr": "0x140033282",
+      "value": "api-ms-win-core-heap-obsolete-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400332ac",
+      "value": "api-ms-win-shcore-scaling-l1-1-1.dll"
+    },
+    {
+      "addr": "0x1400332d2",
+      "value": "api-ms-win-core-string-obsolete-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400332fe",
+      "value": "api-ms-win-core-windowserrorreporting-l1-1-3.dll"
+    },
+    {
+      "addr": "0x140033330",
+      "value": "api-ms-win-eventing-provider-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140033358",
+      "value": "api-ms-win-base-util-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140033378",
+      "value": "api-ms-win-core-libraryloader-l1-2-1.dll"
+    },
+    {
+      "addr": "0x1400333a2",
+      "value": "api-ms-win-core-rtlsupport-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400333c8",
+      "value": "api-ms-win-core-processthreads-l1-1-1.dll"
+    },
+    {
+      "addr": "0x1400333f2",
+      "value": "api-ms-win-core-profile-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140033416",
+      "value": "api-ms-win-core-interlocked-l1-1-0.dll"
+    },
+    {
+      "addr": "0x14003343e",
+      "value": "api-ms-win-core-winrt-error-l1-1-0.dll"
+    },
+    {
+      "addr": "0x140033466",
+      "value": "api-ms-win-core-winrt-error-l1-1-1.dll"
+    },
+    {
+      "addr": "0x140033490",
+      "value": "ImageList_Create"
+    },
+    {
+      "addr": "0x1400334a4",
+      "value": "ImageList_SetBkColor"
+    },
+    {
+      "addr": "0x1400334bc",
+      "value": "ImageList_ReplaceIcon"
+    },
+    {
+      "addr": "0x1400334d4",
+      "value": "ImageList_Draw"
+    },
+    {
+      "addr": "0x1400334e6",
+      "value": "ImageList_GetIconSize"
+    },
+    {
+      "addr": "0x1400334fe",
+      "value": "ImageList_Destroy"
+    },
+    {
+      "addr": "0x140033512",
+      "value": "CreateStatusWindowW"
+    },
+    {
+      "addr": "0x140033526",
+      "value": "COMCTL32.dll"
+    },
+    {
+      "addr": "0x140033536",
+      "value": "ResolveDelayLoadedAPI"
+    },
+    {
+      "addr": "0x14003354e",
+      "value": "DelayLoadFailureHook"
+    },
+    {
+      "addr": "0x140033564",
+      "value": "api-ms-win-core-delayload-l1-1-1.dll"
+    },
+    {
+      "addr": "0x14003358a",
+      "value": "api-ms-win-core-delayload-l1-1-0.dll"
+    },
+    {
+      "addr": "0x1400335b2",
+      "value": "wcscmp"
+    },
+    {
+      "addr": "0x1400335bc",
+      "value": "memcmp"
+    },
+    {
+      "addr": "0x1400335c6",
+      "value": "memcpy"
+    },
+    {
+      "addr": "0x1400335d0",
+      "value": "memmove"
+    },
+    {
+      "addr": "0x140034358",
+      "value": ".?AVbad_alloc@std@@"
+    },
+    {
+      "addr": "0x140034380",
+      "value": ".?AVexception@std@@"
+    },
+    {
+      "addr": "0x1400343a8",
+      "value": ".?AVbad_array_new_length@std@@"
+    },
+    {
+      "addr": "0x1400343d8",
+      "value": ".?AVtype_info@@"
+    },
+    {
+      "addr": "0x140034a8d",
+      "value": "ew|>&=4_"
+    }
+  ],
+  "imports": [],
+  "exports": []
+}
