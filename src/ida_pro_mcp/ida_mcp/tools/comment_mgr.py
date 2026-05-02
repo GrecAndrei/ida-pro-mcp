@@ -6,12 +6,12 @@ except ImportError:
 
 
 # ============================================================================
-# 33. COMMENTS_AI - AI-Optimized Comment Management
+# 33. COMMENT_MGR - Comment Management
 # ============================================================================
 
 @tool
 @idawrite
-def comments_ai(
+def comment_mgr(
     action: Annotated[Literal["get_context", "set_structured", "bulk_set", "export_md", "import_md", "summary"],
                       "Action: get_context|set_structured|bulk_set|export_md|import_md|summary"],
     addr: Annotated[Optional[str], "Address for comment"] = None,
@@ -22,30 +22,30 @@ def comments_ai(
     **kwargs
 ) -> dict:
     """
-    AI-optimized comment management with structured formats and bulk operations.
-    
+    Comment management with structured formats and bulk operations.
+
     ACTIONS:
-    
+
     get_context - Get all comments around an address with context
         Params: addr
         Returns: {func_comment, inline_comments, repeatable, anterior, posterior, nearby_comments}
-        
+
     set_structured - Set a structured comment (supports formats: plain, markdown, structured)
         Params: addr, text, format
         Returns: {ok, addr, format}
-        
+
     bulk_set - Set multiple comments from JSON list
         Params: items (JSON: [{"addr": "0x...", "text": "..."}])
         Returns: {set_count, errors}
-        
+
     export_md - Export all comments to markdown
         Params: path
         Returns: {exported, path, comment_count}
-        
+
     import_md - Import comments from markdown
         Params: path
         Returns: {imported, count}
-        
+
     summary - Get commenting coverage statistics
         Returns: {total_functions, functions_commented, coverage_pct, inline_comments}
     """
@@ -124,13 +124,12 @@ def comments_ai(
             # Format the comment based on format type
             if format == "structured":
                 # Parse key:value pairs into a structured block
-                formatted = "/* AI Analysis:\n"
+                formatted = "/* Analysis:\n"
                 for line in text.split('\n'):
                     formatted += f" * {line}\n"
                 formatted += " */"
             elif format == "markdown":
-                # Keep markdown but add prefix marker
-                formatted = f"[AI] {text}"
+                formatted = text
             else:
                 formatted = text
             

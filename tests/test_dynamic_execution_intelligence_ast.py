@@ -20,14 +20,10 @@ def _find_fn(module, name):
 NEW_ACTIONS = {
     "execution_timeline_graph",
     "cross_run_diff",
-    "runtime_taint_overlay",
-    "state_replay",
-    "path_unlock",
     "coverage_debug_plan",
-    "exploitability_score",
     "anti_analysis_detect",
-    "lifetime_map",
-    "hybrid_callgraph_confidence",
+    "trace_entropy",
+    "api_sequence",
 }
 
 
