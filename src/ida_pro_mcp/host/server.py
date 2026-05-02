@@ -2552,37 +2552,14 @@ class IDAMCPServer:
                     apply_res = self._apply_session_options(session, runtime)
                     if apply_res.get("error"):
                         return apply_res
-                    # Trigger automatic L1 index rebuild on binary load
-                    try:
-                        self._send_rpc_raw(
-                            {"tool": "schemaboot", "args": {"action": "ingest"}},
-                            server_port,
-                            timeout=60.0,
-                        )
-                    except Exception as e:
-                        log_rpc(f"Auto schemaboot ingest failed (non-fatal): {e}")
-                    # Trigger automatic TurboQuant embedding compression
-                    try:
-                        self._send_rpc_raw(
-                            {"tool": "turboquant", "args": {"action": "ingest"}},
-                            server_port,
-                            timeout=120.0,
-                        )
-                    except Exception as e:
-                        log_rpc(f"Auto turboquant ingest failed (non-fatal): {e}")
-                    # Trigger automatic MbaGCN graph embedding
-                    try:
-                        self._send_rpc_raw(
-                            {"tool": "mbagcn", "args": {"action": "stats"}},
-                            server_port,
-                            timeout=30.0,
-                        )
-                    except Exception as e:
-                        log_rpc(f"Auto mbagcn stats failed (non-fatal): {e}")
+                    # Kick off heavy indexing in background so session create returns fast
+                    self._background_index(session.session_id, server_port)
                     return {
                         "ok": True,
                         "idb_path": session.idb_path,
                         "current_options": apply_res.get("current_options"),
+                        "analysis_in_progress": True,
+                        "hint": "IDA is auto-analyzing the binary. Poll session(action='status') to check readiness, or start querying once analysis completes.",
                     }
             except Exception:
                 pass
@@ -2845,6 +2822,52 @@ class IDAMCPServer:
             "ok": True,
             "current_options": current_options if not current_options.get("error") else None,
         }
+
+    def _background_index(self, session_id: str, server_port: int):
+        """Run schemaboot + turboquant + mbagcn indexing in background thread."""
+        import threading
+
+        def _run():
+            log_rpc(f"[bg-index] Starting background indexing for {session_id}")
+            try:
+                self._send_rpc_raw(
+                    {"tool": "schemaboot", "args": {"action": "ingest"}},
+                    server_port,
+                    timeout=60.0,
+                )
+                log_rpc(f"[bg-index] schemaboot complete for {session_id}")
+            except Exception as e:
+                log_rpc(f"[bg-index] schemaboot failed (non-fatal): {e}")
+            try:
+                self._send_rpc_raw(
+                    {"tool": "turboquant", "args": {"action": "ingest"}},
+                    server_port,
+                    timeout=120.0,
+                )
+                log_rpc(f"[bg-index] turboquant complete for {session_id}")
+            except Exception as e:
+                log_rpc(f"[bg-index] turboquant failed (non-fatal): {e}")
+            try:
+                self._send_rpc_raw(
+                    {"tool": "mbagcn", "args": {"action": "stats"}},
+                    server_port,
+                    timeout=30.0,
+                )
+                log_rpc(f"[bg-index] mbagcn complete for {session_id}")
+            except Exception as e:
+                log_rpc(f"[bg-index] mbagcn failed (non-fatal): {e}")
+            # Mark indexing as complete in session metadata
+            try:
+                sess = self.session_mgr.sessions.get(session_id)
+                if sess:
+                    sess.metadata = dict(sess.metadata or {})
+                    sess.metadata["indexing_complete"] = True
+                    self.session_mgr._save_metadata(sess)
+            except Exception:
+                pass
+            log_rpc(f"[bg-index] Background indexing finished for {session_id}")
+
+        threading.Thread(target=_run, daemon=True, name=f"bg-index-{session_id}").start()
 
     def _cleanup_runtime(self, sid):
         with self._runtime_lock:
@@ -5527,6 +5550,10 @@ class IDAMCPServer:
                         runtime
                         and runtime.get("process")
                         and runtime["process"].poll() is None
+                    )
+                    result["analysis_ready"] = bool(
+                        self.current_session.metadata
+                        and self.current_session.metadata.get("indexing_complete")
                     )
                 else:
                     result = None
