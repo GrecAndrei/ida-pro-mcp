@@ -2498,14 +2498,17 @@ class IDAMCPServer:
         env["IDA_MCP_SESSION_ID"] = session.session_id
         env["IDA_MCP_CACHE_DIR"] = self.cache_dir
         env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
+
+        # Determine whether to open existing IDB or create new one
+        use_existing_idb = os.path.exists(session.idb_path)
         env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
+
         sid_tag = session.session_id
         log_file = os.path.join(self.cache_dir, f"ida_mcp_{sid_tag}.log")
         stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
         stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
 
         # Launch IDA: Open existing IDB if present, otherwise analyze binary
-        use_existing_idb = os.path.exists(session.idb_path)
         if use_existing_idb:
             log_rpc(f"Opening existing session IDB: {session.idb_path}")
         else:
