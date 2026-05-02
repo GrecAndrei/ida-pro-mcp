@@ -713,6 +713,7 @@ def llm_helpers(
     max_tokens: Annotated[int, "Target token budget"] = 2000,
     limit: Annotated[int, "Max results to return"] = 10,
     history: Annotated[Optional[str], "Comma-separated previously analyzed addresses"] = None,
+    **kwargs,
 ) -> dict:
     """
     LLM-specific helper actions to optimize binary analysis interaction.

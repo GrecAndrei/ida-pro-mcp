@@ -6,10 +6,13 @@ VOERA Architecture:
 - Context Density Optimization: compact text output with optional structured items
 - Bridge-Conditioned Multi-Hop: find action supports intermediate entity chaining
 - Task Skill Crystallization: search workflows are cacheable and reusable
+- L1 Insight Index: fast tag-based pre-filtering before any search
 
 This module is a thin router. All actions live in submodules to avoid monoliths.
 """
 
+import json
+import os
 import re
 
 try:
@@ -34,6 +37,86 @@ from .unified import search_find, search_callers, search_callees, search_api
 from .advanced import search_vulnerable, search_constants, search_decompiled, search_structured
 from .meta import search_type, search_export, search_summary
 from ..query_lang import run_query_lang
+
+# ============================================================================
+# L1 Insight Index Pre-filtering
+# ============================================================================
+
+# Canonical tags shared with host/insight_index.py
+_CANONICAL_TAGS = frozenset({
+    "crypto", "network", "file_io", "registry", "process",
+    "string_decode", "allocator", "exception_handler",
+    "obfuscation", "compression", "hashing", "encoding",
+    "parser", "main", "init", "cleanup", "loop",
+    "recursive", "thunk", "library", "data",
+})
+
+
+def _insight_index_path() -> str:
+    """Return the default insight index JSON path on the host side."""
+    cache_dir = os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR")
+    if not cache_dir:
+        import tempfile
+        cache_dir = os.path.join(tempfile.gettempdir(), "ida-pro-mcp")
+    return os.path.join(cache_dir, "insight_index.json")
+
+
+def _load_insight_index(path: str = "") -> dict:
+    """Load the persisted L1 insight index from JSON."""
+    target = path or _insight_index_path()
+    if not os.path.exists(target):
+        return {}
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _query_insight_by_tags(tags: list, mode: str = "and") -> list:
+    """
+    Query the on-disk insight index for function addresses matching tags.
+
+    Returns a list of function address strings (e.g., ["0x401000", ...]).
+    """
+    if not tags:
+        return []
+    payload = _load_insight_index()
+    tag_map = payload.get("tag_map", {})
+    func_map = payload.get("func_map", {})
+
+    tags = [t.lower() for t in tags if t]
+    if mode == "and":
+        candidates = None
+        for tag in tags:
+            addrs = set(tag_map.get(tag, []))
+            if candidates is None:
+                candidates = addrs
+            else:
+                candidates &= addrs
+            if not candidates:
+                return []
+        result_addrs = list(candidates) if candidates else []
+    else:  # "or"
+        seen = set()
+        result_addrs = []
+        for tag in tags:
+            for addr in tag_map.get(tag, []):
+                if addr not in seen:
+                    seen.add(addr)
+                    result_addrs.append(addr)
+
+    # Validate that addresses still exist in func_map
+    return [addr for addr in result_addrs if addr in func_map]
+
+
+def _extract_tags_from_pattern(pattern: str) -> list:
+    """Extract canonical behavior tags from a search pattern string."""
+    if not pattern:
+        return []
+    words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", pattern.lower())
+    return [w for w in words if w in _CANONICAL_TAGS]
+
 
 # ============================================================================
 # Router
@@ -147,6 +230,25 @@ def search(
             offset = max(0, int(offset))
         except Exception:
             offset = 0
+
+        # L1 Insight Index pre-filtering
+        l1_pre_filtered_addrs = None
+        if action == "structured" and isinstance(constraints, dict):
+            behavior_tags = constraints.get("behavior_tags")
+            if behavior_tags:
+                tags = behavior_tags if isinstance(behavior_tags, list) else [behavior_tags]
+                l1_pre_filtered_addrs = _query_insight_by_tags(tags, mode=constraints.get("tag_mode", "and"))
+                if l1_pre_filtered_addrs:
+                    constraints = dict(constraints)
+                    constraints["addrs"] = l1_pre_filtered_addrs
+        elif action in ("find", "callers", "callees", "api") and actual_pattern:
+            tags = _extract_tags_from_pattern(actual_pattern)
+            if tags:
+                l1_pre_filtered_addrs = _query_insight_by_tags(tags, mode="or")
+                if l1_pre_filtered_addrs:
+                    # Narrow range to tagged function addresses if possible
+                    kwargs = dict(kwargs)
+                    kwargs["_l1_addrs"] = l1_pre_filtered_addrs
 
         # Route
         response = None

@@ -44,6 +44,9 @@ RESOURCE_TEMPLATES = [
     "ida://exports",
     "ida://structs",
     "ida://bookmarks",
+    "ida://skills",
+    "ida://facts",
+    "ida://archive",
 ]
 
 
@@ -58,6 +61,9 @@ def list_resources() -> List[Dict]:
         {"uri": "ida://exports", "name": "Exports", "mimeType": "application/json"},
         {"uri": "ida://structs", "name": "Structures", "mimeType": "application/json"},
         {"uri": "ida://bookmarks", "name": "Bookmarks", "mimeType": "application/json"},
+        {"uri": "ida://skills", "name": "L3 Task Skills", "mimeType": "application/json"},
+        {"uri": "ida://facts", "name": "L2 Global Facts", "mimeType": "application/json"},
+        {"uri": "ida://archive", "name": "L4 Session Archive", "mimeType": "application/json"},
     ]
 
 
@@ -74,10 +80,13 @@ def _make_json_content(data: Any) -> Dict:
 
 
 class ResourceResolver:
-    """Resolves ida:// URIs by delegating to tool calls."""
+    """Resolves ida:// URIs by delegating to tool calls or memory tiers."""
 
-    def __init__(self, tool_executor):
+    def __init__(self, tool_executor, insight_index=None, global_facts=None, session_mgr=None):
         self.tool_executor = tool_executor
+        self.insight_index = insight_index
+        self.global_facts = global_facts
+        self.session_mgr = session_mgr
 
     def read(self, uri: str) -> Optional[Dict]:
         if not uri.startswith("ida://"):
@@ -119,6 +128,12 @@ class ResourceResolver:
             return self._read_structs()
         elif domain == "bookmarks":
             return self._read_bookmarks()
+        elif domain == "skills":
+            return self._read_skills()
+        elif domain == "facts":
+            return self._read_facts()
+        elif domain == "archive":
+            return self._read_archive()
         return None
 
     def _exec(self, tool_name: str, **kwargs) -> Any:
@@ -189,3 +204,35 @@ class ResourceResolver:
     def _read_bookmarks(self) -> Dict:
         result = self._exec("bookmarks", action="list")
         return _make_json_content(result)
+
+    def _read_skills(self) -> Dict:
+        """Read L3 task skills from the current session."""
+        if not self.session_mgr:
+            return _make_json_content({"error": "Session manager not available"})
+        # Attempt to get skills for current session via session tool
+        result = self._exec("session", action="list_skills")
+        if isinstance(result, dict) and result.get("error"):
+            return _make_json_content({"skills": [], "note": "No skills available or session tool not configured for list_skills"})
+        return _make_json_content(result)
+
+    def _read_facts(self) -> Dict:
+        """Read L2 global facts."""
+        if not self.global_facts:
+            return _make_json_content({"error": "Global facts database not available"})
+        facts = self.global_facts.query_facts(limit=100)
+        return _make_json_content({
+            "total": self.global_facts.count(),
+            "facts": facts,
+        })
+
+    def _read_archive(self) -> Dict:
+        """Read L4 session archive (activity log)."""
+        if not self.session_mgr:
+            return _make_json_content({"error": "Session manager not available"})
+        result = self._exec("session", action="stats")
+        if isinstance(result, dict) and result.get("error"):
+            return _make_json_content({"archive": [], "note": "Archive not available"})
+        return _make_json_content({
+            "stats": result.get("stats", {}),
+            "note": "L4 archive includes session stats and activity logs.",
+        })

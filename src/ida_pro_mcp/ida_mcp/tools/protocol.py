@@ -240,6 +240,7 @@ def protocol(
     addr: Annotated[Optional[str], "Address or function to analyze"] = None,
     limit: Annotated[int, "Max results"] = 50,
     query: Annotated[Optional[str], "Filter query (regex/glob/substring/semantic auto-detected)"] = None,
+    include_items: Annotated[bool, "Include structured items array in response"] = False,
 ) -> dict:
     """
     Analyze network protocol structures, parsing code, and communication patterns.
