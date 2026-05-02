@@ -381,6 +381,7 @@ TOOL_DESCRIPTIONS = {
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions, def_use_graph.",
     "graph": "Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph.",
     "ctree": "Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
+    "mbagcn": "MbaGCN graph encoding for function CFG similarity. Actions: encode, similar, stats.",
     "static_trace": "Static control flow tracing. Actions: static_trace, decrypt_strings, eval_expr.",
     "entropy": "Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
     # Structure and type recovery
@@ -679,6 +680,7 @@ TOOL_ACTIONS = {
     ],
     "microcode": ["get", "blocks", "instructions", "def_use_graph"],
     "graph": ["callgraph", "cfg", "xref_graph"],
+    "mbagcn": ["encode", "similar", "stats"],
     "ctree": [
         "get",
         "traverse",
@@ -1376,6 +1378,12 @@ TOOL_ARG_SCHEMAS = {
         "addr": {"type": "string"},
         "query": {"type": "string"},
         "depth": {"type": "integer"},
+    },
+    "mbagcn": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["mbagcn"]},
+        "addr": {"type": "string"},
+        "top_k": {"type": "integer"},
+        "db_path": {"type": "string"},
     },
     "entropy": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["entropy"]},
@@ -2215,6 +2223,7 @@ _TOOL_CATEGORY_ADVANCED = {
     "microcode",
     "graph",
     "ctree",
+    "mbagcn",
     "static_trace",
     "entropy",
     "imports_deep",
