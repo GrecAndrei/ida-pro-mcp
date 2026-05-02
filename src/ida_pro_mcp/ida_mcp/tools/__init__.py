@@ -67,6 +67,8 @@ __all__ = [
     "turboquant",
     "bridgerag",
     "memrl",
+    "blackboard",
+    "filter",
 ]
 
 

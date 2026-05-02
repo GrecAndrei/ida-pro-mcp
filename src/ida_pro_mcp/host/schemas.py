@@ -121,6 +121,9 @@ TOOLS = [
     "turboquant",
     "bridgerag",
     "memrl",
+    # --- New infrastructure tools ---
+    "blackboard",
+    "filter",
 ]
 
 ADVERTISED_TOOLS = [
@@ -414,6 +417,8 @@ TOOL_DESCRIPTIONS = {
     "turboquant": "3-bit extreme embedding compression with PolarQuant + QJL. Ingests function vectors from SchemaBoot and compresses them to 3 bits per dimension (~8x memory reduction). Supports similarity search on compressed embeddings.",
     "bridgerag": "Bridge-conditioned Multi-Hop Search. Finds structurally related functions through shared bridge entities (APIs, strings, xrefs) using SchemaBoot as the bridge source. Implements tripartite scoring s(query, bridge, candidate).",
     "memrl": "Non-parametric reinforcement learning on episodic memory. Stores Intent-Experience-Utility triplets with learned Q-values. Two-phase retrieval: similarity recall followed by Q-value re-ranking. Updates via TD rule: Q_new = Q_old + alpha * (reward - Q_old).",
+    "blackboard": "Persistent stateful context store for analysis hypotheses and findings. Actions: write, read, list, update, delete, clear, stats. Used for offloading working memory so the LLM doesn't lose state across context windows.",
+    "filter": "Context Guillotine: deterministic JQ-like filtering for tool outputs. Actions: filter. Supports path extraction, array slicing, conditional filtering, sorting, plucking, grouping, and pipe operators. Runs entirely on the MCP server to prevent context window overflow.",
 }
 
 TOOL_ACTIONS = {
@@ -530,6 +535,11 @@ TOOL_ACTIONS = {
         "vulnerable",
         "constants",
         "decompiled",
+        "structured",
+        "type",
+        "export",
+        "summary",
+        "query_lang",
     ],
     "types": [
         "list",
@@ -1013,6 +1023,16 @@ TOOL_ACTIONS = {
         "top",
         "get_q",
     ],
+    "blackboard": [
+        "write",
+        "read",
+        "list",
+        "update",
+        "delete",
+        "clear",
+        "stats",
+    ],
+    "filter": ["filter"],
 }
 
 TOOL_ARG_SCHEMAS = {
@@ -1419,7 +1439,11 @@ TOOL_ARG_SCHEMAS = {
                 "description": "Each item can be 'tool:action', {name, arguments}, or {name, action, ...args}.",
             },
         },
-        "continue_on_error": {"type": "boolean"},
+        "script": {"type": "string", "description": "Macro DSL script. Alternative to 'calls'."},
+        "stop_on_error": {"type": "boolean"},
+        "dry_run": {"type": "boolean"},
+        "template": {"type": "string", "description": "Predefined template name"},
+        "template_vars": {"type": "object", "description": "Variables for template expansion"},
     },
     "schemaboot": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["schemaboot"]},
@@ -1457,6 +1481,25 @@ TOOL_ARG_SCHEMAS = {
         "lambda_explore": {"type": "number", "description": "Weight for Q-value vs similarity (0=pure similarity, 1=pure Q)"},
         "similarity_key": {"type": "string", "description": "Dict key to read similarity score from candidate_pool items"},
         "db_path": {"type": "string", "description": "Override path to MemRL SQLite DB"},
+    },
+    "blackboard": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["blackboard"]},
+        "entry_id": {"type": "string", "description": "Entry ID for read/update/delete"},
+        "title": {"type": "string", "description": "Title for write/update"},
+        "content": {"type": "string", "description": "Content/body text"},
+        "category": {"type": "string", "description": "Category (default: general)"},
+        "addr": {"type": "string", "description": "Associated address"},
+        "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization"},
+        "confidence": {"type": "number", "description": "Confidence score 0-1"},
+        "tag": {"type": "string", "description": "Filter by single tag"},
+        "min_confidence": {"type": "number", "description": "Minimum confidence filter"},
+        "limit": {"type": "integer", "description": "Max entries to return"},
+        "offset": {"type": "integer", "description": "Pagination offset"},
+        "db_path": {"type": "string", "description": "Override path to blackboard SQLite DB"},
+    },
+    "filter": {
+        "data": {"type": "object", "description": "Tool output dict to filter"},
+        "query": {"type": "string", "description": "JQ-like filter expression (e.g. '.functions[?size > 100] | first(10)')"},
     },
 }
 
