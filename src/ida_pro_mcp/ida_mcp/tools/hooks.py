@@ -72,6 +72,8 @@ def hooks(
                 seg = ida_segment.getseg(seg_ea)
                 if seg and seg.type == ida_segment.SEG_XTRN:  # Import segment
                     for head in idautils.Heads(seg_ea, idc.get_segm_end(seg_ea)):
+                        if len(suggestions) >= 10000:
+                            break
                         name = idc.get_name(head)
                         if name:
                             for pattern in patterns:
@@ -87,6 +89,8 @@ def hooks(
             # Search named functions
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    if len(suggestions) >= 10000:
+                        break
                     name = idc.get_func_name(func_ea)
                     if name:
                         for pattern in patterns:
@@ -98,6 +102,8 @@ def hooks(
                                     "type": "function"
                                 })
                                 break
+                if len(suggestions) >= 10000:
+                    break
             
             return {"ok": True, "category": cat, "suggestions": suggestions[:50]}
         
@@ -194,6 +200,8 @@ void Install{name}Hook() {{
             
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    if len(targets) >= 10000:
+                        break
                     name = idc.get_func_name(func_ea)
                     if not name or name.startswith("sub_"):
                         continue
@@ -223,6 +231,8 @@ void Install{name}Hook() {{
                             "category": cat,
                             "importance": importance
                         })
+                if len(targets) >= 10000:
+                    break
             
             # Sort by importance
             importance_order = {"high": 0, "medium": 1, "normal": 2}

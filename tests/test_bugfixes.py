@@ -335,7 +335,7 @@ class TestToolRegistration(unittest.TestCase):
         self.assertIn("batch", TOOL_DESCRIPTIONS)
 
     def test_total_tool_count(self):
-        self.assertGreaterEqual(len(TOOLS), 65)
+        self.assertGreaterEqual(len(TOOLS), 61)
 
     def test_schemas_build(self):
         for t in TOOLS:
@@ -445,9 +445,9 @@ class TestQueryEditActions(unittest.TestCase):
         expected = {"data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns"}
         self.assertEqual(set(TOOL_ACTIONS["query"]), expected)
 
-    def test_edit_actions(self):
-        expected = {"rename", "comment", "type", "patch", "create_func", "bulk"}
-        self.assertEqual(set(TOOL_ACTIONS["edit"]), expected)
+    def test_modify_actions(self):
+        expected = {"rename", "comment", "set_type", "patch_asm"}
+        self.assertEqual(set(TOOL_ACTIONS["modify"]), expected)
 
 
 # =============================================================================

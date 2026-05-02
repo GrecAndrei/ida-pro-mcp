@@ -124,6 +124,8 @@ def lumina(
 
             records = []
             for func_ea in idautils.Functions():
+                if len(records) >= 50000:
+                    break
                 name = idc.get_func_name(func_ea) or ""
                 if not matcher(name):
                     continue

@@ -32,7 +32,7 @@ def quickref() -> list[dict]:
 
 @prompt
 def workflow(
-    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|diff|debug|crypto|protocol|exploit|deobfuscate"] = "triage"
+    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|compare|debug|crypto|protocol|exploit|deobfuscate"] = "triage"
 ) -> list[dict]:
     """Get a step-by-step workflow guide for a specific analysis task."""
     workflows = {

@@ -397,10 +397,11 @@ def abi(
             fn, err = _get_func_ea(addr)
             if err:
                 return err
-            # Collect last N instructions
+            # Collect last N instructions (capped at 20000 heads to prevent OOM)
             all_heads = []
+            max_heads = 20000
             ea = fn.start_ea
-            while ea < fn.end_ea and ea != idaapi.BADADDR:
+            while ea < fn.end_ea and ea != idaapi.BADADDR and len(all_heads) < max_heads:
                 all_heads.append(ea)
                 ea = idc.next_head(ea, fn.end_ea)
                 if ea == idaapi.BADADDR:

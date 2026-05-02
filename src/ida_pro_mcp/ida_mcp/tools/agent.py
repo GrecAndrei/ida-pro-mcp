@@ -27,6 +27,7 @@ def agent(
     include_pseudocode: Annotated[bool, "Include decompiler pseudocode in context pack"] = False,
     max_items: Annotated[int, "Max items for context pack lists"] = 25,
     use_cache: Annotated[bool, "Use cached decompiler summaries when possible"] = True,
+    **kwargs
 ) -> dict:
     """
     High-level agent helpers for efficient binary analysis.
@@ -248,7 +249,11 @@ def agent(
                 try:
                     calls = set()
                     strings = []
+                    _item_count = 0
                     for item in idautils.FuncItems(func.start_ea):
+                        _item_count += 1
+                        if _item_count > 5000:
+                            break
                         for xref in idautils.XrefsFrom(item, 0):
                             if xref.iscode:
                                 tf = idaapi.get_func(xref.to)
@@ -257,7 +262,7 @@ def agent(
                             else:
                                 s = idc.get_strlit_contents(xref.to)
                                 if s:
-                                    strings.append({"addr": hex(xref.to), "string": s.decode("utf-8", errors="replace")})
+                                    strings.append({"addr": hex(xref.to), "string": s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s)})
                     summary["calls"] = [{"addr": a, "name": n} for a, n in sorted(calls)[:max_items]]
                     summary["strings"] = strings[:max_items]
                 except Exception:
@@ -270,7 +275,11 @@ def agent(
             callers = []
             try:
                 caller_set = set()
+                _xref_count = 0
                 for xref in idautils.XrefsTo(func.start_ea, 0):
+                    _xref_count += 1
+                    if _xref_count > 5000:
+                        break
                     if xref.iscode:
                         cf = idaapi.get_func(xref.frm)
                         if cf:
@@ -352,7 +361,11 @@ def agent(
                 
                 # Quick xrefs
                 callers = set()
+                _xref_count = 0
                 for xref in idautils.XrefsTo(func.start_ea, 0):
+                    _xref_count += 1
+                    if _xref_count > 2000:
+                        break
                     if xref.iscode:
                         cf = idaapi.get_func(xref.frm)
                         if cf:
@@ -364,7 +377,7 @@ def agent(
                 result["type"] = "string"
                 content = idc.get_strlit_contents(ea)
                 if content:
-                    result["string"] = content.decode("utf-8", errors="replace")[:500]
+                    result["string"] = (content.decode("utf-8", errors="replace") if isinstance(content, bytes) else str(content))[:500]
                 result["xref_count"] = len(list(idautils.XrefsTo(ea)))
                 
             elif ida_bytes.is_data(ida_bytes.get_flags(ea)):
@@ -407,16 +420,24 @@ def agent(
             }
             
             # Gather strings
+            _fi_count = 0
             for item in idautils.FuncItems(func.start_ea):
+                _fi_count += 1
+                if _fi_count > 2000:
+                    break
                 for xref in idautils.XrefsFrom(item, 0):
                     if not xref.iscode:
                         s = idc.get_strlit_contents(xref.to)
                         if s:
-                            context["strings_used"].append(s.decode("utf-8", errors="replace")[:100])
+                            context["strings_used"].append((s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s))[:100])
             context["strings_used"] = context["strings_used"][:10]
             
             # Gather API calls
+            _fi_count = 0
             for item in idautils.FuncItems(func.start_ea):
+                _fi_count += 1
+                if _fi_count > 2000:
+                    break
                 for xref in idautils.XrefsFrom(item, 0):
                     if xref.type in [17, 18, 19, 20, 21]:
                         callee_name = idc.get_name(xref.to)
@@ -425,7 +446,11 @@ def agent(
             context["apis_called"] = list(set(context["apis_called"]))[:15]
             
             # Callers
+            _xref_count = 0
             for xref in idautils.XrefsTo(func.start_ea, 0):
+                _xref_count += 1
+                if _xref_count > 2000:
+                    break
                 if xref.iscode:
                     cf = idaapi.get_func(xref.frm)
                     if cf:
@@ -436,7 +461,11 @@ def agent(
             
             # Callees (non-API)
             seen = set()
+            _fi_count = 0
             for item in idautils.FuncItems(func.start_ea):
+                _fi_count += 1
+                if _fi_count > 2000:
+                    break
                 for xref in idautils.XrefsFrom(item, 0):
                     if xref.type in [17, 18, 19, 20, 21]:
                         callee = idaapi.get_func(xref.to)
@@ -513,7 +542,11 @@ def agent(
             
             # Get APIs called by target
             target_apis = set()
+            _fi_count = 0
             for item in idautils.FuncItems(func.start_ea):
+                _fi_count += 1
+                if _fi_count > 5000:
+                    break
                 for xref in idautils.XrefsFrom(item, 0):
                     if xref.type in [17, 18, 19, 20, 21]:  # Call types
                         callee_name = idc.get_name(xref.to)
@@ -522,19 +555,30 @@ def agent(
             
             # Get strings used by target
             target_strings = set()
+            _fi_count = 0
             for item in idautils.FuncItems(func.start_ea):
+                _fi_count += 1
+                if _fi_count > 5000:
+                    break
                 for xref in idautils.XrefsFrom(item, 0):
                     if not xref.iscode:
                         s = idc.get_strlit_contents(xref.to)
                         if s:
-                            target_strings.add(s.decode("utf-8", errors="replace")[:50])
+                            target_strings.add((s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s))[:50])
             
             # Get instruction count of target
-            target_insn_count = len(list(idautils.FuncItems(func.start_ea)))
+            target_insn_count = 0
+            for _ in idautils.FuncItems(func.start_ea):
+                target_insn_count += 1
+                if target_insn_count > 10000:
+                    break
             
             # Score all other functions
             similar_funcs = []
+            _max_candidates = max_items * 10
             for other_ea in idautils.Functions():
+                if len(similar_funcs) >= _max_candidates * 2:
+                    break
                 if other_ea == func.start_ea:
                     continue
                 
@@ -555,7 +599,11 @@ def agent(
                 
                 # API overlap
                 other_apis = set()
+                _fi_count = 0
                 for item in idautils.FuncItems(other_ea):
+                    _fi_count += 1
+                    if _fi_count > 2000:
+                        break
                     for xref in idautils.XrefsFrom(item, 0):
                         if xref.type in [17, 18, 19, 20, 21]:
                             callee_name = idc.get_name(xref.to)
@@ -571,12 +619,16 @@ def agent(
                 
                 # String overlap
                 other_strings = set()
+                _fi_count = 0
                 for item in idautils.FuncItems(other_ea):
+                    _fi_count += 1
+                    if _fi_count > 2000:
+                        break
                     for xref in idautils.XrefsFrom(item, 0):
                         if not xref.iscode:
                             s = idc.get_strlit_contents(xref.to)
                             if s:
-                                other_strings.add(s.decode("utf-8", errors="replace")[:50])
+                                other_strings.add((s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s))[:50])
                 
                 if target_strings and other_strings:
                     string_overlap = len(target_strings & other_strings) / len(target_strings | other_strings)
@@ -586,7 +638,11 @@ def agent(
                             reasons.append(f"string_overlap:{int(string_overlap*100)}%")
                 
                 # Instruction count similarity
-                other_insn_count = len(list(idautils.FuncItems(other_ea)))
+                other_insn_count = 0
+                for _ in idautils.FuncItems(other_ea):
+                    other_insn_count += 1
+                    if other_insn_count > 10000:
+                        break
                 insn_ratio = min(target_insn_count, other_insn_count) / max(target_insn_count, other_insn_count) if max(target_insn_count, other_insn_count) > 0 else 0
                 if insn_ratio > 0.7:
                     score += int(insn_ratio * 10)
@@ -653,12 +709,16 @@ def agent(
             bridge_apis = []
             bridge_func = idaapi.get_func(bridge_addr)
             if bridge_func:
+                _fi_count = 0
                 for item in idautils.FuncItems(bridge_func.start_ea):
+                    _fi_count += 1
+                    if _fi_count > 2000:
+                        break
                     for xref in idautils.XrefsFrom(item, 0):
                         if not xref.iscode:
                             s = idc.get_strlit_contents(xref.to)
                             if s:
-                                bridge_strings.append(s.decode("utf-8", errors="replace")[:50])
+                                bridge_strings.append((s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s))[:50])
                         else:
                             callee = idc.get_func_name(xref.to)
                             if callee and not callee.startswith("sub_"):
@@ -706,7 +766,11 @@ def agent(
             for candidate_ea, data in candidate_pool.items():
                 fname = idc.get_func_name(candidate_ea) or f"sub_{candidate_ea:x}"
                 # Bonus for crypto/string manipulation patterns
+                _fi_count = 0
                 for item in idautils.FuncItems(candidate_ea):
+                    _fi_count += 1
+                    if _fi_count > 1000:
+                        break
                     mnem = idc.print_insn_mnem(item)
                     if mnem and mnem.lower() in ("xor", "rol", "ror", "shl", "shr"):
                         data["score"] += 3

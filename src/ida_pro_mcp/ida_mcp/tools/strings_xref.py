@@ -9,6 +9,8 @@ except ImportError:
 # 30. STRINGS_XREF - Advanced String Analysis
 # ============================================================================
 
+_MAX_ITER = 100000  # Guard for unbounded internal iterations
+
 @tool
 @idaread
 def strings_xref(
@@ -61,10 +63,16 @@ def strings_xref(
             if not addr:
                 # Global analysis: find most referenced strings
                 top_list = []
-                for s in idautils.Strings():
-                    count = len(list(idautils.XrefsTo(s.ea)))
-                    if count > 0:
-                        top_list.append((s.ea, str(s), count))
+                for s_idx, s in enumerate(idautils.Strings()):
+                    if s_idx >= _MAX_ITER:
+                        break
+                    xref_cnt = 0
+                    for _ in idautils.XrefsTo(s.ea):
+                        xref_cnt += 1
+                        if xref_cnt > 1000:
+                            break
+                    if xref_cnt > 0:
+                        top_list.append((s.ea, str(s), xref_cnt))
                 top_list.sort(key=lambda x: x[2], reverse=True)
                 top_lines = [f"{hex(ea)}  xrefs={cnt}  {text}" for ea, text, cnt in top_list[:50]]
                 return {"ok": True, "top_strings": "\n".join(top_lines), "note": "Global string summary (most referenced)"}
@@ -78,7 +86,8 @@ def strings_xref(
             
             string_val = idc.get_strlit_contents(ea, -1, str_type)
             if string_val:
-                string_val = string_val.decode('utf-8', errors='replace')
+                if isinstance(string_val, bytes):
+                    string_val = string_val.decode('utf-8', errors='replace')
             
             # Detect encoding
             encoding = "ascii"
@@ -89,7 +98,9 @@ def strings_xref(
             
             # Get xrefs to this string
             xref_lines = []
-            for xref in idautils.XrefsTo(ea):
+            for x_idx, xref in enumerate(idautils.XrefsTo(ea)):
+                if x_idx >= _MAX_ITER:
+                    break
                 func = ida_funcs.get_func(xref.frm)
                 fn_name = idc.get_func_name(xref.frm) if func else ""
                 xref_lines.append(f"{hex(xref.frm)}  {fn_name}")
@@ -118,10 +129,16 @@ def strings_xref(
             if not addr:
                 # List top referenced strings as suggestions
                 top_list = []
-                for s in idautils.Strings():
-                    count = len(list(idautils.XrefsTo(s.ea)))
-                    if count > 1:
-                        top_list.append((s.ea, str(s), count))
+                for s_idx, s in enumerate(idautils.Strings()):
+                    if s_idx >= _MAX_ITER:
+                        break
+                    xref_cnt = 0
+                    for _ in idautils.XrefsTo(s.ea):
+                        xref_cnt += 1
+                        if xref_cnt > 1000:
+                            break
+                    if xref_cnt > 1:
+                        top_list.append((s.ea, str(s), xref_cnt))
                 top_list.sort(key=lambda x: x[2], reverse=True)
                 top_lines = [f"{hex(ea)}  xrefs={cnt}  {text}" for ea, text, cnt in top_list[:20]]
                 return {"ok": True, "top_strings": "\n".join(top_lines), "hint": "Provide 'addr' to trace a specific string"}
@@ -135,7 +152,9 @@ def strings_xref(
                     return
                 visited.add(current_ea)
                 
-                for xref in idautils.XrefsTo(current_ea):
+                for x_idx, xref in enumerate(idautils.XrefsTo(current_ea)):
+                    if x_idx >= _MAX_ITER:
+                        break
                     if xref.type in [1, 17, 18, 19, 20, 21]:
                         func = ida_funcs.get_func(xref.frm)
                         if func:
@@ -150,7 +169,9 @@ def strings_xref(
         elif action == "detect_encoded":
             suspicious_lines = []
             
-            for s in idautils.Strings():
+            for s_idx, s in enumerate(idautils.Strings()):
+                if s_idx >= _MAX_ITER:
+                    break
                 raw = ida_bytes.get_bytes(s.ea, s.length)
                 if not raw:
                     continue
@@ -184,11 +205,14 @@ def strings_xref(
             fmt_lines = []
             query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             
-            for s in idautils.Strings():
+            for s_idx, s in enumerate(idautils.Strings()):
+                if s_idx >= _MAX_ITER:
+                    break
                 try:
                     str_val = idc.get_strlit_contents(s.ea, -1, s.strtype)
                     if str_val:
-                        str_val = str_val.decode('utf-8', errors='replace')
+                        if isinstance(str_val, bytes):
+                            str_val = str_val.decode('utf-8', errors='replace')
                         if '%' in str_val:
                             if query_matcher and not query_matcher(str_val):
                                 continue
@@ -208,8 +232,12 @@ def strings_xref(
         elif action == "clusters":
             clusters = {}
             
-            for s in idautils.Strings():
-                for xref in idautils.XrefsTo(s.ea):
+            for s_idx, s in enumerate(idautils.Strings()):
+                if s_idx >= _MAX_ITER:
+                    break
+                for x_idx, xref in enumerate(idautils.XrefsTo(s.ea)):
+                    if x_idx >= _MAX_ITER:
+                        break
                     func = ida_funcs.get_func(xref.frm)
                     if func:
                         func_name = idc.get_func_name(func.start_ea)

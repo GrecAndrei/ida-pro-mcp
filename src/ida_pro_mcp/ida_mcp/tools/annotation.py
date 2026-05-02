@@ -1,3 +1,4 @@
+import re
 
 try:
     from ._common import *
@@ -354,7 +355,10 @@ def annotation(
                     return err
                 func_eas.append(ea)
             else:
-                for fea in idautils.Functions():
+                _func_limit = max(limit, 5000)
+                for _fc, fea in enumerate(idautils.Functions()):
+                    if _fc >= _func_limit:
+                        break
                     func_eas.append(fea)
 
             warnings = []
@@ -436,7 +440,10 @@ def annotation(
                     return err
                 func_eas.append(ea)
             else:
-                for fea in idautils.Functions():
+                _func_limit = max(limit, 5000)
+                for _fc, fea in enumerate(idautils.Functions()):
+                    if _fc >= _func_limit:
+                        break
                     func_eas.append(fea)
 
             tagged = []
@@ -661,7 +668,10 @@ def annotation(
                     return err
                 func_eas.append(ea)
             else:
-                for fea in idautils.Functions():
+                _func_limit = max(limit, 5000)
+                for _fc, fea in enumerate(idautils.Functions()):
+                    if _fc >= _func_limit:
+                        break
                     func_eas.append(fea)
 
             removed = []

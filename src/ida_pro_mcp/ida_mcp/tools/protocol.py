@@ -121,19 +121,21 @@ _KNOWN_MAGIC = {
 }
 
 
-def _get_all_strings():
-    """Collect all defined strings from the IDB."""
+def _get_all_strings(max_strings=50000):
+    """Collect all defined strings from the IDB (bounded to max_strings)."""
     results = []
     sc = idautils.Strings()
-    for s in sc:
+    for idx, s in enumerate(sc):
+        if idx >= max_strings:
+            break
         val = str(s)
         if val:
             results.append((s.ea, val, s.length))
     return results
 
 
-def _find_api_xrefs(api_name):
-    """Find all xrefs to a named API. Returns list of (caller_ea, caller_name)."""
+def _find_api_xrefs(api_name, max_xrefs=5000):
+    """Find all xrefs to a named API (bounded to max_xrefs). Returns list of (caller_ea, caller_name)."""
     results = []
     ea = ida_name.get_name_ea(idaapi.BADADDR, api_name)
     if ea == idaapi.BADADDR:
@@ -144,7 +146,9 @@ def _find_api_xrefs(api_name):
                 break
     if ea == idaapi.BADADDR:
         return results
-    for xref in idautils.XrefsTo(ea, 0):
+    for idx, xref in enumerate(idautils.XrefsTo(ea, 0)):
+        if idx >= max_xrefs:
+            break
         fn = ida_funcs.get_func(xref.frm)
         if fn:
             fname = idc.get_func_name(fn.start_ea)
@@ -152,14 +156,16 @@ def _find_api_xrefs(api_name):
     return results
 
 
-def _get_func_callees(func_ea):
-    """Return list of (callee_ea, callee_name) for the function."""
+def _get_func_callees(func_ea, max_refs=2000):
+    """Return list of (callee_ea, callee_name) for the function (bounded to max_refs)."""
     fn = ida_funcs.get_func(func_ea)
     if not fn:
         return []
     callees = []
     seen = set()
     for head in idautils.Heads(fn.start_ea, fn.end_ea):
+        if len(callees) >= max_refs:
+            break
         for xref in idautils.CodeRefsFrom(head, 0):
             if xref not in seen:
                 seen.add(xref)
@@ -168,17 +174,23 @@ def _get_func_callees(func_ea):
                     name = ida_name.get_name(xref)
                 if name:
                     callees.append((xref, name))
+                    if len(callees) >= max_refs:
+                        break
     return callees
 
 
-def _get_func_strings(func_ea):
-    """Get all string references from a function."""
+def _get_func_strings(func_ea, max_refs=500):
+    """Get all string references from a function (bounded to max_refs)."""
     fn = ida_funcs.get_func(func_ea)
     if not fn:
         return []
     strings = []
     for head in idautils.Heads(fn.start_ea, fn.end_ea):
+        if len(strings) >= max_refs:
+            break
         for dref in idautils.DataRefsFrom(head):
+            if len(strings) >= max_refs:
+                break
             stype = idc.get_str_type(dref)
             if stype is not None and stype >= 0:
                 s = idc.get_strlit_contents(dref, -1, stype)
@@ -695,7 +707,8 @@ def protocol(
                         if any(p in line for p in ("[", "->", "offset", "buf +",
                                                     "ptr +", ".field", "header")):
                             fields.append(line.strip())
-            except Exception:
+            except Exception as _decomp_err:
+                # Hex-Rays may not be available or decompilation may fail — skip silently
                 pass
 
             return {

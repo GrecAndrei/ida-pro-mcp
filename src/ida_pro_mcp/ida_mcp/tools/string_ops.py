@@ -143,6 +143,17 @@ _STACK_STRING_MOV_PATTERNS = [
 # Helpers
 # ============================================================================
 
+def _is_be():
+    """Detect if the target binary is big-endian."""
+    try:
+        inf = idaapi.get_inf_structure()
+        if inf and hasattr(inf, 'is_be'):
+            return inf.is_be()
+    except Exception:
+        pass
+    return False
+
+
 def _iter_strings(limit=500):
     """Iterate all strings via idautils.Strings(), yielding (ea, raw_bytes, str_type)."""
     results = []
@@ -163,7 +174,7 @@ def _text_or_repr(raw):
         return repr(raw)
 
 
-def _scope_filter(strings, addr):
+def _scope_filter(strings, addr, max_xrefs=5000):
     if addr is None:
         return strings
     ea = parse_address(addr)
@@ -173,9 +184,13 @@ def _scope_filter(strings, addr):
     func_items = set(idautils.FuncItems(func.start_ea))
     scoped = []
     for s_ea, raw, st in strings:
+        xref_count = 0
         for xref in idautils.XrefsTo(s_ea):
             if xref.frm in func_items:
                 scoped.append((s_ea, raw, st))
+                break
+            xref_count += 1
+            if xref_count >= max_xrefs:
                 break
     return scoped
 
@@ -221,15 +236,19 @@ def _get_func_name_for_ea(ea):
     return "unknown"
 
 
-def _find_string_xrefs(strings, limit):
+def _find_string_xrefs(strings, limit, max_xrefs=5000):
     """Find which functions reference each string."""
     results = []
     for s_ea, raw, st in strings:
         funcs = set()
+        xref_count = 0
         for xref in idautils.XrefsTo(s_ea):
             func = idaapi.get_func(xref.frm)
             if func:
                 funcs.add(idc.get_func_name(func.start_ea) or "unknown")
+            xref_count += 1
+            if xref_count >= max_xrefs:
+                break
         if funcs:
             text = _text_or_repr(raw)
             # Truncate very long strings
@@ -267,7 +286,7 @@ def _find_stack_strings(limit):
                 continue
             # Check if value contains printable ASCII bytes
             try:
-                bval = val.to_bytes(8, 'little')
+                bval = val.to_bytes(8, 'big' if _is_be() else 'little')
             except OverflowError:
                 continue
             printable = sum(1 for b in bval if 32 <= b <= 126)
@@ -587,7 +606,7 @@ def string_ops(
                     except (UnicodeDecodeError, Exception):
                         continue
                 if best_decoded is None:
-                    best_decoded = raw.decode("utf-8", errors="replace")
+                    best_decoded = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
                     best_enc = "utf-8-lossy"
                     best_conf = 0.0
                 display = best_decoded.replace("\n", "\\n").replace("\r", "\\r")

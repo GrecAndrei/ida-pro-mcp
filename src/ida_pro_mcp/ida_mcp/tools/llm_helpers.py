@@ -207,7 +207,7 @@ def _build_tool_plan(query: str, addr: Optional[str]) -> list[dict]:
         base.extend(
             [
                 {"tool": "search", "action": "vulnerable", "limit": 100},
-                {"tool": "vuln_scan", "action": "dangerous_flow", "limit": 50},
+                {"tool": "xref_analysis", "action": "dependency_graph", "addr": addr, "depth": 3},
             ]
         )
     elif qtype == "threat_hunting":
@@ -543,9 +543,13 @@ def _handle_feature_expansion_action(
     return {"ok": True, "feature": feature, "note": "Feature action recognized but no specific handler branch matched."}
 
 
-def _count_functions():
-    """Count total functions."""
-    return sum(1 for _ in idautils.Functions())
+def _count_functions(max_count: int = 200000):
+    """Count total functions (capped for safety on huge binaries)."""
+    idx = -1
+    for idx, _ in enumerate(idautils.Functions()):
+        if idx >= max_count - 1:
+            return max_count
+    return idx + 1
 
 
 def _get_imports_summary():
@@ -661,10 +665,40 @@ def _histogram_by_segment(addresses: list[int]) -> dict[str, int]:
     return counts
 
 
+def _llm_summarize_output(data: dict) -> str:
+    """Generate a one-line LLM-friendly summary of any tool output."""
+    if not isinstance(data, dict):
+        return "Non-dict output received"
+    if data.get("error") is True or "error" in data:
+        return f"Error: {data.get('message', data.get('error', 'unknown'))}"
+    if "functions" in data:
+        total = data.get("total_matches", len(data.get("functions", [])))
+        return f"Found {total} function(s) matching constraints"
+    if "candidates" in data:
+        return f"BridgeRAG found {len(data.get('candidates', []))} candidate(s) via {data.get('bridges', {})}"
+    if "results" in data and "compression_ratio" in data:
+        return f"TurboQuant: {data.get('ingested', 0)} vectors, {data.get('compression_ratio', 0)}x compression"
+    if "ranked" in data:
+        return f"MemRL ranked {len(data.get('ranked', []))} candidate(s) by Q-value"
+    if "ingested" in data:
+        return f"Ingested {data.get('ingested', 0)} function(s)"
+    if "stats" in data:
+        return f"Stats: {data['stats']}"
+    if "macros" in data:
+        return f"{data.get('count', 0)} macro(s)"
+    if "sessions" in data:
+        return f"{data.get('count', len(data.get('sessions', [])))} session(s)"
+    if "cheatsheet" in data:
+        return "Cheatsheet generated"
+    if "compacted" in data:
+        return f"Compacted {data.get('original_tokens', 0)} -> {data.get('compacted_tokens', 0)} tokens"
+    return "Tool completed successfully"
+
+
 @tool
 @idaread
 def llm_helpers(
-    action: Annotated[Literal["context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "question_answer", "guided_analysis", "cheatsheet", "compact", "intent_tool_compiler", "adaptive_query_planner", "token_aware_context_optimizer", "cross_call_variable_resolver", "evidence_weighted_response_assembler", "uncertainty_propagation_engine", "multi_granularity_retrieval_layer", "semantic_chunking_for_decompiled_code", "question_type_router", "interactive_clarification_protocol", "behavioral_signature_search", "cross_artifact_correlation_search", "temporal_search_replay", "search_hypothesis_sandbox", "path_constrained_search", "argument_semantics_search", "decompile_disasm_consistency_search", "near_miss_search_ranking", "persistent_search_collections", "auto_expansion_search_chains", "function_role_classifier", "protocol_format_reconstruction_assistant", "global_state_influence_mapper", "api_contract_extractor", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "dangerous_pattern_explainer", "binary_capability_matrix_builder", "execution_hypothesis_generator", "patch_impact_forecaster", "safe_idapython_orchestration_runtime", "script_template_marketplace_layer", "auto_script_synthesis_from_intent", "script_output_schema_enforcer", "long_running_job_manager", "cross_session_script_memory", "privilege_scope_guardrails_for_scripts", "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants", "idapython_provenance_recorder", "investigation_playbook_engine", "next_best_action_recommender", "analysis_dead_end_detector", "workset_intelligence_capsules", "contradiction_tracker", "review_queue_for_ai_edits", "case_narrative_composer", "cost_latency_optimizer", "trust_verification_layer", "learning_feedback_loop"],
+    action: Annotated[Literal["context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "question_answer", "guided_analysis", "cheatsheet", "compact", "enrich", "intent_tool_compiler", "adaptive_query_planner", "token_aware_context_optimizer", "cross_call_variable_resolver", "evidence_weighted_response_assembler", "uncertainty_propagation_engine", "multi_granularity_retrieval_layer", "semantic_chunking_for_decompiled_code", "question_type_router", "interactive_clarification_protocol", "behavioral_signature_search", "cross_artifact_correlation_search", "temporal_search_replay", "search_hypothesis_sandbox", "path_constrained_search", "argument_semantics_search", "decompile_disasm_consistency_search", "near_miss_search_ranking", "persistent_search_collections", "auto_expansion_search_chains", "function_role_classifier", "protocol_format_reconstruction_assistant", "global_state_influence_mapper", "api_contract_extractor", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "dangerous_pattern_explainer", "binary_capability_matrix_builder", "execution_hypothesis_generator", "patch_impact_forecaster", "safe_idapython_orchestration_runtime", "script_template_marketplace_layer", "auto_script_synthesis_from_intent", "script_output_schema_enforcer", "long_running_job_manager", "cross_session_script_memory", "privilege_scope_guardrails_for_scripts", "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants", "idapython_provenance_recorder", "investigation_playbook_engine", "next_best_action_recommender", "analysis_dead_end_detector", "workset_intelligence_capsules", "contradiction_tracker", "review_queue_for_ai_edits", "case_narrative_composer", "cost_latency_optimizer", "trust_verification_layer", "learning_feedback_loop"],
                        "LLM helper action"],
     addr: Annotated[Optional[str], "Address for context"] = None,
     query: Annotated[Optional[str], "Question or topic"] = None,
@@ -689,6 +723,9 @@ def llm_helpers(
     - compact: RE-specific context density optimizer (strip IDA tags, compress hex/xrefs, truncate long output)
         Params: query (content to compact), max_lines, max_line_len
         Returns: {compacted, original_tokens, compacted_tokens, note}
+    - enrich: Post-process any tool output with LLM-friendly metadata.
+        Params: query (JSON tool output to enrich)
+        Returns: {enriched, confidence, coverage, estimated_tokens, budget_pct, suggested_next_actions, summary, original}
     """
     try:
         info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
@@ -732,7 +769,12 @@ def llm_helpers(
 
             # Xrefs to this function
             callers = []
+            _ctx_xref_limit = 5000
+            _ctx_xref_count = 0
             for xref in idautils.XrefsTo(ea):
+                if _ctx_xref_count >= _ctx_xref_limit:
+                    break
+                _ctx_xref_count += 1
                 caller_func = ida_funcs.get_func(xref.frm)
                 if caller_func:
                     callers.append(idc.get_func_name(caller_func.start_ea) or hex(caller_func.start_ea))
@@ -740,8 +782,15 @@ def llm_helpers(
 
             # Xrefs from this function
             callees = []
+            _ctx_cr_count = 0
+            _ctx_cr_limit = 5000
             for item in idautils.FuncItems(ea):
+                if _ctx_cr_count >= _ctx_cr_limit:
+                    break
                 for xref in idautils.CodeRefsFrom(item, 0):
+                    if _ctx_cr_count >= _ctx_cr_limit:
+                        break
+                    _ctx_cr_count += 1
                     target = ida_funcs.get_func(xref)
                     if target and target.start_ea != ea:
                         callees.append(idc.get_func_name(target.start_ea) or hex(target.start_ea))
@@ -754,14 +803,22 @@ def llm_helpers(
 
             # String references
             str_refs = []
+            _ctx_dref_limit = 5000
+            _ctx_dref_count = 0
             for item in idautils.FuncItems(ea):
+                if _ctx_dref_count >= _ctx_dref_limit:
+                    break
                 for dref in idautils.DataRefsFrom(item):
+                    if _ctx_dref_count >= _ctx_dref_limit:
+                        break
+                    _ctx_dref_count += 1
                     st = idc.get_str_type(dref)
                     if st not in (None, -1):
                         raw = idc.get_strlit_contents(dref, -1, st)
                         if raw:
                             try:
-                                str_refs.append(raw.decode("utf-8", errors="replace")[:80])
+                                decoded = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                                str_refs.append(decoded[:80])
                             except Exception:
                                 pass
             if str_refs:
@@ -799,8 +856,15 @@ def llm_helpers(
 
             # Key API calls
             apis = []
+            _dig_xref_limit = 5000
+            _dig_xref_count = 0
             for item in idautils.FuncItems(ea):
+                if _dig_xref_count >= _dig_xref_limit:
+                    break
                 for xref in idautils.CodeRefsFrom(item, 0):
+                    if _dig_xref_count >= _dig_xref_limit:
+                        break
+                    _dig_xref_count += 1
                     target_name = idc.get_func_name(xref)
                     if target_name and not target_name.startswith("sub_"):
                         apis.append(target_name)
@@ -808,14 +872,22 @@ def llm_helpers(
 
             # Strings referenced
             strs = []
+            _dig_dref_limit = 5000
+            _dig_dref_count = 0
             for item in idautils.FuncItems(ea):
+                if _dig_dref_count >= _dig_dref_limit:
+                    break
                 for dref in idautils.DataRefsFrom(item):
+                    if _dig_dref_count >= _dig_dref_limit:
+                        break
+                    _dig_dref_count += 1
                     st = idc.get_str_type(dref)
                     if st not in (None, -1):
                         raw = idc.get_strlit_contents(dref, -1, st)
                         if raw:
                             try:
-                                strs.append(raw.decode("utf-8", errors="replace")[:40])
+                                decoded = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                                strs.append(decoded[:40])
                             except Exception:
                                 pass
             strs = strs[:5]
@@ -839,7 +911,8 @@ def llm_helpers(
                 raw = idc.get_strlit_contents(s.ea, -1, idc.get_str_type(s.ea) or 0)
                 if raw and len(raw) > 5:
                     try:
-                        top_strings.append(raw.decode("utf-8", errors="replace")[:60])
+                        decoded = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                        top_strings.append(decoded[:60])
                     except Exception:
                         pass
                     if len(top_strings) >= 20:
@@ -906,7 +979,8 @@ def llm_helpers(
                     if st not in (None, -1):
                         raw = idc.get_strlit_contents(ea, -1, st)
                         if raw:
-                            explanation.append(f"String: {raw.decode('utf-8', errors='replace')[:100]}")
+                            decoded = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                            explanation.append(f"String: {decoded[:100]}")
                     else:
                         val = ida_bytes.get_dword(ea)
                         explanation.append(f"Value: {hex(val)}")
@@ -949,7 +1023,10 @@ def llm_helpers(
                     suggestions.append(f"Entry point: {name} @ {hex(ea)}")
 
                 # Find functions with interesting names
-                for ea in idautils.Functions():
+                _sug_func_limit = 50000
+                for sug_idx, ea in enumerate(idautils.Functions()):
+                    if sug_idx >= _sug_func_limit:
+                        break
                     fname = idc.get_func_name(ea) or ""
                     if any(kw in fname.lower() for kw in ("main", "init", "start", "entry", "setup")):
                         suggestions.append(f"Key function: {fname} @ {hex(ea)}")
@@ -957,12 +1034,21 @@ def llm_helpers(
                         break
             else:
                 # Find connected functions not yet analyzed
+                _sug_xref_limit = 5000
+                _sug_xref_count = 0
                 for analyzed_ea in analyzed:
+                    if len(suggestions) >= 15:
+                        break
                     func = ida_funcs.get_func(analyzed_ea)
                     if not func:
                         continue
                     for item in idautils.FuncItems(func.start_ea):
+                        if _sug_xref_count >= _sug_xref_limit:
+                            break
                         for xref in idautils.CodeRefsFrom(item, 0):
+                            if _sug_xref_count >= _sug_xref_limit:
+                                break
+                            _sug_xref_count += 1
                             target = ida_funcs.get_func(xref)
                             if target and target.start_ea not in analyzed:
                                 tname = idc.get_func_name(target.start_ea) or hex(target.start_ea)
@@ -971,14 +1057,15 @@ def llm_helpers(
                                     suggestions.append(suggestion)
                     # Also check callers
                     for xref in idautils.XrefsTo(func.start_ea):
+                        if _sug_xref_count >= _sug_xref_limit:
+                            break
+                        _sug_xref_count += 1
                         caller = ida_funcs.get_func(xref.frm)
                         if caller and caller.start_ea not in analyzed:
                             cname = idc.get_func_name(caller.start_ea) or hex(caller.start_ea)
                             suggestion = f"Calls analyzed: {cname} @ {hex(caller.start_ea)}"
                             if suggestion not in suggestions:
                                 suggestions.append(suggestion)
-                    if len(suggestions) >= 15:
-                        break
 
             return {"ok": True, "suggestions": "\n".join(suggestions[:limit]), "count": len(suggestions)}
 
@@ -1000,7 +1087,10 @@ def llm_helpers(
             # Categorize remaining functions
             named_remaining = 0
             unnamed_remaining = 0
-            for ea in idautils.Functions():
+            _prog_func_limit = 100000
+            for func_idx, ea in enumerate(idautils.Functions()):
+                if func_idx >= _prog_func_limit:
+                    break
                 if ea not in analyzed:
                     name = idc.get_func_name(ea) or ""
                     if name.startswith("sub_"):
@@ -1020,13 +1110,22 @@ def llm_helpers(
         elif action == "focus_area":
             # Identify most interesting function to analyze next
             candidates = []
-            for ea in idautils.Functions():
+            _focus_func_limit = int(kwargs.get("max_functions", 50000))
+            _focus_xref_limit = 5000
+            for func_idx, ea in enumerate(idautils.Functions()):
+                if func_idx >= _focus_func_limit:
+                    break
                 func = ida_funcs.get_func(ea)
                 if not func:
                     continue
                 name = idc.get_func_name(ea) or ""
                 size = func.end_ea - func.start_ea
-                xref_count = len(list(idautils.XrefsTo(ea)))
+                _xr_count = 0
+                for _ in idautils.XrefsTo(ea):
+                    _xr_count += 1
+                    if _xr_count >= _focus_xref_limit:
+                        break
+                xref_count = _xr_count
 
                 # Score based on multiple factors
                 score = 0
@@ -1036,8 +1135,14 @@ def llm_helpers(
                 score += min(size // 100, 10)
 
                 # Check for interesting API calls
+                _focus_cr_count = 0
                 for item in idautils.FuncItems(ea):
+                    if _focus_cr_count >= _focus_xref_limit:
+                        break
                     for xref in idautils.CodeRefsFrom(item, 0):
+                        if _focus_cr_count >= _focus_xref_limit:
+                            break
+                        _focus_cr_count += 1
                         target_name = idc.get_func_name(xref) or ""
                         for cat in _API_CATEGORIES:
                             if any(api.lower() in target_name.lower() for api in _API_CATEGORIES[cat]):
@@ -1078,7 +1183,8 @@ def llm_helpers(
                     raw = idc.get_strlit_contents(s.ea, -1, idc.get_str_type(s.ea) or 0)
                     if raw and len(raw) > 4:
                         try:
-                            strs.append(f"{hex(s.ea)}  {raw.decode('utf-8', errors='replace')[:80]}")
+                            decoded = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                            strs.append(f"{hex(s.ea)}  {decoded[:80]}")
                         except Exception:
                             pass
                         if len(strs) >= 30:
@@ -1088,7 +1194,13 @@ def llm_helpers(
 
             elif any(kw in q for kw in ("function", "func", "routine", "subroutine")):
                 func_count = _count_functions()
-                named = sum(1 for ea in idautils.Functions() if not (idc.get_func_name(ea) or "").startswith("sub_"))
+                named = 0
+                _qa_func_limit = 200000
+                for qa_idx, ea in enumerate(idautils.Functions()):
+                    if qa_idx >= _qa_func_limit:
+                        break
+                    if not (idc.get_func_name(ea) or "").startswith("sub_"):
+                        named += 1
                 answer_parts.append(f"Total functions: {func_count}")
                 answer_parts.append(f"Named functions: {named}")
                 answer_parts.append(f"Unnamed (sub_): {func_count - named}")
@@ -1163,6 +1275,95 @@ def llm_helpers(
                 "compacted_tokens": _estimate_tokens(compacted),
                 "compacted": compacted,
                 "note": "RE-specific compaction applied: IDA tags stripped, hex dumps truncated, xrefs compressed, redundant whitespace collapsed."
+            }
+
+        elif action == "enrich":
+            """
+            Post-process any tool output with LLM-friendly metadata.
+            Adds confidence, coverage, suggested next actions, and context budget tracking.
+            """
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query (JSON tool output) required for enrich action")
+            try:
+                data = json.loads(query) if isinstance(query, str) else query
+            except json.JSONDecodeError:
+                data = {"raw_text": query}
+
+            # Heuristic confidence scoring based on data completeness
+            confidence = 0.5
+            coverage = "partial"
+            suggestions = []
+
+            if isinstance(data, dict):
+                if data.get("ok") is True:
+                    confidence = 0.8
+                    coverage = "complete"
+
+                # Schemaboot query results
+                if "functions" in data and "total_matches" in data:
+                    matched = data.get("total_matches", 0)
+                    limit = len(data.get("functions", []))
+                    confidence = min(0.95, 0.7 + (limit / max(matched, 1)) * 0.25)
+                    if matched > limit:
+                        coverage = f"top {limit} of {matched} matches"
+                        suggestions.append(f"schemaboot(action='query', constraints=..., limit={min(matched, 50)}, offset={limit})")
+                    else:
+                        coverage = "all matches returned"
+                    if matched == 0:
+                        confidence = 0.1
+                        suggestions.append("Broaden constraints or use schemaboot(action='stats') to see index coverage")
+
+                # BridgeRAG results
+                if "candidates" in data and "bridges" in data:
+                    nc = len(data.get("candidates", []))
+                    nb = sum(len(v) for v in data.get("bridges", {}).values())
+                    confidence = min(0.9, 0.6 + nc * 0.02 + nb * 0.03)
+                    if nc == 0:
+                        confidence = 0.1
+                        suggestions.append("Try different query_constraints or bridge_types=['strings']")
+                    else:
+                        suggestions.append("Run memrl(action='rank', candidate_pool=...) to re-rank by utility")
+
+                # TurboQuant results
+                if "results" in data and "compression_ratio" in data:
+                    confidence = 0.85
+                    suggestions.append("Use turboquant(action='query', query_key=..., top_k=10) for similarity search")
+
+                # MemRL results
+                if "ranked" in data:
+                    nr = len(data.get("ranked", []))
+                    confidence = min(0.9, 0.6 + nr * 0.05)
+                    if nr > 0 and data["ranked"][0].get("q_value", 0.5) < 0.3:
+                        suggestions.append("Run memrl(action='update', reward=1.0) on successful candidates to improve ranking")
+
+                # Generic: if error present, suggest remediation
+                if data.get("error") is True or "error" in data:
+                    confidence = 0.0
+                    code = data.get("code", "")
+                    if "SESSION_REQUIRED" in code or "session" in str(data.get("hint", "")).lower():
+                        suggestions.append("session(action='create', binary_path='...')")
+                    if "FILE_NOT_FOUND" in code:
+                        suggestions.append("Verify the path exists using misc(action='health')")
+                    if "ACTION_NOT_FOUND" in code:
+                        suggestions.append("Call tools/list to see available actions")
+                    if "DB_ERROR" in code or "index" in str(data.get("hint", "")).lower():
+                        suggestions.append("schemaboot(action='ingest') to rebuild the index")
+
+            # Context budget estimation
+            payload_json = json.dumps(data, separators=(",", ":"))
+            estimated_tokens = len(payload_json) // 4
+            budget_pct = min(100, round(estimated_tokens / max(max_tokens, 1) * 100, 1))
+
+            return {
+                "ok": True,
+                "enriched": True,
+                "confidence": round(confidence, 2),
+                "coverage": coverage,
+                "estimated_tokens": estimated_tokens,
+                "budget_pct": budget_pct,
+                "suggested_next_actions": suggestions[:5],
+                "summary": _llm_summarize_output(data),
+                "original": data,
             }
 
         elif action == "cheatsheet":

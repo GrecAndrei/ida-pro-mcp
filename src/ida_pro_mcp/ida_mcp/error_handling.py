@@ -106,6 +106,7 @@ class MCPError:
     DATABASE_CORRUPTED = "DATABASE_CORRUPTED"
     DATABASE_READ_ONLY = "DATABASE_READ_ONLY"
     DATABASE_NOT_LOADED = "DATABASE_NOT_LOADED"
+    DB_ERROR = "DB_ERROR"
     IDB_NOT_FOUND = "IDB_NOT_FOUND"
     IDB_VERSION_MISMATCH = "IDB_VERSION_MISMATCH"
 
@@ -249,6 +250,7 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.DATABASE_CORRUPTED: "The IDB appears corrupted. Use session(action='rebuild') to recreate.",
     MCPError.DATABASE_READ_ONLY: "The database is read-only. Close other IDA instances.",
     MCPError.DATABASE_NOT_LOADED: "No database is loaded. Create a session first.",
+    MCPError.DB_ERROR: "Database error. The index may be corrupted. Try schemaboot(action='delete') then re-ingest.",
     MCPError.IDB_NOT_FOUND: "The IDB file was not found. The session may need to be rebuilt.",
     MCPError.IDB_VERSION_MISMATCH: "IDB version mismatch. The IDB may have been created by a different IDA version.",
     MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",
@@ -525,10 +527,14 @@ def validate_path_safe(path: str, allow_absolute: bool = True) -> Tuple[Optional
     if "\x00" in path:
         return None, make_error(MCPError.INVALID_ARG_VALUE, "Path contains null bytes")
 
+    # Check for path traversal (.. components) in the raw path
+    if ".." in path.replace("\\", "/").split("/"):
+        return None, make_error(MCPError.PATH_TRAVERSAL, "Path traversal detected")
+    if not allow_absolute and os.path.isabs(path):
+        return None, make_error(MCPError.PATH_TRAVERSAL, "Absolute paths not allowed")
+
     try:
         normalized = os.path.normpath(path)
-        if ".." in normalized and not allow_absolute:
-            return None, make_error(MCPError.PATH_TRAVERSAL, "Path traversal detected")
         return normalized, None
     except Exception as e:
         return None, handle_error(e)

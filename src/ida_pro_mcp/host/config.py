@@ -204,8 +204,8 @@ WIKI_SEMANTIC_GROUPS: tuple[tuple[str, ...], ...] = (
     ("search", "find", "lookup", "query", "locate"),
     ("rename", "naming", "symbol", "label"),
     ("xref", "crossref", "reference", "references", "caller", "callee"),
-    ("patch", "modify", "edit", "write", "rewrite"),
-    ("vulnerability", "security", "exploit", "taint", "sink", "source"),
+    ("patch", "modify", "write", "rewrite"),
+    ("vulnerability", "security", "exploit", "sink", "source"),
 )
 
 

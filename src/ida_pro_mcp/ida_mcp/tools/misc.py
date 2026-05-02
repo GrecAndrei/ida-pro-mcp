@@ -71,7 +71,9 @@ def misc(
             return {"error": True, "message": "path required for read_file"}
         import os as _os
         try:
-            resolved = _os.path.normpath(_os.path.abspath(path))
+            resolved, path_err = validate_path_safe(path)
+            if path_err:
+                return path_err
             if not _os.path.exists(resolved):
                 return {"error": True, "message": f"File not found: {resolved}"}
             if not _os.path.isfile(resolved):
@@ -94,7 +96,9 @@ def misc(
             return {"error": True, "message": "content required for write_file"}
         import os as _os
         try:
-            resolved = _os.path.normpath(_os.path.abspath(path))
+            resolved, path_err = validate_path_safe(path)
+            if path_err:
+                return path_err
             # Ensure parent directory exists
             parent = _os.path.dirname(resolved)
             if parent and not _os.path.exists(parent):
@@ -115,27 +119,35 @@ def misc(
             return {"error": True, "message": traceback.format_exc()}
     return {"error": True, "message": f"Unknown action: {action}"}
 
+_MAX_SCRIPT_LENGTH = 50000
+
+
 @idawrite
 def execute_python(script: str):
     """Executes Python code in IDA context and returns stdout/stderr."""
+    if len(script) > _MAX_SCRIPT_LENGTH:
+        return {"error": True, "message": f"Script exceeds max length ({len(script)} > {_MAX_SCRIPT_LENGTH})"}
     output = io.StringIO()
     old_stdout = sys.stdout
     old_stderr = sys.stderr
     sys.stdout = output
     sys.stderr = output
     
+    # Use a copy of module globals to prevent pollution of live namespace
+    _safe_globals = globals().copy()
+    
     try:
         # Multi-line or compound statements should go straight to exec.
         if "\n" in script or ";" in script:
-            exec(script, globals())
+            exec(script, _safe_globals)
             return {"output": output.getvalue()}
 
         try:
-            res = eval(script, globals())
+            res = eval(script, _safe_globals)
             if res is not None:
                 print(res)
         except SyntaxError:
-            exec(script, globals())
+            exec(script, _safe_globals)
         return {"output": output.getvalue()}
     except SyntaxError as e:
         line = getattr(e, "lineno", None)

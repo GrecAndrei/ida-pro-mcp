@@ -154,206 +154,12 @@ def _get_context_at(ea, count=5):
     return lines
 
 
-def _scan_for_xor_shift_loops(ea_start, ea_end, limit=50):
-    results = []
-    ea = ea_start
-    while ea < ea_end and ea != idaapi.BADADDR and len(results) < limit:
-        mnem = idc.print_insn_mnem(ea)
-        if mnem and mnem.lower() in ("xor", "shr", "shl", "ror", "rol"):
-            func = ida_funcs.get_func(ea)
-            if func:
-                has_loop = False
-                for xref in idautils.XrefsTo(ea, 0):
-                    if func.start_ea <= xref.frm < func.end_ea and xref.frm > ea:
-                        has_loop = True
-                        break
-                if not has_loop:
-                    for xref in idautils.XrefsFrom(ea, 0):
-                        if func.start_ea <= xref.to < ea:
-                            has_loop = True
-                            break
-                if has_loop:
-                    disasm = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))
-                    results.append(f"{hex(ea)}  {idc.get_func_name(func.start_ea)}  {mnem}  {disasm}  [loop]")
-        ea = idc.next_head(ea, ea_end)
-    return results
-
-
-def _analyze_function_ops(ea):
-    func = ida_funcs.get_func(ea)
-    if not func:
-        return None
-    counts = {"xor": 0, "shift": 0, "rotate": 0, "and": 0, "or": 0, "add": 0, "sub": 0, "mul": 0, "mov": 0, "cmp": 0, "call": 0, "table": 0}
-    cur = func.start_ea
-    while cur < func.end_ea and cur != idaapi.BADADDR:
-        mnem = (idc.print_insn_mnem(cur) or "").lower()
-        if mnem == "xor":
-            counts["xor"] += 1
-        elif mnem in ("shr", "shl"):
-            counts["shift"] += 1
-        elif mnem in ("ror", "rol"):
-            counts["rotate"] += 1
-        elif mnem == "and":
-            counts["and"] += 1
-        elif mnem == "or":
-            counts["or"] += 1
-        elif mnem == "add":
-            counts["add"] += 1
-        elif mnem == "sub":
-            counts["sub"] += 1
-        elif mnem in ("mul", "imul"):
-            counts["mul"] += 1
-        elif mnem in ("mov", "movzx", "movsx"):
-            counts["mov"] += 1
-        elif mnem == "cmp":
-            counts["cmp"] += 1
-        elif mnem in ("call", "jmp"):
-            counts["call"] += 1
-        # Detect table lookups (mov reg, [base+index])
-        if mnem in ("mov", "movzx", "movsx"):
-            op1_type = idc.get_operand_type(cur, 1)
-            if op1_type in (idc.o_displ, idc.o_phrase):
-                counts["table"] += 1
-        cur = idc.next_head(cur, func.end_ea)
-        if cur == idaapi.BADADDR:
-            break
-    return counts
-
-
 def _shannon_entropy(data):
     if not data:
         return 0.0
     counts = Counter(data)
     length = len(data)
     return round(-sum((c / length) * math.log2(c / length) for c in counts.values()), 4)
-
-
-def _find_xor_keys(limit):
-    results = []
-    for func_ea in idautils.Functions():
-        if len(results) >= limit:
-            break
-        func = ida_funcs.get_func(func_ea)
-        if not func:
-            continue
-        keys = []
-        for item in idautils.FuncItems(func_ea):
-            mnem = (idc.print_insn_mnem(item) or "").lower()
-            if mnem != "xor":
-                continue
-            op1_type = idc.get_operand_type(item, 1)
-            if op1_type == idc.o_imm:
-                val = idc.get_operand_value(item, 1)
-                if val != 0 and val != 0xFFFFFFFF and val != 0xFFFFFFFFFFFFFFFF:
-                    keys.append(val)
-        if keys:
-            func_name = idc.get_func_name(func_ea)
-            key_strs = [hex(k) for k in set(keys)[:8]]
-            results.append(f"{hex(func_ea)}  {func_name}  keys={','.join(key_strs)}")
-    return results
-
-
-def _detect_rc4_ksa(limit):
-    results = []
-    for func_ea in idautils.Functions():
-        if len(results) >= limit:
-            break
-        func = ida_funcs.get_func(func_ea)
-        if not func or (func.end_ea - func.start_ea) < 64:
-            continue
-        ops = _analyze_function_ops(func_ea)
-        if not ops:
-            continue
-        func_name = idc.get_func_name(func_ea).lower()
-        name_hint = any(kw in func_name for kw in ("rc4", "ksa", "prga", "stream", "cipher"))
-        if ops["xor"] >= 2 and ops["table"] >= 4 and (ops["shift"] + ops["rotate"]) >= 1:
-            if name_hint or (ops["xor"] >= 4 and ops["table"] >= 8):
-                results.append({
-                    "func": idc.get_func_name(func_ea),
-                    "addr": hex(func_ea),
-                    "op_counts": ops,
-                    "likely_rc4_ksa": True,
-                    "confidence": "high" if name_hint else "medium",
-                })
-    return results
-
-
-def _detect_custom_alphabet(limit):
-    results = []
-    for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
-        if not seg:
-            continue
-        size = min(seg.size(), 0x100000)
-        data = ida_bytes.get_bytes(seg.start_ea, size)
-        if not data:
-            continue
-        i = 0
-        while i < len(data) - 64:
-            window = data[i:i+64]
-            printable = sum(1 for b in window if 32 <= b <= 126)
-            if printable >= 60 and window not in (_BASE64_ALPHABET, _BASE64_URL_ALPHABET):
-                ea = seg.start_ea + i
-                func = ida_funcs.get_func(ea)
-                func_name = idc.get_func_name(func.start_ea) if func else None
-                results.append(f"{hex(ea)}  {ida_segment.get_segm_name(seg)}  custom_base64_table?  func={func_name or 'no_func'}")
-                i += 64
-                if len(results) >= limit:
-                    break
-            else:
-                i += 1
-        if len(results) >= limit:
-            break
-    return results
-
-
-def _detect_sbox_usage(limit):
-    results = []
-    for func_ea in idautils.Functions():
-        if len(results) >= limit:
-            break
-        func = ida_funcs.get_func(func_ea)
-        if not func or (func.end_ea - func.start_ea) < 32:
-            continue
-        ops = _analyze_function_ops(func_ea)
-        if not ops:
-            continue
-        func_size = func.end_ea - func.start_ea
-        table_density = ops["table"] / (func_size / 16) if func_size > 0 else 0
-        if ops["table"] >= 8 and table_density >= 0.5:
-            results.append({
-                "func": idc.get_func_name(func_ea),
-                "addr": hex(func_ea),
-                "table_lookups": ops["table"],
-                "table_density": round(table_density, 2),
-                "likely_sbox_usage": True,
-            })
-    return results
-
-
-def _detect_stream_cipher(limit):
-    results = []
-    for func_ea in idautils.Functions():
-        if len(results) >= limit:
-            break
-        func = ida_funcs.get_func(func_ea)
-        if not func or (func.end_ea - func.start_ea) < 32:
-            continue
-        ops = _analyze_function_ops(func_ea)
-        if not ops:
-            continue
-        func_name = idc.get_func_name(func_ea).lower()
-        name_hint = any(kw in func_name for kw in ("stream", "crypt", "enc", "dec", "xor", "cipher"))
-        if ops["xor"] >= 4 and ops["table"] >= 2:
-            if name_hint or ops["xor"] >= 8:
-                results.append({
-                    "func": idc.get_func_name(func_ea),
-                    "addr": hex(func_ea),
-                    "op_counts": ops,
-                    "likely_stream_cipher": True,
-                    "confidence": "high" if name_hint else "medium",
-                })
-    return results
 
 
 def _detect_aes_ni(limit):
@@ -380,36 +186,11 @@ def _detect_aes_ni(limit):
     return results
 
 
-def _detect_mac(limit):
-    results = []
-    for func_ea in idautils.Functions():
-        if len(results) >= limit:
-            break
-        func = ida_funcs.get_func(func_ea)
-        if not func or (func.end_ea - func.start_ea) < 64:
-            continue
-        func_name = idc.get_func_name(func_ea).lower()
-        name_hint = any(kw in func_name for kw in ("hmac", "cmac", "omac", "mac", "auth", "sign"))
-        if name_hint:
-            ops = _analyze_function_ops(func_ea)
-            results.append({
-                "func": idc.get_func_name(func_ea),
-                "addr": hex(func_ea),
-                "likely_mac": True,
-                "confidence": "high",
-                "op_counts": ops,
-            })
-    return results
-
-
 @tool
 @idaread
 def crypto_id(
     action: Annotated[Literal[
-        "identify", "constants", "key_schedule", "block_cipher", "hash_detect", "rng_detect",
-        "asymmetric", "custom_crypto", "encoding", "checksums", "entropy_analysis",
-        "xor_key_detect", "rc4_ksa_detect", "custom_alphabet", "sbox_usage",
-        "stream_cipher", "aes_ni", "mac_detect"
+        "identify", "constants", "encoding", "checksums", "entropy_analysis", "aes_ni"
     ], "Crypto identification action"],
     addr: Annotated[Optional[str], "Address or function to analyze"] = None,
     limit: Annotated[int, "Max results"] = 50,
@@ -422,22 +203,10 @@ def crypto_id(
     Actions:
     - identify: Identify crypto algorithms by constants/S-boxes at an address or globally.
     - constants: Find known cryptographic constants (AES S-box, SHA magic numbers, CRC tables, etc.).
-    - key_schedule: Detect key schedule patterns (loops with XOR/shift/rotate operations).
-    - block_cipher: Detect block cipher patterns (substitution-permutation networks).
-    - hash_detect: Detect hash function patterns (Merkle-Damgard construction, round functions).
-    - rng_detect: Detect random number generators (PRNG, CSPRNG patterns).
-    - asymmetric: Detect asymmetric crypto (RSA modular exponentiation, ECC point ops).
-    - custom_crypto: Detect custom/homebrew cryptographic implementations.
     - encoding: Detect encoding algorithms (Base64, Base32, hex encoding/decoding tables).
     - checksums: Detect checksum algorithms (CRC32, Adler32, Fletcher, etc.).
     - entropy_analysis: Find functions with high entropy code/data (packed/encrypted regions).
-    - xor_key_detect: Find XOR keys used in XOR immediate instructions.
-    - rc4_ksa_detect: Detect RC4 key-scheduling algorithm patterns.
-    - custom_alphabet: Detect custom base64/base32 alphabets (64/32-byte printable tables).
-    - sbox_usage: Find functions with heavy table lookups (S-box usage).
-    - stream_cipher: Detect stream cipher patterns (XOR with keystream).
     - aes_ni: Detect AES-NI instruction usage (aesenc, aeskeygenassist, etc.).
-    - mac_detect: Detect MAC algorithm patterns (HMAC, CMAC).
     """
     try:
         if action == "identify":
@@ -461,8 +230,12 @@ def crypto_id(
                         func = ida_funcs.get_func(search_scope)
                         if func and not (func.start_ea <= hit_ea < func.end_ea):
                             continue
-                        elif not func and abs(hit_ea - search_scope) > 0x10000:
-                            continue
+                        elif not func:
+                            # If addr is not inside a function, restrict to same segment
+                            seg = idaapi.getseg(search_scope)
+                            hit_seg = idaapi.getseg(hit_ea)
+                            if seg and hit_seg and seg.start_ea != hit_seg.start_ea:
+                                continue
                     findings.append(f"{h}  const={name}  algo={algo}")
                     algos_found.add(algo)
                     if len(findings) >= limit:
@@ -483,248 +256,6 @@ def crypto_id(
                 if len(findings) >= limit:
                     break
             return {"ok": True, "findings": "\n".join(str(f) for f in findings), "count": len(findings)}
-
-        elif action == "key_schedule":
-            results = []
-            if addr:
-                ea, err = validate_addr(addr)
-                if err:
-                    return err
-                func = ida_funcs.get_func(ea)
-                if not func:
-                    return make_error(MCPError.ADDRESS_INVALID, "No function at address")
-                xsl = _scan_for_xor_shift_loops(func.start_ea, func.end_ea, limit)
-                ops = _analyze_function_ops(ea)
-                if xsl:
-                    entry = {
-                        "func": idc.get_func_name(func.start_ea),
-                        "addr": hex(func.start_ea),
-                        "xor_shift_loops": xsl,
-                        "op_counts": ops,
-                        "likely_key_schedule": True,
-                    }
-                    if include_context:
-                        entry["context"] = _get_context_at(func.start_ea)
-                    results.append(entry)
-            else:
-                for func_ea in idautils.Functions():
-                    if len(results) >= limit:
-                        break
-                    func = ida_funcs.get_func(func_ea)
-                    if not func or (func.end_ea - func.start_ea) < 32:
-                        continue
-                    ops = _analyze_function_ops(func_ea)
-                    if not ops:
-                        continue
-                    if ops["xor"] >= 4 and (ops["shift"] + ops["rotate"]) >= 2:
-                        xsl = _scan_for_xor_shift_loops(func.start_ea, func.end_ea, 10)
-                        if xsl:
-                            entry = {
-                                "func": idc.get_func_name(func_ea),
-                                "addr": hex(func_ea),
-                                "op_counts": ops,
-                                "xor_shift_loop_count": len(xsl),
-                                "likely_key_schedule": True,
-                            }
-                            if include_context:
-                                entry["context"] = _get_context_at(func_ea)
-                            results.append(entry)
-            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
-
-        elif action == "block_cipher":
-            results = []
-            sbox_hits = _search_bytes_in_segments(_AES_SBOX[:16], limit)
-            for h in sbox_hits:
-                results.append(f"{h}")
-            if len(results) < limit:
-                for func_ea in idautils.Functions():
-                    if len(results) >= limit:
-                        break
-                    func = ida_funcs.get_func(func_ea)
-                    if not func or (func.end_ea - func.start_ea) < 64:
-                        continue
-                    ops = _analyze_function_ops(func_ea)
-                    if not ops:
-                        continue
-                    if ops["xor"] >= 8 and ops["shift"] >= 4 and ops["and"] >= 4:
-                        entry = {
-                            "type": "spn_pattern",
-                            "func": idc.get_func_name(func_ea),
-                            "addr": hex(func_ea),
-                            "op_counts": ops,
-                            "likely_block_cipher": True,
-                        }
-                        if include_context:
-                            entry["context"] = _get_context_at(func_ea)
-                        results.append(entry)
-            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
-
-        elif action == "hash_detect":
-            results = []
-            hash_consts = [
-                ("SHA-256 H", _SHA256_H[:4]),
-                ("SHA-256 K", _SHA256_K[:4]),
-                ("MD5 T", _MD5_T[:4]),
-                ("MD5 init", _MD5_INIT),
-                ("SHA-1 H", _SHA1_H[:4]),
-                ("SHA-1 K", _SHA1_K),
-                ("Blake2b IV", _BLAKE2B_IV[:2]),
-            ]
-            for cname, dwords in hash_consts:
-                if len(results) >= limit:
-                    break
-                hits = _search_dwords_in_segments(dwords, limit - len(results))
-                for h in hits:
-                    results.append(f"{h}")
-            if len(results) < limit:
-                for func_ea in idautils.Functions():
-                    if len(results) >= limit:
-                        break
-                    func = ida_funcs.get_func(func_ea)
-                    if not func or (func.end_ea - func.start_ea) < 100:
-                        continue
-                    ops = _analyze_function_ops(func_ea)
-                    if not ops:
-                        continue
-                    if (ops["rotate"] + ops["shift"]) >= 6 and ops["xor"] >= 4 and ops["add"] >= 4:
-                        entry = {
-                            "type": "hash_round_function",
-                            "func": idc.get_func_name(func_ea),
-                            "addr": hex(func_ea),
-                            "op_counts": ops,
-                            "likely_hash": True,
-                        }
-                        if include_context:
-                            entry["context"] = _get_context_at(func_ea)
-                        results.append(entry)
-            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
-
-        elif action == "rng_detect":
-            results = []
-            lcg_consts = [
-                ("glibc LCG multiplier", [0x41C64E6D]),
-                ("MINSTD multiplier", [0x41A7]),
-                ("Mersenne Twister", [0x6C078965]),
-                ("MMIX LCG multiplier", [0x5851F42D, 0x4C957F2D]),
-            ]
-            for cname, dwords in lcg_consts:
-                if len(results) >= limit:
-                    break
-                hits = _search_dwords_in_segments(dwords, limit - len(results))
-                for h in hits:
-                    results.append(f"{h}")
-            if len(results) < limit:
-                for func_ea in idautils.Functions():
-                    if len(results) >= limit:
-                        break
-                    func = ida_funcs.get_func(func_ea)
-                    if not func:
-                        continue
-                    func_size = func.end_ea - func.start_ea
-                    if func_size < 16 or func_size > 512:
-                        continue
-                    ops = _analyze_function_ops(func_ea)
-                    if not ops:
-                        continue
-                    fname = idc.get_func_name(func_ea).lower()
-                    name_hint = any(kw in fname for kw in ("rand", "random", "seed", "prng", "rng"))
-                    if ops["mul"] >= 1 and ops["add"] >= 1 and (ops["shift"] >= 1 or ops["and"] >= 1):
-                        if name_hint or (ops["mul"] >= 1 and ops["xor"] >= 1):
-                            entry = {
-                                "type": "rng_pattern",
-                                "func": idc.get_func_name(func_ea),
-                                "addr": hex(func_ea),
-                                "op_counts": ops,
-                                "name_hint": name_hint,
-                            }
-                            if include_context:
-                                entry["context"] = _get_context_at(func_ea)
-                            results.append(entry)
-            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
-
-        elif action == "asymmetric":
-            results = []
-            rsa_exp_pattern_le = struct.pack("<I", 0x10001)
-            rsa_exp_pattern_be = struct.pack(">I", 0x10001)
-            for pat, endian in [(rsa_exp_pattern_le, "little"), (rsa_exp_pattern_be, "big")]:
-                if len(results) >= limit:
-                    break
-                hits = _search_bytes_in_segments(pat, limit - len(results))
-                for h in hits:
-                    results.append(f"{h}")
-            if len(results) < limit:
-                for func_ea in idautils.Functions():
-                    if len(results) >= limit:
-                        break
-                    func = ida_funcs.get_func(func_ea)
-                    if not func or (func.end_ea - func.start_ea) < 64:
-                        continue
-                    ops = _analyze_function_ops(func_ea)
-                    if not ops:
-                        continue
-                    fname = idc.get_func_name(func_ea).lower()
-                    name_hint = any(kw in fname for kw in ("rsa", "modpow", "modexp", "bignum", "bn_", "ecc", "ec_", "point", "curve"))
-                    if name_hint:
-                        entry = {
-                            "type": "asymmetric_name_match",
-                            "func": idc.get_func_name(func_ea),
-                            "addr": hex(func_ea),
-                            "op_counts": ops,
-                        }
-                        if include_context:
-                            entry["context"] = _get_context_at(func_ea)
-                        results.append(entry)
-                    elif ops["mul"] >= 4 and ops["shift"] >= 2 and ops["and"] >= 2:
-                        entry = {
-                            "type": "modular_arithmetic_pattern",
-                            "func": idc.get_func_name(func_ea),
-                            "addr": hex(func_ea),
-                            "op_counts": ops,
-                            "likely_modexp": True,
-                        }
-                        if include_context:
-                            entry["context"] = _get_context_at(func_ea)
-                        results.append(entry)
-            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
-
-        elif action == "custom_crypto":
-            results = []
-            for func_ea in idautils.Functions():
-                if len(results) >= limit:
-                    break
-                func = ida_funcs.get_func(func_ea)
-                if not func:
-                    continue
-                func_size = func.end_ea - func.start_ea
-                if func_size < 64:
-                    continue
-                ops = _analyze_function_ops(func_ea)
-                if not ops:
-                    continue
-                total_crypto_ops = ops["xor"] + ops["shift"] + ops["rotate"]
-                if total_crypto_ops >= 10 and ops["xor"] >= 3:
-                    func_bytes = ida_bytes.get_bytes(func.start_ea, min(func_size, 4096))
-                    known_match = False
-                    if func_bytes:
-                        for _, _, pat, is_dw in _CRYPTO_CONSTANTS:
-                            check_pat = _dwords_to_bytes(pat) if is_dw else pat
-                            if check_pat[:8] in func_bytes:
-                                known_match = True
-                                break
-                    if not known_match:
-                        density = round(total_crypto_ops / (func_size / 16), 2)
-                        entry = {
-                            "type": "custom_crypto_candidate",
-                            "func": idc.get_func_name(func_ea),
-                            "addr": hex(func_ea),
-                            "size": func_size,
-                            "op_counts": ops,
-                            "crypto_op_density": density,
-                        }
-                        if include_context:
-                            entry["context"] = _get_context_at(func_ea)
-                        results.append(entry)
-            return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
         elif action == "encoding":
             results = []
@@ -805,32 +336,8 @@ def crypto_id(
                     })
             return {"ok": True, "findings": "\n".join(str(f) for f in results), "count": len(results)}
 
-        elif action == "xor_key_detect":
-            hits = _find_xor_keys(limit)
-            return {"ok": True, "findings": "\n".join(hits), "count": len(hits)}
-
-        elif action == "rc4_ksa_detect":
-            hits = _detect_rc4_ksa(limit)
-            return {"ok": True, "findings": "\n".join(str(f) for f in hits), "count": len(hits)}
-
-        elif action == "custom_alphabet":
-            hits = _detect_custom_alphabet(limit)
-            return {"ok": True, "findings": "\n".join(hits), "count": len(hits)}
-
-        elif action == "sbox_usage":
-            hits = _detect_sbox_usage(limit)
-            return {"ok": True, "findings": "\n".join(str(f) for f in hits), "count": len(hits)}
-
-        elif action == "stream_cipher":
-            hits = _detect_stream_cipher(limit)
-            return {"ok": True, "findings": "\n".join(str(f) for f in hits), "count": len(hits)}
-
         elif action == "aes_ni":
             hits = _detect_aes_ni(limit)
-            return {"ok": True, "findings": "\n".join(str(f) for f in hits), "count": len(hits)}
-
-        elif action == "mac_detect":
-            hits = _detect_mac(limit)
             return {"ok": True, "findings": "\n".join(str(f) for f in hits), "count": len(hits)}
 
         else:

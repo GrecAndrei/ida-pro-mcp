@@ -93,6 +93,8 @@ def imports_deep(
                     seg = ida_segment.getseg(seg_ea)
                     if seg:
                         ea = seg.start_ea
+                        _delay_items = 0
+                        _DELAY_MAX = offset + count if count != 0 else 50000
                         while ea < seg.end_ea:
                             name = idc.get_name(ea)
                             if name:
@@ -102,6 +104,9 @@ def imports_deep(
                                     if dll not in delay_imports:
                                         delay_imports[dll] = []
                                     delay_imports[dll].append(f"{hex(ea)}  {name}")
+                                    _delay_items += 1
+                                    if _delay_items >= _DELAY_MAX:
+                                        break
                             ea = idc.next_head(ea, seg.end_ea)
                             if ea == idaapi.BADADDR:
                                 break
@@ -117,7 +122,10 @@ def imports_deep(
         elif action == "forwarded":
             fwd_lines = []
             
+            _FWD_LIMIT = offset + count if count != 0 else 50000
             def imp_cb(ea, name, ordinal):
+                if len(fwd_lines) >= _FWD_LIMIT:
+                    return False
                 if name and '.' in name:
                     parts = name.split('.')
                     if len(parts) == 2:
@@ -136,7 +144,10 @@ def imports_deep(
         elif action == "ordinal":
             ord_lines = []
             
+            _ORD_LIMIT = offset + count if count != 0 else 50000
             def imp_cb(ea, name, ordinal):
+                if len(ord_lines) >= _ORD_LIMIT:
+                    return False
                 if ordinal and ordinal > 0:
                     ord_lines.append(f"{hex(ea)}  ord={ordinal}  {name or f'Ordinal_{ordinal}'}")
                 return True
@@ -177,7 +188,10 @@ def imports_deep(
                 for i in range(nimps):
                     mod_name = ida_nalt.get_import_module_name(i)
                     
+                    _RES_LIMIT = offset + count if count != 0 else 10000
                     def collect_cb(ea, name, ordinal):
+                        if len(resolve_lines) >= _RES_LIMIT:
+                            return False
                         resolved_name = name or f"ordinal_{ordinal}"
                         if query_matcher and not (
                             query_matcher(mod_name or "") or query_matcher(resolved_name)
