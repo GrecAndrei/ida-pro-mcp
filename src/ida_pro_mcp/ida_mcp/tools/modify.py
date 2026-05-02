@@ -4,15 +4,62 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from .cybercane import evaluate_operation
+except ImportError:
+    from cybercane import evaluate_operation  # type: ignore[import-not-found]
+
 
 # ============================================================================
 # 7. MODIFY - Rename, comments, set type
 # ============================================================================
 
+def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
+    """Gather IDA-specific metadata for CyberCane governance checks."""
+    metadata: dict = {}
+
+    if action == "patch_asm":
+        # Check if address is in import/plt section
+        seg = ida_segment.getseg(ea)
+        if seg:
+            sname = ida_segment.get_segm_name(seg)
+            metadata["section_type"] = sname or ""
+            metadata["is_import_addr"] = sname in (".idata", ".plt", ".edata", ".iat")
+
+    elif action == "rename":
+        fn = ida_funcs.get_func(ea)
+        if fn:
+            metadata["is_library_function"] = (fn.flags & ida_funcs.FUNC_LIB) != 0
+            metadata["is_flirt_identified"] = (fn.flags & ida_funcs.FUNC_THUNK) != 0
+            # Gather API calls for misleading rename check
+            api_calls = []
+            for head in idautils.Heads(fn.start_ea, fn.end_ea):
+                for xref in idautils.CodeRefsFrom(head, 0):
+                    callee = idc.get_func_name(xref) or ""
+                    if callee:
+                        api_calls.append(callee)
+            metadata["api_calls"] = ", ".join(api_calls)
+            # Get argument count for main() signature check
+            tif = ida_typeinf.tinfo_t()
+            if ida_nalt.get_tinfo(tif, ea):
+                fi = idaapi.func_type_data_t()
+                if tif.get_func_details(fi):
+                    metadata["arg_count"] = fi.size()
+
+    elif action == "set_type":
+        fn = ida_funcs.get_func(ea)
+        if fn:
+            metadata["targets_stack"] = True
+            # Heuristic: if the type string mentions frame size changes
+            metadata["changes_frame_size"] = "__frame" in value or "__sp" in value
+
+    return metadata
+
+
 @tool
 @idawrite
 def modify(
-    action: Annotated[Literal["rename", "comment", "set_type", "patch_asm"], 
+    action: Annotated[Literal["rename", "comment", "set_type", "patch_asm"],
                       "Action: rename|comment|set_type|patch_asm"],
     addr: Annotated[str, "Address"],
     value: Annotated[Optional[str], "New name, comment text, type declaration, or assembly instruction(s)"] = None,
@@ -21,13 +68,14 @@ def modify(
     text: Annotated[Optional[str], "Alias for value (when action=comment)"] = None,
     type_str: Annotated[Optional[str], "Alias for value (when action=set_type)"] = None,
     asm: Annotated[Optional[str], "Alias for value (when action=patch_asm)"] = None,
-    comment_type: Annotated[Literal["regular", "repeatable", "anterior", "posterior"], 
+    comment_type: Annotated[Literal["regular", "repeatable", "anterior", "posterior"],
                             "Comment type (for action=comment)"] = "regular",
+    governed: Annotated[bool, "Enable CyberCane neuro-symbolic governance pre-check"] = True,
     **kwargs
 ) -> dict:
     """
     Modify the database: renaming, commenting, types, and assembly patching.
-    
+
     Actions:
     - rename: Change the name of a function, label, or data item at `addr`.
     - comment: Add a comment. Supports regular, repeatable, anterior (above), posterior (below).
@@ -36,10 +84,13 @@ def modify(
       Supports single instructions (e.g. "mov eax, 1") or multiple instructions
       separated by semicolons (e.g. "nop; nop; nop" or "push ebp; mov ebp, esp").
       Each instruction is assembled and patched sequentially at consecutive addresses.
-    
+
     Arguments:
     - value (or name/text/type_str/asm): The content to apply.
     - comment_type: One of 'regular', 'repeatable', 'anterior', 'posterior'.
+    - governed: If True (default), run CyberCane governance pre-check before
+      committing. Blocks dangerous patches, redacts PII, warns on misleading
+      renames. Set to False to bypass (not recommended).
     """
     try:
         # Support multiple parameter names for compatibility
@@ -52,18 +103,75 @@ def modify(
                 value = type_str
             elif action == "patch_asm" and asm:
                 value = asm
-        
+
         if not value:
             return make_error(MCPError.INVALID_ARGS, f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)")
-        
+
         ea, error = validate_addr(addr)
-        if error: return error
-        
+        if error:
+            return error
+
+        # ----------------------------------------------------------------
+        # CyberCane Governance Pre-Check
+        # ----------------------------------------------------------------
+        if governed:
+            op_type_map = {
+                "rename": "rename",
+                "comment": "comment",
+                "set_type": "type_change",
+                "patch_asm": "patch",
+            }
+            op_type = op_type_map.get(action)
+            if op_type:
+                metadata = _gather_governance_metadata(action, ea, value)
+                gov_result = evaluate_operation(
+                    operation_type=op_type,
+                    addr=ea,
+                    proposed_value=value,
+                    context={"tool": "modify", "action": action, "comment_type": comment_type},
+                    metadata=metadata,
+                )
+
+                if not gov_result["approved"]:
+                    return make_error(
+                        MCPError.GOVERNANCE_BLOCKED,
+                        f"CyberCane blocked {action}: {gov_result['verdict']}",
+                        {
+                            "violations": gov_result["violations"],
+                            "ontology_class": gov_result.get("ontology_class"),
+                            "axiom_score": gov_result.get("axiom_score"),
+                        }
+                    )
+
+                # Apply redactions if content was modified
+                redacted = gov_result.get("redacted_content")
+                if redacted and redacted != value:
+                    value = redacted
+                    # Update aliases so downstream code sees redacted value
+                    if action == "rename":
+                        name = value
+                    elif action == "comment":
+                        text = value
+                    elif action == "set_type":
+                        type_str = value
+                    elif action == "patch_asm":
+                        asm = value
+
+                # Include warnings in response (non-blocking)
+                gov_warnings = gov_result.get("warnings", [])
+            else:
+                gov_warnings = []
+        else:
+            gov_warnings = []
+
         if action == "rename":
             if idc.set_name(ea, value, ida_name.SN_FORCE):
-                return {"ok": True, "addr": addr, "name": value}
+                result = {"ok": True, "addr": addr, "name": value}
+                if gov_warnings:
+                    result["governance_warnings"] = gov_warnings
+                return result
             return make_error(MCPError.IDA_ERROR, "Failed to rename", "Check if name is valid C identifier and not duplicate")
-        
+
         elif action == "comment":
             if comment_type == "regular":
                 idc.set_cmt(ea, value, 0)
@@ -81,30 +189,36 @@ def modify(
                     existing = idc.get_cmt(ea, 0) or ""
                     merged = (existing + "\n" if existing else "") + prefix + value
                     idc.set_cmt(ea, merged, 0)
-            return {"ok": True, "addr": addr, "comment_type": comment_type, "comment": value}
-        
+            result = {"ok": True, "addr": addr, "comment_type": comment_type, "comment": value}
+            if gov_warnings:
+                result["governance_warnings"] = gov_warnings
+            return result
+
         elif action == "set_type":
             tif = ida_typeinf.tinfo_t()
             if not ida_typeinf.parse_decl(tif, None, value, ida_typeinf.PT_SIL):
                 return make_error(MCPError.TYPE_ERROR, f"Failed to parse type: {value}", "Check C declaration syntax")
             if ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
-                return {"ok": True, "addr": addr, "type": str(tif)}
+                result = {"ok": True, "addr": addr, "type": str(tif)}
+                if gov_warnings:
+                    result["governance_warnings"] = gov_warnings
+                return result
             return make_error(MCPError.IDA_ERROR, "Failed to apply type", "Check if type is compatible with address")
-        
+
         elif action == "patch_asm":
             # Assemble and patch - supports multiple instructions separated by semicolons
             import ida_idp
             import ida_ua
-            
+
             # Split multiple instructions by semicolons
             instructions = [inst.strip() for inst in value.split(";") if inst.strip()]
             if not instructions:
                 return make_error(MCPError.INVALID_ARGS, "No valid instructions provided")
-            
+
             current_ea = ea
             total_size = 0
             patched = []
-            
+
             for inst in instructions:
                 # IDA assemble API
                 res = ida_idp.assemble(current_ea, 0, current_ea, True, inst)
@@ -124,17 +238,21 @@ def modify(
                         f"Failed to assemble: '{inst}' at {hex(current_ea)}",
                         hint,
                     )
-                
+
                 code_bytes = bytes(code)
                 ida_bytes.patch_bytes(current_ea, code_bytes)
                 patched.append({"addr": hex(current_ea), "size": len(code_bytes), "asm": inst})
                 current_ea += len(code_bytes)
                 total_size += len(code_bytes)
-            
+
             if len(patched) == 1:
-                return {"ok": True, "addr": addr, "size": total_size, "asm": instructions[0]}
-            return {"ok": True, "addr": addr, "total_size": total_size, "instructions": patched, "count": len(patched)}
-        
+                result = {"ok": True, "addr": addr, "size": total_size, "asm": instructions[0]}
+            else:
+                result = {"ok": True, "addr": addr, "total_size": total_size, "instructions": patched, "count": len(patched)}
+            if gov_warnings:
+                result["governance_warnings"] = gov_warnings
+            return result
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

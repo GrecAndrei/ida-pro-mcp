@@ -5,6 +5,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from .cybercane import evaluate_operation
+except ImportError:
+    from cybercane import evaluate_operation  # type: ignore[import-not-found]
+
 
 # ============================================================================
 # ANNOTATION - Intelligent Bulk Annotation for LLMs
@@ -72,54 +77,53 @@ def _strip_api_suffix(name):
 
 def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_type: str) -> dict:
     """Deterministic symbolic rule-check before annotation commit.
-    
+
+    Delegates to CyberCane governance engine for consistent enforcement
+    across all write operations.
+
     Returns {"approved": bool, "violations": list[str], "redacted_comment": str}
     """
+    # Gather metadata from IDA for context-aware checks
+    metadata = {}
+    context = {"action": action_type}
+
+    fn = ida_funcs.get_func(addr)
+    if fn:
+        api_calls = []
+        for head in idautils.Heads(fn.start_ea, fn.end_ea):
+            for xref in idautils.CodeRefsFrom(head, 0):
+                callee = idc.get_func_name(xref) or ""
+                if callee:
+                    api_calls.append(callee)
+        metadata["api_calls"] = ", ".join(api_calls)
+
+        tif = ida_typeinf.tinfo_t()
+        if ida_nalt.get_tinfo(tif, addr):
+            fi = idaapi.func_type_data_t()
+            if tif.get_func_details(fi):
+                metadata["arg_count"] = fi.size()
+
+    # Delegate to CyberCane
+    gov_result = evaluate_operation(
+        operation_type="annotation",
+        addr=addr,
+        proposed_value=proposed_comment,
+        context=context,
+        metadata=metadata,
+    )
+
+    # Convert CyberCane result to annotation.py's expected format
     violations = []
-    redacted = proposed_comment
-    
-    # Rule 1: Prevent contradictions (claiming "safe" when dangerous APIs present)
-    lower = proposed_comment.lower()
-    if any(kw in lower for kw in ("safe", "secure", "harmless", "no risk")):
-        fn = ida_funcs.get_func(addr)
-        if fn:
-            for head in idautils.Heads(fn.start_ea, fn.end_ea):
-                for xref in idautils.CodeRefsFrom(head, 0):
-                    callee = idc.get_func_name(xref) or ""
-                    if callee in _DANGEROUS_APIS:
-                        violations.append(f"Claimed safe but calls dangerous API: {callee}")
-                        break
-                if violations:
-                    break
-    
-    # Rule 2: Prevent misleading renames (calling something "main" when it lacks main signature)
-    if action_type == "rename_suggestion":
-        if "main" in lower:
-            # Simple heuristic: main should have argc/argv or no args
-            tif = ida_typeinf.tinfo_t()
-            if ida_nalt.get_tinfo(tif, addr):
-                fi = idaapi.func_type_data_t()
-                if tif.get_func_details(fi):
-                    argc = fi.size()
-                    if argc > 3:
-                        violations.append("Suggested 'main' but function has >3 arguments")
-    
-    # Rule 3: Redact potential PII/sensitive data patterns from comments
-    pii_patterns = [
-        (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), "SSN"),
-        (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), "email"),
-        (re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'), "IP address"),
-        (re.compile(r'\b[a-f0-9]{32,64}\b'), "hash/secret"),
-    ]
-    for pattern, pii_type in pii_patterns:
-        if pattern.search(redacted):
-            redacted = pattern.sub(f"[{pii_type}_REDACTED]", redacted)
-            violations.append(f"PII detected and redacted: {pii_type}")
-    
+    for v in gov_result.get("violations", []):
+        desc = v.get("description", "")
+        if v.get("rule"):
+            desc = f"[{v['rule']}] {desc}"
+        violations.append(desc)
+
     return {
-        "approved": len(violations) == 0,
+        "approved": gov_result.get("approved", True) and len(violations) == 0,
         "violations": violations,
-        "redacted_comment": redacted,
+        "redacted_comment": gov_result.get("redacted_content", proposed_comment),
     }
 
 

@@ -32,12 +32,12 @@ __all__ = [
     "lumina",
     "symbols",
     "patterns",
-    "emulate",
+    "static_trace",
     "export",
     "history",
     "entropy",
     "imports_deep",
-    "comments_ai",
+    "comment_mgr",
     "nav",
     "colorize",
     "trace_analysis",
@@ -69,12 +69,19 @@ __all__ = [
     "memrl",
     "blackboard",
     "filter",
+    "governance",
 ]
+
+# Mapping from tool name to module name (when they differ)
+_TOOL_MODULE_MAP = {
+    "governance": "cybercane",
+}
 
 
 def __getattr__(name):
     if name in __all__:
-        module = import_module(f".{name}", __name__)
+        module_name = _TOOL_MODULE_MAP.get(name, name)
+        module = import_module(f".{module_name}", __name__)
         value = getattr(module, name)
         globals()[name] = value
         return value

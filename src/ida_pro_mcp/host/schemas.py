@@ -64,7 +64,7 @@ TOOLS = [
     "microcode",
     "graph",
     "ctree",
-    "emulate",
+    "static_trace",
     "entropy",
     # Structure and type recovery
     "imports_deep",
@@ -75,7 +75,7 @@ TOOLS = [
     # Export and annotation
     "export",
     "history",
-    "comments_ai",
+    "comment_mgr",
     "colorize",
     "data_ops",
     "fixups",
@@ -124,6 +124,8 @@ TOOLS = [
     # --- New infrastructure tools ---
     "blackboard",
     "filter",
+    # --- Governance ---
+    "governance",
 ]
 
 ADVERTISED_TOOLS = [
@@ -160,6 +162,7 @@ ADVERTISED_TOOLS = [
     "binary_info",
     "threat_hunt",
     "compare",
+    "governance",
 ]
 
 # Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
@@ -221,6 +224,10 @@ _EXTRA_TOOL_ALIASES = {
     "trace_analyze": "trace_analysis",
     "xref": "xref_analysis",
     "xrefs": "xref_analysis",
+    "govern": "governance",
+    "cybercane": "governance",
+    "rules": "governance",
+    "policy": "governance",
 }
 
 def _snake_variants(value: str) -> set[str]:
@@ -348,7 +355,7 @@ TOOL_DESCRIPTIONS = {
     "query": "Unified read-only query hub. Actions: data, search, idb, code, types, imports_deep, symbols, patterns.",
     # Primary data access
     "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
-    "code": "Code logic, decompilation, and flow analysis. Actions: decompile, semantic_decompile, decomp_dataflow, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
+    "code": "Code logic, decompilation, and flow analysis. Actions: decompile, semantic_decompile, decomp_dataflow, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func, decompile_chain, diff_functions.",
     "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.",
     "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled. Supports semantic matching, case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
@@ -366,7 +373,7 @@ TOOL_DESCRIPTIONS = {
     "debug": "Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem.",
     "trace": "Execution tracing. Actions: get, clear, set_options.",
     "coverage": "Code coverage import and analysis. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter.",
-    "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.",
+    "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis.",
     # Project and file management
     "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.",
     "plugins": "Legacy compatibility plugin surface. Actions: list, run. Preferred entrypoint: misc(action=plugin_list|plugin_run).",
@@ -375,7 +382,7 @@ TOOL_DESCRIPTIONS = {
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions, def_use_graph.",
     "graph": "Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph.",
     "ctree": "Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
-    "emulate": "Static tracing and emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr.",
+    "static_trace": "Static control flow tracing. Actions: static_trace, decrypt_strings, eval_expr.",
     "entropy": "Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
     # Structure and type recovery
     "imports_deep": "Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
@@ -386,7 +393,7 @@ TOOL_DESCRIPTIONS = {
     # Export and annotation
     "export": "Database export. Actions: listing, html, idc, json, binexport, headers.",
     "history": "Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff.",
-    "comments_ai": "AI-optimized comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.",
+    "comment_mgr": "Comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "colorize": "Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
     "data_ops": "Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.",
     "fixups": "Relocation/fixup management. Actions: list, get, add, delete.",
@@ -419,6 +426,7 @@ TOOL_DESCRIPTIONS = {
     "memrl": "Non-parametric reinforcement learning on episodic memory. Stores Intent-Experience-Utility triplets with learned Q-values. Two-phase retrieval: similarity recall followed by Q-value re-ranking. Updates via TD rule: Q_new = Q_old + alpha * (reward - Q_old).",
     "blackboard": "Persistent stateful context store for analysis hypotheses and findings. Actions: write, read, list, update, delete, clear, stats. Used for offloading working memory so the LLM doesn't lose state across context windows.",
     "filter": "Context Guillotine: deterministic JQ-like filtering for tool outputs. Actions: filter. Supports path extraction, array slicing, conditional filtering, sorting, plucking, grouping, and pipe operators. Runs entirely on the MCP server to prevent context window overflow.",
+    "governance": "CyberCane Neuro-Symbolic Governance Layer. Deterministic pre-flight rule engine for all IDB write operations. Actions: check, redact, list_rules, stats. Blocks dangerous patches, redacts PII, warns on misleading renames. Zero ML, zero external dependencies.",
 }
 
 TOOL_ACTIONS = {
@@ -503,6 +511,8 @@ TOOL_ACTIONS = {
         "export",
         "find_paths",
         "strings_in_func",
+        "decompile_chain",
+        "diff_functions",
     ],
     "data": [
         "functions",
@@ -627,14 +637,11 @@ TOOL_ACTIONS = {
         "basic_blocks_hit",
         "execution_timeline_graph",
         "cross_run_diff",
-        "runtime_taint_overlay",
-        "state_replay",
-        "path_unlock",
         "coverage_debug_plan",
-        "exploitability_score",
         "anti_analysis_detect",
-        "lifetime_map",
-        "hybrid_callgraph_confidence",
+        "trace_entropy",
+        "api_sequence",
+        "loop_analysis",
     ],
     # Project and file management
     "project": [
@@ -685,7 +692,7 @@ TOOL_ACTIONS = {
         "dominance_map",
         "var_dependency_graph",
     ],
-    "emulate": ["static_trace", "appcall", "decrypt_strings", "eval_expr"],
+    "static_trace": ["static_trace", "decrypt_strings", "eval_expr"],
     "entropy": [
         "section",
         "region",
@@ -711,7 +718,7 @@ TOOL_ACTIONS = {
     # Export and annotation
     "export": ["listing", "html", "idc", "json", "binexport", "headers"],
     "history": ["undo", "redo", "list", "snapshot", "restore", "diff"],
-    "comments_ai": [
+    "comment_mgr": [
         "get_context",
         "set_structured",
         "bulk_set",
@@ -1033,6 +1040,7 @@ TOOL_ACTIONS = {
         "stats",
     ],
     "filter": ["filter"],
+    "governance": ["check", "redact", "list_rules", "stats"],
 }
 
 TOOL_ARG_SCHEMAS = {
@@ -1377,11 +1385,9 @@ TOOL_ARG_SCHEMAS = {
         "step": {"type": "integer"},
         "limit": {"type": "integer"},
     },
-    "emulate": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["emulate"]},
+    "static_trace": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["static_trace"]},
         "addr": {"type": "string"},
-        "func_name": {"type": "string"},
-        "args": {"type": "array", "items": {"type": "string"}},
         "max_steps": {"type": "integer"},
         "follow_calls": {"type": "boolean"},
         "max_depth": {"type": "integer"},
@@ -1500,6 +1506,14 @@ TOOL_ARG_SCHEMAS = {
     "filter": {
         "data": {"type": "object", "description": "Tool output dict to filter"},
         "query": {"type": "string", "description": "JQ-like filter expression (e.g. '.functions[?size > 100] | first(10)')"},
+    },
+    "governance": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["governance"]},
+        "operation_type": {"type": "string", "description": "Operation type for check: patch, comment, rename, type_change, execution, annotation"},
+        "addr": {"type": "string", "description": "Target address for the operation"},
+        "proposed_value": {"type": "string", "description": "The proposed value to check or redact"},
+        "context": {"type": "object", "description": "Optional context dict for governance check"},
+        "metadata": {"type": "object", "description": "Optional metadata dict for governance check"},
     },
 }
 
@@ -1735,6 +1749,12 @@ _TOOL_ACTION_EXTRA_ALIASES = {
     "microcode": {
         "def_use_graph": {"du_graph", "defuse", "ir_dataflow"},
     },
+    "governance": {
+        "check": {"evaluate", "inspect", "validate", "review"},
+        "redact": {"sanitize", "scrub", "cleanse", "strip_pii"},
+        "list_rules": {"rules", "show_rules", "get_rules"},
+        "stats": {"statistics", "metrics", "counters"},
+    },
 }
 
 _TOOL_ARG_EXTRA_ALIASES = {
@@ -1812,6 +1832,11 @@ _TOOL_ARG_EXTRA_ALIASES = {
         "order_by": {"sort", "order"},
         "include_apis": {"apis", "with_apis"},
         "include_strings": {"strings", "with_strings"},
+    },
+    "governance": {
+        "operation_type": {"op_type", "type", "op"},
+        "proposed_value": {"value", "text", "content", "input"},
+        "addr": {"address", "ea", "va"},
     },
 }
 
@@ -2177,7 +2202,7 @@ _TOOL_CATEGORY_ADVANCED = {
     "microcode",
     "graph",
     "ctree",
-    "emulate",
+    "static_trace",
     "entropy",
     "imports_deep",
     "patterns",
@@ -2185,7 +2210,7 @@ _TOOL_CATEGORY_ADVANCED = {
     "lumina",
     "export",
     "history",
-    "comments_ai",
+    "comment_mgr",
     "colorize",
     "data_ops",
     "fixups",
