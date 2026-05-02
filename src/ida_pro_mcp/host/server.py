@@ -1337,6 +1337,20 @@ class IDAMCPServer:
         action = call_args.get("action")
         if not isinstance(action, str):
             action = ""
+
+        # Auto-nudge tracking
+        try:
+            from .auto_nudge import record_tool_call
+            record_tool_call(
+                sid,
+                tool_name,
+                action,
+                addr=call_args.get("addr"),
+                query=call_args.get("query") or call_args.get("pattern"),
+            )
+        except Exception:
+            pass
+
         addresses: List[str] = []
         if isinstance(result.get("items"), list):
             for item in result["items"][:16]:
@@ -2062,6 +2076,21 @@ class IDAMCPServer:
             compacted = dict(compacted)
             if include_pointer_note:
                 compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
+            # ---- Auto-Nudge Injection ----
+            try:
+                from .auto_nudge import get_nudge
+                idb_key = (self.current_session.idb_path if self.current_session else "")
+                nudge = get_nudge(
+                    idb_key,
+                    tool_name,
+                    opts.get("action", ""),
+                    compacted,
+                    call_args if isinstance(call_args, dict) else {},
+                )
+                if nudge:
+                    compacted["_nudge"] = nudge
+            except Exception:
+                pass
         return compacted
 
     def _serialize_payload(self, payload: Any, opts: dict) -> str:
