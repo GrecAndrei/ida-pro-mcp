@@ -14,26 +14,64 @@ import select
 import fcntl
 import threading
 
+
+def _discover_venv_python():
+    """Find the MCP venv Python interpreter."""
+    candidates = [
+        os.path.expanduser("~/.local/share/ida-pro-mcp/.venv/bin/python3"),
+        os.path.expanduser("~/.local/share/ida-pro-mcp/.venv/bin/python"),
+        os.path.expanduser("~/.ida-pro-mcp/.venv/bin/python3"),
+        os.path.expanduser("~/.ida-pro-mcp/.venv/bin/python"),
+        "/opt/ida-pro-mcp/.venv/bin/python3",
+        "/usr/local/share/ida-pro-mcp/.venv/bin/python3",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 class MCPClient:
     def __init__(self, server_cmd=None, env=None, cache_dir=None):
         """Spawn the MCP server and establish communication."""
         if server_cmd is None:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             server_script = os.path.join(script_dir, "ida_mcp_stdio.py")
-            server_cmd = [sys.executable, server_script]
+            venv_python = _discover_venv_python()
+            if venv_python:
+                server_cmd = [venv_python, server_script]
+            else:
+                server_cmd = [sys.executable, server_script]
         
         # Environment setup
         run_env = os.environ.copy()
         if env:
             run_env.update(env)
-        run_env["IDADIR"] = run_env.get("IDADIR", "/home/grec-alexander/ida-pro-9.2")
-        run_env["IDA_MCP_IDAT"] = run_env.get("IDA_MCP_IDAT", "/home/grec-alexander/ida-pro-9.2/idat")
+        
+        # Auto-detect IDA if not set
+        if "IDADIR" not in run_env:
+            for ida_dir in [
+                "/home/grec-alexander/ida-pro-9.2",
+                "/opt/ida-pro-9.2",
+                os.path.expanduser("~/ida-pro-9.2"),
+            ]:
+                if os.path.isdir(ida_dir):
+                    run_env["IDADIR"] = ida_dir
+                    break
+        
+        if "IDA_MCP_IDAT" not in run_env and "IDADIR" in run_env:
+            idat = os.path.join(run_env["IDADIR"], "idat")
+            if os.path.isfile(idat):
+                run_env["IDA_MCP_IDAT"] = idat
+        
         if cache_dir:
             run_env["IDA_MCP_CACHE_DIR"] = cache_dir
         
         # Use unique cache dir to avoid conflicts with other servers
         if "IDA_MCP_CACHE_DIR" not in run_env:
-            run_env["IDA_MCP_CACHE_DIR"] = os.path.expanduser(f"~/.local/state/ida-pro-mcp/test-{os.getpid()}")
+            run_env["IDA_MCP_CACHE_DIR"] = os.path.expanduser(
+                f"~/.local/state/ida-pro-mcp/test-{os.getpid()}"
+            )
         
         self._stderr_lines = []
         
@@ -254,9 +292,15 @@ def test_session(binary_path, timeout=30):
 
 if __name__ == "__main__":
     import argparse
+    
+    default_binary = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "tests", "data", "test_binary.exe"
+    )
+    
     parser = argparse.ArgumentParser(description="IDA Pro MCP Test Client")
     parser.add_argument("--test", choices=["basic", "session", "all"], default="basic")
-    parser.add_argument("--binary", default="/home/grec-alexander/Downloads/ida-pro-mcp/tests/data/test_binary.exe")
+    parser.add_argument("--binary", default=default_binary)
     args = parser.parse_args()
     
     if args.test == "basic":
