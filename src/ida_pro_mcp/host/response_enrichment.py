@@ -133,19 +133,28 @@ _DYNAMIC_IMPORT_RE = re.compile(r'GetProcAddress\s*\(\s*.*,\s*.*\s*\)|LoadLibrar
 _STRING_IN_CODE_RE = re.compile(r'(?:push|mov|lea).*(?:offset\s+)?(?:a[A-Z]\w+|off_[0-9A-F]+|byte_[0-9A-F]+)', re.IGNORECASE)
 
 
-def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "") -> dict:
+def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
+                      schema_attrs: Optional[dict] = None) -> dict:
     """
     Parse decompiled pseudocode and extract structured summary.
+    Incorporates SchemaBoot attribute data for richer classification.
+    
+    Uses composite scoring from Context Density research:
+      D(C) = 0.4 * lexdiv_norm + 0.3 * entropy_norm + 0.3 * useful_fraction
     
     Returns a digest dict with:
       - api_calls: List of detected API calls with categories
       - patterns: List of detected behavioral patterns
       - security_notes: Security-relevant observations
-      - complexity: Basic complexity metrics
+      - complexity: Complexity metrics (from both parsing and SchemaBoot)
       - string_refs: Inferred string references
+      - behavior_classification: Inferred behavior tags (MemRL-compatible)
+      - density: Information density of the pseudocode
     """
     if not pseudocode or not isinstance(pseudocode, str):
         return {}
+    
+    schema_attrs = schema_attrs or {}
     
     digest = {
         "api_calls": [],
@@ -154,6 +163,8 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "")
         "security_notes": [],
         "complexity": {"lines": 0, "calls": 0, "branches": 0, "loops": 0},
         "string_refs": [],
+        "behavior_tags": [],
+        "density": {},
     }
     
     lines = pseudocode.split("\n")
@@ -162,21 +173,28 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "")
     # Categorize APIs into functional groups
     _API_CATEGORIES = {
         "memory": {"VirtualAlloc", "VirtualFree", "VirtualProtect", "HeapAlloc", "HeapFree",
-                   "malloc", "free", "WriteProcessMemory", "ReadProcessMemory"},
+                   "malloc", "free", "WriteProcessMemory", "ReadProcessMemory", "GlobalAlloc",
+                   "VirtualQuery", "NtAllocateVirtualMemory"},
         "process": {"CreateProcess", "OpenProcess", "TerminateProcess",
-                    "CreateThread", "CreateRemoteThread"},
+                    "CreateThread", "CreateRemoteThread", "NtCreateThreadEx"},
         "network": {"socket", "connect", "send", "recv", "bind", "listen",
                     "InternetOpen", "InternetConnect", "HttpOpenRequest", "URLDownloadToFile",
-                    "WSASocket", "WinHttpOpen"},
+                    "WSASocket", "WinHttpOpen", "WinHttpConnect", "WinHttpOpenRequest",
+                    "WinHttpSendRequest", "WinHttpReceiveResponse"},
         "file": {"CreateFile", "ReadFile", "WriteFile", "DeleteFile",
-                 "FindFirstFile", "FindNextFile"},
-        "crypto": {"CryptEncrypt", "CryptDecrypt", "CryptAcquireContext",
-                   "AES", "MD5", "SHA", "RSA", "X509"},
-        "registry": {"RegOpenKey", "RegSetValue", "RegQueryValue"},
+                 "FindFirstFile", "FindNextFile", "CopyFile", "MoveFile", "NtCreateFile"},
+        "crypto": {"CryptEncrypt", "CryptDecrypt", "CryptAcquireContext", "CryptGenKey",
+                   "AES", "MD5", "SHA", "RSA", "X509", "BCrypt", "NCrypt",
+                   "CryptStringToBinary", "CryptBinaryToString"},
+        "registry": {"RegOpenKey", "RegSetValue", "RegQueryValue", "RegCreateKey",
+                     "RegDeleteKey", "RegEnumKey", "RegCloseKey"},
         "injection": {"CreateRemoteThread", "WriteProcessMemory", "VirtualAllocEx",
-                      "SetWindowsHookEx"},
+                      "SetWindowsHookEx", "QueueUserAPC", "NtMapViewOfSection"},
         "evasion": {"IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-                    "NtQueryInformationProcess", "GetTickCount"},
+                    "NtQueryInformationProcess", "GetTickCount", "QueryPerformanceCounter",
+                    "NtSetInformationThread", "OutputDebugStringA"},
+        "persistence": {"RegCreateKeyEx", "CreateService", "StartService",
+                        "schtasks", "CreateScheduledTask"},
     }
     
     for match in _WIN32_API_PATTERN.finditer(pseudocode):
@@ -211,8 +229,98 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "")
     for match in _STRING_IN_CODE_RE.finditer(pseudocode):
         digest["string_refs"].append(match.group(0))
     
+    # Behavior classification (MemRL-compatible tags)
+    api_cats = digest.get("api_categories", set())
+    if "network" in api_cats:
+        digest["behavior_tags"].append("network")
+    if "crypto" in api_cats:
+        digest["behavior_tags"].append("crypto")
+    if "memory" in api_cats:
+        digest["behavior_tags"].append("allocator")
+    if "injection" in api_cats:
+        digest["behavior_tags"].append("process_injection")
+        digest["security_notes"].append("WARNING: Process injection capability detected")
+    if "evasion" in api_cats:
+        digest["behavior_tags"].append("anti_analysis")
+    if "persistence" in api_cats:
+        digest["behavior_tags"].append("persistence")
+    if "file" in api_cats and "registry" in api_cats:
+        digest["behavior_tags"].append("file_io")
+    
+    # Incorporate SchemaBoot attributes for richer classification
+    if schema_attrs:
+        # Structural complexity from SchemaBoot
+        sb_size = schema_attrs.get("size", 0)
+        sb_cc = schema_attrs.get("cyclomatic_complexity", 0)
+        sb_loops = schema_attrs.get("has_loops", False)
+        sb_entropy = schema_attrs.get("entropy", 0.0)
+        sb_xrefs = schema_attrs.get("xref_count", 0)
+        
+        if sb_loops:
+            digest["complexity"]["has_loops"] = True
+        if sb_cc and sb_cc > digest["complexity"].get("cyclomatic_complexity", 0):
+            digest["complexity"]["cyclomatic_complexity"] = sb_cc
+        if sb_entropy:
+            digest["complexity"]["entropy"] = round(sb_entropy, 3)
+        if sb_xrefs:
+            digest["complexity"]["xref_count"] = sb_xrefs
+        
+        # SchemaBoot API attribution
+        sb_apis = schema_attrs.get("apis", [])
+        if isinstance(sb_apis, list) and sb_apis:
+            for api in sb_apis:
+                if api not in digest["api_calls"]:
+                    digest["api_calls"].append(api)
+        
+        # SchemaBoot crypto detection
+        if schema_attrs.get("has_crypto_constants"):
+            digest["patterns"].append("Crypto constants detected (verified by SchemaBoot)")
+            if "crypto" not in digest["behavior_tags"]:
+                digest["behavior_tags"].append("crypto")
+    
+    # Compute information density (from Context Density research)
+    # D(C) = 0.4 * lexdiv_norm + 0.3 * entropy_norm + 0.3 * useful_fraction
+    words = pseudocode.split()
+    unique_words = set(words)
+    lexical_diversity = len(unique_words) / max(1, len(words))
+    
+    # Shannon entropy approximation
+    import math
+    char_counts = {}
+    for c in pseudocode:
+        char_counts[c] = char_counts.get(c, 0) + 1
+    total_chars = len(pseudocode)
+    entropy = -sum((count / total_chars) * math.log2(count / total_chars)
+                   for count in char_counts.values()) if total_chars > 0 else 0.0
+    
+    # Useful fraction: code lines vs comments/whitespace
+    useful_lines = sum(1 for line in lines if line.strip() and not line.strip().startswith("//"))
+    useful_fraction = useful_lines / max(1, len(lines))
+    
+    normalized_lexdiv = min(1.0, lexical_diversity * 3.0)
+    normalized_entropy = min(1.0, entropy / 8.0)
+    density_score = 0.4 * normalized_lexdiv + 0.3 * normalized_entropy + 0.3 * useful_fraction
+    
+    digest["density"] = {
+        "score": round(density_score, 4),
+        "lexical_diversity": round(lexical_diversity, 4),
+        "shannon_entropy": round(entropy, 2),
+        "useful_fraction": round(useful_fraction, 4),
+    }
+    
+    # Set severity based on combined signals
+    if digest.get("security_notes"):
+        if any("WARNING" in n for n in digest["security_notes"]):
+            digest["severity"] = "high"
+        else:
+            digest["severity"] = "medium"
+    elif len(digest.get("api_calls", [])) > 10:
+        digest["severity"] = "medium"
+    else:
+        digest["severity"] = "low"
+    
     # Convert set to list for JSON serialization
-    digest["api_categories"] = list(digest["api_categories"])
+    digest["api_categories"] = list(digest.get("api_categories", set()))
     
     return digest
 
