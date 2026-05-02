@@ -2238,8 +2238,68 @@ class IDAMCPServer:
                     except Exception:
                         pass
                     
+                    # Phase 5: L2 GlobalFactsDatabase compiler/API pattern lookup
+                    try:
+                        gf = getattr(self, '_global_facts', None)
+                        if gf and hasattr(gf, 'query_facts'):
+                            # Query for compiler signatures
+                            compiler_facts = gf.query_facts(category="compiler_signature", limit=3)
+                            api_facts = gf.query_facts(category="common_api", limit=5)
+                            if compiler_facts:
+                                ghost_results["compiler_info"] = [f.get("fact_value", "")[:100] for f in compiler_facts]
+                            if api_facts:
+                                ghost_results["known_api_patterns"] = [f.get("fact_key", "")[:80] for f in api_facts]
+                    except Exception:
+                        pass
+                    
+                    # Phase 6: TurboQuant embedding similarity
+                    try:
+                        tq_res = self._execute_tool("turboquant", {
+                            "action": "query",
+                            "query_key": addr,
+                            "top_k": 3,
+                        })
+                        if isinstance(tq_res, dict) and tq_res.get("ok"):
+                            tq_similar = tq_res.get("results", [])
+                            if tq_similar:
+                                ghost_results["embedding_similar"] = [
+                                    {"key": s.get("key", ""), "score": s.get("score", 0)}
+                                    for s in tq_similar[:3]
+                                ]
+                    except Exception:
+                        pass
+                    
                     if ghost_results:
                         compacted["_inline"] = ghost_results
+            except Exception:
+                pass
+            
+            # ---- Auto-Advance Phase ----
+            try:
+                if hasattr(self, 'session_mgr') and self.current_session:
+                    sid = self.current_session.session_id
+                    data = self.session_mgr._load_skills(sid)
+                    activity_log = data.get("activity_log", [])
+                    # Count decompiles, imports analyzed, xrefs traced
+                    decompile_count = sum(1 for e in activity_log if e.get("action") in ("decompile", "semantic_decompile"))
+                    import_count = sum(1 for e in activity_log if e.get("tool") == "imports_deep" or e.get("tool") == "data" and e.get("action") == "imports")
+                    # Check phase thresholds
+                    from .session import _ANALYSIS_PHASES
+                    session = self.session_mgr.sessions.get(sid)
+                    if session:
+                        current_phase = session.phase
+                        phases = sorted(_ANALYSIS_PHASES.keys(), key=lambda p: _ANALYSIS_PHASES[p]["order"])
+                        try:
+                            idx = phases.index(current_phase)
+                            if idx < len(phases) - 1:
+                                next_phase = phases[idx + 1]
+                                threshold = _ANALYSIS_PHASES[next_phase].get("threshold", {})
+                                if (decompile_count >= threshold.get("functions_decompiled", 999) and
+                                    import_count >= threshold.get("imports_analyzed", 999)):
+                                    session.phase = next_phase
+                                    self.session_mgr._save_metadata(session)
+                        except (ValueError, IndexError):
+                            pass
             except Exception:
                 pass
             
@@ -2249,14 +2309,27 @@ class IDAMCPServer:
                 addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
                 bb_entries = auto_blackboard_write(tool_name, str(opts.get("action", "")), compacted, addr)
                 if bb_entries:
-                    # Write to blackboard via session manager
-                    if hasattr(self, 'session_mgr') and self.current_session:
-                        sid = self.current_session.session_id
+                    # Actually call blackboard.write (not just activity log)
+                    try:
                         for entry in bb_entries:
-                            try:
-                                self.session_mgr.log_activity(sid, tool_name, "auto_blackboard", json.dumps(entry)[:200])
-                            except Exception:
-                                pass
+                            self._execute_tool("blackboard", {
+                                "action": "write",
+                                "addr": entry.get("addr", addr),
+                                "name": entry.get("name", ""),
+                                "notes": entry.get("notes", ""),
+                                "category": entry.get("category", "general"),
+                                "priority": entry.get("priority", 4),
+                                "tags": ",".join(entry.get("tags", [])),
+                            })
+                    except Exception:
+                        # Fallback: log to activity as before
+                        if hasattr(self, 'session_mgr') and self.current_session:
+                            sid = self.current_session.session_id
+                            for entry in bb_entries:
+                                try:
+                                    self.session_mgr.log_activity(sid, tool_name, "auto_blackboard", json.dumps(entry)[:200])
+                                except Exception:
+                                    pass
             except Exception:
                 pass
         return compacted
