@@ -2278,6 +2278,24 @@ class IDAMCPServer:
                         )
                     except Exception as e:
                         log_rpc(f"Auto schemaboot ingest failed (non-fatal): {e}")
+                    # Trigger automatic TurboQuant embedding compression
+                    try:
+                        self._send_rpc_raw(
+                            {"tool": "turboquant", "args": {"action": "ingest"}},
+                            server_port,
+                            timeout=120.0,
+                        )
+                    except Exception as e:
+                        log_rpc(f"Auto turboquant ingest failed (non-fatal): {e}")
+                    # Trigger automatic MbaGCN graph embedding
+                    try:
+                        self._send_rpc_raw(
+                            {"tool": "mbagcn", "args": {"action": "stats"}},
+                            server_port,
+                            timeout=30.0,
+                        )
+                    except Exception as e:
+                        log_rpc(f"Auto mbagcn stats failed (non-fatal): {e}")
                     return {
                         "ok": True,
                         "idb_path": session.idb_path,
