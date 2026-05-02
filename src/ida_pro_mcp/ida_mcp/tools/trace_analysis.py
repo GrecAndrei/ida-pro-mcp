@@ -27,19 +27,13 @@ def trace_analysis(
             "basic_blocks_hit",
             "execution_timeline_graph",
             "cross_run_diff",
-            "runtime_taint_overlay",
-            "state_replay",
-            "path_unlock",
             "coverage_debug_plan",
-            "exploitability_score",
             "anti_analysis_detect",
-            "lifetime_map",
-            "hybrid_callgraph_confidence",
             "trace_entropy",
             "api_sequence",
             "loop_analysis",
         ],
-        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|runtime_taint_overlay|state_replay|path_unlock|coverage_debug_plan|exploitability_score|anti_analysis_detect|lifetime_map|hybrid_callgraph_confidence|trace_entropy|api_sequence|loop_analysis",
+        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis",
     ],
     path: Annotated[Optional[str], "Path to trace file"] = None,
     addr: Annotated[Optional[str], "Function or address to analyze"] = None,
@@ -48,7 +42,7 @@ def trace_analysis(
 ) -> dict:
     """
     Post-mortem execution trace analysis.
-    
+
     Actions:
     - import_trace: Load a list of addresses from a file or 'trace_data' parameter.
     - analyze_coverage: Calculate global basic block coverage based on the current trace.
@@ -58,14 +52,8 @@ def trace_analysis(
         Params: addr (optional - defaults to entry point)
     - execution_timeline_graph: Merge trace flow + APIs + coverage + breakpoints + memory events into a timeline graph.
     - cross_run_diff: Compare two traces (run IDs or explicit lists) and report divergences with semantic comparison.
-    - runtime_taint_overlay: Taint propagation through trace with source/sink labeling, register tracking, and distance metrics.
-    - state_replay: Snapshot debugger state or compare current state to a stored snapshot.
-    - path_unlock: Suggest concrete inputs and breakpoints to unlock uncovered/runtime-blocked paths.
     - coverage_debug_plan: Recommend next breakpoints/watchpoints to maximize novel coverage.
-    - exploitability_score: Rank suspicious runtime behavior using execution evidence, crash proximity, and dangerous APIs.
     - anti_analysis_detect: Detect anti-debug/anti-VM/timing/environment checks, debug register accesses, and VM instructions in traces.
-    - lifetime_map: Build temporal alloc/free/use map and flag UAF/double-free candidates.
-    - hybrid_callgraph_confidence: Reconcile static and dynamic edges with confidence tags.
     - trace_entropy: Find high-entropy execution regions (crypto/packing) using address and instruction entropy.
     - api_sequence: Extract ordered API call sequences from trace for behavioral analysis.
     - loop_analysis: Detailed loop iteration counts, back-edge detection, hot spot identification, and nesting analysis.
@@ -682,171 +670,8 @@ def trace_analysis(
                 }
             return result
 
-        elif action == "runtime_taint_overlay":
-            trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
-            if not trace_list:
-                return {"ok": True, "tainted": [], "propagation": [], "note": "No trace data loaded."}
-            sources = _parse_addrs(kwargs.get("taint_sources") or kwargs.get("sources") or [])
-            sinks = set(_parse_addrs(kwargs.get("sink_addrs") or kwargs.get("sinks") or []))
-            source_labels = kwargs.get("source_labels") or {}
-            sink_labels = kwargs.get("sink_labels") or {}
-            if not sources:
-                sources = [trace_list[0]]
-            window = max(1, int(kwargs.get("propagation_window", 3)))
-            track_registers = bool(kwargs.get("track_registers", False))
 
-            tainted_addrs = set(sources)
-            tainted_regs = defaultdict(set)  # reg_name -> set of source ids
-            propagation = []
-            source_map = {}  # tainted addr -> source addr
-            for s in sources:
-                source_map[s] = s
 
-            for i, ea in enumerate(trace_list):
-                if ea in tainted_addrs:
-                    current_source = source_map.get(ea, ea)
-                    # Forward propagation within window
-                    for off in range(1, window + 1):
-                        j = i + off
-                        if j >= len(trace_list):
-                            break
-                        nxt = int(trace_list[j])
-                        if nxt not in tainted_addrs:
-                            tainted_addrs.add(nxt)
-                            source_map[nxt] = current_source
-                            propagation.append({
-                                "from": hex(ea),
-                                "to": hex(nxt),
-                                "distance": off,
-                                "source": hex(current_source),
-                            })
-                    # Register-level tracking
-                    if track_registers:
-                        try:
-                            mnem = _get_insn_mnemonic(ea).upper()
-                            if any(m in mnem for m in MOV_MNEMONICS):
-                                # Simple heuristic: if instruction is a mov, propagate taint to destination register
-                                op0 = idc.print_operand(ea, 0)
-                                op1 = idc.print_operand(ea, 1)
-                                if op0 and op1:
-                                    tainted_regs[op0] = tainted_regs.get(op0, set()) | tainted_regs.get(op1, {ea})
-                        except Exception:
-                            pass
-
-            overlays = []
-            sink_chains = []
-            for ea in sorted(tainted_addrs):
-                overlay = {
-                    "addr": hex(ea),
-                    "name": _ea_name(ea),
-                    "source": hex(source_map.get(ea, sources[0])),
-                    "sink_reached": ea in sinks,
-                }
-                if ea in sinks:
-                    label = sink_labels.get(hex(ea), sink_labels.get(str(ea), ""))
-                    overlay["sink_label"] = label
-                    # Build chain from source to this sink
-                    chain = []
-                    current = ea
-                    visited = set()
-                    while current in source_map and current not in visited:
-                        visited.add(current)
-                        chain.append(hex(current))
-                        if current == source_map[current]:
-                            break
-                        current = source_map[current]
-                    chain.reverse()
-                    sink_chains.append({
-                        "sink": hex(ea),
-                        "sink_label": label,
-                        "chain": chain,
-                        "chain_length": len(chain),
-                    })
-                # Add source labels
-                if ea in sources:
-                    overlay["source_label"] = source_labels.get(hex(ea), source_labels.get(str(ea), "source"))
-                overlays.append(overlay)
-
-            sink_hits = [x for x in overlays if x["sink_reached"]]
-            return {
-                "ok": True,
-                "sources": [hex(x) for x in sources],
-                "source_labels": source_labels,
-                "tainted": overlays[:2000],
-                "propagation": propagation[:4000],
-                "sink_hits": sink_hits[:200],
-                "sink_chains": sink_chains[:200],
-                "register_taint": {k: list(v)[:50] for k, v in tainted_regs.items()} if track_registers else {},
-                "counts": {
-                    "tainted": len(overlays),
-                    "sink_hits": len(sink_hits),
-                    "propagation_edges": len(propagation),
-                },
-            }
-
-        elif action == "state_replay":
-            global _TRACE_STATE_SNAPSHOTS
-            mode = str(kwargs.get("mode", "snapshot")).strip().lower()
-            snapshot_id = str(kwargs.get("snapshot_id", f"snap_{time.time_ns()}"))
-            if mode not in {"snapshot", "replay"}:
-                return make_error(MCPError.INVALID_ARGS, "state_replay mode must be snapshot|replay")
-
-            if mode == "snapshot":
-                trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
-                dbg_state = _safe_debug_state()
-                snap = {
-                    "snapshot_id": snapshot_id,
-                    "created_at": int(time.time()),
-                    "debug_state": dbg_state,
-                    "trace_head": [hex(x) for x in trace_list[:1000]],
-                    "trace_count": len(trace_list),
-                    "meta": kwargs.get("meta") if isinstance(kwargs.get("meta"), dict) else {},
-                }
-                _cache_snapshot(snapshot_id, snap)
-                return {"ok": True, "mode": "snapshot", "snapshot": snap}
-
-            snap = _TRACE_STATE_SNAPSHOTS.get(snapshot_id)
-            if not snap:
-                return make_error(MCPError.NOT_FOUND, f"snapshot not found: {snapshot_id}")
-            current = _safe_debug_state()
-            expected = (snap.get("debug_state") or {}).get("regs", {})
-            now_regs = current.get("regs", {}) if isinstance(current, dict) else {}
-            reg_diff = []
-            for k in sorted(set(expected.keys()) | set(now_regs.keys())):
-                a, b = expected.get(k), now_regs.get(k)
-                if a != b:
-                    reg_diff.append({"reg": k, "expected": hex(a) if isinstance(a, int) else a, "current": hex(b) if isinstance(b, int) else b})
-            replay_plan = [{"action": "set_reg", "reg": d["reg"], "value": d["expected"]} for d in reg_diff if d.get("expected") is not None]
-            return {
-                "ok": True,
-                "mode": "replay",
-                "snapshot_id": snapshot_id,
-                "ip_expected": (snap.get("debug_state") or {}).get("ip"),
-                "ip_current": current.get("ip") if isinstance(current, dict) else None,
-                "reg_diff": reg_diff[:256],
-                "replay_plan": replay_plan[:256],
-                "determinism": "high" if not reg_diff else ("medium" if len(reg_diff) < 8 else "low"),
-            }
-
-        elif action == "path_unlock":
-            trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
-            blockers = _parse_addrs(kwargs.get("blockers") or [])
-            if not blockers and trace_list:
-                freq = Counter(trace_list)
-                blockers = [ea for ea, c in freq.most_common(10) if c > 1]
-            candidates = []
-            for ea in blockers[:50]:
-                candidates.append({"addr": hex(ea), "kind": "cmp_eq", "input_mutation": "set byte == 0"})
-                candidates.append({"addr": hex(ea), "kind": "cmp_ne", "input_mutation": "set byte != 0"})
-                candidates.append({"addr": hex(ea), "kind": "cmp_range", "input_mutation": "try [0x20,0x7e] ASCII span"})
-            plan = [{"action": "add_bp", "addr": row["addr"]} for row in candidates[:64]]
-            return {
-                "ok": True,
-                "blocking_predicates": [hex(x) for x in blockers[:100]],
-                "input_mutations": candidates[:200],
-                "debug_plan": plan,
-                "note": "Heuristic path unlocking suggestions; validate with runtime trace deltas.",
-            }
 
         elif action == "coverage_debug_plan":
             trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
@@ -883,74 +708,6 @@ def trace_analysis(
             breakpoints = [{"action": "add_bp", "addr": hex(x["addr"]), "reason": f"coverage={x['coverage']}%"} for x in top]
             return {"ok": True, "targets": [{**x, "addr": hex(x["addr"])} for x in top], "breakpoint_plan": breakpoints}
 
-        elif action == "exploitability_score":
-            trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
-            sinks = _parse_addrs(kwargs.get("sinks") or kwargs.get("sink_addrs") or [])
-            writes = kwargs.get("memory_writes") or []
-            crash_addr = kwargs.get("crash_addr")
-            loops = Counter(trace_list).most_common(20)
-            hot = sum(1 for _, c in loops if c > 5)
-            sink_hits = sum(1 for ea in trace_list if ea in set(sinks))
-            transition_count = len(_trace_pairs(trace_list))
-
-            # Dangerous APIs in trace
-            dangerous_apis = _extract_dangerous_apis_in_trace(trace_list)
-            dangerous_count = len(dangerous_apis)
-            critical_apis = [d for d in dangerous_apis if d.get("severity") == "critical"]
-            high_apis = [d for d in dangerous_apis if d.get("severity") == "high"]
-
-            # Crash proximity (closer to end = higher score)
-            crash_proximity = 0.0
-            if crash_addr:
-                try:
-                    crash_ea = int(str(crash_addr), 0)
-                    if crash_ea in trace_list:
-                        idx = trace_list.index(crash_ea)
-                        crash_proximity = (len(trace_list) - idx) / max(len(trace_list), 1) * 20.0
-                    else:
-                        crash_proximity = 5.0  # Crash not in trace but reported
-                except Exception:
-                    crash_proximity = 5.0
-
-            # Memory write pattern analysis
-            large_writes = sum(1 for w in writes if int(w.get("size", 1)) >= 256)
-            stack_writes = sum(1 for w in writes if any(seg for seg in [ida_segment.getseg(int(str(w.get("addr")), 0))] if seg and (seg.perm & ida_segment.SEGPERM_EXEC)))
-
-            score = 0.0
-            score += min(20.0, hot * 2.0)
-            score += min(15.0, sink_hits * 3.0)
-            score += min(15.0, len(writes) * 1.5)
-            score += min(10.0, transition_count / 100.0)
-            score += min(15.0, dangerous_count * 3.0)
-            score += min(10.0, len(critical_apis) * 5.0 + len(high_apis) * 2.5)
-            score += crash_proximity
-            score += min(10.0, large_writes * 2.0)
-            score += min(5.0, stack_writes * 1.0)
-
-            sev = "low"
-            if score >= 70:
-                sev = "high"
-            elif score >= 40:
-                sev = "medium"
-
-            return {
-                "ok": True,
-                "score": round(min(100.0, score), 2),
-                "severity": sev,
-                "evidence": {
-                    "trace_points": len(trace_list),
-                    "hot_regions": hot,
-                    "sink_hits": sink_hits,
-                    "memory_writes": len(writes),
-                    "large_writes": large_writes,
-                    "transitions": transition_count,
-                    "dangerous_apis": dangerous_count,
-                    "critical_apis": len(critical_apis),
-                    "high_apis": len(high_apis),
-                    "crash_proximity": round(crash_proximity, 2),
-                    "top_dangerous_apis": dangerous_apis[:20],
-                },
-            }
 
         elif action == "anti_analysis_detect":
             trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
@@ -1052,133 +809,7 @@ def trace_analysis(
                 },
             }
 
-        elif action == "lifetime_map":
-            alloc_events = kwargs.get("alloc_events") or []
-            free_events = kwargs.get("free_events") or []
-            use_events = kwargs.get("use_events") or []
-            allocations = {}
-            lifetimes = defaultdict(lambda: {"alloc": None, "free": [], "uses": []})
-            for ev in alloc_events:
-                oid = str(ev.get("id") or ev.get("ptr") or ev.get("addr"))
-                if not oid:
-                    continue
-                allocations[oid] = ev
-                lifetimes[oid]["alloc"] = ev
-            for ev in free_events:
-                oid = str(ev.get("id") or ev.get("ptr") or ev.get("addr"))
-                if not oid:
-                    continue
-                lifetimes[oid]["free"].append(ev)
-            for ev in use_events:
-                oid = str(ev.get("id") or ev.get("ptr") or ev.get("addr"))
-                if not oid:
-                    continue
-                lifetimes[oid]["uses"].append(ev)
-            issues = []
-            for oid, row in lifetimes.items():
-                frees = row["free"]
-                uses = row["uses"]
-                if len(frees) > 1:
-                    issues.append({"id": oid, "type": "double_free", "free_count": len(frees)})
-                if frees and uses:
-                    try:
-                        free_times = []
-                        for x in frees:
-                            t = x.get("t", None)
-                            if t is None:
-                                continue
-                            tv = float(t)
-                            if tv > 0:
-                                free_times.append(tv)
-                        if not free_times:
-                            late_uses = []
-                        else:
-                            first_free_t = min(free_times)
-                            late_uses = []
-                            for u in uses:
-                                ut = u.get("t", None)
-                                if ut is None:
-                                    continue
-                                uv = float(ut)
-                                if uv > first_free_t:
-                                    late_uses.append(u)
-                    except Exception:
-                        late_uses = uses
-                    if late_uses:
-                        issues.append({"id": oid, "type": "use_after_free", "use_count": len(late_uses)})
-            return {
-                "ok": True,
-                "objects": [{"id": oid, **row} for oid, row in list(lifetimes.items())[:2000]],
-                "issues": issues[:500],
-                "counts": {"objects": len(lifetimes), "issues": len(issues)},
-            }
 
-        elif action == "hybrid_callgraph_confidence":
-            trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
-            dynamic_edges = set()
-            last_func = None
-            for ea in trace_list:
-                try:
-                    f = ida_funcs.get_func(ea)
-                    fstart = int(f.start_ea) if f else None
-                except Exception:
-                    fstart = None
-                if fstart is None:
-                    continue
-                if last_func is not None and last_func != fstart:
-                    dynamic_edges.add((last_func, fstart))
-                last_func = fstart
-
-            static_edges = set()
-            for (src, dst) in kwargs.get("static_edges") or []:
-                try:
-                    static_edges.add((int(str(src), 0), int(str(dst), 0)))
-                except Exception:
-                    continue
-            if not static_edges:
-                sampled = set()
-                for ea in set(trace_list[:5000]):
-                    fn = ida_funcs.get_func(ea)
-                    if fn:
-                        sampled.add(int(fn.start_ea))
-                _static_xref_limit = int(kwargs.get("static_xref_limit", 50000))
-                _static_xref_count = 0
-                for src in sampled:
-                    if _static_xref_count >= _static_xref_limit:
-                        break
-                    try:
-                        for x in idautils.XrefsFrom(src):
-                            if _static_xref_count >= _static_xref_limit:
-                                break
-                            _static_xref_count += 1
-                            if x.type in [idaapi.fl_CN, idaapi.fl_CF]:
-                                static_edges.add((int(src), int(x.to)))
-                    except Exception:
-                        continue
-
-            observed = static_edges & dynamic_edges
-            static_only = static_edges - dynamic_edges
-            dynamic_only = dynamic_edges - static_edges
-            confidence_rows = []
-            for src, dst in list(observed)[:1500]:
-                confidence_rows.append({"from": hex(src), "to": hex(dst), "confidence": "high", "evidence": "static+dynamic"})
-            for src, dst in list(static_only)[:1500]:
-                confidence_rows.append({"from": hex(src), "to": hex(dst), "confidence": "low", "evidence": "static_only"})
-            for src, dst in list(dynamic_only)[:1500]:
-                confidence_rows.append({"from": hex(src), "to": hex(dst), "confidence": "medium", "evidence": "dynamic_only"})
-            return {
-                "ok": True,
-                "edges": confidence_rows,
-                "summary": {
-                    "observed": len(observed),
-                    "static_only": len(static_only),
-                    "dynamic_only": len(dynamic_only),
-                },
-                "hypotheses": [
-                    "dynamic_only edges may indicate indirect calls, vtables, thunk folding, or obfuscation",
-                    "static_only edges may indicate dead code, gated paths, or unmet runtime conditions",
-                ],
-            }
 
         elif action == "trace_entropy":
             trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)

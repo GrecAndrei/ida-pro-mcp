@@ -81,7 +81,13 @@ from .config import (
     _COMPACT_DROP,
     _COMPACT_META_KEYS,
     _COMPACT_DETAIL_LIST_KEYS,
+    CONTEXT_DENSITY_DEFAULT_BUDGET,
+    CONTEXT_DENSITY_COMPACT_THRESHOLD,
+    CONTEXT_DENSITY_MAX_CODE_PREVIEW,
+    CONTEXT_DENSITY_MAX_HEX_PREVIEW,
+    CONTEXT_DENSITY_MAX_XREF_ITEMS,
 )
+from .context_density import ContextDensityOptimizer
 from .errors import MCPError, make_error
 from .patterns import compile_smart_pattern, smart_match
 from .session import Session, SessionManager, BookmarkManager
@@ -304,6 +310,13 @@ class IDAMCPServer:
         }
         self._wiki_cache_ttl = 5.0
         self._tools_list_cache: Dict[str, tuple] = {}
+        self._context_density_optimizer = ContextDensityOptimizer(
+            budget_tokens=CONTEXT_DENSITY_DEFAULT_BUDGET,
+            compact_threshold=CONTEXT_DENSITY_COMPACT_THRESHOLD,
+            max_code_preview=CONTEXT_DENSITY_MAX_CODE_PREVIEW,
+            max_hex_preview=CONTEXT_DENSITY_MAX_HEX_PREVIEW,
+            max_xref_items=CONTEXT_DENSITY_MAX_XREF_ITEMS,
+        )
         self._register_lifecycle_handlers()
         self._start_runtime_lease_heartbeat()
         self._adopt_or_cleanup_stale_runtime_leases()
@@ -2003,6 +2016,29 @@ class IDAMCPServer:
         budget = int(opts.get("char_budget", 0) or 0)
         if budget > 0 and isinstance(compacted, dict):
             compacted = truncate_response(compacted, max_tokens=budget)
+
+        # ---- Context Density Auto-Compaction Middleware ----
+        # Skip if the caller explicitly requests raw output.
+        raw_requested = False
+        if isinstance(call_args, dict):
+            raw_requested = _coerce_bool(call_args.get("raw"), False)
+        if not raw_requested and compacted is not None:
+            try:
+                serialized_size = len(
+                    json.dumps(compacted, ensure_ascii=False, separators=(",", ":"))
+                )
+                if serialized_size > CONTEXT_DENSITY_COMPACT_THRESHOLD:
+                    compacted = self._context_density_optimizer.compact_response(
+                        compacted,
+                        budget_tokens=opts.get(
+                            "char_budget", CONTEXT_DENSITY_DEFAULT_BUDGET
+                        ),
+                    )
+            except Exception:
+                # Fail-safe: never let compaction break the response path
+                pass
+        # ------------------------------------------------------
+
         if isinstance(compacted, dict):
             compacted = dict(compacted)
             if include_pointer_note:

@@ -19,6 +19,14 @@ try:
 except ImportError:
     from _api_categories import API_CATEGORIES as _API_CATEGORIES  # type: ignore[import-not-found]
 
+try:
+    from ...host.context_density import ContextDensityOptimizer
+except ImportError:
+    try:
+        from ida_pro_mcp.host.context_density import ContextDensityOptimizer
+    except ImportError:
+        ContextDensityOptimizer = None  # type: ignore[misc,assignment]
+
 _FEATURE_PHASES = {
     "intent_tool_compiler": 1,
     "adaptive_query_planner": 1,
@@ -1266,16 +1274,38 @@ def llm_helpers(
                 return make_error(MCPError.INVALID_ARGS, "query (content to compact) required for compact action")
             max_lines = int(kwargs.get("max_lines", 30))
             max_line_len = int(kwargs.get("max_line_len", 200))
-            compacted = _clean_re_content(query, max_lines=max_lines, max_line_len=max_line_len)
-            return {
-                "ok": True,
-                "original_lines": len(query.splitlines()) if query else 0,
-                "compacted_lines": len(compacted.splitlines()),
-                "original_tokens": _estimate_tokens(query),
-                "compacted_tokens": _estimate_tokens(compacted),
-                "compacted": compacted,
-                "note": "RE-specific compaction applied: IDA tags stripped, hex dumps truncated, xrefs compressed, redundant whitespace collapsed."
-            }
+
+            if ContextDensityOptimizer is not None:
+                optimizer = ContextDensityOptimizer(
+                    max_code_preview=max_lines if max_lines < 10 else 5,
+                    max_hex_preview=3,
+                    max_line_length=max_line_len,
+                )
+                compacted = optimizer.optimize(query, context_label="llm_helpers_compact")
+                return {
+                    "ok": True,
+                    "original_lines": len(query.splitlines()) if query else 0,
+                    "compacted_lines": len(compacted["compacted"].splitlines()),
+                    "original_tokens": compacted["original_tokens"],
+                    "compacted_tokens": compacted["compacted_tokens"],
+                    "compacted": compacted["compacted"],
+                    "compression_ratio": compacted["compression_ratio"],
+                    "info_density_before": compacted.get("info_density_before"),
+                    "info_density_after": compacted.get("info_density_after"),
+                    "note": "ContextDensityOptimizer applied: IDA tags stripped, hex dumps truncated, xrefs compressed, whitespace collapsed.",
+                }
+            else:
+                # Backward-compatible fallback
+                compacted = _clean_re_content(query, max_lines=max_lines, max_line_len=max_line_len)
+                return {
+                    "ok": True,
+                    "original_lines": len(query.splitlines()) if query else 0,
+                    "compacted_lines": len(compacted.splitlines()),
+                    "original_tokens": _estimate_tokens(query),
+                    "compacted_tokens": _estimate_tokens(compacted),
+                    "compacted": compacted,
+                    "note": "RE-specific compaction applied: IDA tags stripped, hex dumps truncated, xrefs compressed, redundant whitespace collapsed."
+                }
 
         elif action == "enrich":
             """

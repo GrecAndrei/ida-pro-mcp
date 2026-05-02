@@ -6,17 +6,15 @@ except ImportError:
 
 
 # ============================================================================
-# 27. EMULATE - Code Emulation and Snippet Execution
+# 27. STATIC_TRACE - Static Control Flow Tracing
 # ============================================================================
 
 @tool
 @idaread
-def emulate(
-    action: Annotated[Literal["static_trace", "appcall", "decrypt_strings", "eval_expr"],
-                      "Action: static_trace|appcall|decrypt_strings|eval_expr"],
+def static_trace(
+    action: Annotated[Literal["static_trace", "decrypt_strings", "eval_expr"],
+                      "Action: static_trace|decrypt_strings|eval_expr"],
     addr: Annotated[Optional[str], "Address to trace from or function to call"] = None,
-    func_name: Annotated[Optional[str], "Function name for appcall"] = None,
-    args: Annotated[Optional[list], "Arguments for appcall"] = None,
     max_steps: Annotated[int, "Maximum instructions to trace"] = 1000,
     follow_calls: Annotated[bool, "Follow call edges in static_trace"] = False,
     max_depth: Annotated[int, "Max call depth in static_trace"] = 1,
@@ -25,11 +23,10 @@ def emulate(
     **kwargs
 ) -> dict:
     """
-    Tracing and dynamic execution utilities.
+    Static control flow tracing utilities.
 
     Actions:
     - static_trace: Follow control flow from `addr` statically (no register changes).
-    - appcall: Call a function with arguments (requires active debugger).
     - decrypt_strings: Heuristic search for string decryption calls.
     - eval_expr: Evaluate value/name at address or an expression.
     """
@@ -106,40 +103,6 @@ def emulate(
                 "count": len(trace),
                 "blocks": blocks,
             }
-
-        elif action == "appcall":
-            import ida_dbg
-            if not ida_dbg.is_debugger_on():
-                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Appcall requires a running debug session")
-
-            if not func_name and not addr: return make_error(MCPError.INVALID_ARGS, "func_name or addr required")
-
-            ea = idc.get_name_ea_simple(func_name) if func_name else parse_address(addr)
-            if ea == idaapi.BADADDR: return make_error(MCPError.ADDRESS_INVALID, f"Function not found: {func_name or addr}")
-
-            if not hasattr(idaapi, 'Appcall'):
-                # Fallback for runtimes without Appcall: return resolved call contract.
-                proto = None
-                try:
-                    fn = ida_funcs.get_func(ea)
-                    proto = get_prototype(fn) if fn else None
-                except Exception:
-                    proto = None
-                return {
-                    "ok": True,
-                    "function": func_name or hex(ea),
-                    "addr": hex(ea),
-                    "mode": "static_fallback",
-                    "args": args or [],
-                    "prototype": proto,
-                    "note": "Appcall API is unavailable in this IDA build; returned resolved target and call contract instead of executing.",
-                }
-
-            try:
-                result = idaapi.Appcall.func_ptr(ea)(*(args or []))
-                return {"ok": True, "function": func_name or hex(ea), "return_value": str(result)}
-            except Exception as e:
-                return make_error(MCPError.IDA_ERROR, f"Appcall failed: {e}")
 
         elif action == "decrypt_strings":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")

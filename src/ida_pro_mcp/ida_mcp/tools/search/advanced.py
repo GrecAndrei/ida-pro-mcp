@@ -1,7 +1,4 @@
-"""SEARCH.ADVANCED - Vulnerable, constants, decompiled, and structured search.
-
-VOERA: Delegates vulnerability discovery to vuln_scan.py instead of duplicating logic.
-"""
+"""SEARCH.ADVANCED - Vulnerable, constants, decompiled, and structured search."""
 
 import time as _time
 
@@ -18,41 +15,51 @@ from .core import (
 )
 
 
-def search_vulnerable(pattern, include_context, offset, limit, include_items, include_breakdown):
-    """VOERA: Delegate vulnerability discovery to vuln_scan for dynamic analysis."""
-    # Import vuln_scan dynamically to avoid circular deps at module load
-    try:
-        from ..vuln_scan import vuln_scan as vuln_scan_tool
-    except ImportError:
-        from vuln_scan import vuln_scan as vuln_scan_tool  # type: ignore[import-not-found]
+def search_vulnerable(pattern, include_context, offset, limit, include_items, include_breakdown, **kwargs):
+    """Search for potentially vulnerable API call patterns."""
+    rows = []
+    max_xrefs = int(kwargs.get("max_xrefs", 100000))
+    xref_count = 0
+    for seg_start, seg_end in iter_segments(None, None, require_exec=True):
+        for func_ea in idautils.Functions(seg_start, seg_end):
+            func = idaapi.get_func(func_ea)
+            if not func:
+                continue
+            for head in idautils.Heads(func.start_ea, func.end_ea):
+                for xref in idautils.XrefsFrom(head):
+                    if xref_count >= max_xrefs:
+                        break
+                    xref_count += 1
+                    if xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
+                        continue
+                    callee = idc.get_name(xref.to)
+                    if not callee:
+                        continue
+                    if callee in DANGEROUS_APIS:
+                        fn_name = idc.get_func_name(func_ea)
+                        line = f"{hex(head)}  sev={DANGEROUS_APIS.get(callee, 'medium')}  {callee}  in:{fn_name}"
+                        if include_context:
+                            disasm_line = safe_generate_disasm_line(head)
+                            line += f"  {clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else '')}"
+                        rows.append({
+                            "address": hex(head),
+                            "function": fn_name,
+                            "api": callee,
+                            "vuln_type": DANGEROUS_APIS.get(callee, "unknown"),
+                            "severity": DANGEROUS_APIS.get(callee, "medium"),
+                            "score": 0,
+                            "line": line,
+                        })
+                if xref_count >= max_xrefs:
+                    break
+            if xref_count >= max_xrefs:
+                break
+        if xref_count >= max_xrefs:
+            break
 
-    # Call vuln_scan scan action for full dynamic analysis
-    vuln_result = vuln_scan_tool(action="scan", limit=max(limit, 50))
-    if not vuln_result.get("ok"):
-        return vuln_result
-
-    findings = vuln_result.get("findings", [])
     if pattern:
         matcher = compile_smart_pattern(pattern, case_sensitive=False)
-        findings = [f for f in findings if matcher(f.get("sink", "")) or matcher(f.get("caller", ""))]
-
-    # Paginate
-    rows = []
-    for f in findings:
-        line = f"{f.get('caller_addr', '0x0')}  sev={f.get('severity', 'info')}  {f.get('sink', 'unknown')}  in:{f.get('caller', 'unknown')}"
-        if include_context:
-            signals = f.get('risk_signals', [])
-            if signals:
-                line += f"  signals={','.join(signals[:3])}"
-        rows.append({
-            "address": f.get("caller_addr", "0x0"),
-            "function": f.get("caller", "unknown"),
-            "api": f.get("sink", "unknown"),
-            "vuln_type": f.get("reason", "unknown"),
-            "severity": f.get("severity", "info"),
-            "score": f.get("score", 0),
-            "line": line,
-        })
+        rows = [r for r in rows if matcher(r.get("api", "")) or matcher(r.get("function", ""))]
 
     page, total, is_truncated = paginate_records(
         rows, offset, limit, sort_key=lambda r: (r.get("score", 0), r["address"]), reverse=True
@@ -71,7 +78,6 @@ def search_vulnerable(pattern, include_context, offset, limit, include_items, in
         result["type_totals"] = by_type
     if pattern:
         result["query"] = pattern
-    result["note"] = "Results powered by vuln_scan dynamic analysis (VOERA delegation)."
     return result
 
 

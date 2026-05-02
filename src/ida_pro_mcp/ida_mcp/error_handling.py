@@ -183,6 +183,9 @@ class MCPError:
     ANNOTATION_ERROR = "ANNOTATION_ERROR"
     COMMENT_TOO_LONG = "COMMENT_TOO_LONG"
 
+    # --- Governance (160-164) ---
+    GOVERNANCE_BLOCKED = "GOVERNANCE_BLOCKED"
+
 
 # Default LLM-actionable hints for each error code
 ERROR_HINTS: Dict[str, str] = {
@@ -302,6 +305,7 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.RPC_PROTOCOL_ERROR: "RPC protocol error. Unexpected response from IDA.",
     MCPError.ANNOTATION_ERROR: "Annotation operation failed.",
     MCPError.COMMENT_TOO_LONG: "Comment is too long. Keep comments under 1024 characters.",
+    MCPError.GOVERNANCE_BLOCKED: "Operation blocked by CyberCane governance rules. Review violations and either fix the operation or set governed=false (not recommended).",
 }
 
 
