@@ -19,3 +19,6 @@ ida_mcp_cache/
 # Planning artifacts — preserve but don't commit
 GAP_ANALYSIS.md
 *.plan.md
+
+# Web search cache
+.opencode-swarm/.search_cache/
