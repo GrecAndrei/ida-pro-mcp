@@ -222,8 +222,9 @@ def calc(
 
         def _is_be():
             try:
-                if hasattr(ida_ida, "inf_is_be"):
-                    return ida_ida.inf_is_be()
+                import ida_ida as _ida_ida
+                if hasattr(_ida_ida, "inf_is_be"):
+                    return _ida_ida.inf_is_be()
             except Exception:
                 pass
             try:
@@ -292,9 +293,12 @@ def calc(
                 s = idc.get_strlit_contents(ea, -1, 0)
                 if not s:
                     return None
-                if len(s) > 65536:
-                    s = s[:65536]
-                return s.decode("utf-8", errors="replace")
+                if isinstance(s, bytes):
+                    if len(s) > 65536:
+                        s = s[:65536]
+                    return s.decode("utf-8", errors="replace")
+                else:
+                    return str(s)[:65536]
             raise ValueError(f"Unknown type: {val_type}")
 
         def eval_expr(expression):

@@ -53,15 +53,18 @@ def nav(
             findings = []
             # Instruction-based triage
             targets = INTERESTING_INSTRUCTIONS
+            scanned = 0
+            max_scan = 500000
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
                 if not seg or not (seg.perm & idaapi.SEGPERM_EXEC): continue
                 curr = seg.start_ea
-                while curr < seg.end_ea and len(findings) < 100:
+                while curr < seg.end_ea and len(findings) < 100 and scanned < max_scan:
                     insn = idc.print_insn_mnem(curr).lower()
                     if insn in targets:
                         findings.append({"addr": hex(curr), "type": targets[insn], "disasm": ida_lines.tag_remove(idc.generate_disasm_line(curr, 0))})
                     curr = idc.next_head(curr, seg.end_ea)
+                    scanned += 1
                     if curr == idaapi.BADADDR: break
             return {"ok": True, "findings": findings}
 
@@ -89,8 +92,12 @@ def nav(
                 if score > 0:
                     candidates.append({"addr": ea, "name": name, "score": score, "matched_by": "entry_point"})
             
-            # Check all functions
+            # Check all functions (capped to prevent hangs)
+            max_funcs = 50000
+            func_count = 0
             for func_ea in idautils.Functions():
+                func_count += 1
+                if func_count > max_funcs: break
                 fname = idc.get_func_name(func_ea) or ""
                 score = 0
                 matched_by = []

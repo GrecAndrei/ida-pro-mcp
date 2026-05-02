@@ -273,6 +273,7 @@ def stack_analysis(
                 sym_ea = idc.get_name_ea_simple(sym)
                 if sym_ea == idaapi.BADADDR:
                     continue
+                xref_count = 0
                 for xref in idautils.XrefsTo(sym_ea, 0):
                     ref_func = idaapi.get_func(xref.frm)
                     if ref_func and ref_func.start_ea == func.start_ea:
@@ -285,6 +286,9 @@ def stack_analysis(
                             "symbol": sym,
                             "ref_addr": hex_ea(xref.frm),
                         })
+                    xref_count += 1
+                    if xref_count >= 5000:
+                        break
             return {
                 "ok": True,
                 "function": func_name,
@@ -385,6 +389,7 @@ def stack_analysis(
             max_spd = 0
             min_spd = 0
             ea = func.start_ea
+            usage_iter = 0
             while ea < func.end_ea and ea != idaapi.BADADDR:
                 spd = ida_frame.get_spd(func, ea)
                 if spd is not None:
@@ -393,6 +398,9 @@ def stack_analysis(
                     if spd < min_spd:
                         min_spd = spd
                 ea = idc.next_head(ea)
+                usage_iter += 1
+                if usage_iter >= 100000:
+                    break
             # Check for dynamic allocation (alloca/__chkstk)
             has_dynamic_alloc = False
             alloca_calls = []
@@ -400,6 +408,7 @@ def stack_analysis(
                 sym_ea = idc.get_name_ea_simple(sym)
                 if sym_ea == idaapi.BADADDR:
                     continue
+                xref_count = 0
                 for xref in idautils.XrefsTo(sym_ea, 0):
                     ref_func = idaapi.get_func(xref.frm)
                     if ref_func and ref_func.start_ea == func.start_ea:
@@ -408,6 +417,9 @@ def stack_analysis(
                             "symbol": sym,
                             "call_addr": hex_ea(xref.frm),
                         })
+                    xref_count += 1
+                    if xref_count >= 5000:
+                        break
             return {
                 "ok": True,
                 "function": func_name,
@@ -551,6 +563,7 @@ def stack_analysis(
             # Scan instructions for writes to stack frame offsets
             written_offsets = set()
             ea = func.start_ea
+            uninit_iter = 0
             while ea < func.end_ea and ea != idaapi.BADADDR:
                 mnem = idc.print_insn_mnem(ea)
                 if mnem:
@@ -564,6 +577,9 @@ def stack_analysis(
                         if op0_val is not None:
                             written_offsets.add(op0_val)
                 ea = idc.next_head(ea)
+                uninit_iter += 1
+                if uninit_iter >= 100000:
+                    break
             # Find locals with no detected write
             uninitialized = []
             for var in local_vars:
@@ -614,10 +630,14 @@ def stack_analysis(
                 sym_ea = idc.get_name_ea_simple(sym)
                 if sym_ea == idaapi.BADADDR:
                     continue
+                xref_count = 0
                 for xref in idautils.XrefsTo(sym_ea, 0):
                     ref_func = idaapi.get_func(xref.frm)
                     if ref_func and ref_func.start_ea == func.start_ea:
                         has_canary = True
+                        break
+                    xref_count += 1
+                    if xref_count >= 5000:
                         break
                 if has_canary:
                     break

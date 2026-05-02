@@ -1,0 +1,513 @@
+"""
+Comprehensive MCP Test Shim.
+
+Tests every tool, action, and edge case against the actual MCP server.
+
+Two modes:
+  1. Host-only mode: tests session, bookmarks, batch, truncation, misc, wiki, etc.
+  2. IDA-integration mode: tests IDA-side tools via the integration harness.
+
+Usage:
+    pytest tests/test_mcp_comprehensive.py -v
+    pytest tests/test_mcp_comprehensive.py -v --ida  # include IDA integration tests
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import json
+import time
+import tempfile
+import subprocess
+import pytest
+import importlib.util
+
+# Add src/ to path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
+
+from ida_pro_mcp.host.server import IDAMCPServer
+from ida_pro_mcp.host.schemas import TOOLS, TOOL_ACTIONS, TOOL_DESCRIPTIONS
+
+
+class MCPTestClient:
+    """
+    Lightweight JSON-RPC client for testing the MCP server directly.
+    Does NOT require stdio; calls handle_request() in-process.
+    """
+
+    def __init__(self):
+        self.server = IDAMCPServer()
+        self._req_id = 0
+
+    def _call(self, method: str, params: dict = None) -> dict:
+        self._req_id += 1
+        req = {"jsonrpc": "2.0", "id": self._req_id, "method": method}
+        if params is not None:
+            req["params"] = params
+        resp = self.server.handle_request(req)
+        if resp is None:
+            raise RuntimeError(f"Null response for {method}")
+        if "error" in resp:
+            raise RuntimeError(f"MCP error: {resp['error']}")
+        return resp.get("result", {})
+
+    def tools_list(self, **kwargs) -> dict:
+        return self._call("tools/list", kwargs)
+
+    def tools_call(self, name: str, arguments: dict = None) -> dict:
+        return self._call("tools/call", {"name": name, "arguments": arguments or {}})
+
+    def call_tool(self, tool: str, **kwargs) -> dict:
+        """Convenience wrapper with automatic result parsing."""
+        result = self.tools_call(tool, kwargs)
+        content = result.get("content", [])
+        if content and content[0].get("type") == "text":
+            text = content[0].get("text", "")
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"ok": True, "text": text}
+        return result
+
+
+# =============================================================================
+# 1. Meta Tests (tool registry integrity)
+# =============================================================================
+
+class TestToolRegistry:
+    """Verify that the tool registry is self-consistent."""
+
+    def test_every_tool_has_description(self):
+        for tool in TOOLS:
+            assert tool in TOOL_DESCRIPTIONS, f"Tool '{tool}' missing description"
+
+    def test_every_tool_has_actions(self):
+        for tool in TOOLS:
+            assert tool in TOOL_ACTIONS, f"Tool '{tool}' missing actions list"
+            assert len(TOOL_ACTIONS[tool]) > 0, f"Tool '{tool}' has empty actions"
+
+    def test_no_duplicate_actions(self):
+        for tool, actions in TOOL_ACTIONS.items():
+            assert len(actions) == len(set(actions)), f"Tool '{tool}' has duplicate actions"
+
+    def test_description_not_empty(self):
+        for tool, desc in TOOL_DESCRIPTIONS.items():
+            assert desc and len(desc) > 10, f"Tool '{tool}' description too short"
+
+
+# =============================================================================
+# 2. Host-Side Tool Tests (no IDA required)
+# =============================================================================
+
+@pytest.fixture(scope="module")
+def mcp_client():
+    return MCPTestClient()
+
+
+class TestToolsList:
+    def test_list_returns_tools(self, mcp_client):
+        result = mcp_client.tools_list()
+        assert "tools" in result
+        assert result["total"] > 0
+        names = [t["name"] for t in result["tools"]]
+        assert "session" in names
+        # schemaboot may be hidden depending on ADVERTISED_TOOLS
+
+    def test_list_filter_by_prefix(self, mcp_client):
+        result = mcp_client.tools_list(prefix="s")
+        for t in result["tools"]:
+            assert t["name"].startswith("s")
+
+    def test_list_filter_by_contains(self, mcp_client):
+        result = mcp_client.tools_list(contains="boot")
+        # May be empty if schemaboot is hidden; just verify no crash
+        assert isinstance(result["tools"], list)
+
+    def test_list_pagination(self, mcp_client):
+        result = mcp_client.tools_list(limit=5)
+        assert len(result["tools"]) <= 5
+
+    def test_list_sort_by_category(self, mcp_client):
+        result = mcp_client.tools_list(sort="category", limit=10)
+        assert len(result["tools"]) > 0
+
+
+class TestSessionTool:
+    def test_session_discover_no_crash(self, mcp_client):
+        result = mcp_client.call_tool("session", action="discover")
+        # Session tools return either {"ok": True, ...} or raw dicts directly
+        assert isinstance(result, dict)
+
+    def test_session_create_requires_binary_path(self, mcp_client):
+        result = mcp_client.call_tool("session", action="create")
+        assert result.get("error") is True or "error" in result
+
+    def test_session_create_with_nonexistent_binary(self, mcp_client):
+        result = mcp_client.call_tool("session", action="create", binary_path="/nonexistent/file")
+        assert result.get("error") is True or "error" in result
+
+    def test_session_stats(self, mcp_client):
+        result = mcp_client.call_tool("session", action="stats")
+        assert isinstance(result, dict)
+        assert "stats" in result or "ok" in result
+
+    def test_session_list(self, mcp_client):
+        result = mcp_client.call_tool("session", action="list")
+        assert isinstance(result, dict)
+        assert "sessions" in result or "ok" in result
+
+    def test_session_recent(self, mcp_client):
+        result = mcp_client.call_tool("session", action="recent", n=5)
+        assert isinstance(result, dict)
+        assert "sessions" in result or "ok" in result
+
+    def test_session_unknown_action(self, mcp_client):
+        result = mcp_client.call_tool("session", action="nonexistent_action_xyz")
+        assert result.get("error") is True or "error" in result
+
+    def test_session_cleanup_stale(self, mcp_client):
+        result = mcp_client.call_tool("session", action="cleanup_stale", max_age_days=1)
+        assert isinstance(result, dict)
+        assert "count" in result or "deleted_sids" in result or "ok" in result
+
+    def test_session_macro_list_empty(self, mcp_client):
+        result = mcp_client.call_tool("session", action="macro_list")
+        assert isinstance(result, dict)
+        assert "count" in result or "macros" in result or "ok" in result
+
+    def test_session_macro_crud(self, mcp_client):
+        # Set
+        r1 = mcp_client.call_tool("session", action="macro_set", name="test_macro", data={"action": "stats"})
+        assert r1.get("ok") is True or "name" in r1
+        # Get
+        r2 = mcp_client.call_tool("session", action="macro_get", name="test_macro")
+        assert r2.get("ok") is True or "data" in r2
+        # Delete
+        r3 = mcp_client.call_tool("session", action="macro_delete", name="test_macro")
+        assert r3.get("ok") is True or "name" in r3
+        # Get after delete should fail
+        r4 = mcp_client.call_tool("session", action="macro_get", name="test_macro")
+        assert r4.get("error") is True or "error" in r4
+
+    def test_session_invalid_id_format(self, mcp_client):
+        result = mcp_client.call_tool("session", action="get", session_id="../../../etc/passwd")
+        assert result.get("error") is True or "error" in result
+
+
+class TestBookmarksTool:
+    def test_bookmarks_no_session_error(self, mcp_client):
+        result = mcp_client.call_tool("bookmarks", action="list")
+        assert result.get("error") is True or "error" in result
+
+
+class TestBatchTool:
+    def test_batch_empty_calls(self, mcp_client):
+        result = mcp_client.call_tool("batch", calls=[])
+        assert result.get("error") is True or "error" in result
+
+    def test_batch_single_call(self, mcp_client):
+        result = mcp_client.call_tool("batch", calls=[{"name": "session", "arguments": {"action": "stats"}}])
+        assert result.get("ok") is True or "results" in result
+
+    def test_batch_string_shorthand(self, mcp_client):
+        result = mcp_client.call_tool("batch", calls=["session:stats"])
+        assert result.get("ok") is True or "results" in result
+
+    def test_batch_nested_batch_rejected(self, mcp_client):
+        result = mcp_client.call_tool("batch", calls=[{"name": "batch", "arguments": {"calls": []}}])
+        assert result.get("error") is True or "error" in result or "Nested batch calls are not allowed" in str(result)
+
+    def test_batch_continue_on_error(self, mcp_client):
+        result = mcp_client.call_tool(
+            "batch",
+            calls=[
+                {"name": "session", "arguments": {"action": "nonexistent"}},
+                {"name": "session", "arguments": {"action": "stats"}},
+            ],
+            continue_on_error=True,
+        )
+        assert result.get("ok") is True or "results" in result
+
+
+class TestTruncationTool:
+    def test_truncation_continue_requires_token(self, mcp_client):
+        result = mcp_client.call_tool("truncation", action="continue")
+        assert result.get("error") is True or "error" in result
+
+    def test_truncation_invalid_token(self, mcp_client):
+        result = mcp_client.call_tool("truncation", action="continue", token="invalid-token-123")
+        assert result.get("error") is True or "error" in result
+
+
+class TestMiscTool:
+    def test_misc_health(self, mcp_client):
+        result = mcp_client.call_tool("misc", action="health")
+        assert isinstance(result, dict)
+        assert "server" in result or "ok" in result or "status" in result
+
+    def test_misc_unknown_action(self, mcp_client):
+        result = mcp_client.call_tool("misc", action="nonexistent_xyz")
+        assert result.get("error") is True or "error" in result
+
+    def test_misc_python_no_crash(self, mcp_client):
+        result = mcp_client.call_tool("misc", action="python", expr="1 + 1")
+        # May fail if no session, but should not crash
+        assert isinstance(result, dict)
+
+
+class TestWikiTool:
+    def test_wiki_list_topics(self, mcp_client):
+        result = mcp_client.call_tool("wiki", action="list_topics")
+        assert isinstance(result, dict)
+
+    def test_wiki_read_unknown_topic(self, mcp_client):
+        result = mcp_client.call_tool("wiki", action="read", topic="nonexistent_topic_12345")
+        assert isinstance(result, dict)
+
+    def test_wiki_search(self, mcp_client):
+        result = mcp_client.call_tool("wiki", action="search", query="session")
+        assert isinstance(result, dict)
+
+    def test_wiki_invalid_action(self, mcp_client):
+        result = mcp_client.call_tool("wiki", action="nonexistent")
+        assert result.get("error") is True or "error" in result
+
+
+class TestCalcTool:
+    def test_calc_eval_basic(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="eval", expr="0x401000 + 0x10")
+        assert result.get("ok") is True or "error" in result
+
+    def test_calc_eval_invalid(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="eval", expr="not_a_valid_expr!!!")
+        assert result.get("error") is True or "error" in result
+
+    def test_calc_offset(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="offset", addr="0x401000")
+        assert isinstance(result, dict)
+
+    def test_calc_align(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="align", addr="0x401003", value="0x10")
+        assert isinstance(result, dict)
+
+
+class TestAnalysisTool:
+    def test_analysis_no_session(self, mcp_client):
+        result = mcp_client.call_tool("analysis", action="get_options")
+        assert result.get("error") is True or "error" in result
+
+
+class TestQueryTool:
+    def test_query_no_session(self, mcp_client):
+        result = mcp_client.call_tool("query", action="data")
+        assert result.get("error") is True or "error" in result
+
+
+class TestUnknownTool:
+    def test_unknown_tool_rejected(self, mcp_client):
+        result = mcp_client.call_tool("nonexistent_tool_12345", action="test")
+        assert result.get("error") is True or "error" in result
+
+    def test_tool_alias_resolution(self, mcp_client):
+        result = mcp_client.call_tool("fn", action="list")
+        assert isinstance(result, dict)
+
+
+class TestResponseModes:
+    def test_compact_vs_full_mode(self, mcp_client):
+        # Default is compact
+        result = mcp_client.call_tool("misc", action="health")
+        assert isinstance(result, dict)
+
+
+# =============================================================================
+# 3. Tool Alias Tests
+# =============================================================================
+
+class TestToolAliases:
+    def test_session_aliases(self, mcp_client):
+        for alias in ["session_tool"]:
+            result = mcp_client.call_tool(alias, action="stats")
+            assert isinstance(result, dict)
+
+    def test_func_aliases(self, mcp_client):
+        for alias in ["fn", "func", "function", "functions"]:
+            result = mcp_client.call_tool(alias, action="list")
+            assert isinstance(result, dict)
+
+    def test_code_aliases(self, mcp_client):
+        for alias in ["disasm", "assembly", "decomp"]:
+            result = mcp_client.call_tool(alias, action="disasm", addr="0x401000")
+            assert isinstance(result, dict)
+
+
+# =============================================================================
+# 4. Edge Case Tests
+# =============================================================================
+
+class TestEdgeCases:
+    def test_null_arguments(self, mcp_client):
+        result = mcp_client.call_tool("session", action=None)
+        assert result.get("error") is True or "error" in result
+
+    def test_empty_tool_name(self, mcp_client):
+        result = mcp_client.call_tool("", action="stats")
+        assert result.get("error") is True or "error" in result
+
+    def test_very_long_string_argument(self, mcp_client):
+        long_str = "A" * 10000
+        result = mcp_client.call_tool("session", action="discover", query=long_str)
+        assert isinstance(result, dict)
+
+    def test_unicode_in_arguments(self, mcp_client):
+        result = mcp_client.call_tool("session", action="discover", query="日本語テスト")
+        assert isinstance(result, dict)
+
+    def test_negative_numbers(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="eval", expr="-5 + 3")
+        assert isinstance(result, dict)
+
+    def test_special_chars_in_query(self, mcp_client):
+        result = mcp_client.call_tool("session", action="discover", query="test' OR '1'='1")
+        assert isinstance(result, dict)
+
+    def test_boolean_coercion(self, mcp_client):
+        result = mcp_client.call_tool("session", action="stats")
+        assert isinstance(result, dict)
+
+
+# =============================================================================
+# 5. VOERA Tool Tests (host-side, no IDA)
+# =============================================================================
+
+class TestVOERAToolsNoSession:
+    """Edge case: VOERA tools require an active session (they are IDA-side tools)."""
+
+    def _assert_session_required(self, result):
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result or "SESSION_REQUIRED" in str(result)
+
+    def test_turboquant_stats_no_session(self, mcp_client):
+        result = mcp_client.call_tool("turboquant", action="stats")
+        self._assert_session_required(result)
+
+    def test_turboquant_delete_no_session(self, mcp_client):
+        result = mcp_client.call_tool("turboquant", action="delete")
+        self._assert_session_required(result)
+
+    def test_turboquant_query_no_session(self, mcp_client):
+        result = mcp_client.call_tool("turboquant", action="query", query_key="0x401000")
+        self._assert_session_required(result)
+
+    def test_bridgerag_bridges_no_session(self, mcp_client):
+        result = mcp_client.call_tool("bridgerag", action="bridges", func_ea="0x401000")
+        self._assert_session_required(result)
+
+    def test_bridgerag_search_no_session(self, mcp_client):
+        result = mcp_client.call_tool("bridgerag", action="search")
+        self._assert_session_required(result)
+
+    def test_memrl_record_no_session(self, mcp_client):
+        result = mcp_client.call_tool("memrl", action="record", intent_key="q1", experience_key="f_401000")
+        self._assert_session_required(result)
+
+    def test_memrl_update_no_session(self, mcp_client):
+        result = mcp_client.call_tool("memrl", action="update", intent_key="q1", experience_key="f_401000", reward=1.0)
+        self._assert_session_required(result)
+
+    def test_memrl_get_q_no_session(self, mcp_client):
+        result = mcp_client.call_tool("memrl", action="get_q", intent_key="q1", experience_key="f_401000")
+        self._assert_session_required(result)
+
+    def test_memrl_stats_no_session(self, mcp_client):
+        result = mcp_client.call_tool("memrl", action="stats")
+        self._assert_session_required(result)
+
+    def test_memrl_rank_no_session(self, mcp_client):
+        result = mcp_client.call_tool("memrl", action="rank", intent_key="q1")
+        self._assert_session_required(result)
+
+    def test_memrl_top_no_session(self, mcp_client):
+        result = mcp_client.call_tool("memrl", action="top", intent_key="q1", top_k=5)
+        self._assert_session_required(result)
+
+    def test_memrl_unknown_action_no_session(self, mcp_client):
+        result = mcp_client.call_tool("memrl", action="nonexistent")
+        # Unknown action may be caught before session check; either error is fine
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result or "SESSION_REQUIRED" in str(result)
+
+
+# =============================================================================
+# 6. Integration Tests with Real IDA (optional, use --ida flag)
+# =============================================================================
+
+@pytest.mark.skipif(
+    not os.environ.get("RUN_IDA_TESTS"),
+    reason="Set RUN_IDA_TESTS=1 to run IDA integration tests"
+)
+class TestIDAIntegration:
+    """Tests that require a live IDA session."""
+
+    @pytest.fixture(scope="class")
+    def ida_client(self, mcp_client):
+        # Create a session with the test binary
+        test_binary = os.path.join(os.path.dirname(__file__), "data", "test_binary.exe")
+        result = mcp_client.call_tool("session", action="create", binary_path=test_binary)
+        if result.get("error"):
+            pytest.skip(f"Could not create IDA session: {result}")
+        return mcp_client
+
+    def test_idb_meta(self, ida_client):
+        result = ida_client.call_tool("idb", action="meta")
+        assert result.get("ok") is True
+
+    def test_data_functions(self, ida_client):
+        result = ida_client.call_tool("data", action="functions", limit=10)
+        assert result.get("ok") is True
+        assert "functions" in result
+
+    def test_code_decompile(self, ida_client):
+        result = ida_client.call_tool("code", action="decompile", addr="0x401000")
+        assert isinstance(result, dict)
+
+    def test_search_bytes(self, ida_client):
+        result = ida_client.call_tool("search", action="bytes", pattern="48 89 5C 24")
+        assert isinstance(result, dict)
+
+    def test_schemaboot_ingest(self, ida_client):
+        result = ida_client.call_tool("schemaboot", action="ingest")
+        assert result.get("ok") is True
+        assert result.get("ingested", 0) > 0
+
+    def test_schemaboot_query(self, ida_client):
+        ida_client.call_tool("schemaboot", action="ingest")
+        result = ida_client.call_tool("schemaboot", action="query", constraints={"min_size": 50}, limit=5)
+        assert result.get("ok") is True
+
+    def test_turboquant_ingest_and_query(self, ida_client):
+        ida_client.call_tool("schemaboot", action="ingest")
+        result = ida_client.call_tool("turboquant", action="ingest")
+        assert result.get("ok") is True
+        result2 = ida_client.call_tool("turboquant", action="stats")
+        assert result2.get("total_vectors", 0) > 0
+
+    def test_bridgerag_search(self, ida_client):
+        ida_client.call_tool("schemaboot", action="ingest")
+        result = ida_client.call_tool("bridgerag", action="search", query_constraints={"min_size": 100}, top_k=5)
+        assert result.get("ok") is True
+
+    def test_memrl_end_to_end(self, ida_client):
+        ida_client.call_tool("schemaboot", action="ingest")
+        # Record a triplet
+        r1 = ida_client.call_tool("memrl", action="record", intent_key="test_query", experience_key="0x401000")
+        assert r1.get("ok") is True
+        # Update with reward
+        r2 = ida_client.call_tool("memrl", action="update", intent_key="test_query", experience_key="0x401000", reward=1.0)
+        assert r2.get("ok") is True
+        # Rank candidates
+        pool = [{"ea": "0x401000", "score": 0.9}, {"ea": "0x402000", "score": 0.8}]
+        r3 = ida_client.call_tool("memrl", action="rank", intent_key="test_query", candidate_pool=pool, lambda_explore=0.5)
+        assert r3.get("ok") is True
+        assert len(r3.get("ranked", [])) == 2

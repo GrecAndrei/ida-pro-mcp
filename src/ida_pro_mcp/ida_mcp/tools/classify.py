@@ -15,7 +15,7 @@ except ImportError:
     from _api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY  # type: ignore[import-not-found]
 
 
-def _get_func_callees(func_ea):
+def _get_func_callees(func_ea, max_items=200):
     """Return list of callee names for the function at func_ea."""
     fn = ida_funcs.get_func(func_ea)
     if not fn:
@@ -26,6 +26,8 @@ def _get_func_callees(func_ea):
             name = idc.get_func_name(xref)
             if name and name not in callees:
                 callees.append(name)
+                if len(callees) >= max_items:
+                    return callees
     return callees
 
 
@@ -51,7 +53,7 @@ def _classify_func(func_ea):
     return top_cat, matched_apis, callees
 
 
-def _count_func_instructions(func_ea):
+def _count_func_instructions(func_ea, max_insns=10000):
     """Count instructions in a function (architecture-neutral)."""
     fn = ida_funcs.get_func(func_ea)
     if not fn:
@@ -59,15 +61,19 @@ def _count_func_instructions(func_ea):
     count = 0
     for _ in idautils.Heads(fn.start_ea, fn.end_ea):
         count += 1
+        if count >= max_insns:
+            break
     return count
 
 
-def _get_xrefs_to_count(ea):
+def _get_xrefs_to_count(ea, max_xrefs=5000):
     """Count code cross-references to an address."""
     count = 0
     for xref in idautils.XrefsTo(ea, 0):
         if xref.type in (idaapi.fl_CF, idaapi.fl_CN, idaapi.fl_JF, idaapi.fl_JN):
             count += 1
+            if count >= max_xrefs:
+                break
     return count
 
 
@@ -113,7 +119,7 @@ def _induce_function_schema(func_ea: int) -> dict:
     
     # Dangerous API detection
     for callee in callees:
-        if callee in _DANGEROUS_APIS:
+        if callee in DANGEROUS_APIS:
             schema["dangerous_apis"].add(callee)
             schema["vuln_class"].add("dangerous_api")
         base = callee
@@ -121,7 +127,7 @@ def _induce_function_schema(func_ea: int) -> dict:
             if base.endswith(suffix):
                 base = base[:-len(suffix)]
                 break
-        if base in _DANGEROUS_APIS:
+        if base in DANGEROUS_APIS:
             schema["dangerous_apis"].add(callee)
             schema["vuln_class"].add("dangerous_api")
     

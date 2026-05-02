@@ -19,11 +19,6 @@ _BATCH_TEMPLATES = {
         {"tool": "data", "action": "strings_in_func", "addr": "$addr"},
         {"tool": "code", "action": "xrefs_from", "addr": "$addr"},
     ],
-    "find_vulns_quick": [
-        {"tool": "vuln_scan", "action": "dangerous_apis", "limit": 20},
-        {"tool": "vuln_scan", "action": "taint_lattice", "limit": 10},
-        {"tool": "taint", "action": "find_sinks", "addr": "$addr", "depth": 3},
-    ],
     "map_binary": [
         {"tool": "binary_info", "action": "headers"},
         {"tool": "segments", "action": "list"},
@@ -34,18 +29,17 @@ _BATCH_TEMPLATES = {
         {"tool": "code", "action": "decompile", "addr": "$addr"},
         {"tool": "code", "action": "disasm", "addr": "$addr"},
         {"tool": "string_ops", "action": "find_xrefs", "addr": "$addr"},
-        {"tool": "taint", "action": "find_sinks", "addr": "$addr", "depth": 5},
-        {"tool": "vuln_scan", "action": "dangerous_apis", "addr": "$addr"},
+        {"tool": "xref_analysis", "action": "call_chain", "addr": "$addr"},
     ],
     "crypto_hunt": [
         {"tool": "crypto_id", "action": "scan", "limit": 20},
         {"tool": "entropy", "action": "crypto_detect", "limit": 10},
         {"tool": "string_ops", "action": "entropy_rank", "limit": 20},
     ],
-    "c2_investigation": [
-        {"tool": "string_ops", "action": "find_c2", "limit": 30},
+    "network_protocol_hunt": [
+        {"tool": "protocol", "action": "detect", "limit": 20},
         {"tool": "string_ops", "action": "find_urls", "limit": 20},
-        {"tool": "c2_detect", "action": "behavior_summary", "limit": 20},
+        {"tool": "data", "action": "strings", "count": 30},
     ],
 }
 
@@ -220,11 +214,10 @@ def batch(
 
     Templates:
       - analyze_function: decompile + strings + xrefs for a function
-      - find_vulns_quick: dangerous APIs + taint + sinks
       - map_binary: headers + segments + imports + functions
-      - deep_function_audit: comprehensive single-function analysis
+      - deep_function_audit: decompile + disasm + string xrefs + call chain
       - crypto_hunt: crypto constants + entropy + high-entropy strings
-      - c2_investigation: C2 strings + URLs + behavior summary
+      - network_protocol_hunt: protocol detection + URLs + string search
 
     Example:
         batch(calls=[

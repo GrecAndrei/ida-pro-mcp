@@ -96,22 +96,27 @@ def history(
             if not name:
                 import datetime
                 name = f"snapshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # Sanitize name to prevent path traversal
+            safe_name = os.path.basename(name.replace("/", "_").replace("\\", "_"))
             
             # Use native snapshot if available (IDA 7.4+)
             if hasattr(idautils, 'take_database_snapshot'):
                 try:
-                    if idautils.take_database_snapshot(name):
-                        return {"ok": True, "type": "native_snapshot", "name": name}
-                except Exception:
-                    pass # Fallback to save copy
+                    if idautils.take_database_snapshot(safe_name):
+                        return {"ok": True, "type": "native_snapshot", "name": safe_name}
+                except Exception as e:
+                    # Log and fallback to save copy
+                    import logging
+                    logging.debug(f"Native snapshot failed, falling back: {e}")
             
             # Fallback: Save a copy of the database
-            import os
             root = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
             dirname = os.path.dirname(root)
-            filename = f"{name}.i64"
+            filename = f"{safe_name}.i64"
             target = os.path.join(dirname, filename)
-            
+            _, path_err = validate_path_safe(target)
+            if path_err: return path_err
+
             if ida_loader.save_database(target, 0):
                 return {"ok": True, "type": "idb_copy", "path": target}
             
@@ -121,11 +126,16 @@ def history(
             if not name:
                 return make_error(MCPError.INVALID_ARGS, "name required")
             
+            # Sanitize name to prevent path traversal
+            safe_name = os.path.basename(name.replace("/", "_").replace("\\", "_"))
+            
             # List available snapshots
             idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB)
             snapshot_dir = os.path.join(os.path.dirname(idb_path), ".ida_snapshots")
             
-            meta_path = os.path.join(snapshot_dir, f"{name}.json")
+            meta_path = os.path.join(snapshot_dir, f"{safe_name}.json")
+            _, path_err = validate_path_safe(meta_path)
+            if path_err: return path_err
             if os.path.exists(meta_path):
                 import json as json_module
                 with open(meta_path, 'r') as f:
@@ -149,16 +159,20 @@ def history(
             }
             
             # We can list functions that appear to have been renamed
+            scanned_funcs = 0
+            max_scan = 100000
             for seg_ea in idautils.Segments():
+                if len(changes["modified_functions"]) >= 100: break
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
+                    scanned_funcs += 1
+                    if scanned_funcs > max_scan: break
+                    if len(changes["modified_functions"]) >= 100: break
                     name = idc.get_func_name(func_ea)
                     if name and not name.startswith("sub_"):
                         changes["modified_functions"].append({
                             "addr": hex(func_ea),
                             "name": name
                         })
-                    if len(changes["modified_functions"]) >= 100:
-                        break
             
             changes["ok"] = True
             return changes

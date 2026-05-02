@@ -205,7 +205,10 @@ def data(
                                     content = idc.get_strlit_contents(sc.ea)
                                 if not content:
                                     continue
-                                s = content.decode("utf-8", errors="replace")
+                                if isinstance(content, bytes):
+                                    s = content.decode("utf-8", errors="replace")
+                                else:
+                                    s = content
                                 if len(s) < 4:
                                     continue
 

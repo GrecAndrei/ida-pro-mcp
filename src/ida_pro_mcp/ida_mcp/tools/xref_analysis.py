@@ -8,6 +8,7 @@ from collections import defaultdict, deque
 
 _MAX_LIMIT = 500
 _MAX_DEPTH = 64
+_MAX_ITER = 100000  # Guard for unbounded internal iterations
 
 
 def _clip_text(value: Any, max_len: int = 220) -> str:
@@ -135,7 +136,9 @@ def _find_entry_functions() -> list[int]:
 
 def _count_external_refs(target_ea: int) -> int:
     count = 0
-    for xref in idautils.XrefsTo(target_ea, 0):
+    for idx, xref in enumerate(idautils.XrefsTo(target_ea, 0)):
+        if idx >= _MAX_ITER:
+            break
         src_fn = ida_funcs.get_func(xref.frm)
         if src_fn is None:
             count += 1
@@ -355,8 +358,12 @@ def xref_analysis(
             if not fn:
                 callee_cache[func_ea] = out
                 return out
+            _c = 0
             for item_ea in idautils.FuncItems(fn.start_ea):
                 for xref in idautils.CodeRefsFrom(item_ea, 0):
+                    _c += 1
+                    if _c > _MAX_ITER:
+                        break
                     target = ida_funcs.get_func(xref)
                     if not target:
                         continue
@@ -364,6 +371,8 @@ def xref_analysis(
                     if tgt == int(fn.start_ea):
                         continue
                     out.add(tgt)
+                if _c > _MAX_ITER:
+                    break
             callee_cache[func_ea] = out
             return out
 
@@ -371,7 +380,9 @@ def xref_analysis(
             if func_ea in caller_cache:
                 return caller_cache[func_ea]
             out: set[int] = set()
-            for xref in idautils.CodeRefsTo(func_ea, 0):
+            for idx, xref in enumerate(idautils.CodeRefsTo(func_ea, 0)):
+                if idx >= _MAX_ITER:
+                    break
                 caller = ida_funcs.get_func(xref)
                 if not caller:
                     continue

@@ -194,6 +194,8 @@ def comments_ai(
             lines.append(f"Generated from: {idc.get_input_file_path()}\n\n")
             count = 0
             
+            _func_limit = 5000
+            _func_count = 0
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
                     func_name = idc.get_func_name(func_ea)
@@ -220,6 +222,11 @@ def comments_ai(
                         lines.append(f"## {func_name} (`{hex(func_ea)}`)\n\n")
                         lines.extend([c + "\n" for c in func_comments])
                         lines.append("\n")
+                    _func_count += 1
+                    if _func_count >= _func_limit:
+                        break
+                if _func_count >= _func_limit:
+                    break
             
             with open(path, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
@@ -229,6 +236,9 @@ def comments_ai(
         elif action == "import_md":
             if not path:
                 return make_error(MCPError.INVALID_ARGS, "path required")
+            
+            path, err = validate_path_safe(path)
+            if err: return err
             
             if not os.path.exists(path):
                 return make_error(MCPError.FILE_NOT_FOUND, path)
@@ -257,6 +267,8 @@ def comments_ai(
             return {"ok": True, "imported": True, "count": imported, "errors": len(errors)}
         
         elif action == "summary":
+            _func_limit = 10000
+            _func_count = 0
             total = 0
             commented = 0
             inline_comments = 0
@@ -277,6 +289,11 @@ def comments_ai(
                                 inline_comments += 1
                             curr = idc.next_head(curr, func.end_ea)
                             if curr == idaapi.BADADDR: break
+                    _func_count += 1
+                    if _func_count >= _func_limit:
+                        break
+                if _func_count >= _func_limit:
+                    break
             
             return {
                 "ok": True,

@@ -953,17 +953,21 @@ def get_assembly_lines(ea: int) -> str:
     return lines_str
 
 
-def get_all_xrefs(ea: int) -> dict:
-    """Get all xrefs to and from an address"""
+def get_all_xrefs(ea: int, max_xrefs: int = 50000) -> dict:
+    """Get all xrefs to and from an address (capped at max_xrefs)."""
+    to_list = []
+    for x in idautils.XrefsTo(ea, 0):
+        if len(to_list) >= max_xrefs:
+            break
+        to_list.append({"addr": hex(x.frm), "type": "code" if x.iscode else "data"})
+    from_list = []
+    for x in idautils.XrefsFrom(ea, 0):
+        if len(from_list) >= max_xrefs:
+            break
+        from_list.append({"addr": hex(x.to), "type": "code" if x.iscode else "data"})
     return {
-        "to": [
-            {"addr": hex(x.frm), "type": "code" if x.iscode else "data"}
-            for x in idautils.XrefsTo(ea, 0)
-        ],
-        "from": [
-            {"addr": hex(x.to), "type": "code" if x.iscode else "data"}
-            for x in idautils.XrefsFrom(ea, 0)
-        ],
+        "to": to_list,
+        "from": from_list,
     }
 
 
@@ -1070,8 +1074,14 @@ def extract_function_strings(ea: int) -> list[String]:
         return []
 
     strings = []
+    _func_str_limit = 50000
+    _func_str_count = 0
     for item_ea in idautils.FuncItems(func.start_ea):
+        if _func_str_count >= _func_str_limit:
+            break
         for xref in idautils.XrefsFrom(item_ea, 0):
+            if _func_str_count >= _func_str_limit:
+                break
             if not xref.iscode:
                 # Check if target is a string
                 str_type = ida_nalt.get_str_type(xref.to)
@@ -1080,13 +1090,15 @@ def extract_function_strings(ea: int) -> list[String]:
                 try:
                     str_content = idc.get_strlit_contents(xref.to)
                     if str_content:
+                        decoded = str_content.decode("utf-8", errors="replace") if isinstance(str_content, bytes) else str(str_content)
                         strings.append(
                             String(
                                 addr=hex(xref.to),
                                 length=len(str_content),
-                                string=str_content.decode("utf-8", errors="replace"),
+                                string=decoded,
                             )
                         )
+                        _func_str_count += 1
                 except Exception:
                     pass
     return strings

@@ -4349,35 +4349,9 @@ class IDAMCPServer:
                     ("coverage", "report", {}),
                 ],
             )
-        elif tool in {"vuln_scan", "taint", "gadgets", "search"}:
+        elif tool in {"gadgets", "search"}:
             mapped_module = "vuln"
-            if tool == "vuln_scan" and action:
-                steps = [
-                    (
-                        "vuln_scan",
-                        action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
-                    )
-                ]
-            elif tool == "taint" and action:
-                steps = [
-                    (
-                        "taint",
-                        action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
-                    )
-                ]
-            elif tool == "gadgets" and action:
+            if tool == "gadgets" and action:
                 steps = [
                     (
                         "gadgets",
@@ -4405,9 +4379,8 @@ class IDAMCPServer:
                 steps = [("search", action, passthrough)]
             else:
                 steps = [
-                    ("vuln_scan", "scan_all", {"scan_profile": profile}),
-                    ("vuln_scan", "intelligence_report", {"scan_profile": profile}),
-                    ("taint", "find_sinks", {"depth": 3 if profile == "quick" else 6}),
+                    ("gadgets", "find_rop", {}),
+                    ("search", "vulnerable", {}),
                 ]
         else:
             mapped_module = "malware"
@@ -4512,10 +4485,10 @@ class IDAMCPServer:
                 ]
             else:
                 steps = [
-                    ("c2_detect", "indicators", {}),
-                    ("c2_detect", "ioc_extract", {}),
                     ("deobfuscate", "stack_strings", {}),
+                    ("deobfuscate", "api_hashing", {}),
                     ("crypto_id", "identify", {}),
+                    ("yara_hunt", "list_rules", {}),
                 ]
 
         return (
@@ -4594,32 +4567,9 @@ class IDAMCPServer:
             include_tracing = module == "tracing"
             step_plan.extend(legacy_steps)
 
-        if include_vuln and not step_plan:
-            vuln_args = {
-                "scan_profile": profile,
-                "include_dataflow_graph": profile == "deep",
-                "include_remediation_plan": profile != "quick",
-            }
-            if "severity" in args:
-                vuln_args["severity"] = args.get("severity")
-            if "addr" in args:
-                vuln_args["addr"] = args.get("addr")
-            step_plan.extend(
-                [
-                    ("vuln_scan", "scan_all", vuln_args),
-                    (
-                        "vuln_scan",
-                        "intelligence_report",
-                        vuln_args if profile != "quick" else {"scan_profile": profile},
-                    ),
-                ]
-            )
-
         if include_malware and not step_plan:
             step_plan.extend(
                 [
-                    ("c2_detect", "indicators", {}),
-                    ("c2_detect", "ioc_extract", {}),
                     ("deobfuscate", "stack_strings", {}),
                     ("deobfuscate", "api_hashing", {}),
                     ("crypto_id", "identify", {}),
@@ -4634,7 +4584,6 @@ class IDAMCPServer:
                     ("trace_analysis", "analyze_coverage", {}),
                     ("trace_analysis", "find_loops", {}),
                     ("coverage", "report", {}),
-                    ("taint", "find_sinks", {"depth": 3 if profile == "quick" else 6}),
                 ]
             )
 
@@ -5683,14 +5632,11 @@ class IDAMCPServer:
             return self._handle_gadgets_semantic_find(args)
 
         legacy_threat_tools = {
-            "vuln_scan",
-            "c2_detect",
             "deobfuscate",
             "crypto_id",
             "trace",
             "trace_analysis",
             "coverage",
-            "taint",
             "yara_hunt",
             "gadgets",
             "agent",

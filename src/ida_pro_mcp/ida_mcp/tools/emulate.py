@@ -160,10 +160,12 @@ def emulate(
                                 continue
                             s = idc.get_strlit_contents(val)
                             if s:
+                                if isinstance(s, bytes):
+                                    s = s.decode("utf-8", errors="replace")
                                 calls.append({
                                     "call_site": hex(xref.frm),
                                     "string_addr": hex(val),
-                                    "string": s.decode('utf-8', 'replace'),
+                                    "string": s,
                                     "xref": hex(prev),
                                 })
                                 if len(calls) >= 50:

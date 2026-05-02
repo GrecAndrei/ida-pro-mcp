@@ -89,7 +89,7 @@ def compare(
                 return []
             return [ida_lines.tag_remove(l.line) for l in cfunc.get_pseudocode()]
 
-        def _get_callees(ea):
+        def _get_callees(ea, max_items=200):
             """Return set of callee names for the function at *ea*."""
             func = ida_funcs.get_func(ea)
             if not func:
@@ -100,9 +100,11 @@ def compare(
                     name = idc.get_func_name(xref)
                     if name:
                         callees.add(name)
+                        if len(callees) >= max_items:
+                            return callees
             return callees
 
-        def _get_string_refs(ea):
+        def _get_string_refs(ea, max_items=200):
             """Return set of strings referenced inside the function at *ea*."""
             func = ida_funcs.get_func(ea)
             if not func:
@@ -115,9 +117,11 @@ def compare(
                         s = idc.get_strlit_contents(dref, -1, stype)
                         if s:
                             strings.add(s.decode("utf-8", errors="replace") if isinstance(s, bytes) else s)
+                            if len(strings) >= max_items:
+                                return strings
             return strings
 
-        def _get_constants(ea):
+        def _get_constants(ea, max_items=200):
             """Return set of immediate operand values inside the function."""
             func = ida_funcs.get_func(ea)
             if not func:
@@ -132,6 +136,8 @@ def compare(
                         val = idc.get_operand_value(head, n)
                         if val not in (0, 1, -1):
                             constants.add(val)
+                            if len(constants) >= max_items:
+                                return constants
             return constants
 
         def _jaccard(s1, s2):
@@ -157,7 +163,7 @@ def compare(
             complexity = edge_count - block_count + 2
             return block_count, edge_count, complexity
 
-        def _mnemonic_hash(ea):
+        def _mnemonic_hash(ea, max_insns=10000):
             """Hash the mnemonic sequence of a function for clone detection."""
             func = ida_funcs.get_func(ea)
             if not func:
@@ -166,6 +172,8 @@ def compare(
             for head in idautils.Heads(func.start_ea, func.end_ea):
                 if idc.is_code(idc.get_full_flags(head)):
                     mnemonics.append(idc.print_insn_mnem(head))
+                    if len(mnemonics) >= max_insns:
+                        break
             if not mnemonics:
                 return None
             return hashlib.md5("|".join(mnemonics).encode()).hexdigest()
@@ -341,7 +349,7 @@ def compare(
             ea2, err = _resolve_func(addr2, "addr2")
             if err: return err
 
-            def _call_sequence(ea):
+            def _call_sequence(ea, max_items=200):
                 """Ordered list of calls made inside a function."""
                 func = ida_funcs.get_func(ea)
                 if not func:
@@ -354,9 +362,11 @@ def compare(
                         name = idc.get_func_name(xref)
                         if name:
                             seq.append(name)
+                            if len(seq) >= max_items:
+                                return seq
                 return seq
 
-            def _data_ref_set(ea):
+            def _data_ref_set(ea, max_items=500):
                 """Set of data addresses referenced by the function."""
                 func = ida_funcs.get_func(ea)
                 if not func:
@@ -365,6 +375,8 @@ def compare(
                 for head in idautils.Heads(func.start_ea, func.end_ea):
                     for dref in idautils.DataRefsFrom(head):
                         refs.add(dref)
+                        if len(refs) >= max_items:
+                            return refs
                 return refs
 
             cs1 = _call_sequence(ea1)
