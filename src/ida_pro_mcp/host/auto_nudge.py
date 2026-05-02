@@ -222,3 +222,144 @@ def get_decompile_history(idb: str) -> List[str]:
 def get_search_history(idb: str) -> List[str]:
     """Get list of previous search queries."""
     return _auto_nudge._search_cache.get(_auto_nudge._session_key(idb), [])
+
+
+# ============================================================================
+# Silent Tool Rerouting
+# ============================================================================
+
+# Maps (tool, action) that LLMs commonly get wrong to the correct (tool, action)
+_REROUTE_MAP: Dict[Tuple[str, str], Tuple[str, str]] = {
+    ("search", "bytes"): ("search", "string"),
+    ("search", "text"): ("search", "name"),
+    ("search", "instruction"): ("search", "insns"),
+    ("compare", "compare"): ("compare", "functions"),
+}
+
+# Heuristic reroutes: when the call signature matches one pattern but another is better
+_HEURISTIC_REROUTES = [
+    # memory.read with code-like args -> code.disasm
+    (lambda t, a, args: t == "memory" and a == "read" and 
+     isinstance(args.get("size"), int) and 0 < args.get("size", 0) <= 4096 and args.get("addr"),
+     ("code", "disasm", {"addr": "__ADDR__", "limit": 50})),
+]
+
+
+def get_reroute(tool: str, action: str, args: dict) -> Optional[Tuple[str, dict]]:
+    """
+    Check if this tool call should be silently rerouted.
+    
+    Returns (corrected_tool, corrected_args) or None.
+    """
+    args = args or {}
+    
+    # Exact matches
+    if (tool, action) in _REROUTE_MAP:
+        new_tool, new_action = _REROUTE_MAP[(tool, action)]
+        new_args = dict(args)
+        new_args["action"] = new_action
+        return (new_tool, new_args)
+    
+    # Heuristic reroutes
+    for check_fn, (new_tool, new_action, template_args) in _HEURISTIC_REROUTES:
+        if check_fn(tool, action, args):
+            new_args = dict(args)
+            new_args["action"] = new_action
+            for k, v in template_args.items():
+                if k not in new_args:
+                    val = str(v).replace("__ADDR__", str(args.get("addr", "")))
+                    new_args[k] = val
+            return (new_tool, new_args)
+    
+    return None
+
+
+# ============================================================================
+# Blocking Stuck Detection
+# ============================================================================
+
+_STUCK_THRESHOLDS = {
+    "decompile_repeat": 4,   # Same function 4+ times
+    "search_repeat": 5,       # Same query 5+ times
+    "tool_loop": 3,           # Same tools alternating 3+ times
+}
+
+
+def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Optional[dict]:
+    """
+    Check if the LLM is stuck and should be forcefully redirected.
+    
+    Returns a blocking intervention dict, or None.
+    """
+    key = _auto_nudge._session_key(idb)
+    dc_cache = _auto_nudge._decompile_cache.get(key, [])
+    search_cache = _auto_nudge._search_cache.get(key, [])
+    call_history = _auto_nudge._call_history.get(key, {})
+    
+    # Pattern 1: Same function decompiled repeatedly
+    addr = args.get("addr", "")
+    if action in ("decompile", "semantic_decompile", "disasm") and addr:
+        count = dc_cache.count(addr)
+        if count >= _STUCK_THRESHOLDS["decompile_repeat"]:
+            # Find what they should look at instead
+            callers_key = f"code:callers"
+            callees_key = f"code:callees"
+            callee_count = call_history.get(callees_key, 0)
+            caller_count = call_history.get(callers_key, 0)
+            
+            suggestions = []
+            if caller_count == 0:
+                suggestions.append(f"code.callers(addr='{addr}') — find what calls this function")
+            if callee_count == 0:
+                suggestions.append(f"code.callees(addr='{addr}') — find what this function calls")
+            suggestions.append(f"bridgerag.search from '{addr}' — find structurally related functions")
+            suggestions.append(f"ctree.get(addr='{addr}') — examine the abstract syntax tree")
+            
+            return {
+                "STUCK": True,
+                "blocking": True,
+                "reason": f"You have decompiled {addr} {count} times. Stop repeating.",
+                "redirect": suggestions,
+                "force_suggestion": f"The next call should be: {suggestions[0]}",
+            }
+    
+    # Pattern 2: Same search repeated
+    query = args.get("query") or args.get("pattern", "")
+    if action in ("find", "search", "text", "string", "bytes", "name") and query:
+        count = search_cache.count(str(query))
+        if count >= _STUCK_THRESHOLDS["search_repeat"]:
+            return {
+                "STUCK": True,
+                "blocking": True,
+                "reason": f"You have searched for '{query}' {count} times. Same results every time.",
+                "redirect": [
+                    f"Try broader search: search(action='find', pattern='{query[:3]}*')",
+                    "Try a different approach: data.functions to list all functions",
+                    "Look at the imports for clues: data.imports",
+                ],
+            }
+    
+    # Pattern 3: Looping between two tools
+    if hasattr(_auto_nudge, '_recent_tools'):
+        recent = list(_auto_nudge._recent_tools.get(key, []))[-8:]
+        recent.append((tool, action))
+        _auto_nudge._recent_tools.setdefault(key, [])
+        _auto_nudge._recent_tools[key] = recent[-10:]
+        
+        pairs = [(recent[i], recent[i + 1]) for i in range(len(recent) - 1)]
+        for pair in set(pairs):
+            if pairs.count(pair) >= _STUCK_THRESHOLDS["tool_loop"]:
+                return {
+                    "STUCK": True,
+                    "blocking": True,
+                    "reason": f"Looping between {pair[0][0]}.{pair[0][1]} <-> {pair[1][0]}.{pair[1][1]}",
+                    "redirect": [
+                        "Take a step back. Check session.dashboard() for progress.",
+                        "Try pivoting: search for a different pattern, or look at a different part of the binary.",
+                        "Use bridgerag.search to find related functions from a different starting point.",
+                    ],
+                }
+    else:
+        _auto_nudge._recent_tools = {key: [(tool, action)]}
+    
+    return None
