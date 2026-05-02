@@ -2091,6 +2091,100 @@ class IDAMCPServer:
                     compacted["_nudge"] = nudge
             except Exception:
                 pass
+            
+            # ---- Address Patching ----
+            try:
+                if tool_name == "code" and opts.get("action") in ("decompile", "semantic_decompile", "disasm"):
+                    from .response_enrichment import patch_addresses
+                    pseudo_key = "pseudocode" if "pseudocode" in compacted else "disassembly"
+                    if pseudo_key in compacted:
+                        compacted[pseudo_key] = patch_addresses(compacted[pseudo_key])
+            except Exception:
+                pass
+            
+            # ---- Auto-Digest ----
+            try:
+                if tool_name == "code" and opts.get("action") in ("decompile", "semantic_decompile"):
+                    from .response_enrichment import digest_decompiled
+                    pseudo_key = "pseudocode" if "pseudocode" in compacted else "output"
+                    if pseudo_key in compacted and isinstance(compacted[pseudo_key], str):
+                        addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
+                        digest = digest_decompiled(compacted[pseudo_key], func_addr=addr)
+                        if digest and any(digest.values()):
+                            compacted["_digest"] = digest
+            except Exception:
+                pass
+            
+            # ---- Session Resume ----
+            try:
+                if hasattr(self, 'session_mgr') and self.current_session:
+                    from .response_enrichment import build_session_resume
+                    sid = self.current_session.session_id
+                    # Only inject on first few calls
+                    if call_args and isinstance(call_args, dict):
+                        call_count = call_args.get("_call_seq", 0)
+                        if not isinstance(call_count, int) or call_count <= 2:
+                            resume = build_session_resume(self.session_mgr, sid)
+                            if resume:
+                                compacted["_session_resume"] = resume
+            except Exception:
+                pass
+            
+            # ---- Ghost Chain Inlining ----
+            try:
+                addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
+                if tool_name == "code" and addr and opts.get("action") in ("decompile", "semantic_decompile"):
+                    from .response_enrichment import GHOST_CHAINS
+                    ghost_results = {}
+                    ghost_key = (tool_name, str(opts.get("action", "")))
+                    for ghost_tool, ghost_args_template in GHOST_CHAINS.get(ghost_key, []):
+                        ghost_args = dict(ghost_args_template)
+                        for k, v in ghost_args.items():
+                            if isinstance(v, str):
+                                v = v.replace("__ADDR__", str(addr))
+                                ghost_args[k] = v
+                        try:
+                            ghost_res = self._execute_tool(ghost_tool, ghost_args)
+                            if isinstance(ghost_res, dict) and ghost_res.get("ok"):
+                                key_name = ghost_args.get("action", ghost_tool)
+                                # Simplify for inlining
+                                if "callers" in key_name:
+                                    items = ghost_res.get("callers", ghost_res.get("matches", ghost_res.get("results", [])))
+                                    ghost_results["callers"] = items[:5] if isinstance(items, list) else str(items)[:200]
+                                elif "callees" in key_name:
+                                    items = ghost_res.get("callees", ghost_res.get("matches", ghost_res.get("results", [])))
+                                    ghost_results["callees"] = items[:5] if isinstance(items, list) else str(items)[:200]
+                                elif "strings" in key_name:
+                                    items = ghost_res.get("strings", ghost_res.get("matches", ghost_res.get("results", [])))
+                                    ghost_results["strings"] = items[:5] if isinstance(items, list) else str(items)[:200]
+                                elif "calls" in key_name:
+                                    items = ghost_res.get("calls", ghost_res.get("results", []))
+                                    ghost_results["api_calls"] = items[:5] if isinstance(items, list) else str(items)[:200]
+                                else:
+                                    ghost_results[key_name] = str(ghost_res)[:200]
+                        except Exception:
+                            pass
+                    if ghost_results:
+                        compacted["_inline"] = ghost_results
+            except Exception:
+                pass
+            
+            # ---- Auto-Blackboard ----
+            try:
+                from .response_enrichment import auto_blackboard_write
+                addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
+                bb_entries = auto_blackboard_write(tool_name, str(opts.get("action", "")), compacted, addr)
+                if bb_entries:
+                    # Write to blackboard via session manager
+                    if hasattr(self, 'session_mgr') and self.current_session:
+                        sid = self.current_session.session_id
+                        for entry in bb_entries:
+                            try:
+                                self.session_mgr.log_activity(sid, tool_name, "auto_blackboard", json.dumps(entry)[:200])
+                            except Exception:
+                                pass
+            except Exception:
+                pass
         return compacted
 
     def _serialize_payload(self, payload: Any, opts: dict) -> str:
@@ -4878,6 +4972,32 @@ class IDAMCPServer:
         if not isinstance(args, dict):
             return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
         args = self._normalize_tool_call_args(tool_name, args)
+        
+        # ---- Silent Tool Rerouting ----
+        action = args.get("action", "")
+        try:
+            from .auto_nudge import get_reroute
+            reroute = get_reroute(tool_name, str(action) if action else "", args)
+            if reroute:
+                new_tool, new_args = reroute
+                new_args["_rerouted_from"] = f"{tool_name}.{action}"
+                tool_name = new_tool
+                args = new_args
+                action = new_args.get("action", "")
+        except Exception:
+            pass
+        
+        # ---- Blocking Stuck Detection ----
+        action = args.get("action", "")
+        try:
+            from .auto_nudge import check_stuck_blocking
+            idb_key = (self.current_session.idb_path if self.current_session else "")
+            stuck = check_stuck_blocking(idb_key, tool_name, str(action) if action else "", args)
+            if stuck:
+                return stuck
+        except Exception:
+            pass
+        
         action = args.get("action")
         if isinstance(action, str):
             action = action.strip()
