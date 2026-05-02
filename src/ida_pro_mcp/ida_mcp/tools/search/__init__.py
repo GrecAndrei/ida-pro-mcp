@@ -33,6 +33,7 @@ from .refs import search_data_ref, search_code_ref, search_regex, search_func_by
 from .unified import search_find, search_callers, search_callees, search_api
 from .advanced import search_vulnerable, search_constants, search_decompiled, search_structured
 from .meta import search_type, search_export, search_summary
+from ..query_lang import run_query_lang
 
 # ============================================================================
 # Router
@@ -45,8 +46,8 @@ def search(
         "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
         "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
-        "type", "export", "summary",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary"],
+        "type", "export", "summary", "query_lang",
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -199,6 +200,9 @@ def search(
             response = search_export(actual_pattern, case_sensitive, offset, limit, include_items)
         elif action == "summary":
             response = search_summary(actual_pattern, case_sensitive, range_start, range_end)
+        elif action == "query_lang":
+            # query_lang uses the 'query' parameter directly, not pattern
+            response = run_query_lang(query or actual_pattern or "")
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 

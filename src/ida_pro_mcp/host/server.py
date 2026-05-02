@@ -31,6 +31,7 @@ warnings.filterwarnings("ignore")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+from .resources import list_resources, ResourceResolver
 from .config import (
     CACHE_DIR,
     BRIDGE_LOG,
@@ -1549,6 +1550,13 @@ class IDAMCPServer:
                 )
             ),
         )
+        # Universal output filtering (applies to ALL tools)
+        opts["output_grep"] = self._pop_first(exec_args, ["output_grep"], None)
+        opts["output_head"] = self._pop_first(exec_args, ["output_head"], None)
+        opts["output_tail"] = self._pop_first(exec_args, ["output_tail"], None)
+        opts["output_skip"] = self._pop_first(exec_args, ["output_skip"], None)
+        opts["output_path"] = self._pop_first(exec_args, ["output_path"], None)
+        opts["output_pluck"] = self._pop_first(exec_args, ["output_pluck"], None)
         return exec_args, opts
 
     def _default_response_options(self) -> dict:
@@ -1567,6 +1575,12 @@ class IDAMCPServer:
             "table_mode": self.default_table_mode,
             "batch_compact": self.default_batch_compact,
             "error_details": self.default_error_detail_level,
+            "output_grep": None,
+            "output_head": None,
+            "output_tail": None,
+            "output_skip": None,
+            "output_path": None,
+            "output_pluck": None,
         }
 
     def _compact_error_details(self, details: Any, opts: dict) -> Any:
@@ -1887,6 +1901,81 @@ class IDAMCPServer:
         self._pointer_note_pending_signal = 0.0
         return True
 
+    def _apply_output_filters(self, payload: Any, opts: dict) -> Any:
+        """Apply universal output filtering (grep, head, tail, skip, path, pluck)."""
+        import re as _re
+
+        # Path extraction: extract a nested field from a dict
+        path = opts.get("output_path")
+        if path and isinstance(payload, dict):
+            current = payload
+            for part in str(path).split("."):
+                if isinstance(current, dict):
+                    current = current.get(part)
+                elif isinstance(current, list) and part.isdigit():
+                    idx = int(part)
+                    current = current[idx] if 0 <= idx < len(current) else None
+                else:
+                    current = None
+                if current is None:
+                    break
+            payload = current if current is not None else {}
+
+        # If payload is a list, apply head/tail/skip/grep/pluck
+        if isinstance(payload, list):
+            skip = opts.get("output_skip")
+            if skip is not None:
+                try:
+                    payload = payload[int(skip):]
+                except Exception:
+                    pass
+
+            head = opts.get("output_head")
+            if head is not None:
+                try:
+                    payload = payload[:int(head)]
+                except Exception:
+                    pass
+
+            tail = opts.get("output_tail")
+            if tail is not None:
+                try:
+                    payload = payload[-int(tail):]
+                except Exception:
+                    pass
+
+            grep = opts.get("output_grep")
+            if grep:
+                try:
+                    pattern = _re.compile(str(grep), _re.IGNORECASE)
+                    payload = [x for x in payload if pattern.search(str(x))]
+                except Exception:
+                    pass
+
+            pluck = opts.get("output_pluck")
+            if pluck:
+                try:
+                    key = str(pluck)
+                    payload = [
+                        x.get(key) if isinstance(x, dict) else x
+                        for x in payload
+                    ]
+                except Exception:
+                    pass
+
+        # If payload is a dict with a list inside, try to apply grep to common list fields
+        elif isinstance(payload, dict) and opts.get("output_grep"):
+            pattern_str = opts.get("output_grep")
+            try:
+                pattern = _re.compile(str(pattern_str), _re.IGNORECASE)
+                for k, v in list(payload.items()):
+                    if isinstance(v, list):
+                        payload[k] = [x for x in v if pattern.search(str(x))]
+            except Exception:
+                pass
+
+        return payload
+
     def _prepare_response_payload(
         self,
         payload: Any,
@@ -1898,6 +1987,8 @@ class IDAMCPServer:
         include_pointer_note = self._should_include_pointer_note(
             tool_name, call_args, payload
         )
+        # Apply universal output filters first
+        payload = self._apply_output_filters(payload, opts)
         if opts.get("mode") == "full":
             if isinstance(payload, dict):
                 payload = dict(payload)
@@ -5905,7 +5996,10 @@ class IDAMCPServer:
                 "id": rid,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {},
+                    },
                     "serverInfo": {"name": "ida-pro-mcp", "version": "3.0.0"},
                 },
             }
@@ -6017,6 +6111,37 @@ class IDAMCPServer:
                         }
                     ],
                     "isError": is_error,
+                },
+            }
+        if m == "resources/list":
+            return {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "result": {
+                    "resources": list_resources(),
+                },
+            }
+        if m == "resources/read":
+            uri = p.get("uri", "")
+            resolver = ResourceResolver(lambda name, kwargs: self._execute_tool(name, kwargs))
+            resource = resolver.read(uri)
+            if resource is None:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "error": {"code": -32602, "message": f"Resource not found: {uri}"},
+                }
+            return {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "result": {
+                    "contents": [
+                        {
+                            "uri": uri,
+                            "mimeType": resource.get("mimeType", "application/json"),
+                            "text": resource.get("text", ""),
+                        }
+                    ],
                 },
             }
         return {
