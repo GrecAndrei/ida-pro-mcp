@@ -248,8 +248,110 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
     return result
 
 
+def _sql_filterable_keys() -> set:
+    """Return set of constraint keys that can be filtered at the SQL level."""
+    from ..hybrid_search import SQL_FILTERABLE_COLUMNS, JUNCTION_TABLES, LEGACY_RANGE_PREFIXES
+    keys = set(SQL_FILTERABLE_COLUMNS.keys())
+    keys.update(JUNCTION_TABLES.keys())
+    keys.update(LEGACY_RANGE_PREFIXES.keys())
+    keys.update({"has_crypto_constants", "constants_value"})
+    return keys
+
+
+def _split_constraints(constraints: dict) -> tuple[dict, dict]:
+    """Split constraints into SQL-filterable and schema-only portions.
+    
+    SQL-filterable constraints go to the schemaboot DB pre-filter.
+    Schema-only constraints (behavior_tags, dangerous_apis, etc.)
+    require per-function schema induction.
+    """
+    sql_keys = _sql_filterable_keys()
+    sql_filterable = {}
+    schema_only = {}
+    for k, v in constraints.items():
+        if k in sql_keys:
+            sql_filterable[k] = v
+        else:
+            schema_only[k] = v
+    return sql_filterable, schema_only
+
+
+def _schemaboot_db_path() -> str | None:
+    """Get the schemaboot DB path for the current IDB."""
+    try:
+        import ida_loader
+        return ida_loader.get_path(ida_loader.PATH_TYPE_IDB) + ".schemaboot.db"
+    except Exception:
+        pass
+    try:
+        return idc.get_idb_path() + ".schemaboot.db"
+    except Exception:
+        pass
+    return None
+
+
+def _sql_pre_filter_functions(
+    sql_constraints: dict,
+) -> tuple[list[int] | None, dict]:
+    """Use HybridSearch to pre-filter function candidates via SQL.
+    
+    Returns:
+        (candidate_eas, info_dict)
+        candidate_eas is None if DB unavailable or no filterable constraints
+    """
+    if not sql_constraints:
+        return None, {"note": "no_sql_constraints"}
+
+    db_path = _schemaboot_db_path()
+    if not db_path:
+        return None, {"note": "no_db_path"}
+
+    import os
+    if not os.path.exists(db_path):
+        return None, {"note": "db_not_found", "db_path": db_path}
+
+    try:
+        from ..hybrid_search import HybridSearchEngine
+        engine = HybridSearchEngine(db_path)
+        eas, elapsed_ms, meta = engine.pre_filter(sql_constraints)
+        if eas is None:
+            return None, {"note": "sql_error", "detail": meta.get("error", "")}
+        return eas, {
+            "note": "sql_pre_filter",
+            "total_matches": meta.get("total", 0),
+            "sql_ms": elapsed_ms,
+        }
+    except Exception as e:
+        return None, {"note": "sql_exception", "error": str(e)}
+
+
+def _verify_sql_coverage(
+    constraints: dict,
+    sql_candidates: list[int] | None,
+    sql_info: dict,
+) -> bool:
+    """Check if SQL candidates cover all constraints.
+    
+    If SQL returned None (DB not available), we return False so caller
+    falls through to full iteration.
+    If SQL returned empty list, we return True (no results to process).
+    """
+    if sql_candidates is None:
+        return False
+    return True
+
+
 def search_structured(constraints, pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=0):
-    """Schema-based structured semantic retrieval with caching."""
+    """Schema-based structured semantic retrieval with SQL pre-filtering.
+    
+    Two-phase hybrid approach:
+      Phase 0: SQL pre-filter via schemaboot DB (if filterable constraints exist)
+      Phase 1: Schema induction + behavior matching on the reduced candidate pool
+    
+    Falls back to full iteration if schemaboot DB is unavailable.
+    Supports both legacy constraints (min_size, apis, has_loops) and
+    operator format ({"size": (">=", 100), "name": ("~", "pattern")}).
+    """
     if not isinstance(constraints, dict):
         return make_error(MCPError.INVALID_ARGS, "constraints must be a dict")
     if not constraints and not pattern:
@@ -365,15 +467,41 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
     timed_out = False
     matches_seen = 0
 
-    for func_ea in idautils.Functions():
+    # ---- Phase 0: SQL pre-filter (if applicable) ----
+    sql_constraints, schema_constraints = _split_constraints(constraints)
+    sql_candidates, sql_info = _sql_pre_filter_functions(sql_constraints)
+    sql_used = sql_candidates is not None
+    pre_filter_note = ""
+
+    if sql_used:
+        if sql_candidates:
+            pre_filter_note = (
+                f"SQL pre-filter narrowed {sql_info.get('total_matches', 0)} candidates "
+                f"in {sql_info.get('sql_ms', 0):.1f}ms"
+            )
+        else:
+            pre_filter_note = "SQL pre-filter: no candidates matched"
+
+    # Build function iterator: SQL candidates or full scan
+    if sql_used and sql_candidates is not None:
+        func_iter = sql_candidates
+    else:
+        func_iter = idautils.Functions()
+
+    # ---- Phase 1: Schema induction + matching on candidate pool ----
+    for func_ea in func_iter:
         try:
             timer.check()
         except TimeoutError:
             timed_out = True
             break
+
         schema = induce_schema(func_ea)
-        if not schema_matches(schema, constraints):
+
+        # Apply schema-only constraints (behavior_tags, etc.)
+        if not schema_matches(schema, schema_constraints if schema_constraints else constraints):
             continue
+
         matches_seen += 1
         if matches_seen <= offset:
             continue
@@ -401,6 +529,14 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         "schema_hits": schema_hits,
         "note": "Structured semantic retrieval pre-filters by induced function schema.",
     }
+    if sql_used:
+        out["sql_pre_filter"] = True
+        out["sql_info"] = {
+            "candidates": len(sql_candidates) if sql_candidates else 0,
+            "total_matches": sql_info.get("total_matches", 0),
+            "sql_ms": round(sql_info.get("sql_ms", 0), 2),
+        }
+        out["note"] += f" | {pre_filter_note}"
     if timed_out:
         out["timed_out"] = True
         out["hint"] = "Search timed out. Increase timeout_ms or tighten constraints."

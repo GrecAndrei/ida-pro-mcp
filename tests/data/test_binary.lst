@@ -1,0 +1,165 @@
+; IDA Pro Listing
+; File: /home/REDACTED/Downloads/ida-pro-mcp/tests/data/test_binary.exe
+; Range: 0x140000000 - 0x140001000
+
+0x140000000: HINSTANCE__ <905A4Dh>; PE magic number
+0x140000004: dw 3; Pages in file
+0x140000006: dw 0; Relocations
+0x140000008: dw 4; Size of header in paragraphs
+0x14000000a: dw 0; Minimum extra paragraphs needed
+0x14000000c: dw 0FFFFh; Maximum extra paragraphs needed
+0x14000000e: dw 0; Initial (relative) SS value
+0x140000010: dw 0B8h; Initial SP value
+0x140000012: dw 0; Checksum
+0x140000014: dw 0; Initial IP value
+0x140000016: dw 0; Initial (relative) CS value
+0x140000018: dw 40h; File address of relocation table
+0x14000001a: dw 0; Overlay number
+0x14000001c: dw 4 dup(0); Reserved words
+0x140000024: dw 0; OEM identifier (for e_oeminfo)
+0x140000026: dw 0; OEM information; e_oemid specific
+0x140000028: dw 0Ah dup(0); Reserved words
+0x14000003c: dd offset dword_1400000F8 - offset __ImageBase; File address of new exe header
+0x140000040: db 0Eh, 1Fh, 0BAh, 0Eh, 0, 0B4h, 9, 0CDh, 21h, 0B8h, 1; DOS Stub code
+0x1400000f8: dd 4550h; Signature
+0x1400000fc: dw 8664h; Machine
+0x1400000fe: dw 8; Number of sections
+0x140000100: dd 7C74B70Ch; Time stamp: Sat Mar 01 22:37:00 2036
+0x140000104: dd 0; Pointer to symbol table
+0x140000108: dd 0; Number of symbols
+0x14000010c: dw 0F0h; Size of optional header
+0x14000010e: dw 22h; Characteristics
+0x140000110: dw 20Bh; Magic number
+0x140000112: db 0Eh; Major linker version
+0x140000113: db 26h; Minor linker version
+0x140000114: dd 28000h; Size of code
+0x140000118: dd 31000h; Size of initialized data
+0x14000011c: dd 0; Size of uninitialized data
+0x140000120: dd rva wWinMainCRTStartup; Address of entry point
+0x140000124: dd rva byte_140001000; Base of code
+0x140000128: dq offset __ImageBase; Image base
+0x140000130: dd 1000h; Section alignment
+0x140000134: dd 1000h; File alignment
+0x140000138: dw 0Ah; Major operating system version
+0x14000013a: dw 0; Minor operating system version
+0x14000013c: dw 0Ah; Major image version
+0x14000013e: dw 0; Minor image version
+0x140000140: dw 0Ah; Major subsystem version
+0x140000142: dw 0; Minor subsystem version
+0x140000144: dd 0; Reserved 1
+0x140000148: dd 5A000h; Size of image
+0x14000014c: dd 1000h; Size of headers
+0x140000150: dd 661F6h; Checksum
+0x140000154: dw 2; Subsystem
+0x140000156: dw 0C160h; Dll characteristics
+0x140000158: dq 80000h; Size of stack reserve
+0x140000160: dq 11000h; Size of stack commit
+0x140000168: dq 100000h; Size of heap reserve
+0x140000170: dq 1000h; Size of heap commit
+0x140000178: dd 0; Loader flag
+0x14000017c: dd 10h; Number of data directories
+0x140000180: dd 2 dup(0); Export Directory
+0x140000188: dd rva __IMPORT_DESCRIPTOR_GDI32; Virtual address
+0x14000018c: dd 3FCh; Size
+0x140000190: dd 3A000h; Virtual address
+0x140000194: dd 1E1D0h; Size
+0x140000198: dd rva ExceptionDir; Virtual address
+0x14000019c: dd 120Ch; Size
+0x1400001a0: dd 2 dup(0); Security Directory
+0x1400001a8: dd 59000h; Virtual address
+0x1400001ac: dd 2F8h; Size
+0x1400001b0: dd rva dword_14002E2F0; Virtual address
+0x1400001b4: dd 70h; Size
+0x1400001b8: dd 2 dup(0); Architecture Specific Data
+0x1400001c0: dd 2 dup(0); RVA of GP
+0x1400001c8: dd 2 dup(0); TLS Directory
+0x1400001d0: dd rva _load_config_used; Virtual address
+0x1400001d4: dd 148h; Size
+0x1400001d8: dd 2 dup(0); Bound Import Directory in headers
+0x1400001e0: dd rva __imp_ImageList_Create; Virtual address
+0x1400001e4: dd 0B68h; Size
+0x1400001e8: dd rva __DELAY_IMPORT_DESCRIPTOR_advapi32_dll; Virtual address
+0x1400001ec: dd 0E0h; Size
+0x1400001f0: dd 2 dup(0); COM Runtime descriptor
+0x1400001f8: dd 2 dup(0); Image data directory 15
+0x140000200: db '.text',0,0,0; Name
+0x140000208: dd 266E2h; Virtual size
+0x14000020c: dd rva byte_140001000; Virtual address
+0x140000210: dd 27000h; Size of raw data
+0x140000214: dd 1000h; Pointer to raw data
+0x140000218: dd 0; Pointer to relocations
+0x14000021c: dd 0; Pointer to line numbers
+0x140000220: dw 0; Number of relocations
+0x140000222: dw 0; Number of linenumbers
+0x140000224: dd 60000020h; Characteristics
+0x140000228: db 'fothk',0,0,0; Name
+0x140000230: dd 1000h; Virtual size
+0x140000234: dd rva byte_140028000; Virtual address
+0x140000238: dd 1000h; Size of raw data
+0x14000023c: dd 28000h; Pointer to raw data
+0x140000240: dd 0; Pointer to relocations
+0x140000244: dd 0; Pointer to line numbers
+0x140000248: dw 0; Number of relocations
+0x14000024a: dw 0; Number of linenumbers
+0x14000024c: dd 60000020h; Characteristics
+0x140000250: db '.rdata',0,0; Name
+0x140000258: dd 0A5D8h; Virtual size
+0x14000025c: dd rva ExceptionInfo; Virtual address
+0x140000260: dd 0B000h; Size of raw data
+0x140000264: dd 29000h; Pointer to raw data
+0x140000268: dd 0; Pointer to relocations
+0x14000026c: dd 0; Pointer to line numbers
+0x140000270: dw 0; Number of relocations
+0x140000272: dw 0; Number of linenumbers
+0x140000274: dd 40000040h; Characteristics
+0x140000278: db '.data',0,0,0; Name
+0x140000280: dd 2740h; Virtual size
+0x140000284: dd rva ?g_FuncAddress@WARBIRD@@3PAPEAXA; Virtual address
+0x140000288: dd 1000h; Size of raw data
+0x14000028c: dd 34000h; Pointer to raw data
+0x140000290: dd 0; Pointer to relocations
+0x140000294: dd 0; Pointer to line numbers
+0x140000298: dw 0; Number of relocations
+0x14000029a: dw 0; Number of linenumbers
+0x14000029c: dd 0C0000040h; Characteristics
+0x1400002a0: db '.pdata',0,0; Name
+0x1400002a8: dd 120Ch; Virtual size
+0x1400002ac: dd rva ExceptionDir; Virtual address
+0x1400002b0: dd 2000h; Size of raw data
+0x1400002b4: dd 35000h; Pointer to raw data
+0x1400002b8: dd 0; Pointer to relocations
+0x1400002bc: dd 0; Pointer to line numbers
+0x1400002c0: dw 0; Number of relocations
+0x1400002c2: dw 0; Number of linenumbers
+0x1400002c4: dd 40000040h; Characteristics
+0x1400002c8: db '.didat',0,0; Name
+0x1400002d0: dd 0F8h; Virtual size
+0x1400002d4: dd rva __imp_DecryptFileW; Virtual address
+0x1400002d8: dd 1000h; Size of raw data
+0x1400002dc: dd 37000h; Pointer to raw data
+0x1400002e0: dd 0; Pointer to relocations
+0x1400002e4: dd 0; Pointer to line numbers
+0x1400002e8: dw 0; Number of relocations
+0x1400002ea: dw 0; Number of linenumbers
+0x1400002ec: dd 0C0000040h; Characteristics
+0x1400002f0: db '.rsrc',0,0,0; Name
+0x1400002f8: dd 1E1D0h; Virtual size
+0x1400002fc: dd 3A000h; Virtual address
+0x140000300: dd 1F000h; Size of raw data
+0x140000304: dd 38000h; Pointer to raw data
+0x140000308: dd 0; Pointer to relocations
+0x14000030c: dd 0; Pointer to line numbers
+0x140000310: dw 0; Number of relocations
+0x140000312: dw 0; Number of linenumbers
+0x140000314: dd 40000040h; Characteristics
+0x140000318: db '.reloc',0,0; Name
+0x140000320: dd 350h; Virtual size
+0x140000324: dd 59000h; Virtual address
+0x140000328: dd 1000h; Size of raw data
+0x14000032c: dd 57000h; Pointer to raw data
+0x140000330: dd 0; Pointer to relocations
+0x140000334: dd 0; Pointer to line numbers
+0x140000338: dw 0; Number of relocations
+0x14000033a: dw 0; Number of linenumbers
+0x14000033c: dd 42000040h; Characteristics
+0x140000340: align 1000h

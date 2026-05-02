@@ -4,6 +4,7 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import os
 import ida_loader
 
 

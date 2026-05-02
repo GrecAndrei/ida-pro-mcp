@@ -837,8 +837,20 @@ class SessionManager:
         description: str,
         steps: list,
         tags: Optional[list] = None,
+        memrl_reward: Optional[float] = None,
     ) -> dict:
-        """Crystallize a successful workflow into a reusable L3 Task Skill."""
+        """Crystallize a successful workflow into a reusable L3 Task Skill.
+
+        If memrl_reward is provided, rewards all MemRL memories whose
+        intent_key matches the skill's context (source_tool = 'session',
+        source_action = 'crystallize_skill').
+
+        Parameters
+        ----------
+        memrl_reward : float, optional
+            A reward value to propagate to contributing MemRL memories.
+            +1.0 for highly successful workflows, -0.5 for failures.
+        """
         with self._lock:
             session = self.sessions.get(sid)
             if not session:
@@ -860,7 +872,93 @@ class SessionManager:
             self._save_skills(sid, data)
             session.update_access()
             self._save_metadata(session)
-            return {"ok": True, "skill_id": skill_id, "skill": data["skills"][skill_id]}
+
+            result = {"ok": True, "skill_id": skill_id, "skill": data["skills"][skill_id]}
+
+            # If memrl_reward provided, reward contributing memories
+            if memrl_reward is not None:
+                try:
+                    memrl_result = self._reward_crystallization_memories(
+                        sid, name, description, steps, memrl_reward
+                    )
+                    if memrl_result:
+                        result["memrl_reward"] = memrl_result
+                except Exception as e:
+                    log_rpc(f"MemRL reward propagation failed: {e}")
+
+            return result
+
+    def _reward_crystallization_memories(
+        self,
+        sid: str,
+        name: str,
+        description: str,
+        steps: list,
+        reward: float,
+    ) -> Optional[dict]:
+        """Reward MemRL memories that contributed to a crystallized skill.
+
+        Searches the MemRL database for suggestions matching tool actions
+        described in the skill's steps and applies the reward to them.
+
+        Returns a summary dict with counts of rewarded memories.
+        """
+        try:
+            from ida_pro_mcp.ida_mcp.tools.memrl import MemRLBank
+        except ImportError:
+            return None
+
+        bank = MemRLBank()
+        intent_keys = set()
+
+        # Derive intent keys from skill context
+        intent_keys.add(f"session:crystallize_skill:{sid}")
+        for tag in (tags or []):
+            intent_keys.add(f"session:skill:{tag}")
+
+        # Extract tool action patterns from steps for matching
+        step_text = " ".join(str(s) for s in steps).lower()
+        tool_patterns = {
+            "modify:rename": 0,
+            "modify:comment": 0,
+            "modify:set_type": 0,
+            "modify:patch_asm": 0,
+            "annotation:validate": 0,
+            "data:functions": 0,
+            "code:decompile": 0,
+        }
+        for pattern in tool_patterns:
+            if pattern.replace(":", "_") in step_text or pattern.replace(":", " ") in step_text:
+                tool_patterns[pattern] = 1
+
+        tool_addr_patterns = [
+            f"modify:rename:{sid}",
+            f"modify:comment:{sid}",
+            f"modify:set_type:{sid}",
+            f"annotation:validate:{sid}",
+        ]
+        for ikey in tool_addr_patterns:
+            intent_keys.add(ikey)
+
+        # Apply reward to all matched intent_keys
+        rewarded_count = 0
+        for intent_key in intent_keys:
+            try:
+                suggestions = bank.list_suggestions(intent_key=intent_key, limit=100)
+                for sug in suggestions.get("suggestions", []):
+                    sug_id = sug.get("suggestion_id")
+                    if sug_id:
+                        bank.process_feedback(sug_id, reward)
+                        rewarded_count += 1
+            except Exception:
+                pass
+
+        return {
+            "reward": reward,
+            "intent_keys_matched": len(intent_keys),
+            "memories_rewarded": rewarded_count,
+            "skill_name": name,
+        }
 
     def rate_skill(self, sid: str, skill_id: str, reward: float) -> dict:
         """Update Q-value for a skill using TD-style update (MemRL-inspired)."""
@@ -889,7 +987,7 @@ class SessionManager:
             self._save_skills(sid, data)
             session.update_access()
             self._save_metadata(session)
-            return {
+            result = {
                 "ok": True,
                 "skill_id": skill_id,
                 "q_value": skill["q_value"],
@@ -897,6 +995,8 @@ class SessionManager:
                 "success_count": skill["success_count"],
                 "failure_count": skill["failure_count"],
             }
+            # Promotion hook: L3 -> L2 (requires caller to pass global_facts)
+            return result
 
     def list_skills(self, sid: str, min_q: float = 0.0) -> dict:
         """List all skills for a session, optionally filtered by minimum Q-value."""
@@ -960,7 +1060,12 @@ class SessionManager:
             # Keep last 100 entries
             data["activity_log"] = data["activity_log"][-100:]
             self._save_skills(sid, data)
-            return {"ok": True}
+            # Promotion hook: L4 -> L3
+            promotion = self._maybe_promote_archive_to_skill(sid, tool, action)
+            out = {"ok": True}
+            if promotion:
+                out["promotion"] = promotion
+            return out
 
     def get_activity_log(self, sid: str, limit: int = 20) -> dict:
         """Get recent activity log for a session."""
@@ -971,6 +1076,77 @@ class SessionManager:
             data = self._load_skills(sid)
             log = data.get("activity_log", [])
             return {"ok": True, "log": log[-limit:], "total": len(log)}
+
+    # ============================================================================
+    # VOERA: Promotion / Demotion Logic (L1-L4)
+    # ============================================================================
+
+    def _maybe_promote_archive_to_skill(self, sid: str, tool: str, action: str) -> Optional[dict]:
+        """
+        L4 -> L3 promotion: if a (tool, action) pair appears >3 times in the
+        activity log, auto-crystallize it as a skill.
+        """
+        data = self._load_skills(sid)
+        log = data.get("activity_log", [])
+        count = sum(1 for e in log if e.get("tool") == tool and e.get("action") == action)
+        if count < 3:
+            return None
+        skill_id = f"skill_{tool}_{action}"
+        if skill_id in data["skills"]:
+            return None
+        return self.crystallize_skill(
+            sid,
+            name=f"Auto: {tool} {action}",
+            description=f"Auto-crystallized from {count} activity log entries",
+            steps=[f"{tool}(action='{action}')"],
+            tags=["auto", tool, action],
+        )
+
+    def _maybe_promote_skill_to_fact(self, sid: str, skill_id: str, skill: dict, global_facts=None) -> Optional[str]:
+        """
+        L3 -> L2 promotion: if a skill's Q-value exceeds 0.8, promote it to a
+        global fact in the provided GlobalFactsDatabase.
+        """
+        if global_facts is None:
+            return None
+        if skill.get("q_value", 0.0) <= 0.8:
+            return None
+        key = f"skill_{sid}_{skill_id}"
+        return global_facts.add_fact(
+            category="task_skill",
+            key=key,
+            value=json.dumps({
+                "name": skill.get("name", ""),
+                "description": skill.get("description", ""),
+                "steps": skill.get("steps", []),
+                "tags": skill.get("tags", []),
+                "q_value": skill.get("q_value", 0.0),
+            }),
+            confidence=skill.get("q_value", 0.5),
+            source=f"session:{sid}",
+        )
+
+    def demote_stale_facts(self, global_facts, staleness_days: int = 30) -> dict:
+        """
+        L2 -> L4 demotion: move global facts unused for `staleness_days` into
+        the session archive (activity log) and delete from L2.
+        """
+        if global_facts is None:
+            return {"ok": False, "error": "global_facts not provided"}
+        stale = global_facts.get_stale_facts(staleness_days=staleness_days, limit=100)
+        demoted = 0
+        for fact in stale:
+            # Archive as activity note across all sessions
+            for sid in list(self.sessions.keys()):
+                self.log_activity(
+                    sid,
+                    tool="archive",
+                    action="demote",
+                    result=f"Demoted fact {fact['fact_id']} ({fact['category']}:{fact['key']}) from L2 to L4",
+                )
+            global_facts.delete_fact(fact["fact_id"])
+            demoted += 1
+        return {"ok": True, "demoted": demoted}
 
 
 class BookmarkManager:

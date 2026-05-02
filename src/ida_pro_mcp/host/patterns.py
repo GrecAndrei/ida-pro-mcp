@@ -5,6 +5,7 @@ No IDA dependencies — safe to import from both host and runtime.
 """
 import os
 import re
+import time
 import fnmatch
 import difflib
 from functools import lru_cache
@@ -239,3 +240,256 @@ def compile_smart_pattern(
 
 def smart_match(pattern, text, case_sensitive=False):
     return compile_smart_pattern(pattern, case_sensitive)(text)
+
+
+# ============================================================================
+# L2 — Global Facts Database (SQLite-backed domain knowledge)
+# ============================================================================
+
+import sqlite3  # noqa: E402
+import threading  # noqa: E402
+import hashlib  # noqa: E402
+from typing import Any, Dict, List, Optional  # noqa: E402
+
+
+class GlobalFactsDatabase:
+    """
+    L2 Global Facts: stable domain knowledge stored in SQLite.
+
+    Categories:
+        "compiler_signature", "common_api", "known_struct",
+        "calling_convention", "obfuscator_signature"
+
+    Integration:
+        - SchemaBoot auto-adds compiler signatures on ingest.
+        - L3 skills reference L2 facts by ID.
+        - L4 archive queries L2 for context.
+
+    No LLM dependencies. Standard library only.
+    """
+
+    _DEFAULT_FACTS = [
+        # Compiler signatures
+        ("compiler_signature", "msvc_rtl", "RTL initialization pattern detected", 0.85, "builtin"),
+        ("compiler_signature", "gcc_main", "GCC __libc_start_main pattern", 0.90, "builtin"),
+        ("compiler_signature", "clang_ctor", "LLVM global constructor pattern", 0.80, "builtin"),
+        # Common APIs
+        ("common_api", "VirtualAlloc", "Windows memory allocation", 0.95, "builtin"),
+        ("common_api", "malloc", "C standard heap allocation", 0.95, "builtin"),
+        ("common_api", "strcpy", "Unsafe string copy (potential sink)", 0.90, "builtin"),
+        ("common_api", "memcpy", "Memory copy (potential sink)", 0.90, "builtin"),
+        ("common_api", "CreateFileW", "Windows file creation", 0.95, "builtin"),
+        ("common_api", "RegOpenKeyEx", "Windows registry access", 0.95, "builtin"),
+        ("common_api", "socket", "BSD socket creation", 0.95, "builtin"),
+        ("common_api", "recv", "Network receive", 0.95, "builtin"),
+        ("common_api", "send", "Network transmit", 0.95, "builtin"),
+        ("common_api", "CryptEncrypt", "Windows crypto API", 0.95, "builtin"),
+        # Known structs
+        ("known_struct", "IMAGE_DOS_HEADER", "PE DOS header", 0.95, "builtin"),
+        ("known_struct", "IMAGE_NT_HEADERS", "PE NT headers", 0.95, "builtin"),
+        ("known_struct", "sockaddr_in", "IPv4 socket address", 0.95, "builtin"),
+        # Calling conventions
+        ("calling_convention", "x64_fastcall", "Windows x64 fastcall (RCX, RDX, R8, R9)", 0.95, "builtin"),
+        ("calling_convention", "amd64_systemv", "System V AMD64 ABI (RDI, RSI, RDX, RCX, R8, R9)", 0.95, "builtin"),
+        ("calling_convention", "x86_stdcall", "x86 stdcall (callee cleanup)", 0.95, "builtin"),
+        ("calling_convention", "x86_cdecl", "x86 cdecl (caller cleanup)", 0.95, "builtin"),
+        # Obfuscator signatures
+        ("obfuscator_signature", "flattened_cfg", "Control-flow flattening detected", 0.75, "builtin"),
+        ("obfuscator_signature", "opaque_predicate", "Opaque predicate detected", 0.70, "builtin"),
+        ("obfuscator_signature", "vm_entry", "Virtualization obfuscator entry", 0.65, "builtin"),
+    ]
+
+    def __init__(self, db_path: Optional[str] = None):
+        if db_path is None:
+            db_path = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "global_facts.db")
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._lock = threading.RLock()
+        self._conn: Optional[sqlite3.Connection] = None
+        self._init_db()
+
+    def _init_db(self) -> None:
+        """Initialize SQLite schema and populate with defaults on first run."""
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA cache_size=-64000")
+
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS global_facts (
+                fact_id TEXT PRIMARY KEY,
+                category TEXT NOT NULL,
+                fact_key TEXT NOT NULL,
+                fact_value TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                source TEXT DEFAULT '',
+                timestamp REAL NOT NULL,
+                access_count INTEGER DEFAULT 0,
+                last_accessed REAL DEFAULT 0.0
+            )
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_facts_category ON global_facts(category)
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_facts_key ON global_facts(fact_key)
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_facts_access ON global_facts(access_count)
+        """)
+        self._conn.commit()
+
+        # Populate defaults if table is empty
+        cursor = self._conn.execute("SELECT COUNT(*) FROM global_facts")
+        if cursor.fetchone()[0] == 0:
+            for category, key, value, confidence, source in self._DEFAULT_FACTS:
+                self.add_fact(category, key, value, confidence, source)
+
+    def add_fact(
+        self,
+        category: str,
+        key: str,
+        value: str,
+        confidence: float = 0.5,
+        source: str = "",
+    ) -> str:
+        """
+        Insert or replace a global fact.
+
+        Returns the deterministic fact_id (SHA256 prefix of category+key).
+        """
+        fact_id = f"fact_{hashlib.sha256((category + ':' + key).encode()).hexdigest()[:16]}"
+        now = time.time()
+        with self._lock:
+            self._conn.execute("""
+                INSERT OR REPLACE INTO global_facts
+                (fact_id, category, fact_key, fact_value, confidence, source, timestamp, access_count, last_accessed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT access_count FROM global_facts WHERE fact_id=?), 0), COALESCE((SELECT last_accessed FROM global_facts WHERE fact_id=?), 0.0))
+            """, (fact_id, category, key, value, confidence, source, now, fact_id, fact_id))
+            self._conn.commit()
+        return fact_id
+
+    def get_fact(self, category: str, key: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a single fact by category and key."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT fact_id, category, fact_key, fact_value, confidence, source, timestamp, access_count FROM global_facts WHERE category = ? AND fact_key = ?",
+                (category, key),
+            )
+            row = cursor.fetchone()
+            if row:
+                self._conn.execute(
+                    "UPDATE global_facts SET access_count = access_count + 1, last_accessed = ? WHERE fact_id = ?",
+                    (time.time(), row[0]),
+                )
+                self._conn.commit()
+                return {
+                    "fact_id": row[0],
+                    "category": row[1],
+                    "key": row[2],
+                    "value": row[3],
+                    "confidence": row[4],
+                    "source": row[5],
+                    "timestamp": row[6],
+                    "access_count": row[7] + 1,
+                }
+            return None
+
+    def query_facts(self, category: Optional[str] = None, key_pattern: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Query facts by category and/or key pattern (substring match).
+
+        Parameters
+        ----------
+        category : str, optional
+            Filter by exact category.
+        key_pattern : str, optional
+            Substring match against fact_key (case-insensitive).
+        limit : int
+            Max results.
+        """
+        conditions = []
+        params: List[Any] = []
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        if key_pattern:
+            conditions.append("fact_key LIKE ?")
+            params.append(f"%{key_pattern}%")
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        sql = f"SELECT fact_id, category, fact_key, fact_value, confidence, source, timestamp, access_count FROM global_facts {where_clause} ORDER BY access_count DESC, confidence DESC LIMIT ?"
+        params.append(limit)
+
+        with self._lock:
+            cursor = self._conn.execute(sql, params)
+            rows = cursor.fetchall()
+            results = []
+            for row in rows:
+                results.append({
+                    "fact_id": row[0],
+                    "category": row[1],
+                    "key": row[2],
+                    "value": row[3],
+                    "confidence": row[4],
+                    "source": row[5],
+                    "timestamp": row[6],
+                    "access_count": row[7],
+                })
+            return results
+
+    def delete_fact(self, fact_id: str) -> bool:
+        """Delete a fact by ID."""
+        with self._lock:
+            cursor = self._conn.execute("DELETE FROM global_facts WHERE fact_id = ?", (fact_id,))
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    def get_stale_facts(self, staleness_days: int = 30, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return facts not accessed recently with low access count (demotion candidates)."""
+        cutoff = time.time() - (staleness_days * 86400)
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT fact_id, category, fact_key, access_count, last_accessed FROM global_facts WHERE last_accessed < ? AND access_count < 5 ORDER BY last_accessed ASC LIMIT ?",
+                (cutoff, limit),
+            )
+            return [
+                {
+                    "fact_id": row[0],
+                    "category": row[1],
+                    "key": row[2],
+                    "access_count": row[3],
+                    "last_accessed": row[4],
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def get_popular_facts(self, min_accesses: int = 5, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return frequently accessed facts (promotion candidates to L1)."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT fact_id, category, fact_key, access_count FROM global_facts WHERE access_count >= ? ORDER BY access_count DESC LIMIT ?",
+                (min_accesses, limit),
+            )
+            return [
+                {
+                    "fact_id": row[0],
+                    "category": row[1],
+                    "key": row[2],
+                    "access_count": row[3],
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def count(self) -> int:
+        with self._lock:
+            cursor = self._conn.execute("SELECT COUNT(*) FROM global_facts")
+            return cursor.fetchone()[0] or 0
+
+    def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def __repr__(self) -> str:
+        return f"<GlobalFactsDatabase: {self.count()} facts at {self.db_path}>"
