@@ -715,16 +715,6 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         snippet = self.server_source[idx : idx + 700]
         self.assertNotIn('"search"', snippet)
 
-    def test_vuln_scan_actions_include_all_advanced_capabilities(self):
-        for action_name in (
-            "dangerous_flow",
-            "taint_lattice",
-            "exploit_chains",
-            "patch_simulate",
-            "memory_sync",
-            "hybrid_rank",
-        ):
-            self.assertIn(f'"{action_name}"', self.schemas_source)
 
     def test_decompilation_tools_expose_advanced_action_sets(self):
         for action_name in ("semantic_decompile", "decomp_dataflow"):

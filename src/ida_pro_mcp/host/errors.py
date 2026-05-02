@@ -23,6 +23,7 @@ class MCPError:
     TRUNCATION_FIELD_MISSING = "TRUNCATION_FIELD_MISSING"
     RPC_CONNECTION_ERROR = "RPC_CONNECTION_ERROR"
     IO_ERROR = "IO_ERROR"
+    DB_ERROR = "DB_ERROR"
 
 
 _HOST_ERROR_HINTS = {
@@ -43,6 +44,7 @@ _HOST_ERROR_HINTS = {
     MCPError.TRUNCATION_FIELD_MISSING: "Requested field not in truncated response.",
     MCPError.RPC_CONNECTION_ERROR: "Cannot connect to IDA. The process may have crashed.",
     MCPError.IO_ERROR: "I/O error while writing to disk. Check disk space and permissions.",
+    MCPError.DB_ERROR: "Database error. The index may be corrupted. Try schemaboot(action='delete') then re-ingest.",
 }
 
 

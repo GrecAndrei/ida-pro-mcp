@@ -589,20 +589,26 @@ def coverage(
         elif action == "uncovered":
             covered_funcs = set()
             cov = None
-            if path and os.path.exists(path):
-                loaded, load_err = _load_coverage(path)
-                if not load_err:
-                    cov = loaded
+            if path:
+                safe_path, path_err = validate_path_safe(path)
+                if not path_err and os.path.exists(safe_path):
+                    loaded, load_err = _load_coverage(safe_path)
+                    if not load_err:
+                        cov = loaded
 
             if cov is not None:
-                for func_ea in idautils.Functions():
+                for f_idx, func_ea in enumerate(idautils.Functions()):
+                    if f_idx >= 50000:
+                        break
                     fn = ida_funcs.get_func(func_ea)
                     if fn and _range_has_coverage(fn.start_ea, fn.end_ea, cov):
                         covered_funcs.add(fn.start_ea)
 
             uncovered = []
             importance_keywords = ["main", "init", "parse", "process", "handle", "check", "verify"]
-            for func_ea in idautils.Functions():
+            for f_idx, func_ea in enumerate(idautils.Functions()):
+                if f_idx >= 50000:
+                    break
                 if func_ea in covered_funcs:
                     continue
                 name = idc.get_func_name(func_ea)
@@ -635,7 +641,9 @@ def coverage(
                 cov = loaded
 
             results = []
-            for func_ea in idautils.Functions():
+            for f_idx, func_ea in enumerate(idautils.Functions()):
+                if f_idx >= 50000:
+                    break
                 fn = ida_funcs.get_func(func_ea)
                 if not fn:
                     continue
@@ -684,7 +692,9 @@ def coverage(
                 cov = loaded
 
             gaps = []
-            for func_ea in idautils.Functions():
+            for f_idx, func_ea in enumerate(idautils.Functions()):
+                if f_idx >= 50000:
+                    break
                 fn = ida_funcs.get_func(func_ea)
                 if not fn:
                     continue

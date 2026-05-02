@@ -49,9 +49,13 @@ def symbols(
         
         elif action == "status":
             named_funcs = 0
+            _STATUS_FUNC_LIMIT = 100000
             for ea in idautils.Functions():
                 name = idc.get_func_name(ea)
-                if name and not name.startswith("sub_"): named_funcs += 1
+                if name and not name.startswith("sub_"):
+                    named_funcs += 1
+                    if named_funcs >= _STATUS_FUNC_LIMIT:
+                        break
             
             til = ida_typeinf.get_idati()
             # Use get_ordinal_qty/get_ordinal_count for efficiency
@@ -82,6 +86,7 @@ def symbols(
             if err: return err
             
             export_data = {"functions": [], "types": []}
+            _EXPORT_FUNC_LIMIT = 50000
             for ea in idautils.Functions():
                 name = idc.get_func_name(ea)
                 if name and not name.startswith("sub_"):
@@ -89,6 +94,8 @@ def symbols(
                     tif = ida_typeinf.tinfo_t()
                     if ida_nalt.get_tinfo(tif, ea): item["type"] = str(tif)
                     export_data["functions"].append(item)
+                    if len(export_data["functions"]) >= _EXPORT_FUNC_LIMIT:
+                        break
             
             import json
             with open(path, 'w', encoding='utf-8') as f:

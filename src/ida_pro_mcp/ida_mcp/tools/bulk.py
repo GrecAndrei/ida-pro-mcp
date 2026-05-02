@@ -229,9 +229,14 @@ def bulk(
 
         elif action == "export_annotations":
             annotations = {"names": [], "comments": [], "types": []}
+            MAX_NAMES = 5000
+            MAX_HEADS = 20000
+            MAX_FUNCS = 5000
             
             # Export names (excluding auto-generated)
             for ea, name in idautils.Names():
+                if len(annotations["names"]) >= MAX_NAMES:
+                    break
                 if not name.startswith(("sub_", "loc_", "unk_", "off_", "byte_", "word_", "dword_", "qword_")):
                     entry = {"addr": hex(ea), "name": name}
                     # Also export type if available
@@ -244,7 +249,11 @@ def bulk(
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
                 if not seg: continue
+                heads_seen = 0
                 for head in idautils.Heads(seg.start_ea, seg.end_ea):
+                    heads_seen += 1
+                    if heads_seen > MAX_HEADS:
+                        break
                     cmt = idc.get_cmt(head, 0)
                     cmt_rep = idc.get_cmt(head, 1)
                     if cmt:
@@ -253,7 +262,11 @@ def bulk(
                         annotations["comments"].append({"addr": hex(head), "comment": cmt_rep, "type": "repeatable"})
             
             # Export function comments
+            funcs_seen = 0
             for func_ea in idautils.Functions():
+                funcs_seen += 1
+                if funcs_seen > MAX_FUNCS:
+                    break
                 func_cmt = idc.get_func_cmt(func_ea, 0)
                 func_cmt_rep = idc.get_func_cmt(func_ea, 1)
                 if func_cmt:
@@ -282,8 +295,10 @@ def bulk(
             n_applied, c_applied, t_applied = 0, 0, 0
             errors = []
             
+            MAX_IMPORT_ITEMS = 5000
+            
             # Import names
-            for item in data.get("names", []):
+            for item in data.get("names", [])[:MAX_IMPORT_ITEMS]:
                 try:
                     ea = parse_address(item["addr"])
                     if idc.set_name(ea, item["name"], ida_name.SN_FORCE | ida_name.SN_NOWARN): 
@@ -298,7 +313,7 @@ def bulk(
                     errors.append({"addr": item.get("addr"), "error": str(e)})
             
             # Import comments
-            for item in data.get("comments", []):
+            for item in data.get("comments", [])[:MAX_IMPORT_ITEMS]:
                 try:
                     ea = parse_address(item["addr"])
                     cmt_type = item.get("type", "regular")

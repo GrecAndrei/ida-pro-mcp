@@ -37,7 +37,7 @@ def _collect_callers(func_start_ea: int) -> list[int]:
     return sorted(callers)
 
 
-def _collect_callees(func_start_ea: int) -> list[int]:
+def _collect_callees(func_start_ea: int, max_items=50000) -> list[int]:
     fn = ida_funcs.get_func(func_start_ea)
     if not fn:
         return []
@@ -47,6 +47,8 @@ def _collect_callees(func_start_ea: int) -> list[int]:
             target = ida_funcs.get_func(ref)
             if target and target.start_ea != fn.start_ea:
                 callees.add(target.start_ea)
+        if len(callees) >= max_items:
+            break
     return sorted(callees)
 
 
@@ -316,7 +318,7 @@ def _funcs_impl(
                 if total <= offset:
                     continue
                 if count != 0 and len(func_lines) >= count:
-                    continue
+                    break
 
                 fn = ida_funcs.get_func(ea)
                 if not fn:
@@ -417,6 +419,7 @@ def _funcs_impl(
                 bb_count = sum(1 for _ in fc)
                 for b in fc:
                     head = b.start_ea
+                    insn_iter = 0
                     while head < b.end_ea and head != idaapi.BADADDR:
                         insn_count += 1
                         mnem = (idc.print_insn_mnem(head) or "").lower()
@@ -429,6 +432,9 @@ def _funcs_impl(
                             if mnem in ("jz", "je", "jnz", "jne", "ja", "jb", "jg", "jl", "jbe", "jge", "jle", "jc", "jnc"):
                                 cond_jump_count += 1
                         head = idc.next_head(head, fn.end_ea)
+                        insn_iter += 1
+                        if insn_iter >= 500000:
+                            break
             except Exception:
                 pass
             # Cyclomatic complexity
@@ -475,6 +481,7 @@ def _funcs_impl(
             target_size = len(target_bytes)
             target_insn_count = sum(1 for _ in idautils.FuncItems(target_fn.start_ea))
             results = []
+            max_candidates = (kwargs.get("limit") or 20) * 10
             for func_ea in idautils.Functions():
                 if func_ea == target_fn.start_ea:
                     continue
@@ -488,7 +495,11 @@ def _funcs_impl(
                 if not func_bytes:
                     continue
                 # Simple similarity: instruction count ratio + byte similarity
-                insn_count = sum(1 for _ in idautils.FuncItems(func_ea))
+                insn_count = 0
+                for _ in idautils.FuncItems(func_ea):
+                    insn_count += 1
+                    if insn_count >= 500000:
+                        break
                 insn_sim = 1.0 - abs(insn_count - target_insn_count) / max(insn_count, target_insn_count, 1)
                 # Byte-level similarity (ignoring addresses in operands)
                 min_len = min(len(target_bytes), len(func_bytes))
@@ -505,6 +516,8 @@ def _funcs_impl(
                         "size": hex(size),
                         "instructions": insn_count,
                     })
+                    if len(results) >= max_candidates:
+                        break
             results.sort(key=lambda x: -x["score"])
             limit = kwargs.get("limit") or 20
             return {"ok": True, "target": hex(target_fn.start_ea), "similar_functions": results[:limit], "count": len(results)}

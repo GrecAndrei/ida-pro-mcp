@@ -18,6 +18,7 @@ def graph(
     depth: Annotated[int, "Max traversal depth"] = 3,
     direction: Annotated[Literal["down", "up", "both"], "Direction: down (callees), up (callers), both"] = "down",
     format: Annotated[Literal["json", "dot", "mermaid"], "Output format: json, dot (Graphviz), or mermaid"] = "json",
+    max_items: Annotated[int, "Max nodes/edges to collect (prevents hangs on large binaries)"] = 5000,
     **kwargs
 ) -> dict:
     """
@@ -41,16 +42,21 @@ def graph(
             
             nodes, edges, visited = {}, [], set()
             edge_set = set()
+            item_count = 0
             def add_node(f_ea):
                 if f_ea not in nodes:
                     nodes[f_ea] = idc.get_func_name(f_ea) or f"sub_{f_ea:x}"
             
             def traverse(f_ea, d):
+                nonlocal item_count
                 if d > depth or f_ea in visited: return
+                if item_count >= max_items: return
                 visited.add(f_ea)
                 add_node(f_ea)
                 for item in idautils.FuncItems(f_ea):
+                    if item_count >= max_items: break
                     for xref in idautils.CodeRefsFrom(item, 0):
+                        if item_count >= max_items: break
                         target = ida_funcs.get_func(xref)
                         if target and target.start_ea != f_ea:
                             add_node(target.start_ea)
@@ -58,6 +64,7 @@ def graph(
                             if edge not in edge_set:
                                 edge_set.add(edge)
                                 edges.append(edge)
+                                item_count += 1
                             traverse(target.start_ea, d + 1)
             
             traverse(ea, 0)
@@ -92,15 +99,19 @@ def graph(
 
             nodes, edges, visited = {}, [], set()
             edge_set = set()
+            item_count = 0
             name = idc.get_name(ea) or hex(ea)
             nodes[ea] = name
 
             def traverse_xrefs(target_ea, d):
+                nonlocal item_count
                 if d > depth or target_ea in visited: return
+                if item_count >= max_items: return
                 visited.add(target_ea)
                 # Traverse callers (xrefs TO this address)
                 if direction in ("up", "both"):
                     for xref in idautils.XrefsTo(target_ea):
+                        if item_count >= max_items: break
                         if not xref.iscode: continue
                         src_func = ida_funcs.get_func(xref.frm)
                         src_ea = src_func.start_ea if src_func else xref.frm
@@ -110,13 +121,16 @@ def graph(
                         if edge not in edge_set:
                             edge_set.add(edge)
                             edges.append(edge)
+                            item_count += 1
                         traverse_xrefs(src_ea, d + 1)
                 # Traverse callees (xrefs FROM this address)
                 if direction in ("down", "both"):
                     func = ida_funcs.get_func(target_ea)
                     if func:
                         for item in idautils.FuncItems(target_ea):
+                            if item_count >= max_items: break
                             for xref in idautils.XrefsFrom(item, 0):
+                                if item_count >= max_items: break
                                 if not xref.iscode: continue
                                 dst_func = ida_funcs.get_func(xref.to)
                                 dst_ea = dst_func.start_ea if dst_func else xref.to
@@ -127,6 +141,7 @@ def graph(
                                 if edge not in edge_set:
                                     edge_set.add(edge)
                                     edges.append(edge)
+                                    item_count += 1
                                 traverse_xrefs(dst_ea, d + 1)
 
             traverse_xrefs(ea, 0)

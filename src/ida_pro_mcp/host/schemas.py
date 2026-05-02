@@ -35,7 +35,6 @@ TOOLS = [
     "analysis",
     # Unified query/edit hubs (delegating to sub-tools)
     "query",
-    "edit",
     # Primary data access tools
     "idb",
     "code",
@@ -65,16 +64,13 @@ TOOLS = [
     "microcode",
     "graph",
     "ctree",
-    "taint",
     "emulate",
     "entropy",
     # Structure and type recovery
-    "structs",
     "imports_deep",
     "patterns",
     "symbols",
     # Differential and comparison
-    "diff",
     "lumina",
     # Export and annotation
     "export",
@@ -90,10 +86,8 @@ TOOLS = [
     "yara_hunt",
     # --- New LLM-optimized tools ---
     # Security & vulnerability analysis
-    "vuln_scan",
     "threat_hunt",
     "gadgets",
-    "c2_detect",
     # Deobfuscation & crypto
     "deobfuscate",
     "crypto_id",
@@ -121,6 +115,12 @@ TOOLS = [
     "binary_info",
     # LLM helpers
     "llm_helpers",
+    # Structured semantic indexing
+    "schemaboot",
+    # VOERA components
+    "turboquant",
+    "bridgerag",
+    "memrl",
 ]
 
 ADVERTISED_TOOLS = [
@@ -131,7 +131,6 @@ ADVERTISED_TOOLS = [
     "wiki",
     "analysis",
     "query",
-    "edit",
     "idb",
     "code",
     "data",
@@ -165,7 +164,6 @@ HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union(
     {"plugins", "xfer_analysis"}
 )
 
-
 _EXTRA_TOOL_ALIASES = {
     "analysis_tool": "analysis",
     "annotate": "annotation",
@@ -196,8 +194,6 @@ _EXTRA_TOOL_ALIASES = {
     "plugins_tool": "misc",
     "python": "misc",
     "queries": "query",
-    "rename": "edit",
-    "scanner": "vuln_scan",
     "vuln": "threat_hunt",
     "vulnerability": "threat_hunt",
     "vulnerabilities": "threat_hunt",
@@ -208,7 +204,6 @@ _EXTRA_TOOL_ALIASES = {
     "trace": "threat_hunt",
     "tracing": "threat_hunt",
     "coverage": "threat_hunt",
-    "taint": "threat_hunt",
     "c2": "threat_hunt",
     "deobfuscation": "threat_hunt",
     "crypto": "threat_hunt",
@@ -224,7 +219,6 @@ _EXTRA_TOOL_ALIASES = {
     "xref": "xref_analysis",
     "xrefs": "xref_analysis",
 }
-
 
 def _snake_variants(value: str) -> set[str]:
     base = str(value or "").strip().lower()
@@ -249,7 +243,6 @@ def _snake_variants(value: str) -> set[str]:
     out.add(f"tools_{base}")
     return {x for x in out if x}
 
-
 def _camel_variants(value: str) -> set[str]:
     words = [w for w in str(value or "").replace("-", "_").split("_") if w]
     if len(words) <= 1:
@@ -257,7 +250,6 @@ def _camel_variants(value: str) -> set[str]:
     pascal = "".join(w.capitalize() for w in words)
     camel = words[0].lower() + "".join(w.capitalize() for w in words[1:])
     return {camel, pascal}
-
 
 def _strip_balanced_wrappers(value: str, rounds: int = 3) -> str:
     text = str(value or "").strip()
@@ -278,7 +270,6 @@ def _strip_balanced_wrappers(value: str, rounds: int = 3) -> str:
             break
     return text
 
-
 def _noisy_alias_variants(value: str) -> set[str]:
     base = str(value or "").strip().lower()
     if not base:
@@ -298,12 +289,10 @@ def _noisy_alias_variants(value: str) -> set[str]:
         f"{base}.tool",
     }
 
-
 def _normalize_alias_lookup_key(value: Any) -> str:
     stripped = _strip_balanced_wrappers(str(value or ""))
     without_prefix = ACTION_PREFIX_RE.sub("", stripped)
     return without_prefix.strip().strip(",;").lower()
-
 
 def _resolve_tool_alias(name: Any) -> Any:
     if not isinstance(name, str):
@@ -318,7 +307,6 @@ def _resolve_tool_alias(name: Any) -> Any:
         return normalized
     # Fallback for callers that already pass clean aliases/canonical names.
     return TOOL_ALIASES.get(name, name)
-
 
 def _build_tool_aliases(tools: list[str], explicit: dict[str, str]) -> dict[str, str]:
     candidates: Dict[str, set[str]] = {}
@@ -343,7 +331,6 @@ def _build_tool_aliases(tools: list[str], explicit: dict[str, str]) -> dict[str,
                 resolved[alias] = target
     return resolved
 
-
 TOOL_ALIASES = _build_tool_aliases(TOOLS, {**TOOL_ALIASES, **_EXTRA_TOOL_ALIASES})
 
 TOOL_DESCRIPTIONS = {
@@ -356,7 +343,6 @@ TOOL_DESCRIPTIONS = {
     "analysis": "Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze.",
     # Unified query/edit hubs
     "query": "Unified read-only query hub. Actions: data, search, idb, code, types, imports_deep, symbols, patterns.",
-    "edit": "Unified write/edit hub. Quick actions: rename, comment, type, patch, create_func, bulk.",
     # Primary data access
     "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
     "code": "Code logic, decompilation, and flow analysis. Actions: decompile, semantic_decompile, decomp_dataflow, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func.",
@@ -386,16 +372,13 @@ TOOL_DESCRIPTIONS = {
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions, def_use_graph.",
     "graph": "Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph.",
     "ctree": "Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
-    "taint": "Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice.",
     "emulate": "Static tracing and emulation. Actions: static_trace, appcall, decrypt_strings, eval_expr.",
     "entropy": "Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
     # Structure and type recovery
-    "structs": "Structure recovery and reconstruction. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.",
     "imports_deep": "Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
     "patterns": "Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, create_sig.",
     "symbols": "PDB/DWARF symbol management. Actions: load_pdb, load_dwarf, status, apply, export.",
     # Differential and comparison
-    "diff": "Binary differential analysis. Actions: functions, bytes, signatures, summary, export_binexport.",
     "lumina": "Lumina server interaction. Actions: pull, push, status, history, search.",
     # Export and annotation
     "export": "Database export. Actions: listing, html, idc, json, binexport, headers.",
@@ -410,7 +393,6 @@ TOOL_DESCRIPTIONS = {
     "wiki": "Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.",
     "yara_hunt": "YARA pattern matching. Actions: scan, compile, list_rules.",
     # --- New LLM-optimized tools ---
-    "vuln_scan": "Automated vulnerability scanner. Actions: buffer_overflow, format_string, integer_overflow, use_after_free, command_injection, race_condition, null_deref, info_leak, auth_bypass, hardcoded_creds, dangerous_flow, taint_lattice, exploit_chains, patch_simulate, memory_sync, hybrid_rank, scan_all, classify, osv_query, intelligence_report. Adds interprocedural source/sink lattice, semantic exploit-chain synthesis, patch-impact simulation, cross-binary vulnerability memory, and hybrid static+trace ranking.",
     "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
@@ -420,7 +402,6 @@ TOOL_DESCRIPTIONS = {
     "stack_analysis": "Stack frame analysis. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
     "classify": "Function purpose classification. Actions: function, binary, all_functions, library_code, wrappers, callbacks, initializers, error_handlers, hot_functions, orphans.",
     "protocol": "Network protocol analysis. Query supports regex. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine.",
-    "c2_detect": "C2/malware behavior detection. Actions: indicators, persistence, evasion, injection, exfiltration, lateral_movement, privilege_escalation, capabilities, config_extract, ioc_extract.",
     "gadgets": "ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, semantic_find.",
     "annotation": "Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.",
     "xref_analysis": "Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
@@ -428,7 +409,11 @@ TOOL_DESCRIPTIONS = {
     "string_ops": "Advanced string analysis. Query supports regex. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious.",
     "cfg_analysis": "Control flow graph metrics. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
     "binary_info": "Binary metadata analysis. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
-    "llm_helpers": "LLM workflow helpers plus 50 advanced external-expansion actions for planning, search orchestration, fusion intelligence, idapython orchestration, and analyst workflow systems.",
+    "llm_helpers": "LLM workflow helpers plus 50 advanced external-expansion actions for planning, search orchestration, fusion intelligence, idapython orchestration, and analyst workflow systems. Includes enrich action for post-processing any tool output with confidence scores, coverage metrics, suggested next actions, and context budget tracking.",
+    "schemaboot": "Deterministic function attribute extraction and structured search. Ingests all functions into a SQLite index with instruction mix, API calls, string refs, structural metrics, and entropy. Enables instant SQL-style queries without iterating functions.",
+    "turboquant": "3-bit extreme embedding compression with PolarQuant + QJL. Ingests function vectors from SchemaBoot and compresses them to 3 bits per dimension (~8x memory reduction). Supports similarity search on compressed embeddings.",
+    "bridgerag": "Bridge-conditioned Multi-Hop Search. Finds structurally related functions through shared bridge entities (APIs, strings, xrefs) using SchemaBoot as the bridge source. Implements tripartite scoring s(query, bridge, candidate).",
+    "memrl": "Non-parametric reinforcement learning on episodic memory. Stores Intent-Experience-Utility triplets with learned Q-values. Two-phase retrieval: similarity recall followed by Q-value re-ranking. Updates via TD rule: Q_new = Q_old + alpha * (reward - Q_old).",
 }
 
 TOOL_ACTIONS = {
@@ -495,7 +480,6 @@ TOOL_ACTIONS = {
         "symbols",
         "patterns",
     ],
-    "edit": ["rename", "comment", "type", "patch", "create_func", "bulk"],
     # Primary data access
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
     "code": [
@@ -691,14 +675,6 @@ TOOL_ACTIONS = {
         "dominance_map",
         "var_dependency_graph",
     ],
-    "taint": [
-        "find_arg_usage",
-        "trace_return",
-        "find_sinks",
-        "data_flow",
-        "backward_trace",
-        "slice",
-    ],
     "emulate": ["static_trace", "appcall", "decrypt_strings", "eval_expr"],
     "entropy": [
         "section",
@@ -710,15 +686,6 @@ TOOL_ACTIONS = {
         "summary",
     ],
     # Structure and type recovery
-    "structs": [
-        "recover",
-        "analyze_usage",
-        "list",
-        "create",
-        "add_member",
-        "apply",
-        "reconstruct_vtable",
-    ],
     "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
     "patterns": [
         "generate",
@@ -730,7 +697,6 @@ TOOL_ACTIONS = {
     ],
     "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
     # Differential and comparison
-    "diff": ["functions", "bytes", "signatures", "summary", "export_binexport"],
     "lumina": ["pull", "push", "status", "history", "search", "get_metadata"],
     # Export and annotation
     "export": ["listing", "html", "idc", "json", "binexport", "headers"],
@@ -766,28 +732,6 @@ TOOL_ACTIONS = {
     "wiki": ["list_topics", "read", "search", "semantic_search", "sections", "index"],
     "yara_hunt": ["scan", "compile", "list_rules"],
     # --- New LLM-optimized tools ---
-    "vuln_scan": [
-        "buffer_overflow",
-        "format_string",
-        "integer_overflow",
-        "use_after_free",
-        "command_injection",
-        "race_condition",
-        "null_deref",
-        "info_leak",
-        "auth_bypass",
-        "hardcoded_creds",
-        "dangerous_flow",
-        "taint_lattice",
-        "exploit_chains",
-        "patch_simulate",
-        "memory_sync",
-        "hybrid_rank",
-        "scan_all",
-        "classify",
-        "osv_query",
-        "intelligence_report",
-    ],
     "threat_hunt": [
         "run",
         "malware",
@@ -894,18 +838,6 @@ TOOL_ACTIONS = {
         "magic_numbers",
         "state_machine",
     ],
-    "c2_detect": [
-        "indicators",
-        "persistence",
-        "evasion",
-        "injection",
-        "exfiltration",
-        "lateral_movement",
-        "privilege_escalation",
-        "capabilities",
-        "config_extract",
-        "ioc_extract",
-    ],
     "gadgets": [
         "rop",
         "jop",
@@ -1002,6 +934,8 @@ TOOL_ACTIONS = {
         "question_answer",
         "guided_analysis",
         "cheatsheet",
+        "compact",
+        "enrich",
         "intent_tool_compiler",
         "adaptive_query_planner",
         "token_aware_context_optimizer",
@@ -1052,6 +986,32 @@ TOOL_ACTIONS = {
         "cost_latency_optimizer",
         "trust_verification_layer",
         "learning_feedback_loop",
+    ],
+    "schemaboot": [
+        "ingest",
+        "query",
+        "refresh",
+        "stats",
+        "delete",
+        "get",
+    ],
+    "turboquant": [
+        "ingest",
+        "query",
+        "stats",
+        "delete",
+    ],
+    "bridgerag": [
+        "search",
+        "bridges",
+    ],
+    "memrl": [
+        "record",
+        "update",
+        "rank",
+        "stats",
+        "top",
+        "get_q",
     ],
 }
 
@@ -1275,88 +1235,6 @@ TOOL_ARG_SCHEMAS = {
         "sample": {"type": "boolean"},
         "sample_max_funcs": {"type": "integer"},
     },
-    "vuln_scan": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["vuln_scan"]},
-        "addr": {
-            "type": "string",
-            "description": "Address or function scope for scanning.",
-        },
-        "limit": {
-            "type": "integer",
-            "description": "Max findings to return (capped for context safety).",
-        },
-        "offset": {"type": "integer", "description": "Skip first N ranked findings."},
-        "severity": {
-            "type": "string",
-            "enum": ["critical", "high", "medium", "low"],
-            "description": "Optional severity filter.",
-        },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include compact decompiled context when available.",
-        },
-        "scan_profile": {
-            "type": "string",
-            "enum": ["quick", "balanced", "deep"],
-            "description": "Scan depth profile controlling local evidence/ranking rigor.",
-        },
-        "max_graph_depth": {
-            "type": "integer",
-            "description": "Correlation graph depth (0-3) for intelligence outputs.",
-        },
-        "include_dataflow_graph": {
-            "type": "boolean",
-            "description": "Include compact correlation graph in scan_all/intelligence_report.",
-        },
-        "include_remediation_plan": {
-            "type": "boolean",
-            "description": "Include prioritized remediation plan in scan_all/intelligence_report.",
-        },
-        "include_vuln_memory": {
-            "type": "boolean",
-            "description": "Use cross-binary vulnerability memory for ranking enrichment.",
-        },
-        "persist_vuln_memory": {
-            "type": "boolean",
-            "description": "Persist current scan signatures into cross-binary vulnerability memory.",
-        },
-        "vuln_memory_path": {
-            "type": "string",
-            "description": "Optional custom path for vulnerability memory JSON cache.",
-        },
-        "trace_addresses": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Executed/observed addresses for hybrid static+trace ranking.",
-        },
-        "trace_functions": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Executed/observed function names for hybrid static+trace ranking.",
-        },
-        "trace_weight": {
-            "type": "number",
-            "description": "Trace weight used during hybrid ranking (0.0-0.9).",
-        },
-        "patch_strategies": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Patch simulation strategies (bounds_checks,input_sanitization,safe_api_replacement,isolation).",
-        },
-        "osv_coordinates": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "OSV package coordinates (ecosystem:name@version or pkg:purl). Used by osv_query and optional scan_all enrichment.",
-        },
-        "osv_ecosystem": {
-            "type": "string",
-            "description": "Default OSV ecosystem for shorthand coordinates like name@version.",
-        },
-        "osv_endpoint": {
-            "type": "string",
-            "description": "OSV endpoint/base URL (default: https://api.osv.dev).",
-        },
-    },
     "threat_hunt": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},
         "legacy_tool": {
@@ -1444,11 +1322,6 @@ TOOL_ARG_SCHEMAS = {
         "subaction": {"type": "string"},
         "args": {"type": "object"},
     },
-    "edit": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["edit"]},
-        "subaction": {"type": "string"},
-        "args": {"type": "object"},
-    },
     "idb": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["idb"]},
         "offset": {"type": "integer"},
@@ -1494,13 +1367,6 @@ TOOL_ARG_SCHEMAS = {
         "max_depth": {"type": "integer"},
         "include_blocks": {"type": "boolean"},
         "expr": {"type": "string"},
-    },
-    "taint": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["taint"]},
-        "addr": {"type": "string"},
-        "arg_num": {"type": "integer"},
-        "depth": {"type": "integer"},
-        "max_hits": {"type": "integer"},
     },
     "gadgets": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
@@ -1554,6 +1420,43 @@ TOOL_ARG_SCHEMAS = {
             },
         },
         "continue_on_error": {"type": "boolean"},
+    },
+    "schemaboot": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["schemaboot"]},
+        "constraints": {"type": "object", "description": "Structured query constraints"},
+        "addr": {"type": "string", "description": "Function address for get/refresh"},
+        "limit": {"type": "integer", "description": "Max results"},
+        "offset": {"type": "integer", "description": "Skip first N results"},
+        "order_by": {"type": "string", "description": "Column to order by (e.g., 'entropy DESC')"},
+        "include_apis": {"type": "boolean", "description": "Include API list in results"},
+        "include_strings": {"type": "boolean", "description": "Include string refs in results"},
+    },
+    "turboquant": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["turboquant"]},
+        "query_key": {"type": "string", "description": "Function address or name to query"},
+        "top_k": {"type": "integer", "description": "Number of similar functions to return"},
+        "db_path": {"type": "string", "description": "Override path to TurboQuant bank file"},
+    },
+    "bridgerag": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["bridgerag"]},
+        "query_constraints": {"type": "object", "description": "SchemaBoot-style constraints for seed selection"},
+        "func_ea": {"type": "string", "description": "Hex address of seed function (for action='bridges')"},
+        "func_name": {"type": "string", "description": "Name of seed function (for action='bridges')"},
+        "bridge_types": {"type": "array", "items": {"type": "string"}, "description": "Bridge types: ['apis'], ['strings'], or ['apis', 'strings']"},
+        "top_k": {"type": "integer", "description": "Max candidates to return"},
+        "hops": {"type": "integer", "description": "Number of hops (2=standard, >2=extended)"},
+    },
+    "memrl": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["memrl"]},
+        "intent_key": {"type": "string", "description": "Identifier for the query/analyst intent"},
+        "experience_key": {"type": "string", "description": "Identifier for the retrieved candidate"},
+        "reward": {"type": "number", "description": "Environmental feedback (+1 success, -0.5 ignored, -1 undo)"},
+        "alpha": {"type": "number", "description": "Learning rate for TD updates"},
+        "candidate_pool": {"type": "array", "items": {"type": "object"}, "description": "Candidates from Phase A for Phase B re-ranking"},
+        "top_k": {"type": "integer", "description": "Number of results to return"},
+        "lambda_explore": {"type": "number", "description": "Weight for Q-value vs similarity (0=pure similarity, 1=pure Q)"},
+        "similarity_key": {"type": "string", "description": "Dict key to read similarity score from candidate_pool items"},
+        "db_path": {"type": "string", "description": "Override path to MemRL SQLite DB"},
     },
 }
 
@@ -1673,7 +1576,6 @@ _TOOL_ACTION_EXTRA_ALIASES = {
             "vulnerabilities",
             "security",
             "security_scan",
-            "vuln_scan",
             "vulnscan",
             "cve",
         },
@@ -1727,14 +1629,6 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         "constants": {"const", "literals", "magic"},
         "decompiled": {"decompile", "pseudo", "pseudocode", "hl"},
     },
-    "vuln_scan": {
-        "dangerous_flow": {"dangerous_functions", "sink_flow", "user_controlled_flow", "deep_flow"},
-        "taint_lattice": {"taint_graph", "interprocedural_taint", "flow_lattice"},
-        "exploit_chains": {"chain_synthesis", "semantic_chains", "attack_chains"},
-        "patch_simulate": {"mitigation_simulation", "patch_impact", "what_if_patch"},
-        "memory_sync": {"knowledge_sync", "scanner_memory", "vuln_memory"},
-        "hybrid_rank": {"trace_rank", "runtime_weighted_rank", "hybrid_static_trace"},
-    },
     "session": {
         "discover": {"scan", "discover_sessions", "find_sessions"},
         "create": {"new", "open", "start", "init", "spawn"},
@@ -1744,7 +1638,7 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         "close": {"delete", "remove", "terminate", "stop"},
         "status": {"state", "current", "active"},
         "rebuild": {"refresh", "recreate", "reanalyze"},
-        "update": {"edit", "set"},
+        "update": {"set"},
         "rename": {"set_name", "retitle"},
         "duplicate": {"clone", "copy"},
         "export_session": {"export", "dump"},
@@ -1834,27 +1728,6 @@ _TOOL_ARG_EXTRA_ALIASES = {
         "sample": {"sample_mode", "sampling"},
         "sample_max_funcs": {"sample_limit", "sample_cap"},
     },
-    "vuln_scan": {
-        "addr": {"address", "ea", "va"},
-        "limit": {"max", "count", "n"},
-        "offset": {"skip"},
-        "severity": {"risk", "level"},
-        "include_context": {"context", "with_context"},
-        "scan_profile": {"profile", "depth", "mode"},
-        "max_graph_depth": {"graph_depth", "depth_limit"},
-        "include_dataflow_graph": {"dataflow", "with_dataflow", "graph"},
-        "include_remediation_plan": {"remediation", "plan", "with_plan"},
-        "include_vuln_memory": {"use_memory", "memory_enrich", "with_memory"},
-        "persist_vuln_memory": {"save_memory", "write_memory", "persist_memory"},
-        "vuln_memory_path": {"memory_path", "knowledge_path"},
-        "trace_addresses": {"trace_addrs", "executed_addresses", "coverage_addresses"},
-        "trace_functions": {"trace_funcs", "executed_functions", "coverage_functions"},
-        "trace_weight": {"runtime_weight", "hybrid_weight"},
-        "patch_strategies": {"patches", "mitigations", "simulation_strategies"},
-        "osv_coordinates": {"osv_coords", "coordinates", "packages"},
-        "osv_ecosystem": {"ecosystem", "package_ecosystem"},
-        "osv_endpoint": {"endpoint", "osv_url"},
-    },
     "session": {
         "binary_path": {"binary", "path", "target", "input"},
         "session_id": {"sid", "session", "id"},
@@ -1888,8 +1761,16 @@ _TOOL_ARG_EXTRA_ALIASES = {
         "field_name": {"field", "member"},
         "target": {"to", "destination"},
     },
+    "schemaboot": {
+        "constraints": {"filters", "where", "criteria"},
+        "addr": {"address", "ea", "va"},
+        "limit": {"max", "count", "n"},
+        "offset": {"skip"},
+        "order_by": {"sort", "order"},
+        "include_apis": {"apis", "with_apis"},
+        "include_strings": {"strings", "with_strings"},
+    },
 }
-
 
 def _build_action_aliases() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
@@ -1924,7 +1805,6 @@ def _build_action_aliases() -> dict[str, dict[str, str]]:
             alias_map.pop(action.lower(), None)
         out[tool_name] = alias_map
     return out
-
 
 def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
@@ -1971,7 +1851,6 @@ def _build_tool_arg_aliases() -> dict[str, dict[str, str]]:
             alias_map.pop(canonical.lower(), None)
         out[tool_name] = alias_map
     return out
-
 
 ACTION_ALIASES_BY_TOOL = _build_action_aliases()
 ARG_ALIASES_BY_TOOL = _build_tool_arg_aliases()
@@ -2028,7 +1907,6 @@ GLOBAL_RESPONSE_CONTROLS = {
     },
 }
 
-
 GLOBAL_WRAPPER_ACTION_CONTROLS = {
     "source_action": {
         "type": "string",
@@ -2078,14 +1956,12 @@ GLOBAL_WRAPPER_ACTION_CONTROLS = {
     },
 }
 
-
 def _action_enum_with_grep(tool_name: str) -> list[str]:
     actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
     for wrapper_action in WRAPPER_ACTIONS:
         if wrapper_action not in actions:
             actions.append(wrapper_action)
     return actions
-
 
 def build_input_schema(tool_name: str) -> dict:
     props = {}
@@ -2116,7 +1992,6 @@ def build_input_schema(tool_name: str) -> dict:
             props.setdefault(key, schema)
         required.append("action")
     return {"type": "object", "properties": props, "required": required}
-
 
 def _lean_prop_schema(prop_name: str, schema: Any) -> dict:
     """
@@ -2149,7 +2024,6 @@ def _lean_prop_schema(prop_name: str, schema: Any) -> dict:
             out["enum"] = enum_vals
     return out
 
-
 def build_input_schema_lean(tool_name: str) -> dict:
     """
     Build a minimal input schema for tools/list to reduce prompt/context overhead.
@@ -2174,7 +2048,6 @@ def build_input_schema_lean(tool_name: str) -> dict:
             props.setdefault(key, _lean_prop_schema(key, schema))
         required.append("action")
     return {"type": "object", "properties": props, "required": required}
-
 
 def build_input_schema_ultra(tool_name: str) -> dict:
     """
@@ -2213,7 +2086,6 @@ def build_input_schema_ultra(tool_name: str) -> dict:
         }
     return {"type": "object", "properties": props, "required": required}
 
-
 def build_tool_description_ultra(tool_name: str) -> str:
     """Return a tiny wiki-first routing hint for ultra tools/list mode."""
     if tool_name == "wiki":
@@ -2223,7 +2095,6 @@ def build_tool_description_ultra(tool_name: str) -> str:
     if tool_name == "batch":
         return "Batch hub. Use calls as 'tool:action' or {name,action,...}."
     return f"Use wiki(topic='tools/{tool_name}') for usage."
-
 
 def build_tool_description_lean(tool_name: str) -> str:
     """Return a short description without embedded action lists."""
@@ -2239,12 +2110,10 @@ def build_tool_description_lean(tool_name: str) -> str:
         full = full[:137].rstrip() + "..."
     return full + "."
 
-
 _TOOL_CATEGORY_CORE = {"session", "truncation", "bookmarks", "batch", "wiki"}
 _TOOL_CATEGORY_ANALYSIS = {
     "analysis",
     "query",
-    "edit",
     "idb",
     "code",
     "data",
@@ -2265,14 +2134,11 @@ _TOOL_CATEGORY_ADVANCED = {
     "microcode",
     "graph",
     "ctree",
-    "taint",
     "emulate",
     "entropy",
-    "structs",
     "imports_deep",
     "patterns",
     "symbols",
-    "diff",
     "lumina",
     "export",
     "history",
@@ -2283,11 +2149,9 @@ _TOOL_CATEGORY_ADVANCED = {
     "hooks",
 }
 _TOOL_CATEGORY_SECURITY = {
-    "vuln_scan",
     "threat_hunt",
     "deobfuscate",
     "crypto_id",
-    "c2_detect",
     "protocol",
     "gadgets",
     "annotation",
@@ -2303,7 +2167,6 @@ _TOOL_CATEGORY_SECURITY = {
     "yara_hunt",
 }
 _TOOL_CATEGORY_COMPAT = {"plugins", "xfer_analysis"}
-
 
 def classify_tool_category(tool_name: str) -> str:
     if tool_name in _TOOL_CATEGORY_CORE:
@@ -2321,7 +2184,6 @@ def classify_tool_category(tool_name: str) -> str:
     if tool_name in _TOOL_CATEGORY_COMPAT:
         return "compat"
     return "other"
-
 
 def sanitize_schema_for_vertex(schema: Any) -> Any:
     """
@@ -2359,6 +2221,4 @@ def sanitize_schema_for_vertex(schema: Any) -> Any:
         del out["items"]
 
     return out
-
-
 

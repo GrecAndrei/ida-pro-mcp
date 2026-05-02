@@ -612,11 +612,16 @@ def _detect_mitigations(addr, _limit, _max_insns, _query):
 
         # FORTIFY: check for _chk variants
         fortified = False
+        _names_scanned = 0
+        _MAX_NAMES_SCAN = 50000
         for name_ea in idautils.Names():
             n = name_ea[1]
             if "_chk" in n and any(f in n for f in ("printf", "memcpy", "strcpy",
-                                                     "sprintf", "strcat")):
+                                                      "sprintf", "strcat")):
                 fortified = True
+                break
+            _names_scanned += 1
+            if _names_scanned >= _MAX_NAMES_SCAN:
                 break
         mitigations["FORTIFY_SOURCE"] = fortified
 

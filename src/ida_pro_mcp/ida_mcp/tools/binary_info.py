@@ -148,7 +148,7 @@ def binary_info(
                 raw = idc.get_strlit_contents(s.ea, -1, idc.get_str_type(s.ea) or 0)
                 if raw:
                     try:
-                        text = raw.decode("utf-8", errors="replace")
+                        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
                     except Exception:
                         text = repr(raw)
                     if any(kw in text.lower() for kw in ("fileversion", "productversion", "companyname", "filedescription", "originalfilename")):
@@ -209,7 +209,7 @@ def binary_info(
                 if not raw:
                     continue
                 try:
-                    text = raw.decode("utf-8", errors="replace")
+                    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
                 except Exception:
                     continue
                 for compiler, patterns in compiler_patterns.items():
@@ -264,7 +264,7 @@ def binary_info(
                 if not raw:
                     continue
                 try:
-                    text = raw.decode("utf-8", errors="replace")
+                    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
                 except Exception:
                     continue
                 if any(lk in text.lower() for lk in ("linker", "ld-linux", "link.exe", "lld")):
@@ -294,7 +294,7 @@ def binary_info(
                 if not raw:
                     continue
                 try:
-                    text = raw.decode("utf-8", errors="replace")
+                    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
                 except Exception:
                     continue
                 # Match date patterns

@@ -273,11 +273,16 @@ def trace_analysis(
             if len(values) < window:
                 return []
             regions = []
+            # Detect target endianness to avoid data corruption on big-endian archs
+            try:
+                _endian = "big" if idaapi.get_inf_structure().is_be() else "little"
+            except Exception:
+                _endian = "little"
             for i in range(0, len(values) - window + 1, window // 2):
                 chunk = values[i:i + window]
                 # Address transition entropy
                 diffs = [abs(int(chunk[j + 1]) - int(chunk[j])) for j in range(len(chunk) - 1)]
-                diff_bytes = b"".join(d.to_bytes(8, "little", signed=True) for d in diffs)
+                diff_bytes = b"".join(d.to_bytes(8, _endian, signed=True) for d in diffs)
                 addr_entropy = _shannon_entropy(diff_bytes)
                 # Instruction byte entropy
                 insn_bytes = b""
@@ -293,11 +298,15 @@ def trace_analysis(
                 })
             return regions
 
-        def _get_api_calls_ordered(trace_list: list[int]) -> list[dict]:
+        def _get_api_calls_ordered(trace_list: list[int], max_xrefs: int = 5000) -> list[dict]:
             apis = []
+            xref_count = 0
             for idx, ea in enumerate(trace_list):
                 try:
                     for xref in idautils.XrefsFrom(ea):
+                        if xref_count >= max_xrefs:
+                            break
+                        xref_count += 1
                         if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                             callee = idc.get_name(xref.to)
                             if callee and not callee.startswith("sub_"):
@@ -309,6 +318,8 @@ def trace_analysis(
                                     "category": category,
                                     "to": hex(xref.to),
                                 })
+                    if xref_count >= max_xrefs:
+                        break
                 except Exception:
                     pass
             return apis
@@ -342,11 +353,15 @@ def trace_analysis(
                 history.append((idx, ea))
             return loops
 
-        def _extract_dangerous_apis_in_trace(trace_list: list[int]) -> list[dict]:
+        def _extract_dangerous_apis_in_trace(trace_list: list[int], max_xrefs: int = 5000) -> list[dict]:
             dangerous = []
+            xref_count = 0
             for idx, ea in enumerate(trace_list):
                 try:
                     for xref in idautils.XrefsFrom(ea):
+                        if xref_count >= max_xrefs:
+                            break
+                        xref_count += 1
                         if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                             callee = idc.get_name(xref.to)
                             if callee and callee in DANGEROUS_APIS:
@@ -356,6 +371,8 @@ def trace_analysis(
                                     "api": callee,
                                     "severity": DANGEROUS_APIS.get(callee, "medium"),
                                 })
+                    if xref_count >= max_xrefs:
+                        break
                 except Exception:
                     pass
             return dangerous
@@ -395,7 +412,10 @@ def trace_analysis(
             trace_sorted = sorted(trace_set)
             
             total_blocks, hit_blocks = 0, 0
-            for ea in idautils.Functions():
+            _max_funcs = int(kwargs.get("max_functions", 50000))
+            for func_idx, ea in enumerate(idautils.Functions()):
+                if func_idx >= _max_funcs:
+                    break
                 func = idaapi.get_func(ea)
                 if not func: continue
                 for block in idaapi.FlowChart(func):
@@ -422,12 +442,19 @@ def trace_analysis(
             if not trace_set:
                 return {"ok": True, "api_calls": [], "count": 0, "note": "No trace data loaded."}
             calls = []
+            xref_count = 0
+            max_xrefs = int(kwargs.get("max_xrefs", 100000))
             for ea in trace_set:
                 for xref in idautils.XrefsFrom(ea):
+                    if xref_count >= max_xrefs:
+                        break
+                    xref_count += 1
                     if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                         name = idc.get_name(xref.to)
                         if name and not name.startswith("sub_"):
                             calls.append(name)
+                if xref_count >= max_xrefs:
+                    break
             api_calls = Counter(calls).most_common(50)
             return {"ok": True, "api_calls": api_calls, "count": len(api_calls)}
 
@@ -479,6 +506,8 @@ def trace_analysis(
             seen_nodes = set()
             hits = set(trace_trimmed)
             api_hits = []
+            _tl_xref_limit = int(kwargs.get("timeline_xref_limit", 20000))
+            _tl_xref_count = 0
             for idx, ea in enumerate(trace_trimmed):
                 event = {"idx": idx, "t": idx, "type": "trace", "addr": hex(ea)}
                 name = _ea_name(ea)
@@ -486,11 +515,16 @@ def trace_analysis(
                     event["name"] = name
                 try:
                     for xref in idautils.XrefsFrom(ea):
+                        if _tl_xref_count >= _tl_xref_limit:
+                            break
+                        _tl_xref_count += 1
                         if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                             callee = idc.get_name(xref.to)
                             if callee and not callee.startswith("sub_"):
                                 api_event = {"idx": idx, "t": idx, "type": "api_call", "from": hex(ea), "to": hex(xref.to), "name": callee}
                                 api_hits.append(api_event)
+                    if _tl_xref_count >= _tl_xref_limit:
+                        break
                 except Exception:
                     pass
                 events.append(event)
@@ -593,14 +627,26 @@ def trace_analysis(
                     fn = _ea_func_name(ea)
                     if fn:
                         funcs_b[fn] += 1
+                _diff_xref_limit = int(kwargs.get("diff_xref_limit", 50000))
+                _diff_xref_count = 0
                 for idx, ea in enumerate(trace_a):
+                    if _diff_xref_count >= _diff_xref_limit:
+                        break
                     for xref in idautils.XrefsFrom(ea):
+                        if _diff_xref_count >= _diff_xref_limit:
+                            break
+                        _diff_xref_count += 1
                         if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                             callee = idc.get_name(xref.to)
                             if callee and not callee.startswith("sub_"):
                                 apis_a.append(callee)
                 for idx, ea in enumerate(trace_b):
+                    if _diff_xref_count >= _diff_xref_limit:
+                        break
                     for xref in idautils.XrefsFrom(ea):
+                        if _diff_xref_count >= _diff_xref_limit:
+                            break
+                        _diff_xref_count += 1
                         if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
                             callee = idc.get_name(xref.to)
                             if callee and not callee.startswith("sub_"):
@@ -806,7 +852,10 @@ def trace_analysis(
             trace_list = load_trace(run_id=str(kwargs.get("run_id")) if kwargs.get("run_id") is not None else None)
             trace_set = set(trace_list)
             ranked = []
-            for ea in idautils.Functions():
+            _max_funcs = int(kwargs.get("max_functions", 50000))
+            for func_idx, ea in enumerate(idautils.Functions()):
+                if func_idx >= _max_funcs:
+                    break
                 try:
                     f = ida_funcs.get_func(ea)
                     if not f:
@@ -1092,9 +1141,16 @@ def trace_analysis(
                     fn = ida_funcs.get_func(ea)
                     if fn:
                         sampled.add(int(fn.start_ea))
+                _static_xref_limit = int(kwargs.get("static_xref_limit", 50000))
+                _static_xref_count = 0
                 for src in sampled:
+                    if _static_xref_count >= _static_xref_limit:
+                        break
                     try:
                         for x in idautils.XrefsFrom(src):
+                            if _static_xref_count >= _static_xref_limit:
+                                break
+                            _static_xref_count += 1
                             if x.type in [idaapi.fl_CN, idaapi.fl_CF]:
                                 static_edges.add((int(src), int(x.to)))
                     except Exception:

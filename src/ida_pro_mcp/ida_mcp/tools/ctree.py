@@ -426,7 +426,7 @@ def ctree(
                         if obj_ea != idaapi.BADADDR:
                             s = idc.get_strlit_contents(obj_ea)
                             if s:
-                                text = s.decode("utf-8", "replace")
+                                text = s.decode("utf-8", "replace") if isinstance(s, bytes) else str(s)
                                 if match_filter(text):
                                     str_lines.append(f"{hex(obj_ea)}  xref@{hex(e.ea)}  {text}")
                     return 0

@@ -67,10 +67,11 @@ def _seg_type_name(seg):
     return seg_types.get(seg.type, f"type_{seg.type}")
 
 
-def _count_heads(seg):
+def _count_heads(seg, max_items=500000):
     """Count code heads, data heads, strings, and functions in a segment."""
     code_count = data_count = string_count = func_count = 0
     head = seg.start_ea
+    iterations = 0
     while head < seg.end_ea:
         flags = ida_bytes.get_flags(head)
         if ida_bytes.is_code(flags):
@@ -81,6 +82,9 @@ def _count_heads(seg):
             string_count += 1
         head = idc.next_head(head, seg.end_ea)
         if head == idaapi.BADADDR:
+            break
+        iterations += 1
+        if iterations >= max_items:
             break
     for _ in idautils.Functions(seg.start_ea, seg.end_ea):
         func_count += 1
@@ -528,6 +532,7 @@ def segments(
             data_items = []
             strings = []
             head = seg.start_ea
+            iterations = 0
             while head < seg.end_ea:
                 flags = ida_bytes.get_flags(head)
                 if ida_bytes.is_data(flags):
@@ -551,6 +556,9 @@ def segments(
                     })
                 head = idc.next_head(head, seg.end_ea)
                 if head == idaapi.BADADDR:
+                    break
+                iterations += 1
+                if iterations >= 500000:
                     break
 
             return {

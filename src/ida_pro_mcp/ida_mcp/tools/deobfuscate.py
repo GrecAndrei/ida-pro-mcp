@@ -100,10 +100,7 @@ def _detect_encoding_in_func(func_ea, limit):
             for xref in idautils.XrefsFrom(ea, 0):
                 contents = idc.get_strlit_contents(xref.to)
                 if contents:
-                    try:
-                        s = contents.decode("utf-8", errors="ignore")
-                    except Exception:
-                        s = str(contents)
+                    s = contents.decode("utf-8", errors="ignore") if isinstance(contents, bytes) else str(contents)
                     if "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" in s:
                         b64_refs += 1
 
@@ -123,49 +120,6 @@ def _detect_encoding_in_func(func_ea, limit):
         findings.append(f"{hex_ea(func_ea)}  {_get_func_name_safe(func_ea)}  {' '.join(methods)}")
 
     return findings[:limit]
-
-
-def _xor_scan_func(func_ea, limit):
-    """Scan a function for XOR-encoded data references and attempt decode."""
-    findings = []
-    func = idaapi.get_func(func_ea)
-    if not func:
-        return findings
-
-    for ea in idautils.FuncItems(func_ea):
-        mnem = idc.print_insn_mnem(ea)
-        if not mnem:
-            continue
-
-        # Look for data references that could be encoded strings
-        for xref in idautils.XrefsFrom(ea, 0):
-            if xref.iscode:
-                continue
-            data_ea = xref.to
-            flags = ida_bytes.get_flags(data_ea)
-            if ida_bytes.is_strlit(flags):
-                continue  # already a known string
-
-            raw = ida_bytes.get_bytes(data_ea, 64)
-            if not raw or len(raw) < 4:
-                continue
-
-            # Try single-byte XOR keys
-            for key in range(1, 256):
-                decoded = _xor_decode(raw, key)
-                # Check for printable result with at least 4 chars before null
-                null_pos = decoded.find(b'\x00')
-                if null_pos < 4:
-                    continue
-                segment = decoded[:null_pos]
-                if _is_printable_ascii(segment) and len(segment) >= 4:
-                    decoded_str = segment.decode("ascii", errors="replace")[:80]
-                    findings.append(f"{hex_ea(data_ea)}  key=0x{key:02x}  len={len(segment)}  {_get_func_name_safe(ea)}  {decoded_str}")
-                    if len(findings) >= limit:
-                        return findings
-                    break  # found a key for this data, move on
-
-    return findings
 
 
 def _find_stack_strings(func_ea, limit):
@@ -228,142 +182,6 @@ def _find_stack_strings(func_ea, limit):
     return findings[:limit]
 
 
-def _detect_opaque_predicates(func_ea, limit):
-    """Detect opaque predicates (conditional jumps where one branch is never taken)."""
-    findings = []
-    func = idaapi.get_func(func_ea)
-    if not func:
-        return findings
-
-    for ea in idautils.FuncItems(func_ea):
-        mnem = idc.print_insn_mnem(ea)
-        if not mnem:
-            continue
-        mnem_l = mnem.lower()
-        if mnem_l not in _COND_JUMPS:
-            continue
-
-        # Get the jump target
-        jump_target = idc.get_operand_value(ea, 0)
-        if jump_target == idaapi.BADADDR:
-            continue
-
-        # Get the fall-through address
-        fall_through = idc.next_head(ea)
-        if fall_through == idaapi.BADADDR:
-            continue
-
-        # Check xrefs to the jump target and fall-through
-        # An opaque predicate has one branch with no other incoming xrefs
-        jump_xrefs = list(idautils.XrefsTo(jump_target, 0))
-        fall_xrefs = list(idautils.XrefsTo(fall_through, 0))
-
-        # Check preceding instruction for suspicious patterns
-        prev = idc.prev_head(ea)
-        if prev == idaapi.BADADDR:
-            continue
-        prev_mnem = idc.print_insn_mnem(prev)
-        if not prev_mnem:
-            continue
-        prev_mnem_l = prev_mnem.lower()
-
-        # Pattern: xor reg, reg followed by conditional jump (always zero)
-        # Pattern: cmp reg, reg (always equal)
-        # Pattern: test reg, reg after xor reg, reg
-        is_opaque = False
-        pred_type = ""
-
-        if prev_mnem_l == "xor":
-            op0 = idc.print_operand(prev, 0)
-            op1 = idc.print_operand(prev, 1)
-            if op0 == op1:
-                is_opaque = True
-                pred_type = "xor_self_then_cond"
-
-        elif prev_mnem_l == "cmp":
-            op0 = idc.print_operand(prev, 0)
-            op1 = idc.print_operand(prev, 1)
-            if op0 == op1:
-                is_opaque = True
-                pred_type = "cmp_self"
-
-        elif prev_mnem_l == "test":
-            op0 = idc.print_operand(prev, 0)
-            op1 = idc.print_operand(prev, 1)
-            if op0 == op1:
-                # Check if preceded by xor reg, reg
-                prev2 = idc.prev_head(prev)
-                if prev2 != idaapi.BADADDR:
-                    pm2 = idc.print_insn_mnem(prev2)
-                    if pm2 and pm2.lower() == "xor":
-                        p2_op0 = idc.print_operand(prev2, 0)
-                        p2_op1 = idc.print_operand(prev2, 1)
-                        if p2_op0 == p2_op1 and p2_op0 == op0:
-                            is_opaque = True
-                            pred_type = "xor_test_cond"
-
-        # Also detect: one branch target has zero xrefs from code
-        if not is_opaque:
-            jump_code_xrefs = [x for x in jump_xrefs if x.iscode]
-            fall_code_xrefs = [x for x in fall_xrefs if x.iscode]
-            if len(jump_code_xrefs) == 1 and len(fall_code_xrefs) == 0:
-                is_opaque = True
-                pred_type = "dead_fallthrough"
-            elif len(fall_code_xrefs) == 1 and len(jump_code_xrefs) == 0:
-                is_opaque = True
-                pred_type = "dead_branch"
-
-        if is_opaque:
-            findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  {pred_type}  {mnem_l}  jmp={hex_ea(jump_target)}  fall={hex_ea(fall_through)}")
-            if len(findings) >= limit:
-                return findings
-
-    return findings
-
-
-def _detect_cff(func_ea, limit, depth):
-    """Detect control flow flattening patterns (dispatcher loops)."""
-    findings = []
-    func = idaapi.get_func(func_ea)
-    if not func:
-        return findings
-
-    # Look for patterns: a variable compared repeatedly in a loop
-    # with many branches (switch-like dispatcher)
-    cmp_targets = {}
-    jmp_count = 0
-    insn_count = 0
-
-    for ea in idautils.FuncItems(func_ea):
-        insn_count += 1
-        mnem = idc.print_insn_mnem(ea)
-        if not mnem:
-            continue
-        mnem_l = mnem.lower()
-
-        if mnem_l == "cmp":
-            op0 = idc.print_operand(ea, 0)
-            op1_type = idc.get_operand_type(ea, 1)
-            if op1_type == idc.o_imm:
-                cmp_targets.setdefault(op0, []).append(ea)
-
-        if mnem_l in _COND_JUMPS:
-            jmp_count += 1
-
-    # Heuristic: if a single variable is compared against many constants,
-    # it's likely a dispatcher
-    for var, cmp_eas in cmp_targets.items():
-        if len(cmp_eas) >= 4:
-            # Ratio of conditional jumps to instructions
-            ratio = jmp_count / max(insn_count, 1)
-            conf = "high" if len(cmp_eas) >= 8 else "medium"
-            findings.append(f"{hex_ea(func_ea)}  {_get_func_name_safe(func_ea)}  dispatcher={var}  cases={len(cmp_eas)}  cond_jumps={jmp_count}  [{conf}]")
-            if len(findings) >= limit:
-                return findings
-
-    return findings
-
-
 def _find_dead_code(func_ea, limit):
     """Find dead/unreachable code blocks within a function."""
     findings = []
@@ -376,11 +194,15 @@ def _find_dead_code(func_ea, limit):
     reachable.add(func.start_ea)
 
     for ea in idautils.FuncItems(func_ea):
-        for xref in idautils.XrefsTo(ea, 0):
+        _matched = False
+        for _xi, xref in enumerate(idautils.XrefsTo(ea, 0)):
+            if _xi >= 1000:
+                break
             if func.start_ea <= xref.frm < func.end_ea:
                 reachable.add(ea)
+                _matched = True
                 break
-        else:
+        if not _matched:
             # Also consider sequential flow from previous instruction
             prev = idc.prev_head(ea)
             if prev != idaapi.BADADDR and prev >= func.start_ea:
@@ -659,8 +481,7 @@ def _decode_attempt_at(ea, key_hex, limit):
 @tool
 @idaread
 def deobfuscate(
-    action: Annotated[Literal["detect_encoding", "xor_scan", "stack_strings",
-                               "opaque_predicates", "control_flow_flatten",
+    action: Annotated[Literal["detect_encoding", "stack_strings",
                                "dead_code", "api_hashing", "dynamic_dispatch",
                                "anti_disasm", "decode_attempt"],
                       "Deobfuscation analysis action"],
@@ -671,14 +492,11 @@ def deobfuscate(
     depth: Annotated[int, "Analysis depth"] = 2,
 ) -> dict:
     """
-    LLM-optimized deobfuscation analysis for binary reverse engineering.
+    Deobfuscation analysis for binary reverse engineering.
 
     Actions:
     - detect_encoding: Detect string encoding/encryption methods (XOR, Base64, RC4, custom).
-    - xor_scan: Find XOR-encoded strings and attempt decode with single-byte keys 0x01-0xFF.
     - stack_strings: Find strings built character-by-character on the stack (mov byte sequences).
-    - opaque_predicates: Detect opaque predicates (always-true/false conditional jumps).
-    - control_flow_flatten: Detect control flow flattening (dispatcher variable with many case comparisons).
     - dead_code: Find dead/unreachable code blocks (no incoming xrefs, follows unconditional terminator).
     - api_hashing: Detect API hashing (ROR/hash constants near GetProcAddress calls).
     - dynamic_dispatch: Find dynamically resolved function calls (indirect call via register/memory).
@@ -708,14 +526,8 @@ def deobfuscate(
 
             if action == "detect_encoding":
                 hits = _detect_encoding_in_func(func_ea, remaining)
-            elif action == "xor_scan":
-                hits = _xor_scan_func(func_ea, remaining)
             elif action == "stack_strings":
                 hits = _find_stack_strings(func_ea, remaining)
-            elif action == "opaque_predicates":
-                hits = _detect_opaque_predicates(func_ea, remaining)
-            elif action == "control_flow_flatten":
-                hits = _detect_cff(func_ea, remaining, depth)
             elif action == "dead_code":
                 hits = _find_dead_code(func_ea, remaining)
             elif action == "api_hashing":

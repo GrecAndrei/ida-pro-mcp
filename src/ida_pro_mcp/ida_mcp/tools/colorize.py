@@ -60,10 +60,14 @@ def colorize(
             bgr = parse_color(color)
             func = ida_funcs.get_func(ea)
             curr = func.start_ea
+            _max_items = 100000
+            _count = 0
             while curr < func.end_ea:
                 idc.set_color(curr, idc.CIC_ITEM, bgr)
                 curr = idc.next_head(curr, func.end_ea)
                 if curr == idaapi.BADADDR: break
+                _count += 1
+                if _count >= _max_items: break
             return {"ok": True, "func": idc.get_func_name(func.start_ea), "color": color or "yellow"}
 
         elif action == "set_range":
@@ -75,10 +79,14 @@ def colorize(
             
             bgr = parse_color(color)
             curr = ea
+            _max_items = 100000
+            _count = 0
             while curr < ee:
                 idc.set_color(curr, idc.CIC_ITEM, bgr)
                 curr = idc.next_head(curr, ee)
                 if curr == idaapi.BADADDR: break
+                _count += 1
+                if _count >= _max_items: break
             return {"ok": True, "start": hex(ea), "end": hex(ee)}
 
         elif action == "set_insn":
@@ -126,10 +134,14 @@ def colorize(
             func = ida_funcs.get_func(ea)
             if func:
                 curr = func.start_ea
+                _max_items = 100000
+                _count = 0
                 while curr < func.end_ea:
                     idc.set_color(curr, idc.CIC_ITEM, 0xFFFFFFFF)
                     curr = idc.next_head(curr, func.end_ea)
                     if curr == idaapi.BADADDR: break
+                    _count += 1
+                    if _count >= _max_items: break
             else:
                 idc.set_color(ea, idc.CIC_ITEM, 0xFFFFFFFF)
             return {"ok": True, "cleared": hex(ea)}

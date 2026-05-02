@@ -228,9 +228,9 @@ def _get_func_strings(func_ea):
             if ida_bytes.is_strlit(flags):
                 contents = idc.get_strlit_contents(xref.to)
                 if contents:
-                    try:
+                    if isinstance(contents, bytes):
                         s = contents.decode("utf-8", errors="ignore")
-                    except Exception:
+                    else:
                         s = str(contents)
                     if s and s not in strings:
                         strings.append(s)

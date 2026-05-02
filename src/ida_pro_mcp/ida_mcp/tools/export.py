@@ -232,12 +232,19 @@ def export(
             commands.append("static main() {")
             
             # Export renames
+            _IDC_RENAME_LIMIT = 50000
+            _rename_count = 0
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
                     name = idc.get_func_name(func_ea)
                     if name and not name.startswith("sub_"):
                         name_escaped = _escape_idc_string(name)
                         commands.append(f'  MakeName({hex(func_ea)}, "{name_escaped}");')
+                        _rename_count += 1
+                        if _rename_count >= _IDC_RENAME_LIMIT:
+                            break
+                if _rename_count >= _IDC_RENAME_LIMIT:
+                    break
             
             # Export comments (sample)
             comment_count = 0
@@ -276,6 +283,7 @@ def export(
             }
             
             # Functions
+            _JSON_FUNC_LIMIT = 5000
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
                     func = ida_funcs.get_func(func_ea)
@@ -284,9 +292,10 @@ def export(
                         "name": idc.get_func_name(func_ea),
                         "size": func.end_ea - func.start_ea if func else 0
                     })
-            
-            # Limit for size
-            data["functions"] = data["functions"][:5000]
+                    if len(data["functions"]) >= _JSON_FUNC_LIMIT:
+                        break
+                if len(data["functions"]) >= _JSON_FUNC_LIMIT:
+                    break
             
             # Strings (sample)
             for s in idautils.Strings():
@@ -315,12 +324,20 @@ def export(
                     return {"ok": True, "exported": True, "path": path, "note": "BinExport plugin executed"}
                 # Plugin unavailable: emit structured JSON fallback artifact.
                 fallback_path = f"{path}.fallback.json"
+                _BINEXPORT_MAX = 100000
+                def _count_bounded(iterable, limit):
+                    c = 0
+                    for _ in iterable:
+                        c += 1
+                        if c >= limit:
+                            break
+                    return c
                 fallback = {
                     "format": "binexport-fallback",
                     "source_file": idaapi.get_input_file_path(),
                     "imagebase": hex(idaapi.get_imagebase()),
-                    "functions": len(list(idautils.Functions())),
-                    "names": len(list(idautils.Names())),
+                    "functions": _count_bounded(idautils.Functions(), _BINEXPORT_MAX),
+                    "names": _count_bounded(idautils.Names(), _BINEXPORT_MAX),
                     "segments": len(list(idautils.Segments())),
                     "note": "BinExport plugin unavailable; emitted fallback metadata artifact.",
                 }

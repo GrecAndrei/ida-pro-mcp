@@ -77,7 +77,10 @@ def patterns(
             
             matches = []
             total = 0
-            for ea in idautils.Functions():
+            _scan_limit = 200000
+            for _scan_idx, ea in enumerate(idautils.Functions()):
+                if _scan_idx >= _scan_limit:
+                    break
                 fb = ida_bytes.get_bytes(ea, len(p_bytes))
                 if not fb or len(fb) < len(p_bytes): continue
                 if all(fb[i] == p_bytes[i] for i in range(len(p_bytes)) if mask[i]):
@@ -145,8 +148,11 @@ def patterns(
             # Show functions that were identified by FLIRT signatures
             matched_lines = []
             unmatched_count = 0
+            _scan_limit = 200000
             
-            for ea in idautils.Functions():
+            for _scan_idx, ea in enumerate(idautils.Functions()):
+                if _scan_idx >= _scan_limit:
+                    break
                 func_name = idc.get_func_name(ea)
                 func = ida_funcs.get_func(ea)
                 if not func:

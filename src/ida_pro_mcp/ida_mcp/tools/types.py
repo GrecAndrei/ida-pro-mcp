@@ -124,6 +124,8 @@ def types(
                                     "is_enum": tif.is_enum(),
                                     "size": tif.get_size(),
                                 })
+                                if count > 0 and len(types_list) >= count:
+                                    break
 
             return {
                 "ok": True,
@@ -342,12 +344,18 @@ def types(
                 return make_error(MCPError.IDA_ERROR, "Type ordinal API not available. "
                                   "This IDA version may use a different type enumeration API.")
 
-            for ordinal in range(1, qty_func(None)):
+            max_types = max(1, qty_func(None))
+            limit = max_types
+            if count > 0:
+                limit = min(max_types, offset + count + 100)  # scan ahead beyond page
+            for ordinal in range(1, limit):
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_numbered_type(None, ordinal) and (tif.is_struct() or tif.is_union()):
                     type_name = tif.get_type_name()
                     if matcher(type_name):
                         matches.append({"name": type_name, "ordinal": ordinal, "match": "name"})
+                        if count > 0 and len(matches) >= count:
+                            break
                         continue
 
                     udt = ida_typeinf.udt_type_data_t()
@@ -361,6 +369,8 @@ def types(
                                     "match": "field",
                                     "field": m.name,
                                 })
+                                if count > 0 and len(matches) >= count:
+                                    break
                                 break
             return {"ok": True, "matches": matches, "total": len(matches)}
 
@@ -475,10 +485,12 @@ def types(
                     elif 0 < mem_size <= 256:
                         raw = ida_bytes.get_bytes(mem_addr, mem_size)
                         if raw:
-                            if all(32 <= b < 127 or b in (9, 10, 13) for b in raw):
+                            if isinstance(raw, bytes) and all(32 <= b < 127 or b in (9, 10, 13) for b in raw):
                                 val_str = repr(raw.decode('utf-8', errors='replace'))
-                            else:
+                            elif isinstance(raw, bytes):
                                 val_str = raw.hex()[:64] + ("..." if len(raw) > 32 else "")
+                            else:
+                                val_str = repr(str(raw))
                         else:
                             val_str = f"[{mem_size} bytes]"
                     else:
@@ -732,8 +744,11 @@ def types(
             # Collect all xrefs TO the given address
             locations = []
             seen = set()
+            MAX_XREFS = 5000
 
             for xref in idautils.XrefsTo(ea, 0):
+                if len(locations) >= MAX_XREFS:
+                    break
                 if xref.frm in seen:
                     continue
                 seen.add(xref.frm)

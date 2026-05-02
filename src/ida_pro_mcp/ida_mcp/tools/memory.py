@@ -50,8 +50,9 @@ def _extract_strings(data, min_len=4):
 
 def _is_be():
     try:
-        if hasattr(ida_ida, "inf_is_be"):
-            return ida_ida.inf_is_be()
+        import ida_ida as _ida_ida
+        if hasattr(_ida_ida, "inf_is_be"):
+            return _ida_ida.inf_is_be()
     except Exception:
         pass
     try:
@@ -155,13 +156,15 @@ def memory(
                 if not raw:
                     return make_error(MCPError.ADDRESS_INVALID, f"Could not read 4 bytes from {hex(ea)}")
                 import struct
-                value = struct.unpack("<f", raw)[0]
+                endian = ">" if _is_be() else "<"
+                value = struct.unpack(f"{endian}f", raw)[0]
             elif type == "f64":
                 raw = ida_bytes.get_bytes(ea, 8)
                 if not raw:
                     return make_error(MCPError.ADDRESS_INVALID, f"Could not read 8 bytes from {hex(ea)}")
                 import struct
-                value = struct.unpack("<d", raw)[0]
+                endian = ">" if _is_be() else "<"
+                value = struct.unpack(f"{endian}d", raw)[0]
             elif type == "ptr":
                 is_64 = idaapi.inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
                 value = ida_bytes.get_qword(ea) if is_64 else ida_bytes.get_wide_dword(ea)
