@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import json
+import numpy as np
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
@@ -173,23 +174,24 @@ class AutoNudge:
             if count >= 3:
                 nudge["redundant"] = f"You have searched for '{q}' {count} times already"
 
-        # 4. Suggest relevant tools based on response content
-        suggestions = []
-        if tool == "code" and action in ("decompile", "semantic_decompile"):
-            if addr_val:
-                suggestions.append(f"code.callers(addr='{addr_val}')")
-                suggestions.append(f"ctree.get(addr='{addr_val}')")
-                suggestions.append(f"bridgerag.search from '{addr_val}'")
-
+        # 4. Smart tool suggestions (Z-score normalized, behavior-tag aware, MemRL-informed)
+        suggestions = suggest_smart_tools(
+            tool, action, response,
+            behavior_tags=response.get("_digest", {}).get("behavior_tags", []) if isinstance(response, dict) else [],
+        )
+        if suggestions:
+            nudge["suggested"] = suggestions[:8]
+        
         if response.get("ok") is False and response.get("error"):
             err_msg = str(response.get("error", ""))
             if "unknown action" in err_msg.lower():
-                suggestions.append("Try a different action. Use wiki.read(topic='" + tool + "') to see available actions.")
+                nudge.setdefault("suggested", []).append(
+                    "Use wiki.read(topic='" + tool + "') to see available actions."
+                )
             if "not found" in err_msg.lower():
-                suggestions.append("The address may not be mapped. Try data.functions to list available functions.")
-
-        if suggestions:
-            nudge["suggested"] = suggestions[:3]
+                nudge.setdefault("suggested", []).append(
+                    "The address may not be mapped. Try data.functions to list available functions."
+                )
 
         # 5. Progress reminder
         if action in ("decompile", "semantic_decompile"):
@@ -222,6 +224,130 @@ def get_decompile_history(idb: str) -> List[str]:
 def get_search_history(idb: str) -> List[str]:
     """Get list of previous search queries."""
     return _auto_nudge._search_cache.get(_auto_nudge._session_key(idb), [])
+
+
+# ============================================================================
+# Smart Tool Suggestion (Z-score normalized, behavior-tag aware)
+# ============================================================================
+
+# Priority scoring: base * (1 + behavior_boost)
+_TOOL_SUGGESTION_BASE = {
+    # When analyzing a function
+    "code:decompile": {"base": 0, "triggers": [], "next": [
+        ("code:callers", 0.3), ("code:callees", 0.3), ("code:blocks", 0.2),
+        ("ctree:get", 0.2), ("bridgerag:search", 0.3), ("stack_analysis:analyze_frame", 0.15),
+        ("crypto_id:detect", 0.2), ("code:strings_in_func", 0.15),
+    ]},
+    "data:functions": {"base": 0, "triggers": [], "next": [
+        ("code:decompile", 0.3), ("funcs:info", 0.2), ("search:find", 0.15),
+        ("schemaboot:ingest", 0.1), ("idb:summary", 0.1),
+    ]},
+    "data:strings": {"base": 0, "triggers": [], "next": [
+        ("string_ops:find_urls", 0.25), ("string_ops:find_ips", 0.2),
+        ("string_ops:find_crypto", 0.2), ("search:string", 0.15),
+        ("string_ops:find_emails", 0.1), ("string_ops:find_commands", 0.1),
+    ]},
+    "data:imports": {"base": 0, "triggers": [], "next": [
+        ("imports_deep:thunks", 0.25), ("imports_deep:delay", 0.2),
+        ("classify:categorize", 0.2), ("data:functions", 0.15),
+    ]},
+    "search:find": {"base": 0, "triggers": [], "next": [
+        ("search:callers", 0.2), ("search:callees", 0.2),
+        ("code:decompile", 0.15), ("funcs:info", 0.1),
+    ]},
+    "search:name": {"base": 0, "triggers": [], "next": [
+        ("code:decompile", 0.3), ("funcs:info", 0.2), ("search:find", 0.15),
+    ]},
+    # When just looking at binary info
+    "idb:summary": {"base": 0, "triggers": [], "next": [
+        ("data:imports", 0.25), ("data:strings", 0.2), ("data:functions", 0.2),
+        ("binary_info:headers", 0.15), ("binary_info:sections", 0.1),
+        ("binary_info:compiler", 0.1), ("entropy:calculate", 0.1),
+    ]},
+    "binary_info:headers": {"base": 0, "triggers": [], "next": [
+        ("binary_info:sections", 0.3), ("binary_info:compiler", 0.25),
+        ("binary_info:checksums", 0.15), ("binary_info:relocations", 0.1),
+    ]},
+    # Bridgerag triggers
+    "bridgerag:search": {"base": 0, "triggers": [], "next": [
+        ("code:decompile", 0.35), ("xref_analysis:call_chain", 0.25),
+        ("compare:functions", 0.15), ("code:decompile_chain", 0.1),
+    ]},
+}
+
+
+def suggest_smart_tools(tool: str, action: str, response: dict, behavior_tags: Optional[List[str]] = None) -> List[str]:
+    """
+    Generate smart tool suggestions using Z-score normalized scoring.
+    
+    Combines:
+      1. Base priority from the workflow knowledge graph
+      2. Behavior-tag boosts (e.g., crypto tag boosts crypto_id)
+      3. Historical call frequency (tools the LLM has used but might forget)
+    
+    Returns list of formatted tool calls sorted by score.
+    """
+    behavior_tags = behavior_tags or []
+    entry = _TOOL_SUGGESTION_BASE.get(f"{tool}:{action}", {})
+    suggestions = entry.get("next", [])
+    
+    if not suggestions:
+        return []
+    
+    scored = []
+    for tool_action, base_score in suggestions:
+        score = base_score
+        
+        # Behavior-tag boosts
+        ta = tool_action.split(":")[0]
+        if "crypto" in behavior_tags and ta in ("crypto_id",):
+            score *= 1.5
+        if "network" in behavior_tags and ta in ("bridgerag", "xref_analysis", "string_ops"):
+            score *= 1.3
+        if "process_injection" in behavior_tags and ta in ("cfg_analysis", "xref_analysis"):
+            score *= 1.4
+        if "anti_analysis" in behavior_tags and ta in ("deobfuscate",):
+            score *= 1.6
+        
+        # Historical usage boost: tools the LLM has used more get boosted
+        call_key = f"{tool}:{action}"
+        call_history = _auto_nudge._call_history
+        for idb_key in call_history:
+            usage_count = call_history[idb_key].get(tool_action, 0)
+            if usage_count > 0:
+                # Tools used 0-2 times: no boost. 3-5 times: slight boost. 6+: moderate boost
+                boost = min(0.3, usage_count * 0.05)
+                score += boost
+                break  # Only count from most recent session
+        
+        scored.append((tool_action, score))
+    
+    # Z-score normalization (from MemRL research)
+    scores = np.array([s for _, s in scored])
+    mean = scores.mean() if len(scores) > 0 else 0
+    std = scores.std() if len(scores) > 0 else 1.0
+    if std > 0:
+        scores = (scores - mean) / std
+    
+    # Add memrl Q-value boost if available
+    try:
+        from ida_pro_mcp.ida_mcp.tools.memrl import MemRLBank
+        bank = MemRLBank()
+        stats = bank.get_statistics()
+        if stats.get("total_memories", 0) > 0:
+            top_mems = bank.get_top_memories(limit=20)
+            for mem in top_mems:
+                intent = mem.get("intent_key", "")
+                for i, (ta, _) in enumerate(scored):
+                    if intent and any(kw in intent.lower() for kw in ta.split(":")[-1].lower().split("_")):
+                        q_val = mem.get("q_value", 0.5)
+                        scores[i] += (q_val - 0.5) * 0.3  # Boost proportional to Q-value
+    except Exception:
+        pass
+    
+    # Sort by normalized score
+    ranked = sorted(zip(scored, scores), key=lambda x: x[1], reverse=True)
+    return [f"{ta[0]}={ta[1]}" for (ta, _), _ in ranked[:8]]
 
 
 # ============================================================================
