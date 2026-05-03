@@ -24,9 +24,11 @@ class MCPError:
     RPC_CONNECTION_ERROR = "RPC_CONNECTION_ERROR"
     IO_ERROR = "IO_ERROR"
     DB_ERROR = "DB_ERROR"
+    NOT_FOUND = "NOT_FOUND"
 
 
 _HOST_ERROR_HINTS = {
+    MCPError.NOT_FOUND: "The requested item was not found.",
     MCPError.FILE_NOT_FOUND: "The file does not exist. Verify the path is correct.",
     MCPError.FILE_LOCKED: "The IDB or file is locked. Close other IDA instances first.",
     MCPError.IDA_TIMEOUT: "IDA took too long to start. Increase IDA_MCP_STARTUP_TIMEOUT or check IDA installation.",

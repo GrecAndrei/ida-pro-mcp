@@ -682,8 +682,9 @@ class TestSnapshots(unittest.TestCase):
 
     def test_snapshot_and_restore(self):
         s = self.mgr.create_session(self.test_binary, notes="original")
-        snap_id = self.mgr.snapshot_session(s.session_id)
-        self.assertIsNotNone(snap_id)
+        snap = self.mgr.snapshot_session(s.session_id)
+        self.assertIsNotNone(snap)
+        snap_id = snap["snapshot_id"]
         # Modify the session
         self.mgr.update_session(s.session_id, notes="modified")
         got = self.mgr.get_session(s.session_id)
@@ -1166,9 +1167,9 @@ class TestSnapshotIDDuplicate(unittest.TestCase):
         # Create multiple snapshots
         snap_ids = []
         for i in range(5):
-            snap_id = self.mgr.snapshot_session(sid)
-            self.assertIsNotNone(snap_id)
-            snap_ids.append(snap_id)
+            snap = self.mgr.snapshot_session(sid)
+            self.assertIsNotNone(snap)
+            snap_ids.append(snap["snapshot_id"])
         
         # All snapshot IDs should be unique
         self.assertEqual(len(snap_ids), len(set(snap_ids)),
