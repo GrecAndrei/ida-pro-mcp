@@ -2645,6 +2645,31 @@ class IDAMCPServer:
                         )
             except Exception:
                 pass
+
+            # ---- Confidence Gate ----
+            try:
+                if isinstance(compacted, dict):
+                    conf = compacted.get("confidence")
+                    if conf is not None:
+                        try:
+                            conf_val = float(conf)
+                            if conf_val < 0.5:
+                                compacted.setdefault(
+                                    "llm_low_confidence_gate",
+                                    {
+                                        "confidence": conf_val,
+                                        "threshold": 0.5,
+                                        "message": "Result confidence is below threshold. Verify before acting.",
+                                        "verification_actions": [
+                                            {"tool": "calc", "arguments": {"action": "eval", "expr": "1+1"}},
+                                            {"tool": "memory", "arguments": {"action": "read", "addr": "0x0", "size": 16}},
+                                        ],
+                                    },
+                                )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         return compacted
 
     def _serialize_payload(self, payload: Any, opts: dict) -> str:
