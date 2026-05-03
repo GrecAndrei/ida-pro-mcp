@@ -234,6 +234,9 @@ Practical agent rules:
 Address/pointer safety assist:
 
 - When the server detects pointer/offset-heavy context, responses can include `llm_pointer_note` plus executable `llm_guardrail_actions` (ready-to-run `calc`/`code` calls) so clients avoid mental address arithmetic mistakes.
+- Optional env toggles:
+  - `IDA_MCP_GUARDRAIL_AUTO_VERIFY=1`: attach `llm_guardrail_preview` for the first suggested guardrail action.
+  - `IDA_MCP_GUARDRAIL_STRICT_WRITES=1`: block risky write actions unless caller sets `_guardrail_ack=true`.
 
 ## Architecture Graphs
 

@@ -269,6 +269,8 @@ class IDAMCPServer:
         )
         self._pointer_note_last_shown_at = 0.0
         self._pointer_note_pending_signal = 0.0
+        self._guardrail_auto_verify = _env_bool("IDA_MCP_GUARDRAIL_AUTO_VERIFY", False)
+        self._guardrail_strict_writes = _env_bool("IDA_MCP_GUARDRAIL_STRICT_WRITES", False)
         # Controls whether tools/list returns the full monolithic description/schema payload.
         # Default OFF for context efficiency in LLM clients.
         self.monolithic_tool_descriptions = _env_bool(
@@ -2042,6 +2044,57 @@ class IDAMCPServer:
 
         return suggestions[:5]
 
+    def _guardrail_reason_tags(self, tool_name: str, call_args: Any, payload: Any) -> list[str]:
+        tags: list[str] = []
+        tn = str(tool_name or "").lower()
+        if tn in {"code", "xref_analysis", "graph", "ctree", "static_trace", "memory", "calc"}:
+            tags.append("address-heavy-tool")
+        if isinstance(call_args, dict):
+            keys = {str(k).lower() for k in call_args.keys()}
+            if {"addr", "address", "target"} & keys:
+                tags.append("explicit-address-arg")
+            if {"offset", "offsets", "base", "size"} & keys:
+                tags.append("offset-arithmetic")
+        addrs = self._collect_hex_addresses(call_args)
+        if len(addrs) < 2:
+            addrs.extend([a for a in self._collect_hex_addresses(payload) if a not in addrs])
+        if len(addrs) >= 2:
+            tags.append("multiple-hex-addresses")
+        return tags
+
+    def _guardrail_preview(self, action_row: dict) -> dict:
+        """Deterministic preview for first guardrail action without recursive tool execution."""
+        try:
+            tool = str(action_row.get("tool") or "")
+            args = dict(action_row.get("arguments") or {})
+            if tool != "calc":
+                return {"ok": False, "note": "preview unsupported for non-calc action"}
+            action = str(args.get("action") or "")
+            if action == "align":
+                v = int(str(args.get("value")), 0)
+                size = int(args.get("size") or 1)
+                if size <= 0:
+                    return {"ok": False, "note": "invalid align size"}
+                aligned = (v + (size - 1)) & ~(size - 1)
+                return {"ok": True, "action": "align", "value": hex(v), "aligned": hex(aligned), "size": size}
+            if action == "eval":
+                expr = str(args.get("expr") or "").strip()
+                if not expr:
+                    return {"ok": False, "note": "empty expr"}
+                # Very restricted arithmetic parser: hex/dec + - * / ( ) and spaces.
+                if not re.fullmatch(r"[0-9a-fA-FxX+\-*/()\s]+", expr):
+                    return {"ok": False, "note": "expr contains unsupported characters"}
+                val = eval(expr, {"__builtins__": {}}, {})
+                if isinstance(val, (int, float)):
+                    out = {"ok": True, "action": "eval", "expr": expr, "value": val}
+                    if isinstance(val, int):
+                        out["value_hex"] = hex(val)
+                    return out
+                return {"ok": False, "note": "expr did not evaluate to numeric value"}
+            return {"ok": False, "note": f"preview unsupported for calc action '{action}'"}
+        except Exception as e:
+            return {"ok": False, "note": f"preview error: {e}"}
+
     def _apply_output_filters(self, payload: Any, opts: dict) -> Any:
         """Apply universal output filtering (grep, head, tail, skip, path, pluck)."""
         import re as _re
@@ -2140,11 +2193,14 @@ class IDAMCPServer:
             if isinstance(payload, dict):
                 payload = dict(payload)
                 if include_pointer_note:
+                    guardrail_actions = self._build_llm_guardrail_actions(tool_name, call_args, payload)
+                    reason_tags = self._guardrail_reason_tags(tool_name, call_args, payload)
                     payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
-                    payload.setdefault(
-                        "llm_guardrail_actions",
-                        self._build_llm_guardrail_actions(tool_name, call_args, payload),
-                    )
+                    payload.setdefault("llm_guardrail_actions", guardrail_actions)
+                    payload.setdefault("llm_guardrail_confidence", round(min(1.0, self._compute_pointer_note_signal(tool_name, call_args, payload) / 6.0), 3))
+                    payload.setdefault("llm_guardrail_reason_tags", reason_tags)
+                    if self._guardrail_auto_verify and guardrail_actions:
+                        payload.setdefault("llm_guardrail_preview", self._guardrail_preview(guardrail_actions[0]))
             compacted = payload
         else:
             projected = self._project_top_level_fields(payload, opts)
@@ -2181,11 +2237,14 @@ class IDAMCPServer:
         if isinstance(compacted, dict):
             compacted = dict(compacted)
             if include_pointer_note:
+                guardrail_actions = self._build_llm_guardrail_actions(tool_name, call_args, compacted)
+                reason_tags = self._guardrail_reason_tags(tool_name, call_args, compacted)
                 compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
-                compacted.setdefault(
-                    "llm_guardrail_actions",
-                    self._build_llm_guardrail_actions(tool_name, call_args, compacted),
-                )
+                compacted.setdefault("llm_guardrail_actions", guardrail_actions)
+                compacted.setdefault("llm_guardrail_confidence", round(min(1.0, self._compute_pointer_note_signal(tool_name, call_args, compacted) / 6.0), 3))
+                compacted.setdefault("llm_guardrail_reason_tags", reason_tags)
+                if self._guardrail_auto_verify and guardrail_actions:
+                    compacted.setdefault("llm_guardrail_preview", self._guardrail_preview(guardrail_actions[0]))
             # ---- Auto-Nudge Injection ----
             try:
                 from .auto_nudge import get_nudge
@@ -5424,6 +5483,48 @@ class IDAMCPServer:
                         return self._handle_tool_next_action(tool_name, args)
                     if action == "stats":
                         return self._handle_tool_stats_action(tool_name, args)
+
+        if self._guardrail_strict_writes:
+            risky_tools = {"modify", "bulk", "annotation", "funcs", "segments", "memory", "data_ops"}
+            risky_actions = {
+                "patch_asm",
+                "rename",
+                "set_type",
+                "comment",
+                "apply_type",
+                "rename_stack",
+                "write",
+                "make_code",
+                "make_data",
+                "delete",
+                "set_name",
+                "set_attr",
+                "set_perms",
+                "set_flags",
+            }
+            ack = _coerce_bool(args.get("_guardrail_ack"), False)
+            signal = self._compute_pointer_note_signal(tool_name, args, {})
+            act = str(args.get("action") or "").strip().lower()
+            if (
+                not ack
+                and tool_name in risky_tools
+                and (act in risky_actions or signal >= 2.0)
+            ):
+                suggested = self._build_llm_guardrail_actions(tool_name, args, {})
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "Guardrail strict mode blocked a risky write without acknowledgement",
+                    hint=(
+                        "Run one suggested calc/code guardrail action, then retry with _guardrail_ack=true "
+                        "or disable IDA_MCP_GUARDRAIL_STRICT_WRITES."
+                    ),
+                    details={
+                        "tool": tool_name,
+                        "action": act,
+                        "signal": round(signal, 3),
+                        "suggested_guardrails": suggested,
+                    },
+                )
         if tool_name == "wiki":
             return self._handle_wiki(args)
         if tool_name == "misc":
