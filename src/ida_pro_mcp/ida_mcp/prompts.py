@@ -97,18 +97,18 @@ QUICKREF_TEXT = """\
 - `agent(action="context_pack", addr="main")` - Gather all context for a function
 - `calc(action="eval", expr="0x401000 + 0x100")` - Address math
 - `types(action="list")` - List type library
-- `structs(action="recover", addr="0x401000")` - Recover structure layout
+- `types(action="infer", addr="0x401000")` - Infer structure layout
 - `entropy(action="packed_detect")` - Detect packed/encrypted sections
 
 ## Security Analysis
-- `vuln_scan(action="scan_all", scan_profile="balanced")` - Scan for all vulnerability classes (CWE-tagged) with risk scoring
-- `vuln_scan(action="intelligence_report", scan_profile="deep", max_graph_depth=3, include_dataflow_graph=True, include_remediation_plan=True)` - Correlated exploit-path report with hotspots/recommendations/graph/plan
-- `vuln_scan(action="osv_query", osv_coordinates=["PyPI:requests@2.19.0"])` - Query OSV for known vulnerable dependency versions
-- `vuln_scan(action="buffer_overflow")` - Find buffer overflow patterns
+- `search(action="vulnerable")` - Scan for dangerous patterns and APIs
+- `search(action="regex", pattern="strcpy|gets|sprintf|strcat")` - Buffer overflow hotspots
+- `search(action="regex", pattern="printf\(|fprintf\(|sprintf\(")` - Format string hotspots
+- `search(action="regex", pattern="system\(|popen\(|_popen\(|exec\(")` - Command injection hotspots
 - `gadgets(action="mitigations")` - Check ASLR/DEP/canary/CFI
 - `gadgets(action="rop")` - Find ROP gadgets
 - `c2_detect(action="indicators")` - Detect C2/malware behavior
-- `taint(action="find_sinks")` - Find dangerous data sinks
+- `code(action="xrefs_to", addr="<sink>")` - Trace dangerous sinks to callers
 
 ## Deobfuscation & Crypto
 - `deobfuscate(action="xor_scan")` - Find and decode XOR-encoded strings
@@ -147,16 +147,15 @@ WORKFLOW_TRIAGE = """\
 WORKFLOW_VULN = """\
 # Vulnerability Hunting Workflow
 
-1. **Full Scan**: `vuln_scan(action="scan_all", scan_profile="balanced")` → all vulnerability classes with CWE tags + risk ranking
-2. **Buffer Overflows**: `vuln_scan(action="buffer_overflow")` → strcpy, gets, memcpy without bounds
-3. **Format Strings**: `vuln_scan(action="format_string")` → printf family with non-const format
-4. **Command Injection**: `vuln_scan(action="command_injection")` → system, popen, exec calls
-5. **Hardcoded Creds**: `vuln_scan(action="hardcoded_creds")` → passwords, tokens, API keys in strings
+1. **Pattern Scan**: `search(action="vulnerable")` → dangerous APIs and patterns
+2. **Buffer Overflows**: `search(action="regex", pattern="strcpy|gets|sprintf|strcat")`
+3. **Format Strings**: `search(action="regex", pattern="printf\(|fprintf\(|sprintf\(")`
+4. **Command Injection**: `search(action="regex", pattern="system\(|popen\(|_popen\(|exec\(")`
+5. **Hardcoded Creds**: `string_ops(action="find_api_keys")` → tokens, keys, secrets
 6. **Check Mitigations**: `gadgets(action="mitigations")` → ASLR, DEP, stack cookies, CFI
-7. **Trace Data Flow**: `taint(action="find_sinks")` → where does user input reach dangerous APIs?
+7. **Trace Data Flow**: Use `code(action="xrefs_to", addr="<sink>")` to trace user input flow
 8. **Stack Analysis**: `stack_analysis(action="buffers")` → find overflow targets
-9. **Classify by CWE**: `vuln_scan(action="classify", addr="0x...")` → classify specific address
-10. **OSV Dependency Check**: `vuln_scan(action="osv_query", osv_coordinates=["npm:lodash@4.17.20"])` → known package vulns from OSV
+9. **Classify by CWE**: `annotation(action="mark_dangerous", addr="0x...")` to tag findings
 10. **Document**: Use `annotation(action="mark_dangerous")` to annotate findings
 """
 
@@ -183,7 +182,7 @@ WORKFLOW_DIFF = """\
 # Binary Diff Workflow
 
 1. **Compare Functions**: `code(action="diff_functions", addrs=["0x401000", "0x402000"])`
-2. **Use BinDiff**: `diff(action="compare", ...)` for full binary comparison
+2. **Use Compare**: `compare(action="functions", addrs=["0x401000","0x402000"])`
 3. **Check Patched Functions**: Look at similarity scores < 1.0
 4. **Analyze Changes**: Decompile both versions of changed functions
 5. **Document**: Comment the differences found
@@ -193,13 +192,13 @@ WORKFLOW_DEBUG = """\
 # Debugging Workflow
 
 1. **Start Debugger**: `debug(action="start")`
-2. **Set Breakpoints**: `debug(action="bp_set", addr="main")`
+2. **Set Breakpoints**: `debug(action="add_bp", addr="main")`
 3. **Run to Break**: `debug(action="continue")`
-4. **Check Registers**: `debug(action="registers")`
+4. **Check Registers**: `debug(action="regs")`
 5. **Step Through**: `debug(action="step_into")` or `debug(action="step_over")`
 6. **Read Memory**: `memory(action="read", addr="0x401000", size=64)`
-7. **Check Stack**: `debug(action="stack")`
-8. **Trace Execution**: `trace(action="start")` → run → `trace(action="stop")` → `trace(action="get")`
+7. **Check Stack**: `debug(action="callstack")`
+8. **Trace Execution**: `trace(action="get")` → `trace_analysis(action="analyze_coverage")`
 """
 
 WORKFLOW_CRYPTO = """\
@@ -233,7 +232,7 @@ WORKFLOW_PROTOCOL = """\
 WORKFLOW_EXPLOIT = """\
 # Exploit Development Workflow
 
-1. **Scan Vulnerabilities**: `vuln_scan(action="scan_all", scan_profile="balanced")` → find all vulnerability classes
+1. **Scan Vulnerabilities**: `search(action="vulnerable")` → find dangerous patterns
 2. **Check Mitigations**: `gadgets(action="mitigations")` → ASLR, DEP, stack cookies, CFI
 3. **Find ROP Gadgets**: `gadgets(action="rop", limit=100)` → ret-terminated sequences
 4. **Stack Pivots**: `gadgets(action="stack_pivot")` → xchg rsp/mov sp gadgets

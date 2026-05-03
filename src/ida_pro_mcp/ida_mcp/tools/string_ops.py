@@ -27,7 +27,7 @@ _PATH_PATTERN = re.compile(
 )
 
 _REGISTRY_PATTERN = re.compile(
-    rb'(HKEY_[A-Z_]+|HKLM|HKCU|HKCR|HKU|HKCC|Software\\|CurrentVersion\\|Microsoft\\)',
+    rb'(HKEY_[A-Z_]+|HKLM|HKCU|HKCR|HKU|HKCC|Software\\\\|CurrentVersion\\\\|Microsoft\\\\)',
     re.IGNORECASE,
 )
 
@@ -597,7 +597,7 @@ _SUSPICIOUS_STRING_KEYWORDS = {
     ],
     "evasion": [
         (re.compile(rb'(?:vmware|vbox|qemu|virtualbox|xen|hyper-v|sandbox|cwsandbox|fakenet)', re.IGNORECASE), 0.74, "vm_check"),
-        (re.compile(rb'(?:\\\\.\\\\(?:HGFS|VBox|vmci|GlobalVM)', re.IGNORECASE), 0.76, "vm_driver"),
+        (re.compile(rb'(?:\\\\.\\\\(?:HGFS|VBox|vmci|GlobalVM))', re.IGNORECASE), 0.76, "vm_driver"),
         (re.compile(rb'(?:IsDebuggerPresent|DebugActiveProcess|CheckRemoteDebugger)', re.IGNORECASE), 0.78, "anti_debug_str"),
     ],
     "injection": [

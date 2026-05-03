@@ -217,3 +217,67 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+# Tool sweep test plan generator
+# This script generates a minimal safe call for each tool.
+
+import json
+
+TEST_ARGS = {
+    "session": {"action": "status"},
+    "idb": {"action": "overview"},
+    "data": {"action": "functions", "count": 1},
+    "code": {"action": "disasm", "addr": "0x140001000", "limit": 1},
+    "search": {"action": "find", "pattern": "main"},
+    "analysis": {"action": "get_options"},
+    "imports_deep": {"action": "thunks"},
+    "symbols": {"action": "status"},
+    "patterns": {"action": "list_sigs"},
+    "types": {"action": "list"},
+    "memory": {"action": "read", "addr": "0x140001000", "size": 8},
+    "calc": {"action": "eval", "expr": "0x10 + 0x20"},
+    "nav": {"action": "cursor"},
+    "binary_info": {"action": "headers"},
+    "export": {"action": "headers"},
+    "history": {"action": "list"},
+    "segments": {"action": "list"},
+    "funcs": {"action": "list", "count": 1},
+    "graph": {"action": "callgraph", "addr": "0x140001000", "format": "dot"},
+    "ctree": {"action": "get", "addr": "0x140001000", "depth": 1},
+    "bookmarks": {"action": "list"},
+    "bulk": {"action": "export_annotations"},
+    "debug": {"action": "threads"},
+    "compare": {"action": "constants", "addr": "0x140001000", "addr2": "0x140001010"},
+    "query": {"action": "data", "subaction": "functions", "count": 1},
+    "misc": {"action": "health"},
+    "project": {"action": "list_recent"},
+    "governance": {"action": "stats"},
+    "threat_hunt": {"action": "quick"},
+    "annotation": {"action": "auto_comment", "addr": "0x140001000", "dry_run": True},
+    "batch": {"calls": ["data:functions"]},
+    "string_ops": {"action": "find_urls", "limit": 1},
+    "schemaboot": {"action": "stats"},
+    "turboquant": {"action": "stats"},
+    "bridgerag": {"action": "stats"},
+    "memrl": {"action": "stats"},
+    "blackboard": {"action": "list"},
+    "mbagcn": {"action": "stats"},
+    "cfg_analysis": {"action": "complexity", "addr": "0x140001000"},
+    "yara_hunt": {"action": "list_rules"},
+    "deobfuscate": {"action": "detect_encoding"},
+    "crypto_id": {"action": "identify"},
+    "summarize": {"action": "binary"},
+    "classify": {"action": "binary"},
+    "protocol": {"action": "detect"},
+    "gadgets": {"action": "mitigations"},
+    "xref_analysis": {"action": "stats"},
+    "coverage": {"action": "report"},
+    "trace": {"action": "get"},
+    "trace_analysis": {"action": "analyze_coverage"},
+    "entropy": {"action": "packed_detect"},
+    "comment_mgr": {"action": "list"},
+    "static_trace": {"action": "list"},
+    "colorize": {"action": "list"},
+    "debug": {"action": "threads"},
+}
+
+print(json.dumps(TEST_ARGS, indent=2))

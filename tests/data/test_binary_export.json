@@ -29,99 +29,14 @@
       "size": 158
     },
     {
-      "addr": "0x140001380",
-      "name": "wil::details::_dynamic_initializer_for__g_enabledStateManager__",
-      "size": 12
-    },
-    {
       "addr": "0x1400013a0",
       "name": "wil::details::_dynamic_initializer_for__g_featureStateManager__",
       "size": 151
     },
     {
-      "addr": "0x140001440",
-      "name": "wil::details::_dynamic_initializer_for__g_header_init_InitializeResultHeader__",
-      "size": 43
-    },
-    {
-      "addr": "0x140001480",
-      "name": "wil::details::_dynamic_initializer_for__g_header_init_InitializeStagingHeaderInternalApi__",
-      "size": 71
-    },
-    {
-      "addr": "0x1400014d0",
-      "name": "wil::details::_dynamic_initializer_for__g_header_init_InitializeStagingSRUMFeatureReporting__",
-      "size": 15
-    },
-    {
-      "addr": "0x1400014f0",
-      "name": "wil::details::_dynamic_initializer_for__g_header_init_WilInitialize_ResultMacros_DesktopOrSystem__",
-      "size": 99
-    },
-    {
-      "addr": "0x140001560",
-      "name": "wil::details::_dynamic_initializer_for__g_processLocalData__",
-      "size": 12
-    },
-    {
-      "addr": "0x140001580",
-      "name": "wil::details::_dynamic_atexit_destructor_for__g_threadFailureCallbacks__",
-      "size": 12
-    },
-    {
-      "addr": "0x1400015a0",
-      "name": "_dynamic_initializer_for__dismissButtonImageList__",
-      "size": 12
-    },
-    {
-      "addr": "0x1400015c0",
-      "name": "_dynamic_initializer_for__dismissString__",
-      "size": 12
-    },
-    {
-      "addr": "0x1400015e0",
-      "name": "_dynamic_initializer_for__launchButtonString__",
-      "size": 12
-    },
-    {
-      "addr": "0x140001600",
-      "name": "_dynamic_initializer_for__messageFont__",
-      "size": 12
-    },
-    {
-      "addr": "0x140001620",
-      "name": "_dynamic_initializer_for__messageString__",
-      "size": 12
-    },
-    {
-      "addr": "0x140001640",
-      "name": "_dynamic_initializer_for__szFileName__",
-      "size": 12
-    },
-    {
-      "addr": "0x140001660",
-      "name": "_dynamic_atexit_destructor_for__restartHandler__",
-      "size": 12
-    },
-    {
-      "addr": "0x140001680",
-      "name": "wil::details::_dynamic_initializer_for__g_header_init_WilInitialize_ResultMacros_DesktopOrSystem_SuppressPrivateApiUse__",
-      "size": 43
-    },
-    {
       "addr": "0x1400016c0",
       "name": "initialize_legacy_wide_specifiers",
       "size": 29
-    },
-    {
-      "addr": "0x1400016e4",
-      "name": "__local_stdio_printf_options",
-      "size": 8
-    },
-    {
-      "addr": "0x1400016f4",
-      "name": "__local_stdio_scanf_options",
-      "size": 8
     },
     {
       "addr": "0x140001710",
@@ -149,9 +64,9 @@
       "size": 368
     },
     {
-      "addr": "0x1400019e0",
-      "name": "__security_check_cookie",
-      "size": 30
+      "addr": "0x1400019b0",
+      "name": "wWinMainCRTStartup",
+      "size": 18
     },
     {
       "addr": "0x140001a04",
@@ -194,11 +109,6 @@
       "size": 23
     },
     {
-      "addr": "0x140001c74",
-      "name": "??3@YAXPEAX_K@Z",
-      "size": 5
-    },
-    {
       "addr": "0x140001c80",
       "name": "??2@YAPEAX_KAEBUnothrow_t@std@@@Z",
       "size": 28
@@ -239,54 +149,9 @@
       "size": 177
     },
     {
-      "addr": "0x140002040",
-      "name": "_get_startup_argv_mode",
-      "size": 6
-    },
-    {
-      "addr": "0x14000204c",
-      "name": "__scrt_initialize_winrt",
-      "size": 3
-    },
-    {
-      "addr": "0x140002058",
-      "name": "_get_startup_file_mode",
-      "size": 6
-    },
-    {
-      "addr": "0x140002064",
-      "name": "?__scrt_initialize_type_info@@YAXXZ",
-      "size": 14
-    },
-    {
-      "addr": "0x140002078",
-      "name": "__scrt_stub_for_acrt_uninitialize",
-      "size": 3
-    },
-    {
-      "addr": "0x140002090",
-      "name": "_guard_check_icall_nop",
-      "size": 3
-    },
-    {
       "addr": "0x14000209c",
       "name": "__scrt_initialize_default_local_stdio_options",
       "size": 27
-    },
-    {
-      "addr": "0x1400020c0",
-      "name": "__scrt_get_dyn_tls_init_callback",
-      "size": 8
-    },
-    {
-      "addr": "0x1400020d0",
-      "name": "__scrt_get_dyn_tls_dtor_callback",
-      "size": 8
-    },
-    {
-      "addr": "0x1400020e0",
-      "name": "__crt_debugger_hook",
-      "size": 8
     },
     {
       "addr": "0x1400020f0",
@@ -299,19 +164,9 @@
       "size": 58
     },
     {
-      "addr": "0x140002298",
-      "name": "__scrt_initialize_mta",
-      "size": 5
-    },
-    {
       "addr": "0x1400022a4",
       "name": "__scrt_is_managed_app",
       "size": 81
-    },
-    {
-      "addr": "0x1400022fc",
-      "name": "__scrt_set_unhandled_exception_filter",
-      "size": 14
     },
     {
       "addr": "0x140002310",
@@ -334,16 +189,6 @@
       "size": 428
     },
     {
-      "addr": "0x1400025bc",
-      "name": "__scrt_is_ucrt_dll_in_use",
-      "size": 12
-    },
-    {
-      "addr": "0x1400025d0",
-      "name": "??3@YAXPEAX@Z",
-      "size": 5
-    },
-    {
       "addr": "0x1400025dc",
       "name": "??2@YAPEAX_K@Z",
       "size": 60
@@ -354,29 +199,14 @@
       "size": 60
     },
     {
-      "addr": "0x140002664",
-      "name": "??0bad_alloc@std@@QEAA@XZ",
-      "size": 30
-    },
-    {
       "addr": "0x140002688",
       "name": "??0bad_array_new_length@std@@QEAA@AEBV01@@Z",
       "size": 60
     },
     {
-      "addr": "0x1400026cc",
-      "name": "??0bad_array_new_length@std@@QEAA@XZ",
-      "size": 30
-    },
-    {
       "addr": "0x1400026f0",
       "name": "??0exception@std@@QEAA@AEBV01@@Z",
       "size": 50
-    },
-    {
-      "addr": "0x140002728",
-      "name": "??1bad_array_new_length@std@@UEAA@XZ",
-      "size": 19
     },
     {
       "addr": "0x140002750",
@@ -394,184 +224,9 @@
       "size": 32
     },
     {
-      "addr": "0x1400027f0",
-      "name": "?what@exception@std@@UEBAPEBDXZ",
-      "size": 18
-    },
-    {
       "addr": "0x140002820",
       "name": "??_Gtype_info@@UEAAPEAXI@Z",
       "size": 38
-    },
-    {
-      "addr": "0x14000284c",
-      "name": "_initterm_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002858",
-      "name": "_initterm_e_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002864",
-      "name": "_c_exit_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002870",
-      "name": "_register_thread_local_exe_atexit_callback_0",
-      "size": 6
-    },
-    {
-      "addr": "0x14000287c",
-      "name": "__C_specific_handler_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002888",
-      "name": "__p__commode",
-      "size": 6
-    },
-    {
-      "addr": "0x140002894",
-      "name": "_o___std_exception_copy_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028a0",
-      "name": "_o___std_exception_destroy_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028ac",
-      "name": "_o___stdio_common_vswprintf_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028b8",
-      "name": "_o__callnewh_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028c4",
-      "name": "_o__cexit_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028d0",
-      "name": "_configthreadlocale",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028dc",
-      "name": "_o__configure_wide_argv_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028e8",
-      "name": "_crt_atexit",
-      "size": 6
-    },
-    {
-      "addr": "0x1400028f4",
-      "name": "_o__exit_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002900",
-      "name": "_o__get_wide_winmain_command_line_0",
-      "size": 6
-    },
-    {
-      "addr": "0x14000290c",
-      "name": "_initialize_onexit_table",
-      "size": 6
-    },
-    {
-      "addr": "0x140002918",
-      "name": "_o__initialize_wide_environment_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002924",
-      "name": "_invalid_parameter_noinfo",
-      "size": 6
-    },
-    {
-      "addr": "0x140002930",
-      "name": "_purecall",
-      "size": 6
-    },
-    {
-      "addr": "0x14000293c",
-      "name": "_o__register_onexit_function_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002948",
-      "name": "_seh_filter_exe",
-      "size": 6
-    },
-    {
-      "addr": "0x140002954",
-      "name": "_set_app_type",
-      "size": 6
-    },
-    {
-      "addr": "0x140002960",
-      "name": "_o__set_fmode_0",
-      "size": 6
-    },
-    {
-      "addr": "0x14000296c",
-      "name": "_o__set_new_mode_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002978",
-      "name": "_o_exit_0",
-      "size": 6
-    },
-    {
-      "addr": "0x140002984",
-      "name": "free",
-      "size": 6
-    },
-    {
-      "addr": "0x140002990",
-      "name": "_o_malloc_0",
-      "size": 6
-    },
-    {
-      "addr": "0x14000299c",
-      "name": "_o_terminate_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400029a8",
-      "name": "__CxxFrameHandler3_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400029b4",
-      "name": "__current_exception_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400029c0",
-      "name": "__current_exception_context_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400029cc",
-      "name": "memset_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400029d8",
-      "name": "_CxxThrowException_0",
-      "size": 6
     },
     {
       "addr": "0x1400029e4",
@@ -586,157 +241,32 @@
     {
       "addr": "0x140002a93",
       "name": "__tailMerge_advapi32_dll",
-      "size": 121
-    },
-    {
-      "addr": "0x140002b12",
-      "name": "__imp_load_DuplicateEncryptionInfoFile",
-      "size": 12
-    },
-    {
-      "addr": "0x140002b24",
-      "name": "__imp_load_DecryptFileW",
-      "size": 12
+      "size": 119
     },
     {
       "addr": "0x140002b30",
       "name": "__tailMerge_comdlg32_dll",
-      "size": 121
-    },
-    {
-      "addr": "0x140002baf",
-      "name": "__imp_load_CommDlgExtendedError",
-      "size": 12
-    },
-    {
-      "addr": "0x140002bc1",
-      "name": "__imp_load_ChooseFontW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002bd3",
-      "name": "__imp_load_PageSetupDlgW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002be5",
-      "name": "__imp_load_PrintDlgExW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002bf7",
-      "name": "__imp_load_FindTextW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002c09",
-      "name": "__imp_load_ReplaceTextW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002c1b",
-      "name": "__imp_load_GetOpenFileNameW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002c2d",
-      "name": "__imp_load_GetSaveFileNameW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002c3f",
-      "name": "__imp_load_GetFileTitleW",
-      "size": 12
+      "size": 119
     },
     {
       "addr": "0x140002c4b",
       "name": "__tailMerge_propsys_dll",
-      "size": 121
-    },
-    {
-      "addr": "0x140002cca",
-      "name": "__imp_load_PSGetPropertyDescriptionListFromString",
-      "size": 12
-    },
-    {
-      "addr": "0x140002cdc",
-      "name": "__imp_load_PropVariantToStringVectorAlloc",
-      "size": 12
+      "size": 119
     },
     {
       "addr": "0x140002ce8",
       "name": "__tailMerge_shell32_dll",
-      "size": 121
-    },
-    {
-      "addr": "0x140002d67",
-      "name": "__imp_load_SHCreateItemFromParsingName",
-      "size": 12
-    },
-    {
-      "addr": "0x140002d79",
-      "name": "__imp_load_ShellExecuteW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002d8b",
-      "name": "__imp_load_ShellAboutW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002d9d",
-      "name": "__imp_load_DragQueryFileW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002daf",
-      "name": "__imp_load_DragFinish",
-      "size": 12
-    },
-    {
-      "addr": "0x140002dc1",
-      "name": "__imp_load_SHAddToRecentDocs",
-      "size": 12
-    },
-    {
-      "addr": "0x140002dd3",
-      "name": "__imp_load_DragAcceptFiles",
-      "size": 12
-    },
-    {
-      "addr": "0x140002de5",
-      "name": "__imp_load_SHGetKnownFolderPath",
-      "size": 12
+      "size": 119
     },
     {
       "addr": "0x140002df1",
       "name": "__tailMerge_winspool_drv",
-      "size": 121
-    },
-    {
-      "addr": "0x140002e70",
-      "name": "__imp_load_OpenPrinterW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002e82",
-      "name": "__imp_load_GetPrinterDriverW",
-      "size": 12
-    },
-    {
-      "addr": "0x140002e94",
-      "name": "__imp_load_ClosePrinter",
-      "size": 12
+      "size": 119
     },
     {
       "addr": "0x140002ea0",
       "name": "__tailMerge_urlmon_dll",
-      "size": 121
-    },
-    {
-      "addr": "0x140002f1f",
-      "name": "__imp_load_FindMimeFromData",
-      "size": 12
+      "size": 119
     },
     {
       "addr": "0x140002f40",
@@ -757,16 +287,6 @@
       "addr": "0x140003020",
       "name": "?_lambda_invoker_cdecl_@_lambda_d51448ba32f8ef42e59400edd4566183_@@CA@PEAU_TP_CALLBACK_INSTANCE@@PEAXPEAU_TP_TIMER@@@Z",
       "size": 140
-    },
-    {
-      "addr": "0x1400030c0",
-      "name": "?_lambda_invoker_cdecl_@_lambda_fee8cea507d2413a58be13acfb66740a_@@CA@PEAX@Z",
-      "size": 5
-    },
-    {
-      "addr": "0x1400030cc",
-      "name": "??$ReportFailure_Base@$00$0A@@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
-      "size": 5
     },
     {
       "addr": "0x1400030d8",
@@ -817,11 +337,6 @@
       "addr": "0x1400038b8",
       "name": "??$ReportFailure_Return@$01@details@wil@@YAXPEAXIPEBD110AEBUResultStatus@01@PEBGW4ReportFailureOptions@01@@Z",
       "size": 277
-    },
-    {
-      "addr": "0x1400039d4",
-      "name": "??0UsageIndexes@details_abi@wil@@QEAA@XZ",
-      "size": 182
     },
     {
       "addr": "0x140003a94",
@@ -892,11 +407,6 @@
       "addr": "0x140004abc",
       "name": "?CreateFromPointer@SemaphoreValue@details_abi@wil@@QEAAJPEBGPEAX@Z",
       "size": 452
-    },
-    {
-      "addr": "0x140004c90",
-      "name": "?DebugBreak@details@wil@@YAXXZ",
-      "size": 7
     },
     {
       "addr": "0x140004ca4",
@@ -979,11 +489,6 @@
       "size": 384
     },
     {
-      "addr": "0x140005ca0",
-      "name": "?HrToNtStatus@details@wil@@YAJJ@Z",
-      "size": 457
-    },
-    {
       "addr": "0x140005e70",
       "name": "?IsFeatureConfigured@details@wil@@YA_NPEAUwil_FeatureState@@I_NW4wil_FeatureStore@@PEAH@Z",
       "size": 214
@@ -1044,29 +549,9 @@
       "size": 460
     },
     {
-      "addr": "0x140006c28",
-      "name": "?RecordException@details@wil@@YAHJ@Z",
-      "size": 22
-    },
-    {
-      "addr": "0x140006c50",
-      "name": "?RecordFailFast@details@wil@@YAHJ@Z",
-      "size": 12
-    },
-    {
       "addr": "0x140006c64",
       "name": "?RecordFeatureUsage@FeatureStateManager@details@wil@@QEAAXIW4wil_details_ServiceReportingKind@@_K@Z",
       "size": 322
-    },
-    {
-      "addr": "0x140006dac",
-      "name": "?RecordLog@details@wil@@YAHJ@Z",
-      "size": 22
-    },
-    {
-      "addr": "0x140006dcc",
-      "name": "?RecordReturn@details@wil@@YAHJ@Z",
-      "size": 22
     },
     {
       "addr": "0x140006df0",
@@ -1154,11 +639,6 @@
       "size": 206
     },
     {
-      "addr": "0x1400082b4",
-      "name": "?StringCchCopyW@@YAJPEAG_KPEBG@Z",
-      "size": 106
-    },
-    {
       "addr": "0x140008328",
       "name": "?StringCchPrintfW@@YAJPEAG_KPEBGZZ",
       "size": 108
@@ -1214,11 +694,6 @@
       "size": 314
     },
     {
-      "addr": "0x140008db0",
-      "name": "?WilApiImpl_SubscribeFeatureStateChangeNotification@details@wil@@YAXPEAPEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@P6AXPEAX@Z1@Z",
-      "size": 45
-    },
-    {
       "addr": "0x140008df0",
       "name": "?WilApiImpl_UnsubscribeFeatureStateChangeNotification@details@wil@@YAXPEAUFEATURE_STATE_CHANGE_SUBSCRIPTION__@@@Z",
       "size": 79
@@ -1249,16 +724,6 @@
       "size": 259
     },
     {
-      "addr": "0x140009104",
-      "name": "?_FailFastImmediate_Unexpected@in1diag3@details@wil@@YAXXZ",
-      "size": 7
-    },
-    {
-      "addr": "0x14000910b",
-      "name": "nullsub_1",
-      "size": 1
-    },
-    {
       "addr": "0x140009114",
       "name": "?_FailFast_GetLastError@in1diag3@details@wil@@YAXPEAXIPEBD@Z",
       "size": 20
@@ -1267,16 +732,6 @@
       "addr": "0x140009130",
       "name": "?_FailFast_Unexpected@in1diag3@details@wil@@YAXPEAXIPEBD@Z",
       "size": 20
-    },
-    {
-      "addr": "0x140009150",
-      "name": "?__move@?$__func@V_lambda_8db0ce862824541f40dfb767113f1e28_@@$$A6A_NPEAX_K01I@Z@__function@wistd@@UEAAXPEAV?$__base@$$A6A_NPEAX_K01I@Z@23@@Z",
-      "size": 29
-    },
-    {
-      "addr": "0x140009180",
-      "name": "?destroy@?$__func@V_lambda_832c4623155ece419fff6642a81e874e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAXXZ",
-      "size": 3
     },
     {
       "addr": "0x14000918c",
@@ -1384,16 +839,6 @@
       "size": 938
     },
     {
-      "addr": "0x14000a520",
-      "name": "?AddRef@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAKXZ",
-      "size": 41
-    },
-    {
-      "addr": "0x14000a550",
-      "name": "?AddRef@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAKXZ",
-      "size": 9
-    },
-    {
       "addr": "0x14000a560",
       "name": "?BannerWndProc@@YA_JPEAUHWND__@@I_K_J@Z",
       "size": 763
@@ -1402,11 +847,6 @@
       "addr": "0x14000a864",
       "name": "?CreateDismissButtonImageList@@YAPEAU_IMAGELIST@@HH@Z",
       "size": 347
-    },
-    {
-      "addr": "0x14000a9d0",
-      "name": "?DisconnectObject@FtmBase@WRL@Microsoft@@UEAAJK@Z",
-      "size": 27
     },
     {
       "addr": "0x14000a9f4",
@@ -1454,29 +894,9 @@
       "size": 214
     },
     {
-      "addr": "0x14000b240",
-      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAJAEBU_GUID@@PEAPEAX@Z",
-      "size": 9
-    },
-    {
-      "addr": "0x14000b250",
-      "name": "?RaiseException@Details@WRL@Microsoft@@YAXJK@Z",
-      "size": 17
-    },
-    {
       "addr": "0x14000b270",
       "name": "?Release@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAKXZ",
       "size": 98
-    },
-    {
-      "addr": "0x14000b2e0",
-      "name": "?Release@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@W4LaunchQuerySupportStatus@System@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAKXZ",
-      "size": 9
-    },
-    {
-      "addr": "0x14000b2f0",
-      "name": "?ReleaseMarshalData@FtmBase@WRL@Microsoft@@UEAAJPEAUIStream@@@Z",
-      "size": 27
     },
     {
       "addr": "0x14000b314",
@@ -1507,11 +927,6 @@
       "addr": "0x14000bd38",
       "name": "??$make_unique_string_nothrow@V?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6APEAXPEAX@Z$1?LocalFree@@YAPEAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@@wil@@YA?AV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6APEAXPEAX@Z$1?LocalFree@@YAPEAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@0@PEBG_K@Z",
       "size": 291
-    },
-    {
-      "addr": "0x14000be64",
-      "name": "??0?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@QEAA@$$QEAV01@@Z",
-      "size": 14
     },
     {
       "addr": "0x14000be7c",
@@ -1679,11 +1094,6 @@
       "size": 186
     },
     {
-      "addr": "0x14000f910",
-      "name": "?TextSelectionChangedFunc@@YAXPEAUHWINEVENTHOOK__@@KPEAUHWND__@@JJKK@Z",
-      "size": 7
-    },
-    {
       "addr": "0x14000f920",
       "name": "?UpdateStatusBar@@YAX_N@Z",
       "size": 417
@@ -1707,16 +1117,6 @@
       "addr": "0x14000fd6c",
       "name": "?UpdateTitle@@YAXXZ",
       "size": 512
-    },
-    {
-      "addr": "0x14000ff80",
-      "name": "?__move@?$__func@V_lambda_3b2e0a520180fee943e15932e0d5e8f1_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
-      "size": 19
-    },
-    {
-      "addr": "0x14000ffa0",
-      "name": "?__move@?$__func@V_lambda_f626c3109e34ea59201b5e3806fed71e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEAAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
-      "size": 20
     },
     {
       "addr": "0x14000ffbc",
@@ -1789,11 +1189,6 @@
       "size": 80
     },
     {
-      "addr": "0x1400119ec",
-      "name": "?ReverseEndian@@YAXPEAGPEBGK@Z",
-      "size": 50
-    },
-    {
       "addr": "0x140011a28",
       "name": "?SaveFile@@YA_NPEAUHWND__@@AEAV?$unique_any_t@V?$unique_storage@U?$resource_policy@PEAGP6AXPEAX@Z$1?CoTaskMemFree@@YAX0@ZU?$integral_constant@_K$0A@@wistd@@PEAGPEAG$0A@$$T@details@wil@@@details@wil@@@wil@@_NPEBG@Z",
       "size": 2055
@@ -1802,11 +1197,6 @@
       "addr": "0x140012238",
       "name": "?SetEdpPolicyForFile@@YAHPEBG@Z",
       "size": 429
-    },
-    {
-      "addr": "0x1400123f0",
-      "name": "?__clone@?$__func@V_lambda_c909c53304c88111c314d24cb7117bac_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEBAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
-      "size": 19
     },
     {
       "addr": "0x140012410",
@@ -1822,11 +1212,6 @@
       "addr": "0x1400124c4",
       "name": "?CreateEditControl@@YAPEAUHWND__@@HHJPEAUHINSTANCE__@@@Z",
       "size": 90
-    },
-    {
-      "addr": "0x140012530",
-      "name": "?EnumProc@@YAHPEBUtagLOGFONTW@@PEBUtagTEXTMETRICW@@K_J@Z",
-      "size": 10
     },
     {
       "addr": "0x140012544",
@@ -2094,11 +1479,6 @@
       "size": 1349
     },
     {
-      "addr": "0x140022e40",
-      "name": "?__clone@?$__func@V_lambda_832c4623155ece419fff6642a81e874e_@@$$A6AJPEAG_KPEA_K@Z@__function@wistd@@UEBAXPEAV?$__base@$$A6AJPEAG_KPEA_K@Z@23@@Z",
-      "size": 11
-    },
-    {
       "addr": "0x140022e54",
       "name": "?TraceFileEncodingSelection@@YAXW4_NP_FILETYPE@@@Z",
       "size": 142
@@ -2162,11 +1542,6 @@
       "addr": "0x140023954",
       "name": "?TraceViewHelp@@YAXXZ",
       "size": 120
-    },
-    {
-      "addr": "0x1400239d4",
-      "name": "_tlgDefineProvider_annotation__Tlgg_NotepadTraceProviderProv",
-      "size": 3
     },
     {
       "addr": "0x1400239e0",
@@ -2284,29 +1659,9 @@
       "size": 29
     },
     {
-      "addr": "0x140024cf4",
-      "name": "?CheckToBreakOnFailure@?$CBreakOnFailureT@VCEmptyType@@@@SAXJ@Z",
-      "size": 25
-    },
-    {
-      "addr": "0x140024d20",
-      "name": "?SetBkMode@WARBIRD_DELAY_LOAD@@YAHPEAUHDC__@@H@Z",
-      "size": 3
-    },
-    {
       "addr": "0x140024d2c",
       "name": "?MemoryFree@@YAXPEAX@Z",
       "size": 46
-    },
-    {
-      "addr": "0x140024d60",
-      "name": "?MulDiv@WARBIRD_DELAY_LOAD@@YAHHHH@Z",
-      "size": 4
-    },
-    {
-      "addr": "0x140024d6c",
-      "name": "StringCchLengthW",
-      "size": 70
     },
     {
       "addr": "0x140024dbc",
@@ -2354,11 +1709,6 @@
       "size": 114
     },
     {
-      "addr": "0x140025550",
-      "name": "?AddRef@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IEventHandler@PEAVProtectedContentRevokedEventArgs@EnterpriseData@Security@Windows@@@Foundation@Windows@@@Details@WRL@Microsoft@@UEAAKXZ",
-      "size": 41
-    },
-    {
       "addr": "0x140025580",
       "name": "?EnsureStackSnapshot@?$DelegateTraits@$0?0@WRL@Microsoft@@SAXJ@Z",
       "size": 82
@@ -2394,19 +1744,9 @@
       "size": 214
     },
     {
-      "addr": "0x140025c50",
-      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVFileProtectionInfo@EnterpriseData@Security@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAJAEBU_GUID@@PEAPEAX@Z",
-      "size": 9
-    },
-    {
       "addr": "0x140025c60",
       "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@UEAAJAEBU_GUID@@PEAPEAX@Z",
       "size": 214
-    },
-    {
-      "addr": "0x140025d40",
-      "name": "?QueryInterface@?$RuntimeClassImpl@U?$RuntimeClassFlags@$01@WRL@Microsoft@@$00$0A@$0A@U?$IAsyncOperationCompletedHandler@PEAVStorageFile@Storage@Windows@@@Foundation@Windows@@VFtmBase@23@@Details@WRL@Microsoft@@W7EAAJAEBU_GUID@@PEAPEAX@Z",
-      "size": 9
     },
     {
       "addr": "0x140025d50",
@@ -2504,41 +1844,6 @@
       "size": 78
     },
     {
-      "addr": "0x140027394",
-      "name": "wcscmp_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400273a0",
-      "name": "memcmp_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400273ac",
-      "name": "memcpy_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400273b8",
-      "name": "memmove_0",
-      "size": 6
-    },
-    {
-      "addr": "0x1400273e0",
-      "name": "_guard_dispatch_icall",
-      "size": 6
-    },
-    {
-      "addr": "0x140027400",
-      "name": "_guard_dispatch_icall_nop",
-      "size": 2
-    },
-    {
-      "addr": "0x140027420",
-      "name": "_guard_xfg_dispatch_icall_nop",
-      "size": 6
-    },
-    {
       "addr": "0x14002746e",
       "name": "_operator_new_::_1_::catch$0",
       "size": 27
@@ -2557,11 +1862,6 @@
       "addr": "0x140027540",
       "name": "wil::details::_dynamic_atexit_destructor_for__g_processLocalData__",
       "size": 27
-    },
-    {
-      "addr": "0x140027570",
-      "name": "wil::details::_dynamic_atexit_destructor_for__g_threadFailureCallbacks___0",
-      "size": 12
     },
     {
       "addr": "0x140027590",
@@ -2597,11 +1897,6 @@
       "addr": "0x1400276c0",
       "name": "_dynamic_atexit_destructor_for__szFileName__",
       "size": 34
-    },
-    {
-      "addr": "0x140028010",
-      "name": "_guard_dispatch_icall$thunk$10345483385596137414",
-      "size": 5
     }
   ],
   "strings": [
@@ -2636,6 +1931,14 @@
     {
       "addr": "0x140000318",
       "value": ".reloc"
+    },
+    {
+      "addr": "0x14000a532",
+      "value": "Q,t\u000bD"
+    },
+    {
+      "addr": "0x140024d7d",
+      "value": "fD9\bt\nH"
     },
     {
       "addr": "0x14002a7c0",
