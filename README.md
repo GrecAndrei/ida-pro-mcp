@@ -111,6 +111,7 @@ Primary documentation now lives under `docs/`:
 - `docs/wiki/`: wiki content used by the `wiki` MCP tool.
 - `docs/TECHNICAL_REFERENCE.md`: low-level technical details.
 - `docs/TOOLS_REFERENCE.md`: tool-focused reference.
+- `docs/DEDUPLICATION_PLAN.md`: canonical-vs-compat tool surface and consolidation rules.
 
 Legacy/superseded notes were moved to `docs/legacy/` to keep repo root clean.
 
