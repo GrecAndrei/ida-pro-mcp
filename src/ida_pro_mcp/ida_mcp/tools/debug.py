@@ -70,6 +70,10 @@ def _debug_active():
     return _debug_state()[0]
 
 
+def _debug_not_running():
+    return {"ok": True, "note": "Debugger is not running in headless mode", "hint": "Use debug(action='start') to launch the process"}
+
+
 def _get_reg_dict(tid=None):
     """Get registers as a plain dict."""
     import ida_dbg
@@ -123,7 +127,7 @@ def _get_ptr_size():
 @idawrite
 def debug(
     action: Annotated[Literal[
-        "start", "stop", "continue", "step_into", "step_over", "run_to", "run_until",
+        "status", "start", "stop", "continue", "step_into", "step_over", "run_to", "run_until",
         "breakpoints", "add_bp", "del_bp", "enable_bp", "add_hw_bp", "add_watch",
         "regs", "set_reg", "reg_diff", "snapshot_regs", "threads", "modules", "callstack",
         "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map"
@@ -170,6 +174,16 @@ def debug(
     try:
         import ida_dbg
         import ida_idd
+
+        if action == "status":
+            active, is_on, state, state_name = _debug_state()
+            return {
+                "ok": True,
+                "active": bool(active),
+                "is_debugger_on": bool(is_on),
+                "state": state,
+                "state_name": state_name,
+            }
 
         if action == "start":
             started = bool(ida_dbg.start_process())
@@ -219,25 +233,25 @@ def debug(
 
         elif action == "stop":
             if not _debug_active():
-                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+                return _debug_not_running()
             ida_dbg.exit_process()
             return {"ok": True}
 
         elif action == "continue":
             if not _debug_active():
-                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+                return _debug_not_running()
             ida_dbg.continue_process()
             return {"ok": True}
 
         elif action == "step_into":
             if not _debug_active():
-                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+                return _debug_not_running()
             ida_dbg.step_into()
             return {"ok": True}
 
         elif action == "step_over":
             if not _debug_active():
-                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+                return _debug_not_running()
             ida_dbg.step_over()
             return {"ok": True}
 
@@ -245,7 +259,7 @@ def debug(
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             if not _debug_active():
-                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+                return _debug_not_running()
             ea, err = validate_addr(addr)
             if err:
                 return err
@@ -254,7 +268,7 @@ def debug(
 
         elif action == "run_until":
             if not _debug_active():
-                return make_error(MCPError.DEBUGGER_NOT_RUNNING, "Debugger not running")
+                return _debug_not_running()
 
             target_ea = None
             if addr:
@@ -371,9 +385,8 @@ def debug(
         elif action == "regs":
             if not _debug_active():
                 _wait_for_suspend(1200)
-            err = check_debugger(require_active=True)
-            if err:
-                return err
+            if not _debug_active():
+                return {"ok": True, "note": "Debugger is not running in headless mode", "_debug_status": "inactive"}
             target_tid = tid if tid is not None else ida_dbg.get_current_thread()
             dbg = ida_idd.get_dbg()
             if not dbg:
@@ -419,7 +432,6 @@ def debug(
                 return err
             name = snapshot_name or f"snap_{int(time.time())}"
             regs = _get_reg_dict(tid)
-            global _REG_SNAPSHOTS
             _REG_SNAPSHOTS[name] = {
                 "regs": regs,
                 "timestamp": time.time(),
@@ -435,7 +447,6 @@ def debug(
                 return err
             if not snapshot_name:
                 return make_error(MCPError.INVALID_ARGS, "snapshot_name required for reg_diff")
-            global _REG_SNAPSHOTS
             old = _REG_SNAPSHOTS.get(snapshot_name)
             if not old:
                 available = list(_REG_SNAPSHOTS.keys())

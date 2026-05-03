@@ -490,6 +490,7 @@ def deobfuscate(
     key: Annotated[Optional[str],
                    "Decryption key for decode_attempt (hex string)"] = None,
     depth: Annotated[int, "Analysis depth"] = 2,
+    **kwargs
 ) -> dict:
     """
     Deobfuscation analysis for binary reverse engineering.
