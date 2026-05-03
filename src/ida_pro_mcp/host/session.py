@@ -682,6 +682,32 @@ class SessionManager:
             sorted_sessions = sorted(self.sessions.values(), key=lambda s: s.created_at)
             return [copy.copy(s) for s in sorted_sessions[:n]]
 
+    def list_active(self) -> List[Session]:
+        with self._lock:
+            return [copy.copy(s) for s in self.sessions.values() if "archived" not in s.tags]
+
+    def list_archived(self) -> List[Session]:
+        with self._lock:
+            return [copy.copy(s) for s in self.sessions.values() if "archived" in s.tags]
+
+    def get_session_age(self, sid: str) -> Optional[timedelta]:
+        session = self.sessions.get(sid)
+        if not session:
+            return None
+        return datetime.now() - session.created_at
+
+    def get_session_idle_time(self, sid: str) -> Optional[timedelta]:
+        session = self.sessions.get(sid)
+        if not session:
+            return None
+        return datetime.now() - session.last_accessed
+
+    def set_binary_path(self, sid: str, path: str) -> Optional[Session]:
+        return self.update_session(sid, binary_path=path)
+
+    def set_idb_path(self, sid: str, path: str) -> Optional[Session]:
+        return self.update_session(sid, idb_path=path)
+
     def session_exists(self, sid: str) -> bool:
         with self._lock:
             return sid in self.sessions
@@ -778,8 +804,8 @@ class SessionManager:
             self._save_snapshots(sid, snapshots)
             return {"ok": True, "snapshot_id": snapshot_id, "message": message}
 
-    def restore_snapshot(self, sid: str, snapshot_id: str) -> Optional[dict]:
-        """Restore session state from a persisted snapshot."""
+    def restore_snapshot(self, sid: str, snapshot_id: str) -> Optional[Session]:
+        """Restore session state from a persisted snapshot. Returns the restored session or None."""
         with self._lock:
             snapshots = self._load_snapshots(sid)
             snap = None
@@ -788,14 +814,19 @@ class SessionManager:
                     snap = s
                     break
             if not snap:
-                return make_error(MCPError.NOT_FOUND, f"Snapshot {snapshot_id} not found for {sid}")
+                return None
             # Restore metadata
             meta = snap.get("metadata", {})
             session = self.sessions.get(sid)
             if session:
                 for key, val in meta.items():
-                    if key not in ("session_id", "created_at", "_snapshot_id", "_snapshot_time", "_message"):
+                    if key not in ("session_id", "_snapshot_id", "_snapshot_time", "_message"):
                         if hasattr(session, key):
+                            if key in ("created_at", "last_accessed") and isinstance(val, str):
+                                try:
+                                    val = datetime.fromisoformat(val)
+                                except Exception:
+                                    pass
                             setattr(session, key, val)
                 self._save_metadata(session)
             # Restore skills
@@ -806,7 +837,7 @@ class SessionManager:
             notebook = snap.get("notebook", "")
             if notebook:
                 self._save_notebook(sid, notebook)
-            return {"ok": True, "restored": snapshot_id}
+            return session
 
     def list_snapshots(self, sid: str) -> dict:
         with self._lock:

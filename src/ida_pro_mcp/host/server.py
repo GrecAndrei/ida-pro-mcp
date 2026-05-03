@@ -1974,6 +1974,77 @@ class IDAMCPServer:
                 )
         return warnings
 
+    def _auto_blackboard_from_response(self, tool_name: str, action: str, payload: dict) -> None:
+        """Deterministic auto-extraction: silently write interesting findings to blackboard."""
+        if not isinstance(payload, dict) or payload.get("error"):
+            return
+        if tool_name in {"session", "blackboard", "batch", "truncation", "wiki"}:
+            return
+
+        findings: list[dict] = []
+        for key in ("findings", "items", "matches", "results", "indicators", "iocs", "apis", "functions", "entries"):
+            val = payload.get(key)
+            if isinstance(val, list):
+                for item in val[:5]:
+                    if isinstance(item, dict):
+                        title = str(item.get("name") or item.get("title") or item.get("summary") or item.get("value") or "finding")[:120]
+                        addr = str(item.get("addr") or item.get("address") or item.get("ea") or "")
+                        category = str(item.get("category") or item.get("type") or item.get("kind") or "finding")
+                        if title and title != "finding":
+                            findings.append({"title": title, "addr": addr, "category": category})
+                    elif isinstance(item, (str, int, float)):
+                        title = str(item)[:120]
+                        if title:
+                            findings.append({"title": title, "addr": "", "category": "finding"})
+            elif isinstance(val, str) and val.strip():
+                findings.append({"title": val.strip()[:120], "addr": "", "category": "finding"})
+
+        if not findings:
+            summary = payload.get("summary")
+            if summary and isinstance(summary, dict):
+                title = str(summary.get("description") or summary.get("name") or f"{tool_name}.{action} result")[:120]
+                findings.append({"title": title, "addr": "", "category": "summary"})
+
+        for f in findings[:3]:
+            try:
+                self._execute_tool("blackboard", {
+                    "action": "write",
+                    "name": f["title"],
+                    "addr": f["addr"],
+                    "category": f["category"],
+                    "notes": f"Auto-captured from {tool_name}.{action}",
+                    "confidence": 0.7,
+                    "tags": "auto",
+                })
+            except Exception:
+                pass
+
+    def _inject_session_memory(self, payload: dict, tool_name: str) -> None:
+        """Inject working memory into analysis responses so LLM sees prior context without asking."""
+        if not isinstance(payload, dict) or payload.get("error"):
+            return
+        if tool_name in {"session", "blackboard", "batch", "truncation", "wiki", "predictor", "workflow"}:
+            return
+        if not (hasattr(self, "session_mgr") and self.current_session):
+            return
+        try:
+            bb = self._execute_tool("blackboard", {"action": "list", "limit": 5})
+            if isinstance(bb, dict) and bb.get("ok") and bb.get("entries"):
+                payload["working_memory"] = {
+                    "source": "blackboard",
+                    "entries": bb["entries"],
+                    "count": bb.get("count", 0),
+                    "note": "These are your prior findings. Use them for continuity.",
+                }
+            phase = self.session_mgr.get_phase(self.current_session.session_id)
+            if isinstance(phase, dict) and not phase.get("error"):
+                payload["analysis_phase"] = phase.get("phase")
+            contract = self.session_mgr.check_state_contract(self.current_session.session_id, window=8)
+            if isinstance(contract, dict) and contract.get("ok"):
+                payload["state_contract_met"] = contract.get("contract_met", True)
+        except Exception:
+            pass
+
     def _collect_hex_addresses(self, value: Any, max_items: int = 8) -> list[str]:
         found: list[str] = []
 
@@ -2668,6 +2739,14 @@ class IDAMCPServer:
                                 )
                         except Exception:
                             pass
+            except Exception:
+                pass
+
+            # ---- Universal Auto-Blackboard + Session Memory Injection ----
+            try:
+                if isinstance(compacted, dict):
+                    self._auto_blackboard_from_response(tool_name, action_name, compacted)
+                    self._inject_session_memory(compacted, tool_name)
             except Exception:
                 pass
         return compacted
@@ -6005,6 +6084,25 @@ class IDAMCPServer:
                         isinstance(session_meta, dict)
                         and session_meta.get("indexing_complete")
                     )
+                    # Inject recent blackboard into session status so LLM sees it by default
+                    try:
+                        import importlib.util
+                        bb_path = os.path.join(SCRIPT_DIR, "..", "ida_mcp", "tools", "blackboard.py")
+                        bb_path = os.path.abspath(bb_path)
+                        spec = importlib.util.spec_from_file_location("_host_blackboard_status", bb_path)
+                        mod = importlib.util.module_from_spec(spec)
+                        mod.__dict__["tool"] = lambda f: f
+                        mod.__dict__["idaread"] = lambda f: f
+                        mod.__dict__["idawrite"] = lambda f: f
+                        mod.__dict__["IDAError"] = Exception
+                        spec.loader.exec_module(mod)
+                        store = mod.BlackboardStore()
+                        entries = store.list(limit=8)
+                        if entries:
+                            result["working_memory"] = entries
+                            result["working_memory_count"] = len(entries)
+                    except Exception:
+                        pass
                 else:
                     result = None
                 return {
@@ -6336,12 +6434,12 @@ class IDAMCPServer:
                     return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
-                snapshot_id = self.session_mgr.snapshot_session(sid)
-                if snapshot_id is None:
+                snapshot_res = self.session_mgr.snapshot_session(sid)
+                if snapshot_res is None:
                     return make_error(
                         MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
                     )
-                return {"ok": True, "session_id": sid, "snapshot_id": snapshot_id}
+                return {"ok": True, "session_id": sid, "snapshot_id": snapshot_res.get("snapshot_id"), "message": snapshot_res.get("message", "")}
             if action == "restore_snapshot":
                 sid, sid_err = _sid_arg()
                 if sid_err:
@@ -6603,6 +6701,9 @@ class IDAMCPServer:
         if tool_name == "workflow":
             return self._handle_workflow(args)
 
+        if tool_name == "blackboard":
+            return self._handle_blackboard(args)
+
         if tool_name == "gadgets" and str(args.get("action") or "").strip() == "semantic_find":
             return self._handle_gadgets_semantic_find(args)
 
@@ -6690,6 +6791,73 @@ class IDAMCPServer:
 
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[: max(1, limit)]
+
+    def _handle_blackboard(self, args: dict) -> dict:
+        """Host-side blackboard handler so it works without IDA runtime."""
+        try:
+            import importlib.util
+            bb_path = os.path.join(SCRIPT_DIR, "..", "ida_mcp", "tools", "blackboard.py")
+            bb_path = os.path.abspath(bb_path)
+            spec = importlib.util.spec_from_file_location("_host_blackboard", bb_path)
+            mod = importlib.util.module_from_spec(spec)
+            # Inject minimal stubs so the module loads without IDA deps
+            mod.__dict__["tool"] = lambda f: f
+            mod.__dict__["idaread"] = lambda f: f
+            mod.__dict__["idawrite"] = lambda f: f
+            mod.__dict__["IDAError"] = Exception
+            spec.loader.exec_module(mod)
+            store = mod.BlackboardStore()
+        except Exception as e:
+            return make_error(MCPError.IDA_ERROR, f"BlackboardStore unavailable: {e}")
+        action = str(args.get("action") or "list").strip().lower()
+        if action == "write":
+            title = str(args.get("name") or args.get("title") or "").strip()
+            if not title:
+                return make_error(MCPError.INVALID_ARGS, "name/title required for write")
+            eid = store.write(
+                title=title,
+                content=str(args.get("notes") or args.get("content") or ""),
+                category=str(args.get("category") or "general"),
+                addr=str(args.get("addr") or ""),
+                tags=[t.strip() for t in str(args.get("tags") or "").split(",") if t.strip()],
+                confidence=float(args.get("confidence", 0.5)),
+            )
+            return {"ok": True, "entry_id": eid, "action": "write"}
+        if action == "list":
+            entries = store.list(
+                category=str(args.get("category") or "").strip() or None,
+                addr=str(args.get("addr") or "").strip() or None,
+                tag=str(args.get("tag") or "").strip() or None,
+                min_confidence=float(args.get("min_confidence", 0.0)),
+                limit=_bounded_int(args.get("limit", 100), 100, min_value=1, max_value=1000),
+                offset=_bounded_int(args.get("offset", 0), 0, min_value=0),
+            )
+            return {"ok": True, "entries": entries, "count": len(entries)}
+        if action == "read":
+            entry = store.read(str(args.get("entry_id") or ""))
+            if entry is None:
+                return make_error(MCPError.INVALID_ARGS, "Entry not found")
+            return {"ok": True, "entry": entry}
+        if action == "delete":
+            ok = store.delete(str(args.get("entry_id") or ""))
+            return {"ok": ok, "action": "delete"}
+        if action == "clear":
+            count = store.clear(category=str(args.get("category") or "").strip() or None)
+            return {"ok": True, "deleted": count}
+        if action == "stats":
+            return {"ok": True, **store.stats()}
+        if action == "merge":
+            result = store.auto_merge(
+                addr=str(args.get("addr") or "").strip(),
+                category=str(args.get("category") or "").strip(),
+                similarity_threshold=float(args.get("similarity_threshold", 0.85)),
+            )
+            return {"ok": True, **result}
+        return make_error(
+            MCPError.ACTION_NOT_FOUND,
+            f"Unsupported blackboard action: '{action}'",
+            hint="Valid actions: write, list, read, delete, clear, stats, merge",
+        )
 
     def _handle_predictor(self, args: dict) -> dict:
         action = str(args.get("action") or "suggest_next_tool").strip()

@@ -417,6 +417,8 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
     
     Returns a blocking intervention dict, or None.
     """
+    if os.environ.get("IDA_MCP_DISABLE_STUCK_DETECTION") == "1":
+        return None
     key = _auto_nudge._session_key(idb)
     dc_cache = _auto_nudge._decompile_cache.get(key, [])
     search_cache = _auto_nudge._search_cache.get(key, [])
