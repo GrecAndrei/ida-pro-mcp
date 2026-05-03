@@ -89,8 +89,8 @@ _CRYPTO_CONSTANTS = [
     ("Base64 URL alphabet", "Base64-URL", _BASE64_URL_ALPHABET, False),
     ("Base32 alphabet", "Base32", _BASE32_ALPHABET, False),
     ("ChaCha20 sigma", "ChaCha20", _CHACHA20_CONSTS, True),
-    ("Blake2b IV", "Blake2", _BLAKE2B_IV[:4], True),
-    ("SHA-3 RC", "SHA-3/Keccak", _SHA3_RC[:2], True),
+    ("Blake2b IV", "Blake2", _BLAKE2B_IV[:4], "qword"),
+    ("SHA-3 RC", "SHA-3/Keccak", _SHA3_RC[:2], "qword"),
 ]
 
 
@@ -134,7 +134,24 @@ def _search_bytes_in_segments(pattern, limit=50):
 def _search_dwords_in_segments(dwords, limit=50):
     hits = []
     for endian in ("little", "big"):
-        pattern = _dwords_to_bytes(dwords, endian)
+        try:
+            pattern = _dwords_to_bytes(dwords, endian)
+        except struct.error:
+            continue
+        found = _search_bytes_in_segments(pattern, limit - len(hits))
+        for h in found:
+            hits.append(f"{h}  endian={endian}")
+        if len(hits) >= limit:
+            break
+    return hits
+
+def _search_qwords_in_segments(qwords, limit=50):
+    hits = []
+    for endian in ("little", "big"):
+        try:
+            pattern = _qwords_to_bytes(qwords, endian)
+        except struct.error:
+            continue
         found = _search_bytes_in_segments(pattern, limit - len(hits))
         for h in found:
             hits.append(f"{h}  endian={endian}")
@@ -218,8 +235,10 @@ def crypto_id(
                 if err:
                     return err
                 search_scope = ea
-            for name, algo, pattern, is_dword in _CRYPTO_CONSTANTS:
-                if is_dword:
+            for name, algo, pattern, mode in _CRYPTO_CONSTANTS:
+                if mode == "qword":
+                    hits = _search_qwords_in_segments(pattern, limit)
+                elif mode:
                     hits = _search_dwords_in_segments(pattern, limit)
                 else:
                     hits = _search_bytes_in_segments(pattern, limit)
@@ -231,7 +250,6 @@ def crypto_id(
                         if func and not (func.start_ea <= hit_ea < func.end_ea):
                             continue
                         elif not func:
-                            # If addr is not inside a function, restrict to same segment
                             seg = idaapi.getseg(search_scope)
                             hit_seg = idaapi.getseg(hit_ea)
                             if seg and hit_seg and seg.start_ea != hit_seg.start_ea:
@@ -246,8 +264,39 @@ def crypto_id(
 
         elif action == "constants":
             findings = []
-            for name, algo, pattern, is_dword in _CRYPTO_CONSTANTS:
-                if is_dword:
+            for name, algo, pattern, mode in _CRYPTO_CONSTANTS:
+                if mode == "qword":
+                    hits = _search_qwords_in_segments(pattern, limit)
+                elif mode:
+                    hits = _search_dwords_in_segments(pattern, limit)
+                else:
+                    hits = _search_bytes_in_segments(pattern, limit)
+                for h in hits:
+                    hit_addr_str = h.split()[0] if h else "0x0"
+                    hit_ea = int(hit_addr_str, 16)
+                    if search_scope is not None:
+                        func = ida_funcs.get_func(search_scope)
+                        if func and not (func.start_ea <= hit_ea < func.end_ea):
+                            continue
+                        elif not func:
+                            seg = idaapi.getseg(search_scope)
+                            hit_seg = idaapi.getseg(hit_ea)
+                            if seg and hit_seg and seg.start_ea != hit_seg.start_ea:
+                                continue
+                    findings.append(f"{h}  const={name}  algo={algo}")
+                    algos_found.add(algo)
+                    if len(findings) >= limit:
+                        break
+                if len(findings) >= limit:
+                    break
+            return {"ok": True, "findings": "\n".join(findings), "algorithms_found": sorted(algos_found), "count": len(findings)}
+
+        elif action == "constants":
+            findings = []
+            for name, algo, pattern, mode in _CRYPTO_CONSTANTS:
+                if mode == "qword":
+                    hits = _search_qwords_in_segments(pattern, limit - len(findings))
+                elif mode:
                     hits = _search_dwords_in_segments(pattern, limit - len(findings))
                 else:
                     hits = _search_bytes_in_segments(pattern, limit - len(findings))

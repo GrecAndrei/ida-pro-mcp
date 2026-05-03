@@ -19,6 +19,7 @@ class MCPClient:
             env=env,
         )
         self.response_queue = queue.Queue()
+        self.pending_by_id = {}
         self.request_id = 1
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
@@ -42,17 +43,24 @@ class MCPClient:
         self.process.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
         self.process.stdin.flush()
 
-        start_time = time.time()
-        while time.time() - start_time < timeout:
+        if req_id in self.pending_by_id:
+            return self.pending_by_id.pop(req_id)
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
             try:
                 resp = self.response_queue.get(timeout=1)
                 if resp.get("id") == req_id:
                     return resp
-                self.response_queue.put(resp)
+                if "id" in resp:
+                    self.pending_by_id[resp["id"]] = resp
             except queue.Empty:
                 if self.process.poll() is not None:
                     return {"error": "Server process exited"}
                 continue
+        # One final late-response check to handle race at deadline.
+        if req_id in self.pending_by_id:
+            return self.pending_by_id.pop(req_id)
         return {"error": "Timeout"}
 
     def stop(self):
@@ -107,7 +115,7 @@ def main():
 
         session_resp = client.call(
             "tools/call",
-            {"name": "session", "arguments": {"action": "create", "binary_path": binary_path}},
+            {"name": "session", "arguments": {"action": "create", "binary_path": binary_path, "force_new": True}},
             timeout=cli_args.timeout,
         )
         if "error" in session_resp:
@@ -135,12 +143,7 @@ def main():
             entry_addr = "0x0"
 
         tool_calls = [
-            ("session", {"action": "status"}),
             ("bookmarks", {"action": "list"}),
-            ("batch", {"calls": [
-                {"name": "session", "arguments": {"action": "status"}},
-                {"name": "calc", "arguments": {"action": "eval", "expr": "0x100 + 0x20"}},
-            ], "continue_on_error": True}),
             ("analysis", {"action": "get_options"}),
             ("idb", {"action": "meta"}),
             ("code", {"action": "disasm", "addr": entry_addr}),
@@ -164,18 +167,20 @@ def main():
             ("agent", {"action": "context_pack", "addr": entry_addr}),
             ("microcode", {"action": "get", "addr": entry_addr}),
             ("graph", {"action": "cfg", "addr": entry_addr}),
+            ("bridgerag", {"action": "bridges", "func_name": "wWinMainCRTStartup", "bridge_types": ["apis"]}),
+            ("mbagcn", {"action": "stats"}),
             ("bulk", {"action": "comment", "items": [{"addr": entry_addr, "value": "probe bulk"}]}),
             ("ctree", {"action": "get", "addr": entry_addr}),
                         ("lumina", {"action": "status"}),
             ("symbols", {"action": "status"}),
             ("patterns", {"action": "list_sigs"}),
-                        ("emulate", {"action": "eval_expr", "addr": entry_addr}),
+                        ("static_trace", {"action": "eval_expr", "addr": entry_addr}),
             ("export", {"action": "json"}),
             ("history", {"action": "list"}),
-            ("strings_xref", {"action": "analyze", "addr": entry_addr}),
+            ("xref_analysis", {"action": "dependency_graph", "addr": entry_addr, "depth": 1, "direction": "forward", "limit": 20}),
             ("entropy", {"action": "section"}),
             ("imports_deep", {"action": "api_sets"}),
-            ("comments_ai", {"action": "get_context", "addr": entry_addr}),
+            ("comment_mgr", {"action": "get_context", "addr": entry_addr}),
             ("nav", {"action": "cursor"}),
             ("colorize", {"action": "palette"}),
             ("trace_analysis", {"action": "analyze_coverage"}),
@@ -189,14 +194,25 @@ def main():
             ("yara_hunt", {"action": "list_rules"}),
         ]
 
-        results = {"entry_addr": entry_addr, "tools": {}}
-        for tool, tool_args in tool_calls:
-            resp = client.call("tools/call", {"name": tool, "arguments": tool_args}, timeout=cli_args.timeout)
-            results["tools"][tool] = {
-                "request": tool_args,
+        results = {"entry_addr": entry_addr, "tools": {}, "calls": []}
+        for idx, (tool, tool_args) in enumerate(tool_calls):
+            t0 = time.time()
+            call_args = dict(tool_args)
+            resp = client.call("tools/call", {"name": tool, "arguments": call_args}, timeout=cli_args.timeout)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            key = f"{idx:02d}:{tool}"
+            call_entry = {
+                "index": idx,
+                "tool": tool,
+                "request": call_args,
                 "response": decode_content(resp),
+                "elapsed_ms": elapsed_ms,
             }
-
+            if tool == "debug" and isinstance(call_entry["response"], dict):
+                if call_entry["response"].get("error") is True and call_entry["response"].get("code") == "DEBUGGER_NOT_RUNNING":
+                    call_entry["expected_in_headless"] = True
+            results["tools"][key] = call_entry
+            results["calls"].append(call_entry)
         os.makedirs(os.path.dirname(cli_args.out), exist_ok=True)
         with open(cli_args.out, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)

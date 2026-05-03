@@ -43,557 +43,554 @@
 // Ordinal 19
 // C_SCOPE_TABLE
 
-// Ordinal 23
+// Ordinal 21
 // EVENT_DESCRIPTOR
 
-// Ordinal 24
+// Ordinal 22
 // _EVENT_DESCRIPTOR
 
-// Ordinal 29
+// Ordinal 27
 // _EVENT_DATA_DESCRIPTOR
 
-// Ordinal 31
+// Ordinal 29
 // _EVENT_DATA_DESCRIPTOR::$535316677C6A15A6ECBA40D88E1D787B::$AE424CE1AA1E88F41D16EB4A36C24CA2
 
-// Ordinal 32
+// Ordinal 30
 // _RTL_CRITICAL_SECTION
 
-// Ordinal 34
+// Ordinal 32
 // _RTL_CRITICAL_SECTION_DEBUG
 
-// Ordinal 36
+// Ordinal 34
 // LIST_ENTRY
 
-// Ordinal 37
+// Ordinal 35
 // _LIST_ENTRY
 
-// Ordinal 41
+// Ordinal 39
 // HINSTANCE__
 
-// Ordinal 42
+// Ordinal 40
 // _onexit_table_t
 
-// Ordinal 45
+// Ordinal 44
 // _CONTEXT
 
-// Ordinal 48
+// Ordinal 47
 // XMM_SAVE_AREA32
 
-// Ordinal 49
+// Ordinal 48
 // XSAVE_FORMAT
 
-// Ordinal 50
+// Ordinal 49
 // _XSAVE_FORMAT
 
-// Ordinal 52
+// Ordinal 51
 // M128A
 
-// Ordinal 53
+// Ordinal 52
 // _M128A
 
-// Ordinal 55
+// Ordinal 54
 // _CONTEXT::$D2ECA93702C646ACAFACD524BE9E8FEB::$897D11C01F73F7E79A06B0B9ED9B9414
 
-// Ordinal 58
+// Ordinal 57
 // _FILETIME
 
-// Ordinal 61
+// Ordinal 60
 // _LARGE_INTEGER::$837407842DC9087486FDFA5FEB63B74E
 
-// Ordinal 62
+// Ordinal 61
 // _EXCEPTION_POINTERS
 
-// Ordinal 64
+// Ordinal 63
 // EXCEPTION_RECORD
 
-// Ordinal 65
+// Ordinal 64
 // _EXCEPTION_RECORD
 
-// Ordinal 66
+// Ordinal 65
 // _STARTUPINFOW
 
-// Ordinal 71
+// Ordinal 75
 // _ThrowInfo
 
-// Ordinal 72
+// Ordinal 76
 // ThrowInfo
 
-// Ordinal 73
+// Ordinal 77
 // _s_ThrowInfo
 
-// Ordinal 76
+// Ordinal 87
 // RTL_SRWLOCK
 
-// Ordinal 77
+// Ordinal 88
 // _RTL_SRWLOCK
 
-// Ordinal 85
+// Ordinal 104
 // WNDCLASSEXW
 
-// Ordinal 86
+// Ordinal 105
 // tagWNDCLASSEXW
 
-// Ordinal 90
+// Ordinal 109
 // HWND__
 
-// Ordinal 97
+// Ordinal 116
 // HICON__
 
-// Ordinal 100
+// Ordinal 119
 // HBRUSH__
 
-// Ordinal 102
+// Ordinal 121
 // HMENU__
 
-// Ordinal 104
+// Ordinal 123
 // RECT
 
-// Ordinal 105
+// Ordinal 124
 // tagRECT
 
-// Ordinal 106
+// Ordinal 125
 // tagPAINTSTRUCT
 
-// Ordinal 108
+// Ordinal 127
 // HDC__
 
-// Ordinal 111
+// Ordinal 130
 // tagTRACKMOUSEEVENT
 
-// Ordinal 112
+// Ordinal 132
 // LOGFONTW
 
-// Ordinal 113
+// Ordinal 133
 // tagLOGFONTW
 
-// Ordinal 114
+// Ordinal 134
 // tagSIZE
 
-// Ordinal 115
+// Ordinal 135
 // HSTRING_HEADER
 
-// Ordinal 118
+// Ordinal 138
 // HSTRING__
 
-// Ordinal 120
+// Ordinal 141
 // TASKDIALOGCONFIG
 
-// Ordinal 121
+// Ordinal 142
 // _TASKDIALOGCONFIG
 
-// Ordinal 126
+// Ordinal 147
 // TASKDIALOG_BUTTON
 
-// Ordinal 127
+// Ordinal 148
 // _TASKDIALOG_BUTTON
 
-// Ordinal 131
+// Ordinal 152
 // tagOFNW
 
-// Ordinal 134
+// Ordinal 155
 // tagFINDREPLACEW
 
-// Ordinal 136
+// Ordinal 157
 // CHOOSEFONTW
 
-// Ordinal 137
+// Ordinal 158
 // tagCHOOSEFONTW
 
-// Ordinal 142
+// Ordinal 163
 // _WIN32_FIND_DATAW
 
-// Ordinal 143
+// Ordinal 164
 // FILETIME
 
-// Ordinal 145
+// Ordinal 166
 // _EVENT_FILTER_DESCRIPTOR
 
-// Ordinal 146
+// Ordinal 167
 // tagMSG
 
-// Ordinal 147
+// Ordinal 168
 // POINT
 
-// Ordinal 148
+// Ordinal 169
 // tagPOINT
 
-// Ordinal 149
+// Ordinal 170
 // _SYSTEMTIME
 
-// Ordinal 153
+// Ordinal 174
 // _BY_HANDLE_FILE_INFORMATION
 
-// Ordinal 155
+// Ordinal 176
 // _SECURITY_ATTRIBUTES
 
-// Ordinal 158
+// Ordinal 179
 // HKEY__
 
-// Ordinal 159
+// Ordinal 180
 // WINDOWPLACEMENT
 
-// Ordinal 160
+// Ordinal 181
 // tagWINDOWPLACEMENT
 
-// Ordinal 163
+// Ordinal 184
 // tagPDEXW
 
-// Ordinal 166
+// Ordinal 187
 // PRINTPAGERANGE
 
-// Ordinal 167
+// Ordinal 188
 // tagPRINTPAGERANGE
 
-// Ordinal 169
+// Ordinal 190
 // IUnknown
 
-// Ordinal 170
+// Ordinal 191
 // IUnknownVtbl
 
-// Ordinal 171
+// Ordinal 192
 // IID
 
-// Ordinal 174
+// Ordinal 195
 // SYSTEMTIME
 
-// Ordinal 175
+// Ordinal 196
 // tagTEXTMETRICW
 
-// Ordinal 176
+// Ordinal 197
 // tagDRAWTEXTPARAMS
 
-// Ordinal 180
+// Ordinal 202
 // _ULARGE_INTEGER::$0354AA9C204208F00D0965D07BBE7FAC
 
-// Ordinal 186
+// Ordinal 208
 // _PROCESS_INFORMATION
 
-// Ordinal 187
+// Ordinal 211
 // PROPVARIANT
 
-// Ordinal 188
+// Ordinal 212
 // tagPROPVARIANT
 
-// Ordinal 190
+// Ordinal 214
 // tagPROPVARIANT::$B01A803922ACEB71FC353E1ACAA1539E::$1A0FF913CB6A2700FBDFFDCC16233417
 
-// Ordinal 203
+// Ordinal 227
 // tagCY::$3EA7BC8C29B528C7CA1203FC489E132F
 
-// Ordinal 205
+// Ordinal 229
 // CLSID
 
-// Ordinal 206
+// Ordinal 230
 // CLIPDATA
 
-// Ordinal 207
+// Ordinal 231
 // tagCLIPDATA
 
-// Ordinal 210
+// Ordinal 234
 // BSTRBLOB
 
-// Ordinal 211
+// Ordinal 235
 // tagBSTRBLOB
 
-// Ordinal 212
+// Ordinal 236
 // BLOB
 
-// Ordinal 213
+// Ordinal 237
 // tagBLOB
 
-// Ordinal 214
+// Ordinal 238
 // IDispatch
 
-// Ordinal 215
+// Ordinal 239
 // IDispatchVtbl
 
-// Ordinal 217
+// Ordinal 241
 // ITypeInfo
 
-// Ordinal 218
+// Ordinal 242
 // ITypeInfoVtbl
 
-// Ordinal 219
+// Ordinal 243
 // TYPEATTR
 
-// Ordinal 220
+// Ordinal 244
 // tagTYPEATTR
 
-// Ordinal 226
+// Ordinal 250
 // TYPEDESC
 
-// Ordinal 227
+// Ordinal 251
 // tagTYPEDESC
 
-// Ordinal 229
+// Ordinal 253
 // tagARRAYDESC
 
-// Ordinal 230
+// Ordinal 254
 // SAFEARRAYBOUND
 
-// Ordinal 231
+// Ordinal 255
 // tagSAFEARRAYBOUND
 
-// Ordinal 233
+// Ordinal 257
 // IDLDESC
 
-// Ordinal 234
+// Ordinal 258
 // tagIDLDESC
 
-// Ordinal 235
+// Ordinal 259
 // ITypeComp
 
-// Ordinal 236
+// Ordinal 260
 // ITypeCompVtbl
 
-// Ordinal 241
+// Ordinal 265
 // FUNCDESC
 
-// Ordinal 242
+// Ordinal 266
 // tagFUNCDESC
 
-// Ordinal 243
+// Ordinal 267
 // ELEMDESC
 
-// Ordinal 244
+// Ordinal 268
 // tagELEMDESC
 
-// Ordinal 246
+// Ordinal 270
 // PARAMDESC
 
-// Ordinal 247
+// Ordinal 271
 // tagPARAMDESC
 
-// Ordinal 249
+// Ordinal 273
 // tagPARAMDESCEX
 
-// Ordinal 250
+// Ordinal 274
 // VARIANTARG
 
-// Ordinal 251
+// Ordinal 275
 // VARIANT
 
-// Ordinal 252
+// Ordinal 276
 // tagVARIANT
 
-// Ordinal 254
+// Ordinal 278
 // tagVARIANT::$E93DC971A089CC95F6C875332324C1E7::$65D68C826D16CA47CF95571D7BFCD657
 
-// Ordinal 256
+// Ordinal 280
 // SAFEARRAY
 
-// Ordinal 257
+// Ordinal 281
 // tagSAFEARRAY
 
-// Ordinal 258
+// Ordinal 282
 // DECIMAL
 
-// Ordinal 259
+// Ordinal 283
 // tagDEC
 
-// Ordinal 261
+// Ordinal 285
 // tagDEC::$64EC678C49E7BE49873AFBFB7A849D34::$7F8459940C2B08BD5D82B0F27239141B
 
-// Ordinal 263
+// Ordinal 287
 // tagDEC::$D28E26DEC3EC762C06C2AA9D0F7AC301::$674876891A86A76F12C10005982BCA56
 
-// Ordinal 264
+// Ordinal 288
 // tagVARIANT::$::$::$E09503A454170B491AC1C4312CE36FE6::$0FDBD249F1AECD6A49409B6B82281578
 
-// Ordinal 265
+// Ordinal 289
 // IRecordInfo
 
-// Ordinal 266
+// Ordinal 290
 // IRecordInfoVtbl
 
-// Ordinal 274
+// Ordinal 298
 // VARDESC
 
-// Ordinal 275
+// Ordinal 299
 // tagVARDESC
 
-// Ordinal 279
+// Ordinal 303
 // DISPPARAMS
 
-// Ordinal 280
+// Ordinal 304
 // tagDISPPARAMS
 
-// Ordinal 281
+// Ordinal 305
 // EXCEPINFO
 
-// Ordinal 282
+// Ordinal 306
 // tagEXCEPINFO
 
-// Ordinal 283
+// Ordinal 307
 // ITypeLib
 
-// Ordinal 284
+// Ordinal 308
 // ITypeLibVtbl
 
-// Ordinal 285
+// Ordinal 309
 // TLIBATTR
 
-// Ordinal 286
+// Ordinal 310
 // tagTLIBATTR
 
-// Ordinal 289
+// Ordinal 313
 // IStream
 
-// Ordinal 290
+// Ordinal 314
 // IStreamVtbl
 
-// Ordinal 291
+// Ordinal 315
 // STATSTG
 
-// Ordinal 292
+// Ordinal 316
 // tagSTATSTG
 
-// Ordinal 293
+// Ordinal 317
 // IStorage
 
-// Ordinal 294
+// Ordinal 318
 // IStorageVtbl
 
-// Ordinal 296
+// Ordinal 320
 // IEnumSTATSTG
 
-// Ordinal 297
+// Ordinal 321
 // IEnumSTATSTGVtbl
 
-// Ordinal 299
+// Ordinal 323
 // tagVersionedStream
 
-// Ordinal 301
+// Ordinal 325
 // CAC
 
-// Ordinal 302
+// Ordinal 326
 // tagCAC
 
-// Ordinal 303
+// Ordinal 327
 // CAUB
 
-// Ordinal 304
+// Ordinal 328
 // tagCAUB
 
-// Ordinal 305
+// Ordinal 329
 // CAI
 
-// Ordinal 306
+// Ordinal 330
 // tagCAI
 
-// Ordinal 307
+// Ordinal 331
 // CAUI
 
-// Ordinal 308
+// Ordinal 332
 // tagCAUI
 
-// Ordinal 309
+// Ordinal 333
 // CAL
 
-// Ordinal 310
+// Ordinal 334
 // tagCAL
 
-// Ordinal 311
+// Ordinal 335
 // CAUL
 
-// Ordinal 312
+// Ordinal 336
 // tagCAUL
 
-// Ordinal 313
+// Ordinal 337
 // CAH
 
-// Ordinal 314
+// Ordinal 338
 // tagCAH
 
-// Ordinal 315
+// Ordinal 339
 // CAUH
 
-// Ordinal 316
+// Ordinal 340
 // tagCAUH
 
-// Ordinal 317
+// Ordinal 341
 // CAFLT
 
-// Ordinal 318
+// Ordinal 342
 // tagCAFLT
 
-// Ordinal 319
+// Ordinal 343
 // CADBL
 
-// Ordinal 320
+// Ordinal 344
 // tagCADBL
 
-// Ordinal 321
+// Ordinal 345
 // CABOOL
 
-// Ordinal 322
+// Ordinal 346
 // tagCABOOL
 
-// Ordinal 323
+// Ordinal 347
 // CASCODE
 
-// Ordinal 324
+// Ordinal 348
 // tagCASCODE
 
-// Ordinal 325
+// Ordinal 349
 // CACY
 
-// Ordinal 326
+// Ordinal 350
 // tagCACY
 
-// Ordinal 327
+// Ordinal 351
 // CADATE
 
-// Ordinal 328
+// Ordinal 352
 // tagCADATE
 
-// Ordinal 329
+// Ordinal 353
 // CAFILETIME
 
-// Ordinal 330
+// Ordinal 354
 // tagCAFILETIME
 
-// Ordinal 331
+// Ordinal 355
 // CACLSID
 
-// Ordinal 332
+// Ordinal 356
 // tagCACLSID
 
-// Ordinal 333
+// Ordinal 357
 // CACLIPDATA
 
-// Ordinal 334
+// Ordinal 358
 // tagCACLIPDATA
 
-// Ordinal 335
+// Ordinal 359
 // CABSTR
 
-// Ordinal 336
+// Ordinal 360
 // tagCABSTR
 
-// Ordinal 337
+// Ordinal 361
 // CABSTRBLOB
 
-// Ordinal 338
+// Ordinal 362
 // tagCABSTRBLOB
 
-// Ordinal 339
+// Ordinal 363
 // CALPSTR
 
-// Ordinal 340
+// Ordinal 364
 // tagCALPSTR
 
-// Ordinal 341
+// Ordinal 365
 // CALPWSTR
 
-// Ordinal 342
+// Ordinal 366
 // tagCALPWSTR
 
-// Ordinal 343
+// Ordinal 367
 // CAPROPVARIANT
 
-// Ordinal 344
+// Ordinal 368
 // tagCAPROPVARIANT
-
-// Ordinal 358
-// tagPSDW

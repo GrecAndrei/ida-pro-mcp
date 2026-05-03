@@ -2033,22 +2033,29 @@ class IDAMCPServer:
         include_pointer_note = self._should_include_pointer_note(
             tool_name, call_args, payload
         )
+        action_name = ""
+        if isinstance(call_args, dict):
+            action_name = str(call_args.get("action") or "")
+        if not action_name:
+            action_name = str(opts.get("action") or "")
         # Apply universal output filters first
         payload = self._apply_output_filters(payload, opts)
-        if opts.get("mode") == "full":
+        full_mode = opts.get("mode") == "full"
+        if full_mode:
             if isinstance(payload, dict):
                 payload = dict(payload)
                 if include_pointer_note:
                     payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
-            return payload
-        projected = self._project_top_level_fields(payload, opts)
-        compacted = self._compact_value(projected, opts)
-        if compacted is _COMPACT_DROP:
-            compacted = {}
-        compacted = self._compact_batch_result(compacted, opts)
-        budget = int(opts.get("char_budget", 0) or 0)
-        if budget > 0 and isinstance(compacted, dict):
-            compacted = truncate_response(compacted, max_tokens=budget)
+            compacted = payload
+        else:
+            projected = self._project_top_level_fields(payload, opts)
+            compacted = self._compact_value(projected, opts)
+            if compacted is _COMPACT_DROP:
+                compacted = {}
+            compacted = self._compact_batch_result(compacted, opts)
+            budget = int(opts.get("char_budget", 0) or 0)
+            if budget > 0 and isinstance(compacted, dict):
+                compacted = truncate_response(compacted, max_tokens=budget)
 
         # ---- Context Density Auto-Compaction Middleware ----
         # Skip if the caller explicitly requests raw output.
@@ -2083,7 +2090,7 @@ class IDAMCPServer:
                 nudge = get_nudge(
                     idb_key,
                     tool_name,
-                    opts.get("action", ""),
+                    action_name,
                     compacted,
                     call_args if isinstance(call_args, dict) else {},
                 )
@@ -2094,9 +2101,14 @@ class IDAMCPServer:
             
             # ---- Address Patching ----
             try:
-                if tool_name == "code" and opts.get("action") in ("decompile", "semantic_decompile", "disasm"):
+                if tool_name == "code" and action_name in ("decompile", "semantic_decompile", "disasm"):
                     from .response_enrichment import patch_addresses
-                    pseudo_key = "pseudocode" if "pseudocode" in compacted else "disassembly"
+                    if "pseudocode" in compacted:
+                        pseudo_key = "pseudocode"
+                    elif "code" in compacted:
+                        pseudo_key = "code"
+                    else:
+                        pseudo_key = "disassembly"
                     if pseudo_key in compacted:
                         compacted[pseudo_key] = patch_addresses(compacted[pseudo_key])
             except Exception:
@@ -2104,9 +2116,14 @@ class IDAMCPServer:
             
             # ---- Auto-Digest ----
             try:
-                if tool_name == "code" and opts.get("action") in ("decompile", "semantic_decompile"):
+                if tool_name == "code" and action_name in ("decompile", "semantic_decompile"):
                     from .response_enrichment import digest_decompiled
-                    pseudo_key = "pseudocode" if "pseudocode" in compacted else "output"
+                    if "pseudocode" in compacted:
+                        pseudo_key = "pseudocode"
+                    elif "code" in compacted:
+                        pseudo_key = "code"
+                    else:
+                        pseudo_key = "output"
                     if pseudo_key in compacted and isinstance(compacted[pseudo_key], str):
                         addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
                         # Try to get SchemaBoot attributes for richer classification
@@ -2142,7 +2159,7 @@ class IDAMCPServer:
             # ---- Ghost Chain Inlining ----
             try:
                 addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                ghost_action = str(opts.get("action", ""))
+                ghost_action = action_name
                 if tool_name == "code" and addr and ghost_action in ("decompile", "semantic_decompile"):
                     from .response_enrichment import GHOST_CHAINS
                     ghost_results = {}
@@ -5555,9 +5572,10 @@ class IDAMCPServer:
                         and runtime.get("process")
                         and runtime["process"].poll() is None
                     )
+                    session_meta = getattr(self.current_session, "metadata", None) or {}
                     result["analysis_ready"] = bool(
-                        self.current_session.metadata
-                        and self.current_session.metadata.get("indexing_complete")
+                        isinstance(session_meta, dict)
+                        and session_meta.get("indexing_complete")
                     )
                 else:
                     result = None
@@ -6155,19 +6173,10 @@ class IDAMCPServer:
             return self._handle_gadgets_semantic_find(args)
 
         legacy_threat_tools = {
-            "deobfuscate",
-            "crypto_id",
             "trace",
             "trace_analysis",
             "coverage",
-            "yara_hunt",
-            "gadgets",
             "agent",
-            "summarize",
-            "classify",
-            "protocol",
-            "xref_analysis",
-            "string_ops",
         }
         if tool_name in legacy_threat_tools:
             bridged = dict(args or {})
@@ -6629,4 +6638,3 @@ if __name__ == "__main__":
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
-

@@ -49,7 +49,22 @@ def _get_func_or_error(addr):
 
 def _get_frame_or_error(func):
     """Get stack frame for a function, returning (frame, error_dict_or_None)."""
-    frame = ida_frame.get_frame(func)
+    frame = None
+    get_frame_fn = getattr(ida_frame, "get_frame", None)
+    if callable(get_frame_fn):
+        try:
+            frame = get_frame_fn(func)
+        except Exception:
+            frame = None
+
+    if not frame and ida_struct is not None and hasattr(idc, "get_frame_id"):
+        try:
+            sid = idc.get_frame_id(func.start_ea)
+            if sid not in (None, idaapi.BADADDR, -1):
+                frame = ida_struct.get_struc(sid)
+        except Exception:
+            frame = None
+
     if not frame:
         return None, {"ok": True, "members": [],
                       "note": "No stack frame for this function"}

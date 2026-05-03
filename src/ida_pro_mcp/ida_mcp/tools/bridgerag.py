@@ -367,8 +367,14 @@ class BridgeRAGSearch:
         cur = conn.cursor()
 
         # Step 1: Find seed functions
-        from schemaboot import _build_query_sql
-        sql, params = _build_query_sql(query_constraints, limit=5, order_by=None)
+        try:
+            import importlib
+            _sb = importlib.import_module("ida_mcp.tools.schemaboot")
+            _build_where_clause = _sb._build_where_clause
+            where, params = _build_where_clause(query_constraints or {})
+            sql = f"SELECT * FROM function_attrs WHERE {where} LIMIT 5" if where else "SELECT * FROM function_attrs LIMIT 5"
+        except Exception:
+            return {"ok": False, "error": "SchemaBoot module not available - run schemaboot(action='ingest') first"}
         cur.execute(sql, params)
         seeds = []
         for row in cur.fetchall():

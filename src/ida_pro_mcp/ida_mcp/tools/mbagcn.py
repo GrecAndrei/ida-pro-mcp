@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import math
 from typing import Dict, List, Optional, Tuple
-import numpy as np
+try:
+    import numpy as np
+except Exception:
+    np = None
 
 # IDA MCP decorators
 try:
@@ -378,6 +381,13 @@ def mbagcn(
     """
     import os
     import time
+
+    if np is None:
+        return make_error(
+            MCPError.NOT_IMPLEMENTED,
+            "mbagcn requires numpy in the IDA Python environment",
+            hint="Install numpy into IDA's Python or run IDA with a venv that includes numpy.",
+        )
 
     if db_path is None:
         try:

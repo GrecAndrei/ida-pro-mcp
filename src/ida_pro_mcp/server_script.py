@@ -38,6 +38,7 @@ TOOLS = {}
 TOOL_ALIASES = {
     # Compatibility typo used by some wrappers.
     "xfer_analysis": "xref_analysis",
+    "c2_detect": "string_ops",
 }
 _ERROR_DETAIL_LEVEL = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
 if _ERROR_DETAIL_LEVEL not in {"none", "basic", "full"}:
