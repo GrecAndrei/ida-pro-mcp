@@ -1948,6 +1948,100 @@ class IDAMCPServer:
         self._pointer_note_pending_signal = 0.0
         return True
 
+    def _collect_hex_addresses(self, value: Any, max_items: int = 8) -> list[str]:
+        found: list[str] = []
+
+        def _push(addr_text: str) -> None:
+            if not addr_text:
+                return
+            norm = addr_text.lower()
+            if not norm.startswith("0x"):
+                return
+            if norm in found:
+                return
+            found.append(norm)
+
+        def _walk(v: Any, depth: int = 0) -> None:
+            if len(found) >= max_items or depth > 3:
+                return
+            if isinstance(v, str):
+                for m in _POINTER_NOTE_HEX_RE.finditer(v):
+                    _push(m.group(0))
+            elif isinstance(v, int):
+                if v >= 0x1000:
+                    _push(hex(v))
+            elif isinstance(v, list):
+                for item in v[:12]:
+                    _walk(item, depth + 1)
+                    if len(found) >= max_items:
+                        break
+            elif isinstance(v, dict):
+                for idx, (_, item) in enumerate(v.items()):
+                    if idx >= 24:
+                        break
+                    _walk(item, depth + 1)
+                    if len(found) >= max_items:
+                        break
+
+        _walk(value)
+        return found[:max_items]
+
+    def _build_llm_guardrail_actions(
+        self, tool_name: str, call_args: Any, payload: Any
+    ) -> list[dict]:
+        """Return executable calc/memory suggestions to prevent mental math mistakes."""
+        addrs = self._collect_hex_addresses(call_args)
+        if len(addrs) < 4:
+            addrs.extend([a for a in self._collect_hex_addresses(payload) if a not in addrs])
+        addrs = addrs[:6]
+        if not addrs:
+            return []
+
+        suggestions: list[dict] = []
+        # Always include a base alignment check for first address.
+        suggestions.append(
+            {
+                "why": "Verify canonical alignment and avoid hand-calculated page/slot mistakes",
+                "tool": "calc",
+                "arguments": {"action": "align", "value": addrs[0], "size": 16},
+            }
+        )
+
+        # Include pointer-safe deref for one or two addresses.
+        for addr in addrs[:2]:
+            suggestions.append(
+                {
+                    "why": "Read memory via tool instead of assuming pointer values",
+                    "tool": "calc",
+                    "arguments": {"action": "deref", "addr": addr, "type": "u32"},
+                }
+            )
+
+        # If at least two addresses are present, provide explicit offset math.
+        if len(addrs) >= 2:
+            suggestions.append(
+                {
+                    "why": "Compute offset delta explicitly (no mental subtraction)",
+                    "tool": "calc",
+                    "arguments": {
+                        "action": "eval",
+                        "expr": f"{addrs[1]} - {addrs[0]}",
+                    },
+                }
+            )
+
+        # Contextual disassembly verification for code-like workflows.
+        if str(tool_name or "") in {"code", "xref_analysis", "graph", "ctree", "static_trace"}:
+            suggestions.append(
+                {
+                    "why": "Confirm nearby instructions before reasoning about control flow",
+                    "tool": "code",
+                    "arguments": {"action": "disasm", "addr": addrs[0]},
+                }
+            )
+
+        return suggestions[:5]
+
     def _apply_output_filters(self, payload: Any, opts: dict) -> Any:
         """Apply universal output filtering (grep, head, tail, skip, path, pluck)."""
         import re as _re
@@ -2047,6 +2141,10 @@ class IDAMCPServer:
                 payload = dict(payload)
                 if include_pointer_note:
                     payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
+                    payload.setdefault(
+                        "llm_guardrail_actions",
+                        self._build_llm_guardrail_actions(tool_name, call_args, payload),
+                    )
             compacted = payload
         else:
             projected = self._project_top_level_fields(payload, opts)
@@ -2084,6 +2182,10 @@ class IDAMCPServer:
             compacted = dict(compacted)
             if include_pointer_note:
                 compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
+                compacted.setdefault(
+                    "llm_guardrail_actions",
+                    self._build_llm_guardrail_actions(tool_name, call_args, compacted),
+                )
             # ---- Auto-Nudge Injection ----
             try:
                 from .auto_nudge import get_nudge
