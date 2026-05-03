@@ -231,6 +231,10 @@ Practical agent rules:
 - Use `truncation(action="continue")` only when needed.
 - Save milestones via bookmarks and session notes.
 
+Address/pointer safety assist:
+
+- When the server detects pointer/offset-heavy context, responses can include `llm_pointer_note` plus executable `llm_guardrail_actions` (ready-to-run `calc`/`code` calls) so clients avoid mental address arithmetic mistakes.
+
 ## Architecture Graphs
 
 ### High-level architecture
