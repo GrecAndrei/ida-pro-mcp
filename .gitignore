@@ -22,3 +22,6 @@ GAP_ANALYSIS.md
 
 # Web search cache
 .opencode-swarm/.search_cache/
+
+# Local probe/report artifacts
+reports/*.json

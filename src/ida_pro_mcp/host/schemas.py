@@ -106,7 +106,6 @@ TOOLS = [
     "annotation",
     # Deep cross-reference analysis
     "xref_analysis",
-    "xfer_analysis",
     # String operations
     "string_ops",
     # CFG analysis
@@ -167,9 +166,7 @@ ADVERTISED_TOOLS = [
 ]
 
 # Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
-HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union(
-    {"plugins", "xfer_analysis"}
-)
+HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"plugins"})
 
 _EXTRA_TOOL_ALIASES = {
     "analysis_tool": "analysis",
@@ -418,7 +415,6 @@ TOOL_DESCRIPTIONS = {
     "gadgets": "ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, semantic_find.",
     "annotation": "Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.",
     "xref_analysis": "Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
-    "xfer_analysis": "Alias of xref_analysis (compatibility typo, not advertised in tools/list).",
     "string_ops": "Advanced string analysis, C2 scoring, and IOC extraction. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious, find_xrefs, find_stack_strings, find_base64, find_api_keys, find_configs, find_c2, find_databases, find_crypto_addrs, entropy_rank, score_c2 (ML C2 risk assessment), indicators, persistence, evasion, ioc_extract.",
     "cfg_analysis": "Control flow graph metrics. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
     "binary_info": "Binary metadata analysis. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
@@ -911,18 +907,6 @@ TOOL_ACTIONS = {
         "cleanup",
     ],
     "xref_analysis": [
-        "call_chain",
-        "common_callers",
-        "common_callees",
-        "hub_functions",
-        "leaf_functions",
-        "recursive",
-        "dominator",
-        "influence",
-        "dependency_graph",
-        "dead_functions",
-    ],
-    "xfer_analysis": [
         "call_chain",
         "common_callers",
         "common_callees",
@@ -2300,7 +2284,7 @@ _TOOL_CATEGORY_SECURITY = {
     "classify",
     "summarize",
 }
-_TOOL_CATEGORY_COMPAT = {"plugins", "xfer_analysis"}
+_TOOL_CATEGORY_COMPAT = {"plugins"}
 
 def classify_tool_category(tool_name: str) -> str:
     if tool_name in _TOOL_CATEGORY_CORE:
