@@ -29,6 +29,7 @@ from ida_mcp_stdio import (
     TOOL_ACTIONS,
     TOOL_DESCRIPTIONS,
     TOOL_ARG_SCHEMAS,
+    TOOL_ALIASES,
     build_input_schema,
     truncate_response,
     continue_truncated,
@@ -325,9 +326,11 @@ class TestToolRegistration(unittest.TestCase):
             self.assertIn(t, TOOLS)
 
     def test_plugins_registered(self):
-        self.assertIn("plugins", TOOLS)
-        self.assertIn("plugins", TOOL_ACTIONS)
-        self.assertIn("plugins", TOOL_DESCRIPTIONS)
+        # plugins is now a compatibility alias routed to misc
+        self.assertIn("plugins", TOOL_ALIASES)
+        self.assertNotIn("plugins", TOOLS)
+        self.assertIn("plugin_list", TOOL_ACTIONS["misc"])
+        self.assertIn("plugin_run", TOOL_ACTIONS["misc"])
 
     def test_batch_registered(self):
         self.assertIn("batch", TOOLS)
