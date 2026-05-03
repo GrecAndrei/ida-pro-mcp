@@ -237,6 +237,14 @@ Address/pointer safety assist:
 - Optional env toggles:
   - `IDA_MCP_GUARDRAIL_AUTO_VERIFY=1`: attach `llm_guardrail_preview` for the first suggested guardrail action.
   - `IDA_MCP_GUARDRAIL_STRICT_WRITES=1`: block risky write actions unless caller sets `_guardrail_ack=true`.
+- Per-call overrides:
+  - `_guardrail_mode`: `assist` (default), `enforce`, or `off`
+  - `_guardrail_auto_verify`: `true|false` to override preview behavior for one call
+
+Blackboard adoption assist:
+
+- The server can emit `llm_state_sync` / `llm_state_sync_hint` metadata to push clients toward persistent blackboard usage during long investigations.
+- When auto-extracted entries are available, the server attempts `blackboard(action="write")` automatically and reports write counts.
 
 ## Architecture Graphs
 
