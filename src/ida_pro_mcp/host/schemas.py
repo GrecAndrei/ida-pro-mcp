@@ -49,7 +49,6 @@ TOOLS = [
     "bulk",
     # Utilities
     "misc",
-    "plugins",
     "calc",
     "nav",
     # Debugging and tracing
@@ -166,7 +165,7 @@ ADVERTISED_TOOLS = [
 ]
 
 # Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
-HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}.union({"plugins"})
+HIDDEN_TOOLS_IN_LIST = {t for t in TOOLS if t not in ADVERTISED_TOOLS}
 
 _EXTRA_TOOL_ALIASES = {
     "analysis_tool": "analysis",
@@ -375,7 +374,6 @@ TOOL_DESCRIPTIONS = {
     "trace_analysis": "Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis.",
     # Project and file management
     "project": "Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.",
-    "plugins": "Legacy compatibility plugin surface. Actions: list, run. Preferred entrypoint: misc(action=plugin_list|plugin_run).",
     # Advanced analysis
     "agent": "High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.",
     "microcode": "Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions, def_use_graph.",
@@ -683,7 +681,6 @@ TOOL_ACTIONS = {
         "knowledge_debt",
         "casefile_export",
     ],
-    "plugins": ["list", "run"],
     # Advanced analysis (LLM-friendly)
     "agent": [
         "analyze_function",
@@ -2284,7 +2281,7 @@ _TOOL_CATEGORY_SECURITY = {
     "classify",
     "summarize",
 }
-_TOOL_CATEGORY_COMPAT = {"plugins"}
+_TOOL_CATEGORY_COMPAT = set()
 
 def classify_tool_category(tool_name: str) -> str:
     if tool_name in _TOOL_CATEGORY_CORE:
