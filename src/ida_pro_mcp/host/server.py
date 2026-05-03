@@ -20,6 +20,7 @@ import atexit
 import signal
 import glob
 import difflib
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
@@ -6169,6 +6170,9 @@ class IDAMCPServer:
         if tool_name == "threat_hunt":
             return self._handle_threat_hunt(args)
 
+        if tool_name == "predictor":
+            return self._handle_predictor(args)
+
         if tool_name == "gadgets" and str(args.get("action") or "").strip() == "semantic_find":
             return self._handle_gadgets_semantic_find(args)
 
@@ -6205,6 +6209,147 @@ class IDAMCPServer:
                 "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
             )
         return self.call_tool(tool_name, ip, **args)
+
+    def _predict_next_tool_from_activity(
+        self, activity_log: list[dict], limit: int = 5
+    ) -> list[dict]:
+        """Simple local sequence model: Markov transition + global frequency prior."""
+        if not activity_log:
+            return []
+
+        seq = [
+            f"{str(e.get('tool') or '').strip()}.{str(e.get('action') or '').strip()}"
+            for e in activity_log
+            if e.get("tool") and e.get("action")
+        ]
+        seq = [s for s in seq if s and s != "."]
+        if not seq:
+            return []
+
+        global_counts = Counter(seq)
+        transition_counts: dict[str, Counter] = {}
+        for i in range(len(seq) - 1):
+            src = seq[i]
+            dst = seq[i + 1]
+            transition_counts.setdefault(src, Counter())[dst] += 1
+
+        current = seq[-1]
+        local_next = transition_counts.get(current, Counter())
+        total_global = max(1, sum(global_counts.values()))
+        total_local = max(1, sum(local_next.values()))
+
+        candidates = set(global_counts.keys()) | set(local_next.keys())
+        scored: list[dict] = []
+        for cand in candidates:
+            p_local = local_next.get(cand, 0) / total_local
+            p_global = global_counts.get(cand, 0) / total_global
+            score = (0.75 * p_local) + (0.25 * p_global)
+            tool, action = cand.split(".", 1) if "." in cand else (cand, "")
+            scored.append(
+                {
+                    "tool": tool,
+                    "action": action,
+                    "score": round(score, 4),
+                    "evidence": {
+                        "transition_hits": int(local_next.get(cand, 0)),
+                        "global_hits": int(global_counts.get(cand, 0)),
+                        "current": current,
+                    },
+                }
+            )
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[: max(1, limit)]
+
+    def _handle_predictor(self, args: dict) -> dict:
+        action = str(args.get("action") or "suggest_next_tool").strip()
+        sid = args.get("session_id")
+        if not sid and self.current_session:
+            sid = self.current_session.session_id
+        if not sid:
+            return make_error(
+                MCPError.SESSION_REQUIRED,
+                "No active session. Create/switch session first or pass session_id.",
+            )
+        if not self.session_mgr.session_exists(str(sid)):
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+
+        limit = _bounded_int(args.get("limit", 5), 5, min_value=1, max_value=20)
+        recent_n = _bounded_int(args.get("recent_n", 30), 30, min_value=5, max_value=200)
+        context = str(args.get("context") or "").strip()
+
+        activity = self.session_mgr.get_activity_log(str(sid), limit=recent_n)
+        if isinstance(activity, dict) and activity.get("error"):
+            return activity
+        log = list((activity or {}).get("log") or [])
+
+        if action == "suggest_next_tool":
+            seq_suggestions = self._predict_next_tool_from_activity(log, limit=limit)
+            strategy = self.session_mgr.suggest_strategy(str(sid), context=context)
+            strategy_rows = []
+            if isinstance(strategy, dict) and not strategy.get("error"):
+                for s in (strategy.get("suggestions") or [])[:limit]:
+                    strategy_rows.append(
+                        {
+                            "skill_id": s.get("skill_id"),
+                            "score": s.get("score", s.get("q_value", 0.0)),
+                            "source": s.get("source", "local"),
+                            "tags": s.get("tags", []),
+                        }
+                    )
+            return {
+                "ok": True,
+                "session_id": sid,
+                "model": "markov_plus_qvalue",
+                "suggestions": seq_suggestions,
+                "strategy_suggestions": strategy_rows,
+                "activity_window": len(log),
+                "context": context,
+            }
+
+        if action == "detect_stuck":
+            dead_end = self.session_mgr._detect_dead_end(log)
+            return {
+                "ok": True,
+                "session_id": sid,
+                "stuck": bool(dead_end),
+                "signal": dead_end or {},
+                "activity_window": len(log),
+            }
+
+        if action == "suggest_focus":
+            dead_end = self.session_mgr._detect_dead_end(log)
+            phase = self.session_mgr.get_phase(str(sid))
+            phase_tools = []
+            if isinstance(phase, dict) and not phase.get("error"):
+                phase_tools = list(phase.get("suggested_tools") or [])
+
+            pivots = []
+            if dead_end and isinstance(dead_end, dict):
+                dtype = str(dead_end.get("type") or "")
+                if dtype == "repeated_decompile":
+                    pivots = ["code:callers", "code:callees", "xref_analysis:dependency_graph"]
+                elif dtype == "repeated_search":
+                    pivots = ["search:structured", "schemaboot:query", "string_ops:indicators"]
+                elif dtype == "tool_loop":
+                    pivots = ["graph:cfg", "classify:function", "threat_hunt:quick"]
+
+            if not pivots:
+                pivots = [f"{t}:*" for t in phase_tools[:5]] if phase_tools else ["data:functions", "code:decompile", "search:name"]
+
+            return {
+                "ok": True,
+                "session_id": sid,
+                "focus_pivots": pivots[:limit],
+                "phase": phase.get("phase") if isinstance(phase, dict) else None,
+                "dead_end": dead_end or {},
+            }
+
+        return make_error(
+            MCPError.ACTION_NOT_FOUND,
+            f"Unsupported predictor action: '{action}'",
+            hint=f"Valid predictor actions: {', '.join(TOOL_ACTIONS.get('predictor', []))}",
+        )
 
     def _normalize_batch_call(
         self, call: Any, idx: int

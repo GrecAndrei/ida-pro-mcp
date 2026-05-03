@@ -86,6 +86,7 @@ TOOLS = [
     # --- New LLM-optimized tools ---
     # Security & vulnerability analysis
     "threat_hunt",
+    "predictor",
     "gadgets",
     # Deobfuscation & crypto
     "deobfuscate",
@@ -160,6 +161,7 @@ ADVERTISED_TOOLS = [
     "annotation",
     "binary_info",
     "threat_hunt",
+    "predictor",
     "compare",
     "governance",
 ]
@@ -407,6 +409,7 @@ TOOL_DESCRIPTIONS = {
     "yara_hunt": "YARA scanning with context and attribution. Actions: scan, compile, list_rules, match_context, extract_strings, xref_matches.",
     # --- New LLM-optimized tools ---
     "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
+    "predictor": "Deterministic/local-ML predictive assistant for workflow guidance. Actions: suggest_next_tool, detect_stuck, suggest_focus. Uses activity sequence modeling + local Q-value strategy ranking.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
@@ -786,6 +789,11 @@ TOOL_ACTIONS = {
         "quick",
         "deep",
         "legacy",
+    ],
+    "predictor": [
+        "suggest_next_tool",
+        "detect_stuck",
+        "suggest_focus",
     ],
     "deobfuscate": [
         "detect_encoding",
@@ -1360,6 +1368,29 @@ TOOL_ARG_SCHEMAS = {
             "description": "For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.",
         },
     },
+    "predictor": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["predictor"]},
+        "session_id": {
+            "type": "string",
+            "description": "Optional session ID. If omitted, active session is used.",
+        },
+        "context": {
+            "type": "string",
+            "description": "Optional context text to bias suggestions.",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "Maximum suggestions to return.",
+        },
+        "recent_n": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 200,
+            "description": "Recent activity window for sequence modeling.",
+        },
+    },
     "segments": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["segments"]},
         "start": {"type": "string"},
@@ -1714,6 +1745,11 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         },
         "quick": {"fast", "lite", "quick_scan", "quickly"},
         "deep": {"thorough", "intensive", "deep_scan", "full_depth"},
+    },
+    "predictor": {
+        "suggest_next_tool": {"next_tool", "recommend_tool", "tool_suggest", "predict_next"},
+        "detect_stuck": {"stuck", "dead_end", "loop_detect", "stalled"},
+        "suggest_focus": {"next_focus", "focus", "suggest_address", "interesting"},
     },
     "agent": {
         "context_pack": {"context", "pack", "summarize_context", "analysis_context"},
