@@ -1,6 +1,6 @@
 # IDA Pro MCP
 
-LLM-first reverse engineering for IDA Pro.
+Deterministic and ML-powered reverse engineering for IDA Pro via MCP.
 
 `ida-pro-mcp` exposes IDA analysis, decompilation, debugging, triage, and annotation as MCP tools so coding agents can operate on binaries with structured calls instead of fragile text scraping.
 
@@ -34,7 +34,13 @@ It provides:
 - Persistent session/bookmark metadata in user runtime directory (`IDA_MCP_CACHE_DIR` or OS default)
 - Built-in wiki docs accessible through the `wiki` tool
 
-The design goal is simple: make LLM binary analysis stable, scriptable, and token-efficient.
+The design goal is simple: make binary analysis stable, scriptable, and token-efficient for MCP clients.
+
+Important architecture note:
+
+- This project does **not** run any backend cloud LLM service.
+- Tool execution is deterministic IDA SDK logic plus local/statistical ML components where implemented (for example C2 scoring and ranking components).
+- Any LLM behavior comes from the MCP client using this server, not from an embedded server-side LLM runtime.
 
 ## Why LLM Agents Use It
 
