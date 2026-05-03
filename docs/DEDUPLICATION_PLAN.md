@@ -16,6 +16,7 @@ This project keeps a small canonical MCP surface and supports older names via al
 - `annotations_ai` -> `annotation`
 - `strings_xref` -> `xref_analysis`
 - `emulate` -> `static_trace`
+- `recommend` / `predict` / `next_tool` -> `predictor`
 
 ## Workflow Canonicals
 
@@ -33,6 +34,7 @@ This project keeps a small canonical MCP surface and supports older names via al
   - Canonical: `agent` for guided investigative flow
   - Canonical: `threat_hunt` for malware/vuln/tracing pipelines
   - Canonical: `llm_helpers` for deterministic post-processing/enrichment
+  - Canonical: `predictor` for local sequence/Q-value workflow prediction
 
 ## Action Alias Consolidation
 

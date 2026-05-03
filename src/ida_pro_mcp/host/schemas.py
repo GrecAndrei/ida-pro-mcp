@@ -216,6 +216,10 @@ _EXTRA_TOOL_ALIASES = {
     "yara": "threat_hunt",
     "hunt": "threat_hunt",
     "automated_findings": "threat_hunt",
+    "recommend": "predictor",
+    "predict": "predictor",
+    "next_tool": "predictor",
+    "workflow_predictor": "predictor",
     # Legacy/compat aliases kept for older clients and scripts.
     "comments_ai": "comment_mgr",
     "annotations_ai": "annotation",
