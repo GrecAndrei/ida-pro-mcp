@@ -4743,6 +4743,70 @@ class IDAMCPServer:
             )
         return out
 
+    def _threat_hunt_score_finding(self, finding: dict, freq: int = 1) -> float:
+        """Deterministic local scoring model for threat_hunt ranking."""
+        if not isinstance(finding, dict):
+            return 0.0
+        tool = str(finding.get("tool") or "").lower()
+        action = str(finding.get("action") or "").lower()
+        text = " ".join(
+            str(finding.get(k) or "")
+            for k in ("summary", "name", "title", "value", "kind", "type", "indicator")
+        ).lower()
+        addr = str(finding.get("addr") or finding.get("address") or finding.get("ea") or "")
+
+        score = 0.0
+
+        # Module priors
+        if tool in {"yara_hunt", "crypto_id", "deobfuscate"}:
+            score += 1.4
+        elif tool in {"trace_analysis", "coverage", "trace"}:
+            score += 1.1
+        elif tool in {"search", "string_ops", "xref_analysis"}:
+            score += 0.9
+
+        # Action priors
+        if action in {"identify", "find_c2", "ioc_extract", "vulnerable", "detect"}:
+            score += 1.0
+        if action in {"analyze_coverage", "find_loops"}:
+            score += 0.6
+
+        # Keyword features
+        keyword_weights = {
+            "c2": 1.2,
+            "beacon": 1.2,
+            "ransom": 1.0,
+            "inject": 0.9,
+            "shellcode": 1.1,
+            "persistence": 0.8,
+            "registry": 0.6,
+            "suspicious": 0.7,
+            "obfusc": 0.8,
+            "crypto": 0.7,
+            "entropy": 0.5,
+            "vuln": 1.0,
+            "overflow": 1.0,
+            "format string": 1.0,
+        }
+        for kw, w in keyword_weights.items():
+            if kw in text:
+                score += w
+
+        # Structural confidence hints
+        if addr:
+            score += 0.35
+        if finding.get("count"):
+            try:
+                cnt = int(finding.get("count") or 0)
+                score += min(0.8, 0.1 * max(0, cnt))
+            except Exception:
+                pass
+
+        # Frequency boost from independent corroboration across steps
+        score += min(1.5, 0.35 * max(0, freq - 1))
+
+        return round(score, 4)
+
     def _threat_hunt_legacy_route(
         self, legacy_tool: str, legacy_action: str, args: dict
     ) -> tuple[str, list[tuple[str, str, dict]], dict]:
@@ -5114,6 +5178,7 @@ class IDAMCPServer:
                 )
 
         dedup: dict[str, dict] = {}
+        dedup_freq: dict[str, int] = {}
         for f in raw_findings:
             if not isinstance(f, dict):
                 continue
@@ -5131,8 +5196,18 @@ class IDAMCPServer:
                 continue
             if key not in dedup:
                 dedup[key] = f
+                dedup_freq[key] = 1
+            else:
+                dedup_freq[key] = dedup_freq.get(key, 1) + 1
 
-        findings = list(dedup.values())[:limit]
+        ranked_findings: list[dict] = []
+        for k, f in dedup.items():
+            row = dict(f)
+            row["ml_score"] = self._threat_hunt_score_finding(row, dedup_freq.get(k, 1))
+            row["support_count"] = dedup_freq.get(k, 1)
+            ranked_findings.append(row)
+        ranked_findings.sort(key=lambda x: (x.get("ml_score", 0.0), x.get("support_count", 1)), reverse=True)
+        findings = ranked_findings[:limit]
         ok_steps = sum(1 for s in steps if s.get("ok"))
         failed_steps = len(steps) - ok_steps
         out = {
