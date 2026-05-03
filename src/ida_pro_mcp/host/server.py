@@ -6526,6 +6526,9 @@ class IDAMCPServer:
         if tool_name == "predictor":
             return self._handle_predictor(args)
 
+        if tool_name == "workflow":
+            return self._handle_workflow(args)
+
         if tool_name == "gadgets" and str(args.get("action") or "").strip() == "semantic_find":
             return self._handle_gadgets_semantic_find(args)
 
@@ -6768,6 +6771,56 @@ class IDAMCPServer:
             for k, v in passthrough.items():
                 call_args.setdefault(k, v)
         return name, call_args, None
+
+    def _handle_workflow(self, args: dict) -> dict:
+        action = str(args.get("action") or "triage_fast").strip().lower()
+        profile = str(args.get("profile") or "balanced").strip().lower()
+        if profile not in {"quick", "balanced", "deep"}:
+            profile = "balanced"
+        limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=100)
+        addr = str(args.get("addr") or "").strip()
+
+        step_plan: list[dict] = []
+        if action == "triage_fast":
+            step_plan = [
+                {"name": "idb", "arguments": {"action": "meta"}},
+                {"name": "data", "arguments": {"action": "functions", "count": limit}},
+                {"name": "data", "arguments": {"action": "imports", "count": limit}},
+                {"name": "string_ops", "arguments": {"action": "find_urls", "limit": limit}},
+                {"name": "threat_hunt", "arguments": {"action": "quick", "limit": limit, "profile": profile}},
+            ]
+        elif action == "malware_deep":
+            step_plan = [
+                {"name": "string_ops", "arguments": {"action": "find_c2", "limit": limit}},
+                {"name": "deobfuscate", "arguments": {"action": "stack_strings", "limit": limit}},
+                {"name": "deobfuscate", "arguments": {"action": "api_hashing", "limit": limit}},
+                {"name": "crypto_id", "arguments": {"action": "identify", "limit": limit}},
+                {"name": "yara_hunt", "arguments": {"action": "list_rules"}},
+                {"name": "threat_hunt", "arguments": {"action": "malware", "limit": limit, "profile": profile}},
+            ]
+        elif action == "vuln_audit":
+            step_plan = [
+                {"name": "gadgets", "arguments": {"action": "rop", "limit": limit}},
+                {"name": "search", "arguments": {"action": "vulnerable", "limit": limit}},
+                {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
+                {"name": "threat_hunt", "arguments": {"action": "vuln", "limit": limit, "profile": profile}},
+            ]
+        elif action == "patch_review":
+            step_plan = [
+                {"name": "code", "arguments": {"action": "disasm", "addr": addr}},
+                {"name": "code", "arguments": {"action": "xrefs_to", "addr": addr, "limit": limit}},
+                {"name": "code", "arguments": {"action": "xrefs_from", "addr": addr, "limit": limit}},
+                {"name": "xref_analysis", "arguments": {"action": "dependency_graph", "addr": addr, "depth": 1, "limit": limit}},
+                {"name": "compare", "arguments": {"action": "functions", "addr": addr, "addr2": addr}},
+            ]
+        else:
+            return make_error(
+                MCPError.ACTION_NOT_FOUND,
+                f"Unsupported workflow action: '{action}'",
+                hint="Valid workflow actions: triage_fast, malware_deep, vuln_audit, patch_review",
+            )
+
+        return self._handle_batch({"calls": step_plan, "continue_on_error": True})
 
     def _handle_batch(self, args):
         calls = args.get("calls", [])
