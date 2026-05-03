@@ -1133,6 +1133,40 @@ class SessionManager:
                 out["dead_end_warning"] = dead_end
             return out
 
+    def check_state_contract(self, sid: str, window: int = 8) -> dict:
+        """Check if analyst has persisted findings to blackboard within recent window."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return {"ok": False, "error": "session_not_found"}
+            data = self._load_skills(sid)
+            log = data.get("activity_log", [])
+            recent = log[-window:]
+            bb_writes = sum(
+                1
+                for e in recent
+                if isinstance(e, dict)
+                and e.get("tool") == "blackboard"
+                and str(e.get("action") or "").startswith("write")
+            )
+            return {
+                "ok": True,
+                "session_id": sid,
+                "contract_met": bb_writes > 0,
+                "blackboard_writes_in_window": bb_writes,
+                "window_size": len(recent),
+                "recommended_action": {
+                    "tool": "blackboard",
+                    "arguments": {
+                        "action": "write",
+                        "name": "finding_summary",
+                        "notes": "<concise finding from recent analysis>",
+                        "category": "analysis",
+                        "priority": 3,
+                    },
+                },
+            }
+
     def _detect_dead_end(self, activity_log: List[dict]) -> Optional[dict]:
         """Detect stalled analysis patterns."""
         if len(activity_log) < 10:

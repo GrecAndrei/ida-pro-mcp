@@ -1950,6 +1950,30 @@ class IDAMCPServer:
         self._pointer_note_pending_signal = 0.0
         return True
 
+    def _validate_address_lockstep(self, call_args: Any, payload: Any) -> list[dict]:
+        """Detect addresses in call_args that do not appear in previous payload output."""
+        if not isinstance(call_args, dict):
+            return []
+        requested = self._collect_hex_addresses(call_args, max_items=12)
+        if not requested:
+            return []
+        available = self._collect_hex_addresses(payload, max_items=50)
+        available_set = set(available)
+        warnings: list[dict] = []
+        for addr in requested:
+            if addr not in available_set:
+                warnings.append(
+                    {
+                        "addr": addr,
+                        "warning": "This address was not present in the previous tool output. Verify with calc/memory before reasoning.",
+                        "suggested_verification": {
+                            "tool": "calc",
+                            "arguments": {"action": "deref", "addr": addr, "type": "u32"},
+                        },
+                    }
+                )
+        return warnings
+
     def _collect_hex_addresses(self, value: Any, max_items: int = 8) -> list[str]:
         found: list[str] = []
 
@@ -2235,6 +2259,10 @@ class IDAMCPServer:
                     payload.setdefault("llm_guardrail_reason_tags", reason_tags)
                     if self._guardrail_auto_verify_for_call(call_args) and guardrail_actions:
                         payload.setdefault("llm_guardrail_preview", self._guardrail_preview(guardrail_actions[0]))
+                    # Address lockstep: warn about unseen addresses
+                    lockstep_warnings = self._validate_address_lockstep(call_args, payload)
+                    if lockstep_warnings:
+                        payload.setdefault("llm_address_lockstep_warnings", lockstep_warnings)
             compacted = payload
         else:
             projected = self._project_top_level_fields(payload, opts)
@@ -2594,6 +2622,27 @@ class IDAMCPServer:
                                     },
                                 },
                             )
+            except Exception:
+                pass
+
+            # ---- State Contract Enforcement ----
+            try:
+                if (
+                    hasattr(self, "session_mgr")
+                    and self.current_session
+                    and tool_name not in {"session", "blackboard", "batch", "predictor", "workflow"}
+                ):
+                    sid = self.current_session.session_id
+                    contract = self.session_mgr.check_state_contract(sid, window=8)
+                    if isinstance(contract, dict) and contract.get("ok") and not contract.get("contract_met"):
+                        compacted.setdefault(
+                            "llm_state_contract_reminder",
+                            {
+                                "message": f"No blackboard write in last {contract.get('window_size', 8)} calls. Persist findings to maintain state.",
+                                "recommended_action": contract.get("recommended_action"),
+                                "contract_met": False,
+                            },
+                        )
             except Exception:
                 pass
         return compacted
@@ -6699,6 +6748,76 @@ class IDAMCPServer:
                 "focus_pivots": pivots[:limit],
                 "phase": phase.get("phase") if isinstance(phase, dict) else None,
                 "dead_end": dead_end or {},
+            }
+
+        if action == "suggest_next_address":
+            addrs = []
+            for e in log:
+                if not isinstance(e, dict):
+                    continue
+                for k in ("addr", "address", "ea"):
+                    v = e.get(k)
+                    if v and str(v).startswith("0x"):
+                        a = str(v).lower()
+                        if a not in addrs:
+                            addrs.append(a)
+            # Centrality heuristic: if recent decompile, suggest callers/callees via xref_analysis
+            suggestions = []
+            if addrs:
+                recent_addr = addrs[-1]
+                suggestions.append({"addr": recent_addr, "reason": "recent_focus", "tool": "code", "action": "xrefs_to"})
+                if len(addrs) >= 2:
+                    suggestions.append({"addr": addrs[-2], "reason": "previous_focus", "tool": "code", "action": "xrefs_from"})
+            return {
+                "ok": True,
+                "session_id": sid,
+                "suggestions": suggestions[:limit],
+                "recent_addresses": addrs[-10:],
+            }
+
+        if action == "risk_of_stall":
+            dead_end = self.session_mgr._detect_dead_end(log)
+            # Sequence entropy: low variety in recent tools -> high stall risk
+            recent_tools = [f"{e.get('tool','')}.{e.get('action','')}" for e in log[-20:] if isinstance(e, dict)]
+            unique_tools = len(set(recent_tools))
+            total_recent = max(1, len(recent_tools))
+            entropy = unique_tools / total_recent
+            stall_score = 0.0
+            if dead_end:
+                stall_score += 0.5
+            stall_score += max(0.0, 0.5 - entropy)
+            return {
+                "ok": True,
+                "session_id": sid,
+                "risk_score": round(min(1.0, stall_score), 3),
+                "entropy": round(entropy, 3),
+                "dead_end_detected": bool(dead_end),
+                "recent_tool_variety": unique_tools,
+                "recent_tool_total": total_recent,
+            }
+
+        if action == "explain_decision":
+            # Reconstruct feature contribution for any ranked result
+            target_tool = str(args.get("target_tool") or "").strip()
+            target_action = str(args.get("target_action") or "").strip()
+            explanations = []
+            if target_tool == "threat_hunt" and target_action in {"run", "quick", "malware", "vuln"}:
+                explanations.append({"feature": "module_prior", "weight": 1.4, "reason": "Tool is in malware/crypto/deobfuscation family"})
+                explanations.append({"feature": "action_prior", "weight": 1.0, "reason": "Action is detection/identification oriented"})
+                explanations.append({"feature": "keyword_match", "weight": 0.8, "reason": "Indicator keywords present in finding text"})
+                explanations.append({"feature": "corroboration", "weight": 0.35, "reason": "Cross-step frequency boost"})
+            elif target_tool == "predictor" and target_action == "suggest_next_tool":
+                explanations.append({"feature": "markov_transition", "weight": 0.75, "reason": "Local transition probability from recent activity"})
+                explanations.append({"feature": "global_frequency", "weight": 0.25, "reason": "Global tool usage frequency prior"})
+            else:
+                explanations.append({"feature": "default", "weight": 1.0, "reason": "Standard deterministic ranking"})
+            return {
+                "ok": True,
+                "session_id": sid,
+                "target_tool": target_tool,
+                "target_action": target_action,
+                "model": "deterministic_feature_contribution",
+                "explanations": explanations,
             }
 
         return make_error(

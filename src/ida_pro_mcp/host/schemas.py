@@ -415,7 +415,7 @@ TOOL_DESCRIPTIONS = {
     "yara_hunt": "YARA scanning with context and attribution. Actions: scan, compile, list_rules, match_context, extract_strings, xref_matches.",
     # --- New LLM-optimized tools ---
     "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
-    "predictor": "Deterministic/local-ML predictive assistant for workflow guidance. Actions: suggest_next_tool, detect_stuck, suggest_focus. Uses activity sequence modeling + local Q-value strategy ranking.",
+    "predictor": "Deterministic/local-ML predictive assistant for workflow guidance. Actions: suggest_next_tool, detect_stuck, suggest_focus, suggest_next_address, risk_of_stall. Uses activity sequence modeling + local Q-value strategy ranking.",
     "workflow": "Deterministic workflow façade that expands a single call into a validated multi-step batch plan. Actions: triage_fast, malware_deep, vuln_audit, patch_review. Reduces LLM prompt complexity by hiding orchestration details behind a single canonical entrypoint.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
@@ -801,6 +801,9 @@ TOOL_ACTIONS = {
         "suggest_next_tool",
         "detect_stuck",
         "suggest_focus",
+        "suggest_next_address",
+        "risk_of_stall",
+        "explain_decision",
     ],
     "workflow": [
         "triage_fast",
@@ -1402,6 +1405,14 @@ TOOL_ARG_SCHEMAS = {
             "minimum": 5,
             "maximum": 200,
             "description": "Recent activity window for sequence modeling.",
+        },
+        "target_tool": {
+            "type": "string",
+            "description": "Target tool for explain_decision action.",
+        },
+        "target_action": {
+            "type": "string",
+            "description": "Target action for explain_decision action.",
         },
     },
     "workflow": {
