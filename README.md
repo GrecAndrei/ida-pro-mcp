@@ -280,6 +280,21 @@ stateDiagram-v2
 
 ## Tool Surface
 
+### Canonical vs compatibility tool names
+
+The server keeps a **canonical** tool surface and preserves compatibility aliases for older clients.
+
+- Canonical tool names are listed in `src/ida_pro_mcp/host/schemas.py` under `TOOLS`.
+- Compatibility aliases are listed under `TOOL_ALIASES` and resolve before dispatch.
+- Alias names are not advertised in `tools/list` unless intentionally promoted.
+
+Current examples:
+
+- `xfer_analysis` -> `xref_analysis`
+- `plugins` -> `misc` (`misc(action="plugin_list"|"plugin_run")`)
+
+This keeps the externally visible MCP surface smaller while maintaining backward compatibility.
+
 The advertised `tools/list` surface is intentionally compact (~30 core tools) for limited context windows.
 Additional specialized capabilities remain accessible via hub tools + wiki docs.
 
