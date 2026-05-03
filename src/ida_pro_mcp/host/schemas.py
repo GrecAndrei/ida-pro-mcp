@@ -87,6 +87,7 @@ TOOLS = [
     # Security & vulnerability analysis
     "threat_hunt",
     "predictor",
+    "workflow",
     "gadgets",
     # Deobfuscation & crypto
     "deobfuscate",
@@ -162,6 +163,7 @@ ADVERTISED_TOOLS = [
     "binary_info",
     "threat_hunt",
     "predictor",
+    "workflow",
     "compare",
     "governance",
 ]
@@ -414,6 +416,7 @@ TOOL_DESCRIPTIONS = {
     # --- New LLM-optimized tools ---
     "threat_hunt": "Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy. Executes real end-to-end pipelines across existing tools and can route legacy actions from archived tools, returning step-by-step status with deduplicated findings.",
     "predictor": "Deterministic/local-ML predictive assistant for workflow guidance. Actions: suggest_next_tool, detect_stuck, suggest_focus. Uses activity sequence modeling + local Q-value strategy ranking.",
+    "workflow": "Deterministic workflow façade that expands a single call into a validated multi-step batch plan. Actions: triage_fast, malware_deep, vuln_audit, patch_review. Reduces LLM prompt complexity by hiding orchestration details behind a single canonical entrypoint.",
     "deobfuscate": "Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).",
     "crypto_id": "Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.",
     "abi": "ABI and calling convention analysis. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
@@ -798,6 +801,12 @@ TOOL_ACTIONS = {
         "suggest_next_tool",
         "detect_stuck",
         "suggest_focus",
+    ],
+    "workflow": [
+        "triage_fast",
+        "malware_deep",
+        "vuln_audit",
+        "patch_review",
     ],
     "deobfuscate": [
         "detect_encoding",
@@ -1393,6 +1402,24 @@ TOOL_ARG_SCHEMAS = {
             "minimum": 5,
             "maximum": 200,
             "description": "Recent activity window for sequence modeling.",
+        },
+    },
+    "workflow": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["workflow"]},
+        "addr": {
+            "type": "string",
+            "description": "Optional address focus for the workflow.",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Max findings per sub-step.",
+        },
+        "profile": {
+            "type": "string",
+            "enum": ["quick", "balanced", "deep"],
+            "description": "Depth profile override for underlying pipelines.",
         },
     },
     "segments": {
