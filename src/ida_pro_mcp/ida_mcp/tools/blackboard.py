@@ -198,6 +198,52 @@ class BlackboardStore:
                 "by_category": by_cat,
             }
 
+    def auto_merge(self, addr: str = "", category: str = "", similarity_threshold: float = 0.85) -> Dict:
+        """Detect and merge duplicate entries by addr+category+title similarity."""
+        with self._conn() as conn:
+            cur = conn.cursor()
+            conditions = ["1=1"]
+            params: list = []
+            if addr:
+                conditions.append("addr = ?")
+                params.append(addr)
+            if category:
+                conditions.append("category = ?")
+                params.append(category)
+            where = "WHERE " + " AND ".join(conditions)
+            cur.execute(f"SELECT * FROM blackboard {where} ORDER BY updated_at DESC", params)
+            rows = cur.fetchall()
+
+        entries = [self._row_to_dict(r) for r in rows]
+        merged_count = 0
+        kept_ids: set = set()
+
+        for i, entry in enumerate(entries):
+            if entry["id"] in kept_ids:
+                continue
+            for other in entries[i + 1 :]:
+                if other["id"] in kept_ids:
+                    continue
+                # Simple similarity: same addr/category and title containment
+                if (
+                    entry.get("addr") == other.get("addr")
+                    and entry.get("category") == other.get("category")
+                ):
+                    t1 = str(entry.get("title") or "").lower().strip()
+                    t2 = str(other.get("title") or "").lower().strip()
+                    sim = 0.0
+                    if t1 and t2:
+                        if t1 in t2 or t2 in t1:
+                            sim = 0.9
+                        elif t1.split()[0] == t2.split()[0]:
+                            sim = 0.85
+                    if sim >= similarity_threshold:
+                        # Merge: keep newer, delete older
+                        self.delete(other["id"])
+                        kept_ids.add(other["id"])
+                        merged_count += 1
+        return {"merged": merged_count, "remaining": len(entries) - merged_count}
+
     def _row_to_dict(self, row) -> Dict:
         return {
             "id": row[0],
@@ -299,6 +345,10 @@ def blackboard(
 
     elif action == "stats":
         return {"ok": True, **store.stats()}
+
+    elif action == "merge":
+        result = store.auto_merge(addr=addr, category=category if category != "general" else "")
+        return {"ok": True, **result}
 
     else:
         return {"ok": False, "error": f"Unknown action: {action}"}
