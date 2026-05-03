@@ -2044,6 +2044,37 @@ class IDAMCPServer:
 
         return suggestions[:5]
 
+    def _guardrail_mode_from_args(self, call_args: Any) -> str:
+        """Resolve per-call guardrail mode: assist|enforce|off."""
+        mode = ""
+        if isinstance(call_args, dict):
+            mode = str(call_args.get("_guardrail_mode") or "").strip().lower()
+        if mode in {"off", "none", "disable", "disabled"}:
+            return "off"
+        if mode in {"enforce", "strict", "block"}:
+            return "enforce"
+        return "assist"
+
+    def _guardrail_auto_verify_for_call(self, call_args: Any) -> bool:
+        if isinstance(call_args, dict) and "_guardrail_auto_verify" in call_args:
+            return _coerce_bool(call_args.get("_guardrail_auto_verify"), False)
+        return bool(self._guardrail_auto_verify)
+
+    def _guardrail_action_recipe(self, actions: list[dict]) -> list[str]:
+        """Human/LLM-friendly compact command recipe lines."""
+        recipe: list[str] = []
+        for row in actions[:5]:
+            tool = str(row.get("tool") or "")
+            args = row.get("arguments") or {}
+            if not tool or not isinstance(args, dict):
+                continue
+            action = str(args.get("action") or "")
+            if action:
+                recipe.append(f"{tool}:{action}")
+            else:
+                recipe.append(tool)
+        return recipe
+
     def _guardrail_reason_tags(self, tool_name: str, call_args: Any, payload: Any) -> list[str]:
         tags: list[str] = []
         tn = str(tool_name or "").lower()
@@ -2195,11 +2226,14 @@ class IDAMCPServer:
                 if include_pointer_note:
                     guardrail_actions = self._build_llm_guardrail_actions(tool_name, call_args, payload)
                     reason_tags = self._guardrail_reason_tags(tool_name, call_args, payload)
+                    guardrail_mode = self._guardrail_mode_from_args(call_args)
                     payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
                     payload.setdefault("llm_guardrail_actions", guardrail_actions)
+                    payload.setdefault("llm_guardrail_mode", guardrail_mode)
+                    payload.setdefault("llm_guardrail_recipe", self._guardrail_action_recipe(guardrail_actions))
                     payload.setdefault("llm_guardrail_confidence", round(min(1.0, self._compute_pointer_note_signal(tool_name, call_args, payload) / 6.0), 3))
                     payload.setdefault("llm_guardrail_reason_tags", reason_tags)
-                    if self._guardrail_auto_verify and guardrail_actions:
+                    if self._guardrail_auto_verify_for_call(call_args) and guardrail_actions:
                         payload.setdefault("llm_guardrail_preview", self._guardrail_preview(guardrail_actions[0]))
             compacted = payload
         else:
@@ -2239,11 +2273,14 @@ class IDAMCPServer:
             if include_pointer_note:
                 guardrail_actions = self._build_llm_guardrail_actions(tool_name, call_args, compacted)
                 reason_tags = self._guardrail_reason_tags(tool_name, call_args, compacted)
+                guardrail_mode = self._guardrail_mode_from_args(call_args)
                 compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
                 compacted.setdefault("llm_guardrail_actions", guardrail_actions)
+                compacted.setdefault("llm_guardrail_mode", guardrail_mode)
+                compacted.setdefault("llm_guardrail_recipe", self._guardrail_action_recipe(guardrail_actions))
                 compacted.setdefault("llm_guardrail_confidence", round(min(1.0, self._compute_pointer_note_signal(tool_name, call_args, compacted) / 6.0), 3))
                 compacted.setdefault("llm_guardrail_reason_tags", reason_tags)
-                if self._guardrail_auto_verify and guardrail_actions:
+                if self._guardrail_auto_verify_for_call(call_args) and guardrail_actions:
                     compacted.setdefault("llm_guardrail_preview", self._guardrail_preview(guardrail_actions[0]))
             # ---- Auto-Nudge Injection ----
             try:
@@ -2500,11 +2537,12 @@ class IDAMCPServer:
                 from .response_enrichment import auto_blackboard_write
                 addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
                 bb_entries = auto_blackboard_write(tool_name, str(opts.get("action", "")), compacted, addr)
+                bb_written = 0
                 if bb_entries:
                     # Actually call blackboard.write (not just activity log)
                     try:
                         for entry in bb_entries:
-                            self._execute_tool("blackboard", {
+                            wr = self._execute_tool("blackboard", {
                                 "action": "write",
                                 "addr": entry.get("addr", addr),
                                 "name": entry.get("name", ""),
@@ -2513,6 +2551,8 @@ class IDAMCPServer:
                                 "priority": entry.get("priority", 4),
                                 "tags": ",".join(entry.get("tags", [])),
                             })
+                            if isinstance(wr, dict) and wr.get("ok"):
+                                bb_written += 1
                     except Exception:
                         # Fallback: log to activity as before
                         if hasattr(self, 'session_mgr') and self.current_session:
@@ -2522,6 +2562,38 @@ class IDAMCPServer:
                                     self.session_mgr.log_activity(sid, tool_name, "auto_blackboard", json.dumps(entry)[:200])
                                 except Exception:
                                     pass
+
+                # LLM-visible state-sync guidance: make blackboard usage explicit.
+                if isinstance(compacted, dict):
+                    if bb_entries:
+                        compacted.setdefault(
+                            "llm_state_sync",
+                            {
+                                "blackboard_entries_suggested": len(bb_entries),
+                                "blackboard_entries_written": bb_written,
+                                "recommended_next": {
+                                    "tool": "blackboard",
+                                    "arguments": {"action": "list"},
+                                },
+                            },
+                        )
+                    else:
+                        # Periodic reminder for long analysis chains to externalize state.
+                        if tool_name in {"code", "search", "xref_analysis", "threat_hunt", "predictor"}:
+                            compacted.setdefault(
+                                "llm_state_sync_hint",
+                                {
+                                    "message": "Persist important findings to blackboard to avoid context-loss.",
+                                    "tool": "blackboard",
+                                    "arguments": {
+                                        "action": "write",
+                                        "name": "finding_summary",
+                                        "notes": "<concise finding>",
+                                        "category": "analysis",
+                                        "priority": 3,
+                                    },
+                                },
+                            )
             except Exception:
                 pass
         return compacted
@@ -5484,7 +5556,9 @@ class IDAMCPServer:
                     if action == "stats":
                         return self._handle_tool_stats_action(tool_name, args)
 
-        if self._guardrail_strict_writes:
+        guardrail_mode = self._guardrail_mode_from_args(args)
+        strict_guardrails = self._guardrail_strict_writes or guardrail_mode == "enforce"
+        if strict_guardrails:
             risky_tools = {"modify", "bulk", "annotation", "funcs", "segments", "memory", "data_ops"}
             risky_actions = {
                 "patch_asm",
@@ -5522,6 +5596,7 @@ class IDAMCPServer:
                         "tool": tool_name,
                         "action": act,
                         "signal": round(signal, 3),
+                        "guardrail_mode": guardrail_mode,
                         "suggested_guardrails": suggested,
                     },
                 )
