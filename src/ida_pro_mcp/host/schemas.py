@@ -214,6 +214,11 @@ _EXTRA_TOOL_ALIASES = {
     "yara": "threat_hunt",
     "hunt": "threat_hunt",
     "automated_findings": "threat_hunt",
+    # Legacy/compat aliases kept for older clients and scripts.
+    "comments_ai": "comment_mgr",
+    "annotations_ai": "annotation",
+    "strings_xref": "xref_analysis",
+    "emulate": "static_trace",
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",
@@ -1709,6 +1714,31 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         },
         "quick": {"fast", "lite", "quick_scan", "quickly"},
         "deep": {"thorough", "intensive", "deep_scan", "full_depth"},
+    },
+    "agent": {
+        "context_pack": {"context", "pack", "summarize_context", "analysis_context"},
+        "explore_address": {"explore", "inspect_address", "addr_overview"},
+        "find_references": {"references", "xrefs", "find_xrefs"},
+        "search_all": {"search", "global_search", "multi_search"},
+    },
+    "llm_helpers": {
+        "enrich": {"augment", "post_process", "enhance_output"},
+        "compact": {"compress", "minify", "shrink"},
+        "function_digest": {"func_digest", "summarize_function", "function_summary"},
+        "binary_digest": {"bin_digest", "summarize_binary", "binary_summary"},
+    },
+    "trace_analysis": {
+        "analyze_coverage": {"coverage", "coverage_report", "analyze_trace"},
+        "extract_api_calls": {"api_calls", "apis", "extract_apis"},
+    },
+    "comment_mgr": {
+        "get_context": {"context", "comments_context", "comment_context"},
+        "set_structured": {"set_comment", "annotate", "comment"},
+        "bulk_set": {"bulk_comment", "set_many", "annotate_many"},
+    },
+    "annotation": {
+        "auto_comment": {"comment", "annotate", "auto_annotate"},
+        "cleanup": {"clean", "sanitize", "normalize"},
     },
     "search": {
         "bytes": {"byte", "opcode_bytes", "hex_bytes"},
