@@ -1,10 +1,10 @@
 # IDA Pro MCP
 
-Deterministic and ML-powered reverse engineering for IDA Pro via MCP.
+Deterministic and ML-powered reverse engineering for IDA Pro via the Model Context Protocol (MCP).
 
-`ida-pro-mcp` exposes IDA analysis, decompilation, debugging, triage, and annotation as MCP tools so coding agents can operate on binaries with structured calls instead of fragile text scraping.
+`ida-pro-mcp` exposes IDA analysis, decompilation, debugging, triage, and annotation as structured MCP tools so coding agents can operate on binaries with deterministic calls instead of fragile text scraping.
 
-## Table Of Contents
+## Table of Contents
 
 - [What This Project Is](#what-this-project-is)
 - [Why LLM Agents Use It](#why-llm-agents-use-it)
@@ -14,13 +14,19 @@ Deterministic and ML-powered reverse engineering for IDA Pro via MCP.
 - [Skillized Tool Catalog](#skillized-tool-catalog)
 - [Quick Start](#quick-start)
 - [How LLMs Should Use It](#how-llms-should-use-it)
-- [Architecture Graphs](#architecture-graphs)
 - [Tool Surface](#tool-surface)
+- [Local ML Components](#local-ml-components)
+- [Production Hardening](#production-hardening)
+- [Auto-Blackboard and Context Injection](#auto-blackboard-and-context-injection)
+- [Session Management](#session-management)
+- [Guardrails](#guardrails)
+- [Architecture Graphs](#architecture-graphs)
 - [Technical Deep Dive](#technical-deep-dive)
 - [Linux Support Details](#linux-support-details)
 - [Response And Context Controls](#response-and-context-controls)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+- [License](#license)
 
 ## What This Project Is
 
@@ -28,18 +34,19 @@ Deterministic and ML-powered reverse engineering for IDA Pro via MCP.
 
 It provides:
 
-- A host MCP server (`ida_mcp_stdio.py`) that LLM clients talk to
-- A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`)
-- 60+ analysis tools under `src/ida_pro_mcp/ida_mcp/tools/`
+- A host MCP server (`ida_mcp_stdio.py`) that LLM clients talk to via JSON-RPC over stdio
+- A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`) communicating over local TCP
+- 69 canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases
+- A local deterministic ML engine (Cartographer-mu) for relevance-ranked context injection
+- Structured audit logging, token-bucket rate limiting, and blackboard auto-pruning
+- Guardrail layer for safe writes: strict write mode, address lockstep validation, pointer safety notes
 - Persistent session/bookmark metadata in user runtime directory (`IDA_MCP_CACHE_DIR` or OS default)
 - Built-in wiki docs accessible through the `wiki` tool
-
-The design goal is simple: make binary analysis stable, scriptable, and token-efficient for MCP clients.
 
 Important architecture note:
 
 - This project does **not** run any backend cloud LLM service.
-- Tool execution is deterministic IDA SDK logic plus local/statistical ML components where implemented (for example C2 scoring and ranking components).
+- Tool execution is deterministic IDA SDK logic plus local/statistical ML components (Cartographer-mu, schema induction, Q-learning).
 - Any LLM behavior comes from the MCP client using this server, not from an embedded server-side LLM runtime.
 
 ## Why LLM Agents Use It
@@ -52,11 +59,13 @@ With `ida-pro-mcp`, an LLM can:
 - Perform edits (rename/comment/patch/type changes) reproducibly
 - Batch operations to reduce round trips
 - Receive compact-by-default responses to preserve context window
+- Persist findings to a blackboard that survives context window resets
+- Track hypotheses, crystallize skills, and maintain an analysis notebook
 
 ## Requirements
 
-- IDA Pro `9.2+`
-- Python `3.11+`
+- IDA Pro 9.2+
+- Python 3.11+
 - `uv` recommended (installer supports fallback without `uv`)
 
 ## Install
@@ -76,11 +85,26 @@ Installer behavior:
 5. Installs Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`) with `router` mode by default (single skill, minimal context).
 6. Sets wiki path automatically when available.
 7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1` and `IDA_MCP_TOOLS_LIST_MODE=full` so MCP clients receive full tool descriptions and schemas directly.
+8. Hardcoded MCP client config paths are loaded dynamically from `client_configs.json`.
 
 Default install directory:
 
 - Windows: `%LOCALAPPDATA%/ida-pro-mcp`
 - Linux/macOS: `~/.local/share/ida-pro-mcp`
+
+### PyPI install
+
+```bash
+pip install ida-pro-mcp
+```
+
+### Development install
+
+```bash
+git clone https://github.com/mrexodia/ida-pro-mcp.git
+cd ida-pro-mcp
+pip install -e .
+```
 
 ### Supported MCP clients auto-configured by installer
 
@@ -121,7 +145,7 @@ To reduce prompt/context churn from large tool metadata blocks, this repo uses a
 
 - Root: `.agents/skills/`
 - Router skill (only skill by default): `.agents/skills/ida-tool-router/SKILL.md`
-- Per-tool docs (not skills, loaded on demand): `.agents/tool-docs/ida-tool-<tool>.md`
+- Per-tool docs (loaded on demand): `.agents/tool-docs/ida-tool-<tool>.md`
 
 Installer skill modes:
 
@@ -135,13 +159,10 @@ Regenerate after tool metadata changes:
 python3 scripts/generate_tool_skills.py
 ```
 
-Source of truth for generation:
-
+Source of truth for generation -- all in `ida_mcp_stdio.py`:
 - `TOOL_DESCRIPTIONS`
 - `TOOL_ACTIONS`
 - `TOOL_ARG_SCHEMAS`
-
-all in `ida_mcp_stdio.py`.
 
 ## Quick Start
 
@@ -229,22 +250,162 @@ Practical agent rules:
 - Use `batch` when the next calls are deterministic.
 - Paginate large result sets with tool-level `offset`/`count`.
 - Use `truncation(action="continue")` only when needed.
-- Save milestones via bookmarks and session notes.
+- Save milestones via bookmarks, blackboard entries, and session notes.
 
-Address/pointer safety assist:
+## Tool Surface
 
-- When the server detects pointer/offset-heavy context, responses can include `llm_pointer_note` plus executable `llm_guardrail_actions` (ready-to-run `calc`/`code` calls) so clients avoid mental address arithmetic mistakes.
-- Optional env toggles:
-  - `IDA_MCP_GUARDRAIL_AUTO_VERIFY=1`: attach `llm_guardrail_preview` for the first suggested guardrail action.
-  - `IDA_MCP_GUARDRAIL_STRICT_WRITES=1`: block risky write actions unless caller sets `_guardrail_ack=true`.
-- Per-call overrides:
-  - `_guardrail_mode`: `assist` (default), `enforce`, or `off`
-  - `_guardrail_auto_verify`: `true|false` to override preview behavior for one call
+### Canonical vs compatibility tool names
 
-Blackboard adoption assist:
+The server keeps a **canonical** tool surface and preserves compatibility aliases for older clients.
 
-- The server can emit `llm_state_sync` / `llm_state_sync_hint` metadata to push clients toward persistent blackboard usage during long investigations.
-- When auto-extracted entries are available, the server attempts `blackboard(action="write")` automatically and reports write counts.
+- Canonical tool names are listed in `src/ida_pro_mcp/host/schemas.py` under `TOOLS` (69 tools total).
+- Compatibility aliases are listed under `TOOL_ALIASES` and resolve before dispatch.
+- Alias names are not advertised in `tools/list` unless intentionally promoted.
+
+Current aliases:
+
+- `plugins` -> `misc` (`misc(action="plugin_list"|"plugin_run")`)
+- `xfer_analysis` -> `xref_analysis`
+
+The advertised `tools/list` surface is intentionally compact (~36 core tools) for limited context windows.
+Additional specialized capabilities remain accessible via hub tools + wiki docs.
+
+- Core/session: `session`, `batch`, `bookmarks`, `wiki`, `truncation`
+- Data access: `idb`, `data`, `code`, `search`, `types`, `memory`, `query`
+- Editing: `modify`, `funcs`, `segments`, `bulk`, `annotation`
+- Analysis: `cfg_analysis`, `xref_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `compare`, `summarize`, `agent`
+- Security RE: `threat_hunt`, `vuln_scan`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `yara_hunt`
+- Debug/trace: `debug`, `trace`, `trace_analysis`, `coverage`
+- Structural: `ctree`, `microcode`, `graph`, `imports_deep`, `symbols`, `patterns`
+- Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `llm_helpers`, `binary_info`, `string_ops`
+- Infrastructure: `blackboard`, `governance`, `filter`, `schemaboot`
+
+For detailed per-tool docs, use the `wiki` tool or browse `docs/wiki/tools/`.
+
+### 633+ tool-action combinations
+
+Each tool exposes multiple actions. The entire surface provides 633+ deterministic operations across all tools, covering everything from decompilation and cross-referencing to pattern matching and vulnerability scanning.
+
+## Local ML Components
+
+All ML is local, deterministic, and zero-dependency (numpy only). No backend LLM runtime is required.
+
+### Cartographer-mu
+
+A 32KB-parameter pure-Python semantic engine that replaces passive blackboard injection with utility-driven, relevance-ranked context selection. Components:
+
+- **S4REncoder**: Selective state-space encoder with RE-specific structural priors
+- **TurboQuantLite**: 4-bit PolarQuant for fast similarity comparisons
+- **BridgeRAGLite**: Cross-reference bridge extraction and scoring for multi-hop discovery
+- **MemRLUtility**: Non-parametric Q-learning on blackboard entry utility (reinforcement learning from usage patterns)
+- **SchemaBootRE**: Deterministic attribute induction for pre-filtering
+- **ContextComposer**: Pipeline orchestrator combining all components
+
+Cartographer-mu runs on every tool response to encode, quantize, and index payloads for relevance-ranked retrieval.
+
+### Additional ML tools
+
+- `schemaboot`: Structured semantic indexing with induced attribute-value schemas per function
+- `turboquant`: Dedicated quantization operations for fast embedding comparisons
+- `bridgerag`: Multi-hop bridge query expansion for discovering indirect relationships
+- `memrl`: Q-value learning and skill crystallization based on usage patterns
+- `predictor`: Deterministic prediction and strategy suggestion using crystallized skills
+
+## Production Hardening
+
+### Structured audit logging
+
+Every tool call is logged as JSONL to `<cache_dir>/audit/YYYY-MM/audit_YYYY-MM-DD.jsonl`. Each record captures:
+
+- Tool name, action, arguments
+- Timestamp, duration, result shape
+- Guardrail mode and warnings
+- Session and process context
+
+Logs rotate daily and are pruned when total size exceeds a configurable cap.
+
+### Token-bucket rate limiting
+
+A token-bucket rate limiter (`host/rate_limit.py`) prevents runaway call volumes. Per-tool and aggregate rate limits with configurable refill rates. Rate-limited calls return structured errors with retry hints.
+
+### Blackboard auto-pruning
+
+The blackboard SQLite store supports automatic pruning by:
+
+- `max_entries`: culls oldest entries when threshold is exceeded
+- `min_q_value`: removes low-utility entries below Q-value floor
+- `older_than_days`: age-based eviction
+
+This prevents unbounded storage growth and keeps the working memory focused on high-value findings.
+
+## Auto-Blackboard and Context Injection
+
+### Auto-blackboard
+
+Every tool response is automatically analyzed by the `_auto_blackboard_from_response` pipeline. Interesting findings (addresses, API calls, vulnerability signals, string references, structural patterns) are silently extracted and written to the persistent blackboard store without requiring explicit LLM action.
+
+The blackboard provides:
+- SQLite-backed durable storage in `~/.ida-pro-mcp/blackboard.db`
+- Structured entries with category, address, confidence, tags, and evidence
+- Full CRUD: `write`, `read`, `list`, `update`, `delete`, `clear`, `prune`, `stats`
+- Auto-extraction from all tool responses
+
+### Context injection via Cartographer-mu
+
+Before every tool call, Cartographer-mu injects relevance-ranked context from the blackboard into the response. The pipeline:
+
+1. Queries recent blackboard entries
+2. Runs Cartographer-mu encoding and BridgeRAG bridge extraction on the current payload
+3. Scores blackboard entries against the current query context
+4. Returns top-K entries ranked by relevance, weighted by MemRL Q-values
+
+This gives the LLM a persistent, auto-maintained working memory that survives context window resets.
+
+## Session Management
+
+Full-featured session lifecycle with analysis notebook, hypothesis tracking, and skill crystallization.
+
+### Session lifecycle
+
+- `create`: start a new analysis session for a binary
+- `switch`/`close`/`archive`/`unarchive`: manage active sessions
+- `recent_workset`: quickly resume context from recent activity + bookmarks
+- Session macros: `macro_set`, `macro_get`, `macro_list`, `macro_delete`, `macro_run`
+
+### Analysis notebook
+
+- `notebook_append`/`notebook_read`/`notebook_section`: durable per-session notebook
+
+### Hypothesis tracking
+
+- `track_hypothesis`/`confirm_hypothesis`/`refute_hypothesis`/`list_hypotheses`: formal hypothesis lifecycle
+
+### Skill crystallization (MemRL)
+
+- `crystallize_skill`: save successful workflows as reusable L3 skills
+- `rate_skill`: TD-style Q-value updates
+- `suggest_strategy`: ranks skills by Q-value + context matching
+- `list_skills`: inspect available crystallized skills
+- `log_activity`/`get_activity_log`: episodic activity tracking
+
+### Analysis phases
+
+- `get_phase`/`advance_phase`: track analysis phase progression with dead-end detection
+
+## Guardrails
+
+A deterministic rule-based governance layer prevents common RE mistakes:
+
+- **Strict write mode** (`IDA_MCP_GUARDRAIL_STRICT_WRITES`): blocks risky write actions unless caller explicitly sets `_guardrail_ack=true`
+- **Address lockstep validation**: detects mismatches between addresses in arguments and addresses in payloads, emitting structured warnings
+- **Pointer safety notes** (`llm_pointer_note`): ALL CAPS reminders to use `calc`/`memory` tooling instead of mental address arithmetic
+- **Governance tool** (`governance(action="check")`): pre-flight validation for patches, comments, renames, and type changes. Detects contradictions, PII, dangerous patches, and misleading claims
+
+Per-call overrides:
+
+- `_guardrail_mode`: `assist` (default), `enforce`, or `off`
+- `_guardrail_auto_verify`: `true|false` to override preview behavior
+- `_guardrail_ack`: `true` to bypass strict write blocks when acknowledged
 
 ## Architecture Graphs
 
@@ -258,6 +419,9 @@ flowchart LR
     D --> E[Tool Modules\nida_mcp.tools.*]
     E --> F[IDA SDK + Hex-Rays APIs]
     B --> G[Wiki Index + Docs\ndocs/wiki]
+    B --> H[Cartographer-mu\nSemantic Engine]
+    B --> I[Structured Audit\nJSONL Logger]
+    B --> J[Blackboard\nSQLite Store]
 ```
 
 ### Tool call sequence
@@ -275,7 +439,7 @@ sequenceDiagram
     I->>T: dispatch tool(action,...)
     T-->>I: result/error
     I-->>H: JSON response
-    H->>H: truncation + compact pipeline
+    H->>H: truncation + compact pipeline\n+ auto-blackboard extraction\n+ Cartographer-mu encoding
     H-->>L: MCP content[text=json]
 ```
 
@@ -293,81 +457,6 @@ stateDiagram-v2
     Active --> Closed: session close
     Closed --> [*]
 ```
-
-## Tool Surface
-
-### Canonical vs compatibility tool names
-
-The server keeps a **canonical** tool surface and preserves compatibility aliases for older clients.
-
-- Canonical tool names are listed in `src/ida_pro_mcp/host/schemas.py` under `TOOLS`.
-- Compatibility aliases are listed under `TOOL_ALIASES` and resolve before dispatch.
-- Alias names are not advertised in `tools/list` unless intentionally promoted.
-
-Current examples:
-
-- `xfer_analysis` -> `xref_analysis`
-- `plugins` -> `misc` (`misc(action="plugin_list"|"plugin_run")`)
-
-This keeps the externally visible MCP surface smaller while maintaining backward compatibility.
-
-The advertised `tools/list` surface is intentionally compact (~30 core tools) for limited context windows.
-Additional specialized capabilities remain accessible via hub tools + wiki docs.
-
-- Core/session: `session`, `batch`, `bookmarks`, `wiki`, `truncation`
-- Data access: `idb`, `data`, `code`, `search`, `types`, `memory`
-- Editing: `modify`, `funcs`, `segments`, `bulk`, `edit`, `annotation`, `comments_ai`
-- Analysis: `cfg_analysis`, `xref_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `compare`, `summarize`, `agent`
-- Security RE: `vuln_scan`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `c2_detect`, `yara_hunt`
-- Debug/trace: `debug`, `trace`, `trace_analysis`, `coverage`
-- Structural: `ctree`, `microcode`, `graph`, `structs`, `imports_deep`, `symbols`, `patterns`
-- Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `llm_helpers`, `binary_info`, `string_ops`
-
-For detailed per-tool docs, use the `wiki` tool or browse `docs/wiki/tools/`.
-
-### `vuln_scan` modes (local + OSV)
-
-`vuln_scan` now supports both:
-
-- Local static heuristics (buffer overflow, format string, command injection, etc.)
-- Public OSV lookups for package-version vulnerability intelligence
-
-Useful actions:
-
-- `scan_all`: aggregate all local scanners, optionally enriched with OSV
-- `osv_query`: OSV-only package vulnerability query
-- `classify`: classify one function/address context against scanner signatures
-
-OSV coordinates accepted:
-
-- `ecosystem:name@version` (recommended), e.g. `PyPI:requests@2.19.0`
-- `pkg:purl` format, e.g. `pkg:npm/lodash@4.17.20`
-
-Example calls:
-
-```json
-{
-  "name": "vuln_scan",
-  "arguments": {
-    "action": "osv_query",
-    "osv_coordinates": ["PyPI:requests@2.19.0", "npm:lodash@4.17.20"]
-  }
-}
-```
-
-```json
-{
-  "name": "vuln_scan",
-  "arguments": {
-    "action": "scan_all",
-    "limit": 80,
-    "severity": "high",
-    "osv_coordinates": ["PyPI:requests@2.19.0"]
-  }
-}
-```
-
-`vuln_scan` responses include compact `findings` plus structured `items`, with `count/total/offset/truncated` and summary buckets (`severity_counts`, `type_counts`).
 
 ## Technical Deep Dive
 
@@ -429,9 +518,11 @@ At call time:
 3. Runtime RPC call.
 4. Tool execution in IDA runtime.
 5. Host truncation and response compaction.
-6. Final MCP response serialization.
+6. Auto-blackboard extraction from response payload.
+7. Cartographer-mu encoding and context injection.
+8. Final MCP response serialization.
 
-Normalization hardening (host-side) now aggressively tolerates noisy LLM call formats for
+Normalization hardening (host-side) aggressively tolerates noisy LLM call formats for
 `threat_hunt`, `search`, `session`, and `code`:
 
 - wrapped or malformed action tokens (for example `[disasm]`, `"compatibility"`, `action:regexp`)
@@ -461,6 +552,7 @@ Every tool response now also carries:
 
 - `llm_pointer_note` (ALL CAPS): reminder to avoid mental pointer/address arithmetic and use
   `calc` / `memory` tooling instead.
+- Auto-blackboard entries written silently to the persistent store.
 
 ### 6) Wiki subsystem
 
@@ -536,6 +628,9 @@ Environment defaults:
 - `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`1` default full verbose tool metadata)
 - `IDA_MCP_POINTER_NOTE_INTERVAL` (seconds; default `900`)
 - `IDA_MCP_POINTER_NOTE_MIN_SIGNAL` (usage signal threshold before showing note; default `3`)
+- `IDA_MCP_SMART_MATCH_MODE` (`balanced` default: `off|conservative|balanced|aggressive`)
+- `IDA_MCP_CARTOGRAPHER_DIM` (embedding dimension; default `128`)
+- `IDA_MCP_CARTOGRAPHER_TOPK` (context injection top-K; default `3`)
 
 `tools/list` mode behavior:
 - `ultra`: tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
@@ -547,23 +642,18 @@ Environment defaults:
 - `sort` (`name` or `category`) and `descending`
 - `offset` + `limit` pagination (`next_offset` returned when more results exist)
 
-Installer defaults now bias for direct schema-rich tool loading:
+Installer defaults bias for direct schema-rich tool loading:
 - `IDA_MCP_RESPONSE_MODE=compact`
 - `IDA_MCP_QOL_MODE=balanced`
 - `IDA_MCP_TOOLS_LIST_MODE=full`
 - `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1`
-- `IDA_MCP_SMART_MATCH_MODE=balanced` (`off|conservative|balanced|aggressive`)
+- `IDA_MCP_SMART_MATCH_MODE=balanced`
 - `IDA_MCP_BATCH_COMPACT=1`
 - `IDA_MCP_COMPACT_MAX_ITEMS=48`
 - `IDA_MCP_COMPACT_MAX_STRING=1400`
 - `IDA_MCP_COMPACT_CHAR_BUDGET=30000`
 - `IDA_MCP_TRUNCATE_TOKENS=2000`
 - `IDA_MCP_WIKI_DEFAULT_LIMIT=140`
-
-Session QoL additions:
-- Session macros: `macro_set`, `macro_get`, `macro_list`, `macro_delete`, `macro_run`.
-- Resume context quickly with `session(action="recent_workset")`.
-- Tool-call activity is captured in-memory and merged with session bookmarks for workset output.
 
 ## Troubleshooting
 
@@ -599,6 +689,12 @@ python -m unittest tests.test_linux_support
 python -m unittest tests.test_session_features
 ```
 
+Run all tests:
+
+```bash
+python -m unittest discover tests
+```
+
 Generate noisy-argument/action acceptance corpus (10k+ cases; current default flow emits 20k):
 
 ```bash
@@ -613,6 +709,8 @@ Manual client probing:
 ```bash
 python tests/test_mcp_client.py --tool idb --args "action=meta"
 ```
+
+Test suite: 679+ test methods across 34 test files (510+ runnable without IDA Pro installed).
 
 ## License
 
