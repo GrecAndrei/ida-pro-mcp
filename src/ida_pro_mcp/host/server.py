@@ -33,6 +33,7 @@ warnings.filterwarnings("ignore")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from .resources import list_resources, ResourceResolver
+from .cartographer_mu import CartographerMu
 from .config import (
     CACHE_DIR,
     BRIDGE_LOG,
@@ -294,6 +295,12 @@ class IDAMCPServer:
         os.makedirs(self.cache_dir, exist_ok=True)
         self.session_mgr = SessionManager(self.cache_dir)
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
+        self.cartographer = CartographerMu(
+            db_path=os.path.join(self.cache_dir, "cartographer_mu_q.db")
+        )
+        self._last_injected_entries: List[Dict[str, Any]] = []
+        self._last_query_bridges: List[str] = []
+        self._call_counter = 0
         self._macro_path = os.path.join(self.cache_dir, "session_macros.json")
         self._runtime_lease_dir = os.path.join(self.cache_dir, "runtime_leases")
         os.makedirs(self._runtime_lease_dir, exist_ok=True)
@@ -1981,6 +1988,24 @@ class IDAMCPServer:
         if tool_name in {"session", "blackboard", "batch", "truncation", "wiki"}:
             return
 
+        self._call_counter += 1
+
+        # Encode payload for Cartographer-μ
+        try:
+            vector = self.cartographer.encode_payload(payload, tool_name)
+            quantized, q_signs, norm = self.cartographer.quantize(vector)
+            bridges = self.cartographer.extract_bridges(payload, tool_name)
+            schema = self.cartographer.induce_schema(payload, tool_name)
+            q_value = 0.5  # Initial Q-value
+        except Exception:
+            vector = None
+            quantized = None
+            q_signs = None
+            norm = 0.0
+            bridges = []
+            schema = {}
+            q_value = 0.5
+
         findings: list[dict] = []
         for key in ("findings", "items", "matches", "results", "indicators", "iocs", "apis", "functions", "entries"):
             val = payload.get(key)
@@ -2007,7 +2032,7 @@ class IDAMCPServer:
 
         for f in findings[:3]:
             try:
-                self._execute_tool("blackboard", {
+                args = {
                     "action": "write",
                     "name": f["title"],
                     "addr": f["addr"],
@@ -2015,12 +2040,23 @@ class IDAMCPServer:
                     "notes": f"Auto-captured from {tool_name}.{action}",
                     "confidence": 0.7,
                     "tags": "auto",
-                })
+                }
+                # Add Cartographer-μ metadata if available
+                if vector is not None:
+                    args["vector"] = vector.tobytes()
+                    args["quantized"] = quantized.tobytes()
+                    args["q_signs"] = q_signs.tobytes()
+                    args["norm"] = norm
+                    args["bridges"] = ",".join(bridges)
+                    args["schema"] = json.dumps(schema)
+                    args["q_value"] = q_value
+                    args["call_idx"] = self._call_counter
+                self._execute_tool("blackboard", args)
             except Exception:
                 pass
 
-    def _inject_session_memory(self, payload: dict, tool_name: str) -> None:
-        """Inject working memory into analysis responses so LLM sees prior context without asking."""
+    def _inject_session_memory(self, payload: dict, tool_name: str, action: str = "") -> None:
+        """Inject relevance-ranked working memory via Cartographer-μ."""
         if not isinstance(payload, dict) or payload.get("error"):
             return
         if tool_name in {"session", "blackboard", "batch", "truncation", "wiki", "predictor", "workflow"}:
@@ -2028,20 +2064,62 @@ class IDAMCPServer:
         if not (hasattr(self, "session_mgr") and self.current_session):
             return
         try:
-            bb = self._execute_tool("blackboard", {"action": "list", "limit": 5})
-            if isinstance(bb, dict) and bb.get("ok") and bb.get("entries"):
-                payload["working_memory"] = {
-                    "source": "blackboard",
-                    "entries": bb["entries"],
-                    "count": bb.get("count", 0),
-                    "note": "These are your prior findings. Use them for continuity.",
-                }
-            phase = self.session_mgr.get_phase(self.current_session.session_id)
-            if isinstance(phase, dict) and not phase.get("error"):
-                payload["analysis_phase"] = phase.get("phase")
-            contract = self.session_mgr.check_state_contract(self.current_session.session_id, window=8)
+            # Get all recent blackboard entries
+            bb = self._execute_tool("blackboard", {"action": "list", "limit": 100})
+            entries = []
+            if isinstance(bb, dict) and bb.get("ok"):
+                entries = bb.get("entries", [])
+
+            # Run Cartographer-μ pipeline
+            context = self.cartographer.inject_context(
+                current_tool=tool_name,
+                current_action=action,
+                payload=payload,
+                blackboard_entries=entries,
+            )
+
+            # Inject compact working memory
+            if context.get("working_memory"):
+                payload["working_memory"] = context["working_memory"]
+                payload["memory_stats"] = context.get("memory_stats", {})
+                payload["analysis_phase"] = context.get("analysis_phase", "triage")
+                payload["bridges_detected"] = context.get("bridges_detected", [])
+
+                # Store for MemRL observation
+                self._last_injected_entries = list(context["working_memory"])
+                self._last_query_bridges = list(context.get("bridges_detected", []))
+            else:
+                self._last_injected_entries = []
+                self._last_query_bridges = []
+
+            # State contract check
+            contract = self.session_mgr.check_state_contract(
+                self.current_session.session_id, window=8
+            )
             if isinstance(contract, dict) and contract.get("ok"):
                 payload["state_contract_met"] = contract.get("contract_met", True)
+        except Exception:
+            pass
+
+    def _observe_memrl(self, tool_name: str, action: str, payload: dict) -> None:
+        """Observe LLM behavior and update MemRL Q-values for previously injected entries."""
+        if not self._last_injected_entries:
+            return
+        try:
+            next_bridges = self.cartographer.extract_bridges(payload, tool_name)
+            for entry in self._last_injected_entries:
+                entry_id = entry.get("id", "")
+                entry_bridges = entry.get("bridges", [])
+                if isinstance(entry_bridges, str):
+                    entry_bridges = [b.strip() for b in entry_bridges.split(",") if b.strip()]
+                was_injected = True
+                self.cartographer.observe_usage(
+                    entry_id=entry_id,
+                    was_injected=was_injected,
+                    next_bridges=next_bridges,
+                    entry_bridges=entry_bridges,
+                )
+            self._last_injected_entries = []
         except Exception:
             pass
 
@@ -2746,7 +2824,7 @@ class IDAMCPServer:
             try:
                 if isinstance(compacted, dict):
                     self._auto_blackboard_from_response(tool_name, action_name, compacted)
-                    self._inject_session_memory(compacted, tool_name)
+                    self._inject_session_memory(compacted, tool_name, action_name)
             except Exception:
                 pass
         return compacted
@@ -3370,7 +3448,15 @@ class IDAMCPServer:
             res = self._send_rpc_raw(
                 {"tool": tool_name, "args": kwargs}, runtime["port"]
             )
-            return truncate_response(res, max_tokens=self.default_truncate_tokens)
+            res = truncate_response(res, max_tokens=self.default_truncate_tokens)
+            # MemRL observation for IDA-side tools
+            if isinstance(res, dict):
+                self._observe_memrl(
+                    tool_name,
+                    str(kwargs.get("action") or ""),
+                    res,
+                )
+            return res
         except Exception as e:
             proc = runtime.get("process")
             exit_code = proc.poll() if proc else None
@@ -6814,6 +6900,22 @@ class IDAMCPServer:
             title = str(args.get("name") or args.get("title") or "").strip()
             if not title:
                 return make_error(MCPError.INVALID_ARGS, "name/title required for write")
+            # Parse Cartographer-μ metadata if provided
+            bridges_raw = str(args.get("bridges") or "")
+            bridges = [b.strip() for b in bridges_raw.split(",") if b.strip()]
+            schema_str = str(args.get("schema") or "")
+            schema = {}
+            if schema_str:
+                try:
+                    schema = json.loads(schema_str)
+                except Exception:
+                    pass
+            vector = args.get("vector")
+            quantized = args.get("quantized")
+            q_signs = args.get("q_signs")
+            norm = float(args.get("norm", 0.0))
+            q_value = float(args.get("q_value", 0.5))
+            call_idx = int(args.get("call_idx", 0))
             eid = store.write(
                 title=title,
                 content=str(args.get("notes") or args.get("content") or ""),
@@ -6821,6 +6923,14 @@ class IDAMCPServer:
                 addr=str(args.get("addr") or ""),
                 tags=[t.strip() for t in str(args.get("tags") or "").split(",") if t.strip()],
                 confidence=float(args.get("confidence", 0.5)),
+                bridges=bridges,
+                schema=schema,
+                vector=vector,
+                quantized=quantized,
+                q_signs=q_signs,
+                norm=norm,
+                q_value=q_value,
+                call_idx=call_idx,
             )
             return {"ok": True, "entry_id": eid, "action": "write"}
         if action == "list":
@@ -7394,7 +7504,13 @@ class IDAMCPServer:
                     res = self._handle_batch(call_args)
             else:
                 res = self._execute_tool(tn, call_args)
+                # MemRL observation: compare next call bridges with injected entries
                 if isinstance(call_args, dict):
+                    self._observe_memrl(
+                        resolved_tn or str(tn or ""),
+                        str(call_args.get("action") or ""),
+                        res if isinstance(res, dict) else {},
+                    )
                     res = self._cache_next_page(resolved_tn or "", call_args, res)
                     self._record_activity(resolved_tn or "", call_args, res)
             res = self._prepare_response_payload(
