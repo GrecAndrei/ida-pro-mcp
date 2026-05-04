@@ -36,6 +36,7 @@ from .resources import list_resources, ResourceResolver
 from .cartographer_mu import CartographerMu
 from .audit import AuditLogger
 from .rate_limit import RateLimiter
+from .attention_kernel import AttentionKernel
 from .config import (
     CACHE_DIR,
     BRIDGE_LOG,
@@ -307,6 +308,9 @@ class IDAMCPServer:
         )
         self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
         self.rate_limiter = RateLimiter()
+        self.attention_kernel = AttentionKernel(
+            db_path=os.path.join(self.cache_dir, "attention_kernel.db")
+        )
         self._last_injected_entries: List[Dict[str, Any]] = []
         self._last_query_bridges: List[str] = []
         self._call_counter = 0
@@ -2085,6 +2089,12 @@ class IDAMCPServer:
                 current_action=action,
                 payload=payload,
                 blackboard_entries=entries,
+            )
+            self.attention_kernel.observe_context(
+                getattr(self.current_session, "session_id", None) if self.current_session else None,
+                tool_name,
+                str(action or ""),
+                context,
             )
 
             # Inject compact working memory
@@ -5627,9 +5637,27 @@ class IDAMCPServer:
             )
 
         result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
+        sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+        # Active Blackboard Kernel: result shaping + observation logging
+        try:
+            pre = self.attention_kernel.preflight(
+                sid,
+                resolved_tool,
+                str(args.get("action", "") if isinstance(args, dict) else ""),
+                args if isinstance(args, dict) else {},
+            )
+            result = self.attention_kernel.shape_result(pre, result)
+            self.attention_kernel.observe_result(
+                sid,
+                resolved_tool,
+                str(args.get("action", "") if isinstance(args, dict) else ""),
+                args if isinstance(args, dict) else {},
+                result,
+            )
+        except Exception:
+            pass
         latency_ms = (time.perf_counter() - start_ts) * 1000.0
         action_name = str(args.get("action", "")) if isinstance(args, dict) else ""
-        sid = getattr(self.current_session, "session_id", None) if self.current_session else None
         guardrail_mode = self._guardrail_mode_from_args(args) if isinstance(args, dict) else "assist"
         guardrail_blocked = False
         error_str = None
@@ -5668,6 +5696,26 @@ class IDAMCPServer:
         if not isinstance(args, dict):
             return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
         args = self._normalize_tool_call_args(tool_name, args)
+
+        # ---- Active Blackboard Kernel (preflight) ----
+        sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+        pre = self.attention_kernel.preflight(
+            sid,
+            tool_name,
+            str(args.get("action", "") or ""),
+            args,
+        )
+        if pre.get("decision") == "block_high_impact":
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Action blocked by active blackboard obligations",
+                hint="Resolve required receipts via supporting read/exploration actions before high-impact writes.",
+                details={
+                    "blocked_by": pre.get("blocked_by", []),
+                    "required_receipts": pre.get("required_receipts", []),
+                    "attention_debt": pre.get("debt", 0.0),
+                },
+            )
         
         # ---- Silent Tool Rerouting ----
         action = args.get("action", "")
@@ -6911,10 +6959,23 @@ class IDAMCPServer:
                 older_than_days=int(args.get("older_than_days", 0)),
             )
             return {"ok": True, **result}
+        if action == "attention_status":
+            sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
+            return self.attention_kernel.status(sid)
+        if action == "attention_policy_upsert":
+            self.attention_kernel.upsert_policy(
+                feature_id=str(args.get("feature_id") or "").strip(),
+                helpfulness_score=float(args.get("helpfulness_score", 0.0)),
+                ignore_rate=float(args.get("ignore_rate", 0.0)),
+                failure_when_ignored=float(args.get("failure_when_ignored", 0.0)),
+                best_enforcement_level=int(args.get("best_enforcement_level", 0)),
+                tool_contexts=[s.strip() for s in str(args.get("tool_contexts") or "").split(",") if s.strip()],
+            )
+            return {"ok": True, "action": "attention_policy_upsert"}
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",
-            hint="Valid actions: write, list, read, delete, clear, stats, merge, prune",
+            hint="Valid actions: write, list, read, delete, clear, stats, merge, prune, attention_status, attention_policy_upsert",
         )
 
     def _handle_predictor(self, args: dict) -> dict:
