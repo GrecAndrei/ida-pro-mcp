@@ -478,9 +478,12 @@ class BridgeRAGLite:
 class MemRLUtility:
     """
     Learn which blackboard entries are actually useful by observing LLM behavior.
-    Uses TD(0) updates with a per-entry Q-value table.
 
-    Now integrates with OutcomeTracker for richer, context-aware rewards.
+    BRIDGE-KEYED Q-LEARNING:
+    - Q-values are stored per bridge (address, API name) not per entry_id.
+    - When an entry about 0x140001000 is useful, ALL future entries about
+      0x140001000 inherit that Q-value.
+    - This makes learning transfer across sessions and binaries.
     """
 
     def __init__(
@@ -495,17 +498,30 @@ class MemRLUtility:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._lock = threading.RLock()
         self._init_db()
-        self._cache: Dict[str, float] = {}
+        self._bridge_q: Dict[str, float] = {}   # bridge -> Q
+        self._entry_q: Dict[str, float] = {}    # entry_id -> Q (legacy)
         self._load_cache()
         self.outcome_tracker = OutcomeTracker()
         self._injected_history: Dict[str, Dict[str, Any]] = {}  # entry_id -> {ts, bridges, phase}
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            # Legacy entry-level table (kept for migration)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memrl_q (
                     entry_id TEXT PRIMARY KEY,
+                    q_value REAL NOT NULL DEFAULT 0.5,
+                    access_count INTEGER NOT NULL DEFAULT 0,
+                    last_updated REAL NOT NULL
+                )
+                """
+            )
+            # NEW: bridge-keyed Q table — survives across sessions
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memrl_bridge_q (
+                    bridge TEXT PRIMARY KEY,
                     q_value REAL NOT NULL DEFAULT 0.5,
                     access_count INTEGER NOT NULL DEFAULT 0,
                     last_updated REAL NOT NULL
@@ -517,10 +533,39 @@ class MemRLUtility:
     def _load_cache(self):
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.cursor()
+            # Load bridge Q-values
+            cur.execute("SELECT bridge, q_value FROM memrl_bridge_q")
+            self._bridge_q = {row[0]: row[1] for row in cur.fetchall()}
+            # Load legacy entry Q-values (for backward compat)
             cur.execute("SELECT entry_id, q_value FROM memrl_q")
-            self._cache = {row[0]: row[1] for row in cur.fetchall()}
+            self._entry_q = {row[0]: row[1] for row in cur.fetchall()}
 
-    def _save_q(self, entry_id: str, q_value: float):
+    def _normalize_bridge(self, bridge: str) -> str:
+        """Normalize bridge for consistent keying."""
+        # Strip fuzzy-match prefix
+        if bridge.startswith("~"):
+            bridge = bridge[1:]
+        # Lowercase addresses and APIs for consistent matching
+        if bridge.startswith("0x"):
+            return bridge.lower()
+        return bridge
+
+    def _save_bridge_q(self, bridge: str, q_value: float):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO memrl_bridge_q (bridge, q_value, access_count, last_updated)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(bridge) DO UPDATE SET
+                    q_value = excluded.q_value,
+                    access_count = access_count + 1,
+                    last_updated = excluded.last_updated
+                """,
+                (bridge, q_value, time.time()),
+            )
+            conn.commit()
+
+    def _save_entry_q(self, entry_id: str, q_value: float):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -535,18 +580,51 @@ class MemRLUtility:
             )
             conn.commit()
 
-    def get_q(self, entry_id: str) -> float:
+    def get_q(self, entry_or_bridges) -> float:
+        """
+        Get Q-value. If given a list of bridges, compute from bridge Q-values.
+        If given an entry_id string, fallback to legacy entry Q.
+        """
         with self._lock:
-            return self._cache.get(entry_id, 0.5)
+            if isinstance(entry_or_bridges, str):
+                # Legacy: entry_id
+                return self._entry_q.get(entry_or_bridges, 0.5)
+            if isinstance(entry_or_bridges, (list, tuple)):
+                # Bridge-keyed: average Q across bridges
+                if not entry_or_bridges:
+                    return 0.5
+                q_vals = []
+                for b in entry_or_bridges:
+                    norm = self._normalize_bridge(str(b))
+                    q_vals.append(self._bridge_q.get(norm, 0.5))
+                if not q_vals:
+                    return 0.5
+                # Use max instead of mean to avoid dilution from weak bridges
+                return float(max(q_vals))
+            return 0.5
 
-    def update_q(self, entry_id: str, reward: float):
-        """TD update: Q_new = Q_old + alpha * (reward - Q_old)"""
+    def update_q(self, entry_id: str, reward: float, bridges: Optional[List[str]] = None):
+        """
+        TD update. Updates Q for both the entry AND each bridge,
+        so future entries about the same address/API inherit the learning.
+        """
         with self._lock:
-            old_q = self._cache.get(entry_id, 0.5)
+            # Update legacy entry Q
+            old_q = self._entry_q.get(entry_id, 0.5)
             new_q = old_q + self.alpha * (reward - old_q)
             new_q = max(0.0, min(1.0, new_q))
-            self._cache[entry_id] = new_q
-            self._save_q(entry_id, new_q)
+            self._entry_q[entry_id] = new_q
+            self._save_entry_q(entry_id, new_q)
+
+            # Update bridge Q-values (the magic: survives across sessions)
+            if bridges:
+                for b in bridges:
+                    norm = self._normalize_bridge(str(b))
+                    old_bq = self._bridge_q.get(norm, 0.5)
+                    new_bq = old_bq + self.alpha * (reward - old_bq)
+                    new_bq = max(0.0, min(1.0, new_bq))
+                    self._bridge_q[norm] = new_bq
+                    self._save_bridge_q(norm, new_bq)
 
     def observe_usage(
         self,
@@ -585,13 +663,12 @@ class MemRLUtility:
                 next_bridges=next_bridges,
                 phase_after=phase_after,
             )
-            # Blend: 60% rich signal (follow-up quality) + 40% base signal (bridge overlap)
-            # This prevents overfitting to any single signal
             reward = 0.6 * rich_reward + 0.4 * base_reward
         else:
             reward = base_reward
 
-        self.update_q(entry_id, reward)
+        # Update with bridge propagation
+        self.update_q(entry_id, reward, bridges=entry_bridges)
 
     def record_injection(
         self,
@@ -613,29 +690,58 @@ class MemRLUtility:
             phase_before=phase_before,
             injected_bridges=bridges or [],
         )
-        # Prune old history to prevent unbounded growth
-        cutoff = time.time() - 3600  # 1 hour
+        # Prune old history
+        cutoff = time.time() - 3600
         to_remove = [eid for eid, info in self._injected_history.items() if info["ts"] < cutoff]
         for eid in to_remove:
             del self._injected_history[eid]
 
-    def rank_entries(self, entry_ids: List[str]) -> List[Tuple[float, str]]:
-        """Re-rank by Q-value descending."""
-        scored = [(self.get_q(eid), eid) for eid in entry_ids]
+    def rank_entries(self, entries: List[Dict[str, Any]]) -> List[Tuple[float, str]]:
+        """Re-rank entries by Q-value (bridge-keyed)."""
+        scored = []
+        for entry in entries:
+            eid = entry.get("id", "") if isinstance(entry, dict) else str(entry)
+            bridges = entry.get("bridges", []) if isinstance(entry, dict) else []
+            q = self.get_q(bridges) if bridges else self.get_q(eid)
+            scored.append((q, eid))
         scored.sort(reverse=True, key=lambda x: x[0])
         return scored
 
+    def get_bridge_stats(self, bridge: str) -> Dict[str, Any]:
+        """Get Q and access count for a specific bridge."""
+        norm = self._normalize_bridge(bridge)
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT q_value, access_count, last_updated FROM memrl_bridge_q WHERE bridge = ?",
+                (norm,),
+            )
+            row = cur.fetchone()
+            if row:
+                return {
+                    "bridge": norm,
+                    "q_value": round(row[0], 3),
+                    "access_count": row[1],
+                    "last_updated": row[2],
+                }
+            return {"bridge": norm, "q_value": 0.5, "access_count": 0}
+
     def prune_low_q(self, threshold: float = 0.2) -> int:
-        """Remove entries with Q below threshold. Returns count removed."""
+        """Remove entries and bridges with Q below threshold."""
         with self._lock:
-            to_remove = [eid for eid, q in self._cache.items() if q < threshold]
+            to_remove = [eid for eid, q in self._entry_q.items() if q < threshold]
             for eid in to_remove:
-                del self._cache[eid]
+                del self._entry_q[eid]
+            bridges_remove = [b for b, q in self._bridge_q.items() if q < threshold]
+            for b in bridges_remove:
+                del self._bridge_q[b]
             with sqlite3.connect(self.db_path) as conn:
                 for eid in to_remove:
                     conn.execute("DELETE FROM memrl_q WHERE entry_id = ?", (eid,))
+                for b in bridges_remove:
+                    conn.execute("DELETE FROM memrl_bridge_q WHERE bridge = ?", (b,))
                 conn.commit()
-            return len(to_remove)
+            return len(to_remove) + len(bridges_remove)
 
 
 # =============================================================================
@@ -797,12 +903,20 @@ class ContextComposer:
 
         # 5. MEMRL: Combine relevance + Q-value for final ranking
         # Uses ADAPTIVE weights learned from historical outcomes
+        # BRIDGE-KEYED: Q-values come from entry bridges, not entry_id
         phase = query_schema.get("phase_hint", "triage")
         w = self.bridgerag.weight_learner.get_weights(current_tool, current_action, phase)
         ranked = []
         for score, breakdown, entry in scored:
             eid = entry.get("id", "")
-            q = self.memrl.get_q(eid)
+            entry_bridges = entry.get("bridges", [])
+            if isinstance(entry_bridges, str):
+                try:
+                    entry_bridges = json.loads(entry_bridges)
+                except Exception:
+                    entry_bridges = []
+            # Bridge-keyed Q: inherits from ALL previous sessions
+            q = self.memrl.get_q(entry_bridges) if entry_bridges else self.memrl.get_q(eid)
             # Adaptive combination: learned weights + Q-value
             utility = (
                 w["bridge"] * breakdown.get("bridge", 0)
