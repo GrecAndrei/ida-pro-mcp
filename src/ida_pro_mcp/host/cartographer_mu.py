@@ -18,7 +18,6 @@ Deterministic: fixed seeds, no stochastic inference.
 """
 
 import os
-import re
 import json
 import time
 import base64
@@ -34,6 +33,15 @@ from .adaptive_heuristics import (
     LearnedPhaseClassifier,
     OutcomeTracker,
 )
+from .cognitive_layer import (
+    NarrativeThread,
+    PatternSynthesizer,
+    TaskInference,
+    ErrorAttribution,
+    AnalystActionModel,
+    CognitiveOrchestrator,
+)
+from .autogenic_semantics import AutogenicSemanticField
 
 # =============================================================================
 # Configuration
@@ -47,107 +55,6 @@ CARTOGRAPHER_DECAY_API = float(os.environ.get("IDA_MCP_CARTOGRAPHER_DECAY_API", 
 CARTOGRAPHER_DECAY_STR = float(os.environ.get("IDA_MCP_CARTOGRAPHER_DECAY_STR", "0.50"))
 CARTOGRAPHER_DECAY_CF = float(os.environ.get("IDA_MCP_CARTOGRAPHER_DECAY_CF", "0.85"))
 CARTOGRAPHER_DECAY_GEN = float(os.environ.get("IDA_MCP_CARTOGRAPHER_DECAY_GEN", "0.30"))
-
-# Bridge entity patterns
-BRIDGE_PATTERNS = {
-    "addr": re.compile(r"0x[0-9a-fA-F]{8,16}"),
-    "api": re.compile(
-        r"\b(?:VirtualAlloc|VirtualProtect|CreateThread|RegSetValue|"
-        r"RegQueryValue|CreateFile|WriteFile|ReadFile|Socket|Connect|"
-        r"Recv|Send|InternetOpen|InternetConnect|HttpSendRequest|"
-        r"CryptAcquireContext|CryptEncrypt|CryptDecrypt|BCryptEncrypt|"
-        r"NtAllocateVirtualMemory|NtProtectVirtualMemory|RtlMoveMemory|"
-        r"LoadLibrary|GetProcAddress|WinExec|CreateProcess|ShellExecute|"
-        r"CoCreateInstance|OleInitialize|SetWindowsHookEx|MapViewOfFile|"
-        r"OpenProcess|OpenThread|DebugActiveProcess|NtCreateThread|"
-        r"ZwQueryInformationProcess|NtUnmapViewOfSection|WriteProcessMemory|"
-        r"ReadProcessMemory|CreateRemoteThread|QueueUserAPC|"
-        r"SetThreadContext|ResumeThread|SuspendThread|VirtualAllocEx|"
-        r"HeapAlloc|GlobalAlloc|LocalAlloc|malloc|free|calloc|realloc|"
-        r"memcpy|memmove|memset|strcpy|strncpy|strcat|sprintf|snprintf|"
-        r"printf|fprintf|fwrite|fread|fopen|fclose|exit|abort|system|"
-        r"popen|execve|execvp|fork|clone|pthread_create|mmap|munmap|"
-        r"mprotect|ptrace|dlopen|dlsym|syscall|ioctl|open|close|read|"
-        r"write|socket|bind|listen|accept|connect|send|recv|sendto|"
-        r"recvfrom|gethostbyname|getaddrinfo|SSL_new|SSL_connect|"
-        r"SSL_write|SSL_read|AES_encrypt|AES_decrypt|DES_encrypt|"
-        r"RSA_public_encrypt|RSA_private_decrypt|MD5_Init|SHA1_Init|"
-        r"SHA256_Init|EVP_EncryptInit|EVP_DecryptInit|RC4|ChaCha20|"
-        r"Curve25519|ECDSA_sign|ECDSA_verify|Base64Encode|Base64Decode|"
-        r"inflate|deflate|crc32|adler32|lzma|bzip2|zstd|xxhash|"
-        r"LookupPrivilegeValue|AdjustTokenPrivileges|OpenSCManager|"
-        r"CreateService|StartService|ControlService|DeleteService|"
-        r"RegisterServiceCtrlHandler|SetServiceStatus|"
-        r"WNetAddConnection|WNetEnumResource|NetShareEnum|NetUserEnum|"
-        r"LsaOpenPolicy|LsaRetrievePrivateData|SamConnect|SamOpenUser|"
-        r"NtQuerySystemInformation|NtQueryInformationProcess|"
-        r"NtQueryInformationThread|NtReadVirtualMemory|NtWriteVirtualMemory|"
-        r"NtCreateFile|NtOpenFile|NtReadFile|NtWriteFile|NtClose|"
-        r"KeStackAttachProcess|KeUnstackDetachProcess|MmMapIoSpace|"
-        r"IoCreateDevice|IoCreateSymbolicLink|PsCreateSystemThread|"
-        r"PsGetProcessImageFileName|ZwCreateKey|ZwQueryValueKey|"
-        r"ZwSetValueKey|FltRegisterFilter|FltCreateCommunicationPort)\b",
-        re.IGNORECASE,
-    ),
-    "func_name": re.compile(r"\b(?:sub_[0-9a-fA-F]+|_?[a-zA-Z_][a-zA-Z0-9_]*)\b"),
-}
-
-# API → category mapping for phase inference
-API_CATEGORIES = {
-    "crypt": re.compile(
-        r"Crypt|BCrypt|AES|DES|RSA|MD5|SHA|EVP_|RC4|ChaCha|Curve25519|"
-        r"ECDSA|Base64|inflate|deflate|crc32|adler32|lzma|bzip2|zstd|xxhash",
-        re.IGNORECASE,
-    ),
-    "network": re.compile(
-        r"Socket|Connect|Recv|Send|Internet|Http|SSL_|gethostby|getaddrinfo|"
-        r"bind|listen|accept|sendto|recvfrom|WNet|NetShare|NetUser",
-        re.IGNORECASE,
-    ),
-    "process": re.compile(
-        r"CreateThread|CreateProcess|OpenProcess|OpenThread|DebugActive|"
-        r"NtCreateThread|WriteProcessMemory|ReadProcessMemory|"
-        r"CreateRemoteThread|QueueUserAPC|ptrace|fork|clone|pthread_create|"
-        r"execve|execvp|system|popen|WinExec|ShellExecute",
-        re.IGNORECASE,
-    ),
-    "memory": re.compile(
-        r"VirtualAlloc|VirtualProtect|NtAllocateVirtualMemory|"
-        r"NtProtectVirtualMemory|HeapAlloc|GlobalAlloc|LocalAlloc|"
-        r"malloc|calloc|realloc|free|mmap|mprotect|munmap|"
-        r"MapViewOfFile|NtUnmapViewOfSection",
-        re.IGNORECASE,
-    ),
-    "registry": re.compile(
-        r"RegSetValue|RegQueryValue|RegOpenKey|RegCreateKey|ZwCreateKey|"
-        r"ZwQueryValueKey|ZwSetValueKey",
-        re.IGNORECASE,
-    ),
-    "file": re.compile(
-        r"CreateFile|WriteFile|ReadFile|fopen|fwrite|fread|open|close|"
-        r"read|write|NtCreateFile|NtOpenFile|NtReadFile|NtWriteFile",
-        re.IGNORECASE,
-    ),
-}
-
-# Crypto constants pattern
-CRYPTO_PATTERN = re.compile(
-    r"0x9e3779b9|0x67452301|0xefcdab89|0x98badcfe|0x10325476|"
-    r"0xc6ef3720|0x6ed9eba1|0x5c4dd124|0xf1bbcdc|0xca62c1d6|"
-    r"0x5a827999|0x6ed9eba1|0x8f1bbcdc|0xa953fd4e|0x50a28be6|"
-    r"0x5c4dd124|0x6d703ef3|0x7a6d76e9|0x00000000.*0x63636279|"
-    r"AES|DES|RSA| Blowfish|Twofish|Serpent|ChaCha|Salsa20",
-    re.IGNORECASE,
-)
-
-NETWORK_PATTERN = re.compile(
-    r"http[s]?://|ftp://|tcp://|udp://|\\d+\\.\\d+\\.\\d+\\.\\d+|"
-    r"localhost|127\.0\.0\.1|0\.0\.0\.0|255\.255\.255\.255|"
-    r"\\b(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\b|"
-    r"User-Agent|Content-Type|Accept-Encoding|Connection:",
-    re.IGNORECASE,
-)
-
 
 # =============================================================================
 # S4REncoder: Selective State Space Encoder
@@ -183,22 +90,36 @@ class S4REncoder:
         return A
 
     def _tokenize_payload(self, payload: Any, tool_name: str) -> List[str]:
-        """Convert payload to feature tokens."""
-        tokens = [tool_name]
-        text = json.dumps(payload, ensure_ascii=False, default=str)
-        # Extract addresses
-        tokens.extend(BRIDGE_PATTERNS["addr"].findall(text))
-        # Extract APIs
-        tokens.extend(BRIDGE_PATTERNS["api"].findall(text))
-        # Extract keys
-        if isinstance(payload, dict):
-            for k, v in payload.items():
-                tokens.append(k)
-                if isinstance(v, str):
-                    tokens.append(v[:50])
-                elif isinstance(v, (int, float)):
-                    tokens.append(str(v))
-        return tokens[:256]  # Cap sequence length
+        """Convert payload to structure-first feature tokens without predefined patterns."""
+        tokens: List[str] = [f"tool:{tool_name}"]
+
+        def walk(obj: Any, path: str = ""):
+            if isinstance(obj, dict):
+                tokens.append(f"n:{path}:dict:{len(obj)}")
+                for k in sorted(obj.keys(), key=lambda x: str(x)):
+                    kp = f"{path}.{k}" if path else str(k)
+                    tokens.append(f"k:{kp}")
+                    walk(obj[k], kp)
+                return
+            if isinstance(obj, list):
+                tokens.append(f"n:{path}:list:{len(obj)}")
+                for i, v in enumerate(obj[:32]):
+                    walk(v, f"{path}[{i}]")
+                return
+            if isinstance(obj, (int, float, bool)):
+                tokens.append(f"v:{path}:num:{str(obj)[:24]}")
+                return
+            sval = str(obj)
+            tokens.append(f"v:{path}:str:{len(sval)}")
+            b = sval.encode("utf-8", errors="ignore")
+            for n in (3, 4):
+                if len(b) < n:
+                    continue
+                for i in range(min(len(b) - n + 1, 32)):
+                    tokens.append(f"g{n}:{b[i:i+n].hex()}")
+
+        walk(payload)
+        return tokens[:256]
 
     def _embed_token(self, token: str) -> np.ndarray:
         """Deterministic token embedding via hash-based projection."""
@@ -335,27 +256,38 @@ class BridgeRAGLite:
         self.weight_learner = AdaptiveWeightLearner()
 
     def extract_bridges(self, payload: Any, tool_name: str = "") -> List[str]:
-        """Extract bridge entities from a tool response."""
-        bridges = []
-        text = json.dumps(payload, ensure_ascii=False, default=str)
-        for kind, pattern in BRIDGE_PATTERNS.items():
-            matches = pattern.findall(text)
-            bridges.extend([m.lower() if kind == "addr" else m for m in matches])
-        # Fuzzy API extraction for obfuscated/renamed APIs
-        fuzzy_apis = self.fuzzy.extract(text)
-        for api_name, sim in fuzzy_apis:
-            if sim >= 0.85:
-                bridges.append(api_name)  # High confidence: treat as exact
-            elif sim >= 0.65:
-                bridges.append(f"~{api_name}")  # Mark as fuzzy match
-        # Deduplicate while preserving order
-        seen = set()
-        unique = []
-        for b in bridges:
-            if b not in seen:
-                seen.add(b)
-                unique.append(b)
-        return unique[:20]
+        """Extract latent bridge entities from structure, not predefined signatures."""
+        tokens: List[str] = []
+
+        def walk(obj: Any, path: str = ""):
+            if isinstance(obj, dict):
+                tokens.append(f"n:{path}:d:{len(obj)}")
+                for k in sorted(obj.keys(), key=lambda x: str(x)):
+                    kp = f"{path}.{k}" if path else str(k)
+                    tokens.append(f"k:{kp}")
+                    walk(obj[k], kp)
+                return
+            if isinstance(obj, list):
+                tokens.append(f"n:{path}:l:{len(obj)}")
+                for i, v in enumerate(obj[:24]):
+                    walk(v, f"{path}[{i}]")
+                return
+            sval = str(obj)
+            tokens.append(f"v:{path}:{len(sval)}")
+            b = sval.encode("utf-8", errors="ignore")
+            for n in (3, 5):
+                if len(b) < n:
+                    continue
+                for i in range(min(len(b) - n + 1, 20)):
+                    tokens.append(f"g{n}:{b[i:i+n].hex()}")
+
+        walk({"tool": tool_name, "payload": payload})
+        # lightweight recurrence filter
+        counts: Dict[str, int] = {}
+        for t in tokens:
+            counts[t] = counts.get(t, 0) + 1
+        ranked = sorted(counts.items(), key=lambda kv: (kv[1], len(kv[0])), reverse=True)
+        return [f"b_{abs(hash(t)) & 0xffffffff:08x}" for t, _ in ranked[:20]]
 
     def score_relevance(
         self,
@@ -760,7 +692,7 @@ class SchemaBootRE:
         self.phase_classifier = LearnedPhaseClassifier()
 
     def induce_schema(self, payload: Any, tool_name: str = "") -> Dict[str, Any]:
-        """Extract structured schema from a tool response."""
+        """Extract structure-driven schema from a tool response."""
         text = json.dumps(payload, ensure_ascii=False, default=str)
         action = ""
         confidence = 0.5
@@ -768,13 +700,37 @@ class SchemaBootRE:
             action = str(payload.get("action", ""))
             confidence = float(payload.get("confidence", 0.5))
 
+        # Zero-prior structural features
+        nesting = 0
+        list_nodes = 0
+        dict_nodes = 0
+        scalar_nodes = 0
+
+        def walk(obj: Any, depth: int = 0):
+            nonlocal nesting, list_nodes, dict_nodes, scalar_nodes
+            nesting = max(nesting, depth)
+            if isinstance(obj, dict):
+                dict_nodes += 1
+                for v in obj.values():
+                    walk(v, depth + 1)
+            elif isinstance(obj, list):
+                list_nodes += 1
+                for v in obj[:64]:
+                    walk(v, depth + 1)
+            else:
+                scalar_nodes += 1
+
+        walk(payload)
+        text_len = len(text)
+        digit_ratio = (sum(ch.isdigit() for ch in text) / max(text_len, 1))
+
         schema = {
             "tool": tool_name,
             "action": action,
-            "has_addr": bool(BRIDGE_PATTERNS["addr"].search(text)),
-            "has_api": bool(BRIDGE_PATTERNS["api"].search(text)),
-            "has_crypto": bool(CRYPTO_PATTERN.search(text)),
-            "has_network": bool(NETWORK_PATTERN.search(text)),
+            "has_addr": digit_ratio > 0.15,
+            "has_api": dict_nodes > 0 and scalar_nodes > 4,
+            "has_crypto": text_len > 256 and nesting >= 3,
+            "has_network": list_nodes > 0 and scalar_nodes > 6,
             "confidence": confidence,
             "phase_hint": "triage",
         }
@@ -842,6 +798,9 @@ class SchemaBootRE:
 class ContextComposer:
     """
     Orchestrate the full relevance pipeline and format output for LLM consumption.
+
+    Now integrates CognitiveOrchestrator for structural/narrative intelligence
+    that goes beyond mathematical scoring.
     """
 
     def __init__(
@@ -860,6 +819,8 @@ class ContextComposer:
         self.schemaboot = schemaboot
         self.topk = topk
         self._call_counter = 0
+        self.cognitive = CognitiveOrchestrator()
+        self.autogenic = AutogenicSemanticField()
 
     def compose(
         self,
@@ -875,7 +836,7 @@ class ContextComposer:
 
         # 1. SCHEMABOOT: Extract attributes
         query_schema = self.schemaboot.induce_schema(payload, current_tool)
-        query_bridges = self.bridgerag.extract_bridges(payload, current_tool)
+        query_bridges = self.autogenic.induce(payload, current_tool, current_action)
 
         # 2. ENCODE: Compress to state vector
         query_vector = self.encoder.encode(payload, current_tool)
@@ -883,6 +844,23 @@ class ContextComposer:
 
         # 3. PRE-FILTER: Structured filtering
         candidates = self.schemaboot.pre_filter(blackboard_entries, query_schema)
+        for entry in candidates:
+            entry_bridges = entry.get("bridges", [])
+            if isinstance(entry_bridges, str):
+                try:
+                    entry_bridges = json.loads(entry_bridges)
+                except Exception:
+                    entry_bridges = []
+            if not entry_bridges:
+                # zero-prior latent symbol induction for older entries
+                synthesized = {
+                    "id": entry.get("id", ""),
+                    "title": entry.get("title", ""),
+                    "content": entry.get("content", ""),
+                    "addr": entry.get("addr", ""),
+                    "category": entry.get("category", ""),
+                }
+                entry["bridges"] = self.autogenic.induce(synthesized, "blackboard", "entry")
 
         # 4. BRIDGERAG: Score relevance with ADAPTIVE weights
         scored = []
@@ -941,8 +919,57 @@ class ContextComposer:
                 phase_before=query_schema.get("phase_hint", "triage"),
                 bridges=entry.get("bridges", []),
             )
+            # Reinforce utility for induced symbols
+            self.autogenic.update_symbol_utility(entry.get("bridges", []), q)
 
-        # 7. DENSITY OPTIMIZE: Compact to 1-line summaries
+        # 7. COGNITIVE ENRICHMENT: Structural/narrative intelligence
+        # This is where the magic happens — non-mathematical reasoning about
+        # patterns, tasks, gaps, errors, voids, shadows, surprises, and hierarchy.
+        cognitive_context = self.cognitive.enrich_context(
+            current_tool=current_tool,
+            current_action=current_action,
+            payload=payload,
+            working_memory=top_entries,
+            blackboard_entries=blackboard_entries,
+            query_bridges=query_bridges,
+        )
+
+        # Apply error attribution: if a bridge has caused hallucinations before,
+        # downgrade entries that feature it and boost alternatives
+        error_bridges = set()
+        for entry in top_entries:
+            bridges = entry.get("bridges", [])
+            if isinstance(bridges, str):
+                try:
+                    bridges = json.loads(bridges)
+                except Exception:
+                    bridges = []
+            for b in bridges:
+                stats = self.memrl.get_bridge_stats(b)
+                if stats["q_value"] < 0.2 and stats["access_count"] > 3:
+                    # This bridge has been penalized repeatedly — likely misleading
+                    error_bridges.add(b)
+
+        if error_bridges:
+            # Find alternatives that don't have error bridges
+            alternatives = []
+            for utility, score, q, entry, breakdown in ranked[self.topk:self.topk+3]:
+                entry_bridges = entry.get("bridges", [])
+                if isinstance(entry_bridges, str):
+                    try:
+                        entry_bridges = json.loads(entry_bridges)
+                    except Exception:
+                        entry_bridges = []
+                if not error_bridges & set(entry_bridges):
+                    alternatives.append(entry)
+            if alternatives:
+                cognitive_context["error_recovery"] = {
+                    "message": f"Avoided {len(error_bridges)} error-prone bridges; suggested {len(alternatives)} alternatives",
+                    "avoided": list(error_bridges),
+                    "alternatives": [{"id": a.get("id"), "title": a.get("title")} for a in alternatives[:2]],
+                }
+
+        # 8. DENSITY OPTIMIZE: Compact to 1-line summaries
         compact_entries = []
         for e in top_entries:
             compact = {
@@ -974,6 +1001,17 @@ class ContextComposer:
             },
             "analysis_phase": query_schema.get("phase_hint", "triage"),
             "bridges_detected": query_bridges[:5],
+            "cognitive": {
+                "synthesized_patterns": cognitive_context.get("synthesized_patterns", []),
+                "narrative_gaps": cognitive_context.get("narrative_gaps", []),
+                "inferred_task": cognitive_context.get("inferred_task", {}),
+                "error_recovery": cognitive_context.get("error_recovery", {}),
+                "voids": cognitive_context.get("voids", []),
+                "shadow_warnings": cognitive_context.get("shadow_warnings", []),
+                "surprising_findings": cognitive_context.get("surprising_findings", []),
+                "temporal_patterns": cognitive_context.get("temporal_patterns", []),
+                "multi_resolution": cognitive_context.get("multi_resolution", {}),
+            },
         }
 
 

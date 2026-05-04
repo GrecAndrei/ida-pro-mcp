@@ -314,10 +314,7 @@ class FuzzyBridgeExtractor:
 
 class LearnedPhaseClassifier:
     """
-    Replace keyword-based phase inference with a simple perceptron.
-
-    Features: tool name, action, has_addr, has_api, api_categories present,
-    string count, confidence level.
+    Zero-prior phase induction via online perceptron over structural features.
     """
 
     PHASES = ["triage", "behavioral_analysis", "threat_analysis", "structure_recovery", "reporting"]
@@ -332,22 +329,6 @@ class LearnedPhaseClassifier:
         self._lock = threading.Lock()
         self._init_db()
         self._load()
-        # Fallback keyword rules for cold start
-        # Use word boundaries to avoid matching JSON field names like "has_api"
-        self._keyword_rules = {
-            "threat_analysis": re.compile(
-                r"\b(crypt|encrypt|decrypt|cipher|hash|md5|sha|aes|rsa|ssl|tls|network|socket|connect|http|c2|beacon)\b", re.I
-            ),
-            "behavioral_analysis": re.compile(
-                r"\b(api|call|invoke|thread|process|memory|alloc|hook|inject)\b", re.I
-            ),
-            "structure_recovery": re.compile(
-                r"\b(struct|type|enum|union|class|vtable|inherit)\b", re.I
-            ),
-            "reporting": re.compile(
-                r"\b(report|summary|export|ioc|indicator|finding)\b", re.I
-            ),
-        }
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -385,51 +366,51 @@ class LearnedPhaseClassifier:
             conn.commit()
 
     def _features(self, schema: Dict[str, Any], tool: str = "", action: str = "", payload_text: str = "") -> np.ndarray:
-        """Extract feature vector from schema."""
+        """Extract feature vector from schema using structural/statistical cues only."""
         f = np.zeros(12, dtype=np.float32)
         f[0] = 1.0 if schema.get("has_addr") else 0.0
         f[1] = 1.0 if schema.get("has_api") else 0.0
         f[2] = schema.get("confidence", 0.5)
-        # Use payload text for keyword search if available, else schema text
         text = payload_text if payload_text else json.dumps(schema, default=str)
-        # Avoid matching JSON field names by requiring word boundaries around keywords
-        f[3] = 1.0 if self._keyword_rules["threat_analysis"].search(text) else 0.0
-        f[4] = 1.0 if self._keyword_rules["behavioral_analysis"].search(text) else 0.0
-        f[5] = 1.0 if self._keyword_rules["structure_recovery"].search(text) else 0.0
-        f[6] = 1.0 if self._keyword_rules["reporting"].search(text) else 0.0
-        f[7] = 1.0 if tool in {"code", "ctree", "decompile"} else 0.0
-        f[8] = 1.0 if tool in {"data", "search", "schemaboot"} else 0.0
-        f[9] = 1.0 if tool in {"trace", "debug", "static_trace"} else 0.0
-        f[10] = 1.0 if tool in {"modify", "bulk", "annotation"} else 0.0
-        f[11] = 1.0 if action in {"decompile", "disasm", "semantic_decompile"} else 0.0
+        tlen = max(len(text), 1)
+        digits = sum(ch.isdigit() for ch in text)
+        braces = text.count("{") + text.count("[")
+        quotes = text.count('"')
+        alpha = sum(ch.isalpha() for ch in text)
+        f[3] = min(1.0, digits / tlen)
+        f[4] = min(1.0, braces / 64.0)
+        f[5] = min(1.0, quotes / 128.0)
+        f[6] = min(1.0, alpha / tlen)
+        tool_hash = (abs(hash(tool)) % 997) / 997.0 if tool else 0.0
+        action_hash = (abs(hash(action)) % 991) / 991.0 if action else 0.0
+        f[7] = tool_hash
+        f[8] = action_hash
+        f[9] = ((tool_hash + action_hash) * 0.5)
+        f[10] = float(schema.get("has_network", False))
+        f[11] = float(schema.get("has_crypto", False))
         return f
 
     def predict(self, schema: Dict[str, Any], tool: str = "", action: str = "") -> str:
-        """Predict phase. Falls back to keyword rules if no learned weights or low confidence."""
+        """Predict phase with no keyword/pattern fallback."""
         f = self._features(schema, tool, action)
         scores = {}
-        has_learned = False
         with self._lock:
             for phase in self.PHASES:
                 if phase in self._weights:
-                    has_learned = True
                     scores[phase] = float(np.dot(self._weights[phase], f)) + self._bias.get(phase, 0.0)
                 else:
-                    # Cold start: use keyword rule score as initial bias
-                    scores[phase] = f[3] if phase == "threat_analysis" else \
-                                    f[4] if phase == "behavioral_analysis" else \
-                                    f[5] if phase == "structure_recovery" else \
-                                    f[6] if phase == "reporting" else 0.1
+                    # Cold start: deterministic structural priors from feature geometry.
+                    if phase == "triage":
+                        scores[phase] = 0.35 + 0.1 * (1.0 - f[4])
+                    elif phase == "behavioral_analysis":
+                        scores[phase] = 0.2 + 0.2 * f[1] + 0.1 * f[6]
+                    elif phase == "threat_analysis":
+                        scores[phase] = 0.2 + 0.2 * f[11] + 0.1 * f[10]
+                    elif phase == "structure_recovery":
+                        scores[phase] = 0.2 + 0.25 * f[4] + 0.1 * f[5]
+                    else:
+                        scores[phase] = 0.2 + 0.15 * f[2]
         best = max(scores, key=scores.get)
-        # If learned but confidence is low (margin < 0.3), apply keyword fallback
-        if has_learned:
-            sorted_scores = sorted(scores.values(), reverse=True)
-            margin = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else 0
-            if margin < 0.3 and best == "triage":
-                if schema.get("has_crypto") or schema.get("has_network"):
-                    best = "threat_analysis"
-                elif schema.get("has_api"):
-                    best = "behavioral_analysis"
         return best
 
     def update(self, schema: Dict[str, Any], tool: str, action: str, true_phase: str, lr: float = 0.1):
