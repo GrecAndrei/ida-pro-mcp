@@ -5826,6 +5826,14 @@ class IDAMCPServer:
                         "guardrail_mode": guardrail_mode,
                     },
                 )
+            if ack:
+                # Analyst override: learn that this obligation may be over-eager
+                sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+                try:
+                    for obl in self.attention_kernel.unresolved_obligations(sid)[:3]:
+                        self.attention_kernel.record_override(sid, obl["id"], tool_name, act, "guardrail_ack")
+                except Exception:
+                    pass
         if tool_name == "wiki":
             return self._handle_wiki(args)
         if tool_name == "misc":
