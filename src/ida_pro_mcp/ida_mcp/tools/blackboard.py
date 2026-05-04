@@ -73,6 +73,25 @@ class BlackboardStore:
                 )
                 """
             )
+            # Migration: add Cartographer-μ columns if missing
+            existing_cols = {
+                row[1] for row in conn.execute(
+                    "PRAGMA table_info(blackboard)"
+                ).fetchall()
+            }
+            migrations = [
+                ("bridges", "TEXT DEFAULT '{}'"),
+                ("schema", "TEXT DEFAULT '{}'"),
+                ("vector", "BLOB"),
+                ("quantized", "BLOB"),
+                ("q_signs", "BLOB"),
+                ("norm", "REAL DEFAULT 0.0"),
+                ("q_value", "REAL DEFAULT 0.5"),
+                ("call_idx", "INTEGER DEFAULT 0"),
+            ]
+            for col, dtype in migrations:
+                if col not in existing_cols:
+                    conn.execute(f"ALTER TABLE blackboard ADD COLUMN {col} {dtype}")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_category ON blackboard(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_addr ON blackboard(addr)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_tags ON blackboard(tags)")
@@ -86,14 +105,26 @@ class BlackboardStore:
         addr: str = "",
         tags: List[str] = None,
         confidence: float = 0.5,
+        bridges: List[str] = None,
+        schema: Dict[str, Any] = None,
+        vector: bytes = None,
+        quantized: bytes = None,
+        q_signs: bytes = None,
+        norm: float = 0.0,
+        q_value: float = 0.5,
+        call_idx: int = 0,
     ) -> str:
         entry_id = str(uuid.uuid4())[:8]
         now = time.time()
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO blackboard (id, category, title, content, addr, tags, confidence, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO blackboard (
+                    id, category, title, content, addr, tags, confidence,
+                    created_at, updated_at, bridges, schema, vector, quantized,
+                    q_signs, norm, q_value, call_idx
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -105,6 +136,14 @@ class BlackboardStore:
                     confidence,
                     now,
                     now,
+                    json.dumps(bridges or []),
+                    json.dumps(schema or {}),
+                    vector,
+                    quantized,
+                    q_signs,
+                    norm,
+                    q_value,
+                    call_idx,
                 ),
             )
             conn.commit()
@@ -255,6 +294,14 @@ class BlackboardStore:
             "confidence": row[6],
             "created_at": row[7],
             "updated_at": row[8],
+            "bridges": json.loads(row[9]) if row[9] else [],
+            "schema": json.loads(row[10]) if row[10] else {},
+            "vector": row[11],
+            "quantized": row[12],
+            "q_signs": row[13],
+            "norm": row[14] or 0.0,
+            "q_value": row[15] if row[15] is not None else 0.5,
+            "call_idx": row[16] or 0,
         }
 
 
