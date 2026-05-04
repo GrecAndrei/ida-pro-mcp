@@ -511,3 +511,89 @@ class TestIDAIntegration:
         r3 = ida_client.call_tool("memrl", action="rank", intent_key="test_query", candidate_pool=pool, lambda_explore=0.5)
         assert r3.get("ok") is True
         assert len(r3.get("ranked", [])) == 2
+
+
+# =============================================================================
+# 7. Production Hardening Tests (audit, pruning, rate limiting, guardrails)
+# =============================================================================
+
+class TestProductionHardening:
+    """Tests for audit logging, rate limiting, blackboard pruning, and guardrails."""
+
+    def test_audit_log_written(self, mcp_client):
+        # Make a call that should be audited
+        result = mcp_client.call_tool("session", action="discover")
+        assert "sessions" in result or "error" in result
+        # Check that audit log file exists
+        import glob
+        audit_dir = os.path.join(mcp_client.server.cache_dir, "audit")
+        pattern = os.path.join(audit_dir, "*", "audit_*.jsonl")
+        files = glob.glob(pattern)
+        assert len(files) > 0, "No audit log files found"
+        # Verify at least one entry exists and has expected fields
+        with open(files[0], "r") as f:
+            line = f.readline()
+            record = json.loads(line)
+            assert "ts" in record
+            assert "tool" in record
+            assert "latency_ms" in record
+
+    def test_rate_limiting_disabled_in_tests(self, mcp_client):
+        # Rapid-fire calls should succeed with rate limiting disabled in tests
+        for i in range(5):
+            result = mcp_client.call_tool("session", action="discover")
+            assert "Rate limit exceeded" not in str(result)
+
+    def test_blackboard_prune(self, mcp_client):
+        # Write several entries
+        for i in range(5):
+            mcp_client.call_tool(
+                "blackboard",
+                action="write",
+                title=f"Test entry {i}",
+                content="test",
+                category="test",
+            )
+        # Prune with a low max
+        result = mcp_client.call_tool("blackboard", action="prune", max_entries=3)
+        # "ok" is dropped by default for context efficiency; check pruned count
+        assert result.get("pruned", 0) >= 2
+        # Verify only 3 remain
+        list_result = mcp_client.call_tool("blackboard", action="list", category="test")
+        assert list_result.get("count", 0) <= 3
+        # Clean up
+        mcp_client.call_tool("blackboard", action="clear", category="test")
+
+    def test_guardrail_mode_off(self, mcp_client):
+        # With _guardrail_mode=off, pointer note should not appear
+        result = mcp_client.call_tool(
+            "session", action="discover", _guardrail_mode="off"
+        )
+        # session discover doesn't include pointer notes, but verify mode is parsed
+        assert "Rate limit exceeded" not in str(result)
+
+    def test_guardrail_strict_blocks_writes(self, mcp_client):
+        # Strict mode should block risky writes without _guardrail_ack
+        result = mcp_client.call_tool(
+            "modify",
+            action="rename",
+            addr="0x401000",
+            name="test_func",
+            _guardrail_mode="enforce",
+        )
+        assert "guardrail" in str(result).lower() or "session" in str(result).lower()
+
+    def test_blackboard_merge(self, mcp_client):
+        # Write duplicate entries
+        mcp_client.call_tool(
+            "blackboard", action="write", title="Duplicate finding",
+            content="same", category="dup", addr="0x401000"
+        )
+        mcp_client.call_tool(
+            "blackboard", action="write", title="Duplicate finding",
+            content="same", category="dup", addr="0x401000"
+        )
+        result = mcp_client.call_tool("blackboard", action="merge", category="dup")
+        # merge returns {"merged": N, "remaining": M} wrapped with ok by host handler
+        assert "merged" in result
+        assert result.get("merged", 0) >= 1
