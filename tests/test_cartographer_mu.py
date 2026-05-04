@@ -92,10 +92,11 @@ class TestBridgeRAGLite(unittest.TestCase):
             "q_signs": q[1].tobytes(),
             "norm": q[2],
         }
-        score = br.score_relevance(
+        score, breakdown = br.score_relevance(
             ["0x140001000"], vec, q, entry, call_age=0
         )
         self.assertTrue(score > 0.4)  # High bridge overlap should give high score
+        self.assertIn("exact_addr", breakdown)  # Should have exact address match
 
 
 class TestMemRLUtility(unittest.TestCase):
@@ -126,6 +127,13 @@ class TestMemRLUtility(unittest.TestCase):
 
 
 class TestSchemaBootRE(unittest.TestCase):
+    def setUp(self):
+        # Clear learned classifier weights to ensure cold-start behavior
+        import os
+        db_path = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "phase_classifier.db")
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
     def test_induce_schema_addr(self):
         sb = SchemaBootRE()
         schema = sb.induce_schema({"addr": "0x140001000"}, "code")

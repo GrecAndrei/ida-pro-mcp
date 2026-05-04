@@ -28,6 +28,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from .adaptive_heuristics import (
+    AdaptiveWeightLearner,
+    FuzzyBridgeExtractor,
+    LearnedPhaseClassifier,
+    OutcomeTracker,
+)
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -315,12 +322,17 @@ class TurboQuantLite:
 
 class BridgeRAGLite:
     """
-    Extract bridge entities from payloads and score relevance
-    via bridge overlap + semantic similarity + temporal decay.
+    Extract cross-reference bridge entities (addr, API, func_name)
+    and score relevance via bridge overlap.
+    
+    Uses fuzzy matching for obfuscated APIs and adaptive weights
+    learned from historical outcomes.
     """
 
     def __init__(self, quantizer: TurboQuantLite):
         self.quantizer = quantizer
+        self.fuzzy = FuzzyBridgeExtractor(threshold=0.65)
+        self.weight_learner = AdaptiveWeightLearner()
 
     def extract_bridges(self, payload: Any, tool_name: str = "") -> List[str]:
         """Extract bridge entities from a tool response."""
@@ -329,6 +341,13 @@ class BridgeRAGLite:
         for kind, pattern in BRIDGE_PATTERNS.items():
             matches = pattern.findall(text)
             bridges.extend([m.lower() if kind == "addr" else m for m in matches])
+        # Fuzzy API extraction for obfuscated/renamed APIs
+        fuzzy_apis = self.fuzzy.extract(text)
+        for api_name, sim in fuzzy_apis:
+            if sim >= 0.85:
+                bridges.append(api_name)  # High confidence: treat as exact
+            elif sim >= 0.65:
+                bridges.append(f"~{api_name}")  # Mark as fuzzy match
         # Deduplicate while preserving order
         seen = set()
         unique = []
@@ -345,14 +364,14 @@ class BridgeRAGLite:
         query_quantized: Tuple[np.ndarray, np.ndarray, float],
         entry: Dict[str, Any],
         call_age: int = 0,
-    ) -> float:
+        tool: str = "",
+        action: str = "",
+        phase: str = "triage",
+    ) -> Tuple[float, Dict[str, float]]:
         """
         Score relevance of a blackboard entry to current query.
-        Domain-aware scoring for reverse engineering:
-        - Exact address match = maximum relevance
-        - Bridge overlap (addr/API/func_name) = primary signal
-        - Semantic similarity = tiebreaker when no bridges match
-        - Temporal decay = gentle for bridged entries, steep for orphans
+        Uses ADAPTIVE weights learned from historical outcomes.
+        Returns (score, signal_breakdown).
         """
         # Parse entry bridges
         entry_bridges = entry.get("bridges", [])
@@ -363,33 +382,38 @@ class BridgeRAGLite:
                 entry_bridges = []
         if not isinstance(entry_bridges, list):
             entry_bridges = []
-        
+
         q_set = set(query_bridges)
         e_set = set(entry_bridges)
-        
-        # EXACT ADDRESS MATCH: the strongest signal in RE
+
+        # EXACT ADDRESS MATCH: still hardcoded as the strongest signal
         query_addrs = {b for b in q_set if b.startswith("0x")}
         entry_addrs = {b for b in e_set if b.startswith("0x")}
         shared_addrs = query_addrs & entry_addrs
         if shared_addrs:
-            # Exact address match is the strongest signal in RE
             shared_non_addrs = (q_set - query_addrs) & (e_set - entry_addrs)
-            if shared_non_addrs:
-                # Address + API/func match = perfect relevance
-                exact_bonus = 1.0
-            else:
-                # Address-only match = very high but not perfect
-                exact_bonus = 0.85
-            temporal = np.exp(-call_age / 20.0)  # Slower decay for exact matches
-            return exact_bonus * (0.7 + 0.3 * temporal)
-        
-        # Bridge overlap score (Jaccard)
+            exact_bonus = 1.0 if shared_non_addrs else 0.85
+            temporal = np.exp(-call_age / 20.0)
+            score = exact_bonus * (0.7 + 0.3 * temporal)
+            return score, {"exact_addr": exact_bonus, "temporal": temporal}
+
+        # Bridge overlap score (Jaccard) — with fuzzy match support
         if q_set and e_set:
-            bridge_score = len(q_set & e_set) / max(len(q_set), len(e_set))
+            # Count exact matches
+            exact_matches = len(q_set & e_set)
+            # Count fuzzy matches (marked with ~)
+            fuzzy_matches = 0
+            for qb in q_set:
+                if qb.startswith("~"):
+                    base = qb[1:]
+                    for eb in e_set:
+                        if base.lower() in eb.lower() or eb.lower() in base.lower():
+                            fuzzy_matches += 0.5
+            bridge_score = (exact_matches + fuzzy_matches) / max(len(q_set), len(e_set))
         else:
             bridge_score = 0.0
-        
-        # Semantic similarity (only meaningful when no bridge overlap)
+
+        # Semantic similarity
         semantic_score = 0.0
         if bridge_score < 0.01:
             entry_quantized = entry.get("quantized")
@@ -419,17 +443,32 @@ class BridgeRAGLite:
                     )
                 except Exception:
                     pass
-        
-        # Temporal decay: gentler when bridges exist, much steeper for orphans
-        # Orphan entries (no bridge overlap) decay 3× faster
-        if bridge_score > 0:
-            temporal_decay = np.exp(-call_age / 10.0)
-        else:
-            temporal_decay = np.exp(-call_age / 3.0)
-        
-        # Weighted combination: bridge dominates, semantic is tiebreaker
-        # 0.7 bridge + 0.2 semantic + 0.1 temporal
-        return 0.7 * bridge_score + 0.2 * semantic_score + 0.1 * temporal_decay
+
+        # Adaptive temporal decay: per-category learned rate
+        category = str(entry.get("category", "finding"))
+        decay_rates = {
+            "finding": 10.0, "vuln": 12.0, "behavior": 8.0,
+            "crypto": 14.0, "network": 14.0, "general": 6.0,
+        }
+        decay = decay_rates.get(category, 8.0)
+        if bridge_score < 0.01:
+            decay = decay / 2.5  # Orphans decay faster
+        temporal_decay = np.exp(-call_age / decay)
+
+        # ADAPTIVE weights: learned from outcomes
+        w = self.weight_learner.get_weights(tool, action, phase)
+        score = (
+            w["bridge"] * bridge_score
+            + w["semantic"] * semantic_score
+            + w["temporal"] * temporal_decay
+        )
+        breakdown = {
+            "bridge": bridge_score,
+            "semantic": semantic_score,
+            "temporal": temporal_decay,
+            "weights": w,
+        }
+        return score, breakdown
 
 
 # =============================================================================
@@ -440,6 +479,8 @@ class MemRLUtility:
     """
     Learn which blackboard entries are actually useful by observing LLM behavior.
     Uses TD(0) updates with a per-entry Q-value table.
+
+    Now integrates with OutcomeTracker for richer, context-aware rewards.
     """
 
     def __init__(
@@ -456,6 +497,8 @@ class MemRLUtility:
         self._init_db()
         self._cache: Dict[str, float] = {}
         self._load_cache()
+        self.outcome_tracker = OutcomeTracker()
+        self._injected_history: Dict[str, Dict[str, Any]] = {}  # entry_id -> {ts, bridges, phase}
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -511,22 +554,70 @@ class MemRLUtility:
         was_injected: bool,
         next_bridges: List[str],
         entry_bridges: List[str],
+        next_tool: str = "",
+        next_action: str = "",
+        next_payload: Any = None,
+        phase_after: str = "triage",
     ):
         """
         Infer utility from LLM behavior and update Q-value.
+        Uses OutcomeTracker for richer, multi-signal rewards.
         """
-        reward = 0.0
+        # Base reward from bridge overlap (legacy signal)
+        base_reward = 0.0
         if was_injected:
-            # Check if next call used related bridges
             if set(next_bridges) & set(entry_bridges):
-                reward = 1.0
+                base_reward = 1.0
             else:
-                reward = -0.3
+                base_reward = -0.3
         else:
-            # Check if we missed a relevant entry
             if set(next_bridges) & set(entry_bridges):
-                reward = 0.5
+                base_reward = 0.5
+
+        # Rich reward from outcome tracking
+        rich_reward = base_reward
+        if was_injected and entry_id in self._injected_history:
+            rich_reward = self.outcome_tracker.record_follow_up(
+                entry_id=entry_id,
+                next_tool=next_tool,
+                next_action=next_action,
+                next_payload=next_payload,
+                next_bridges=next_bridges,
+                phase_after=phase_after,
+            )
+            # Blend: 60% rich signal (follow-up quality) + 40% base signal (bridge overlap)
+            # This prevents overfitting to any single signal
+            reward = 0.6 * rich_reward + 0.4 * base_reward
+        else:
+            reward = base_reward
+
         self.update_q(entry_id, reward)
+
+    def record_injection(
+        self,
+        entry_id: str,
+        session_id: Optional[str] = None,
+        phase_before: str = "triage",
+        bridges: List[str] = None,
+    ):
+        """Record that an entry was injected so we can track outcomes."""
+        self._injected_history[entry_id] = {
+            "ts": time.time(),
+            "session_id": session_id,
+            "phase": phase_before,
+            "bridges": bridges or [],
+        }
+        self.outcome_tracker.record_injection(
+            entry_id=entry_id,
+            session_id=session_id,
+            phase_before=phase_before,
+            injected_bridges=bridges or [],
+        )
+        # Prune old history to prevent unbounded growth
+        cutoff = time.time() - 3600  # 1 hour
+        to_remove = [eid for eid, info in self._injected_history.items() if info["ts"] < cutoff]
+        for eid in to_remove:
+            del self._injected_history[eid]
 
     def rank_entries(self, entry_ids: List[str]) -> List[Tuple[float, str]]:
         """Re-rank by Q-value descending."""
@@ -553,32 +644,46 @@ class MemRLUtility:
 
 class SchemaBootRE:
     """
-    Extract deterministic RE-specific attributes from tool payloads
+    Extract RE-specific attributes from tool payloads
     for structured pre-filtering.
+
+    Uses learned phase classifier instead of hardcoded keyword rules.
     """
+
+    def __init__(self):
+        self.phase_classifier = LearnedPhaseClassifier()
 
     def induce_schema(self, payload: Any, tool_name: str = "") -> Dict[str, Any]:
         """Extract structured schema from a tool response."""
         text = json.dumps(payload, ensure_ascii=False, default=str)
+        action = ""
+        confidence = 0.5
+        if isinstance(payload, dict):
+            action = str(payload.get("action", ""))
+            confidence = float(payload.get("confidence", 0.5))
+
         schema = {
             "tool": tool_name,
-            "action": "",
+            "action": action,
             "has_addr": bool(BRIDGE_PATTERNS["addr"].search(text)),
             "has_api": bool(BRIDGE_PATTERNS["api"].search(text)),
             "has_crypto": bool(CRYPTO_PATTERN.search(text)),
             "has_network": bool(NETWORK_PATTERN.search(text)),
-            "confidence": 0.5,
+            "confidence": confidence,
             "phase_hint": "triage",
         }
-        if isinstance(payload, dict):
-            schema["action"] = str(payload.get("action", ""))
-            schema["confidence"] = float(payload.get("confidence", 0.5))
 
-        # Phase inference
-        if schema["has_crypto"] or schema["has_network"]:
-            schema["phase_hint"] = "threat_analysis"
-        elif schema["has_api"]:
-            schema["phase_hint"] = "behavioral_analysis"
+        # Phase inference: learned classifier with keyword fallback for cold start
+        predicted = self.phase_classifier.predict(schema, tool_name, action)
+        # If classifier has no training data (returns default triage) but we have
+        # strong keyword signals, use keyword rules as fallback
+        has_learned = any(p in self.phase_classifier._weights for p in self.phase_classifier.PHASES)
+        if not has_learned and predicted == "triage":
+            if schema["has_crypto"] or schema["has_network"]:
+                predicted = "threat_analysis"
+            elif schema["has_api"]:
+                predicted = "behavioral_analysis"
+        schema["phase_hint"] = predicted
 
         return schema
 
@@ -673,38 +778,55 @@ class ContextComposer:
         # 3. PRE-FILTER: Structured filtering
         candidates = self.schemaboot.pre_filter(blackboard_entries, query_schema)
 
-        # 4. BRIDGERAG: Score relevance
+        # 4. BRIDGERAG: Score relevance with ADAPTIVE weights
         scored = []
         for entry in candidates:
             entry_call_idx = entry.get("call_idx", 0)
             call_age = max(0, self._call_counter - entry_call_idx)
-            score = self.bridgerag.score_relevance(
+            score, breakdown = self.bridgerag.score_relevance(
                 query_bridges,
                 query_vector,
                 query_quantized,
                 entry,
                 call_age=call_age,
+                tool=current_tool,
+                action=current_action,
+                phase=query_schema.get("phase_hint", "triage"),
             )
-            scored.append((score, entry))
+            scored.append((score, breakdown, entry))
 
         # 5. MEMRL: Combine relevance + Q-value for final ranking
-        # Utility = 0.8*relevance + 0.2*Q_value
-        # Relevance dominates (exact addr match always wins); Q is tiebreaker.
+        # Uses ADAPTIVE weights learned from historical outcomes
+        phase = query_schema.get("phase_hint", "triage")
+        w = self.bridgerag.weight_learner.get_weights(current_tool, current_action, phase)
         ranked = []
-        for score, entry in scored:
+        for score, breakdown, entry in scored:
             eid = entry.get("id", "")
             q = self.memrl.get_q(eid)
-            utility = 0.8 * score + 0.2 * q
-            ranked.append((utility, score, q, entry))
+            # Adaptive combination: learned weights + Q-value
+            utility = (
+                w["bridge"] * breakdown.get("bridge", 0)
+                + w["semantic"] * breakdown.get("semantic", 0)
+                + w["temporal"] * breakdown.get("temporal", 0)
+                + w["q"] * q
+            )
+            ranked.append((utility, score, q, entry, breakdown))
         ranked.sort(reverse=True, key=lambda x: x[0])
 
         # 6. SELECT: Take top-k
         top_entries = []
-        for utility, score, q, entry in ranked[:self.topk]:
+        for utility, score, q, entry, breakdown in ranked[:self.topk]:
             entry_copy = dict(entry)
             entry_copy["relevance_score"] = round(score, 2)
             entry_copy["q_value"] = round(q, 2)
+            entry_copy["adaptive_weights"] = breakdown.get("weights", {})
             top_entries.append(entry_copy)
+            # Record injection for outcome tracking
+            self.memrl.record_injection(
+                entry_id=entry.get("id", ""),
+                phase_before=query_schema.get("phase_hint", "triage"),
+                bridges=entry.get("bridges", []),
+            )
 
         # 7. DENSITY OPTIMIZE: Compact to 1-line summaries
         compact_entries = []
@@ -734,6 +856,7 @@ class ContextComposer:
                 "pre_filtered": len(candidates),
                 "injected": len(compact_entries),
                 "avg_utility": avg_utility,
+                "adaptive_weights": w,
             },
             "analysis_phase": query_schema.get("phase_hint", "triage"),
             "bridges_detected": query_bridges[:5],
@@ -799,9 +922,17 @@ class CartographerMu:
         was_injected: bool,
         next_bridges: List[str],
         entry_bridges: List[str],
+        next_tool: str = "",
+        next_action: str = "",
+        next_payload: Any = None,
+        phase_after: str = "triage",
     ):
         """Observe LLM behavior and update Q-values."""
-        self.memrl.observe_usage(entry_id, was_injected, next_bridges, entry_bridges)
+        self.memrl.observe_usage(
+            entry_id, was_injected, next_bridges, entry_bridges,
+            next_tool=next_tool, next_action=next_action,
+            next_payload=next_payload, phase_after=phase_after,
+        )
 
     def get_q(self, entry_id: str) -> float:
         """Get current Q-value for an entry."""
