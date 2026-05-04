@@ -34,6 +34,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from .resources import list_resources, ResourceResolver
 from .cartographer_mu import CartographerMu
+from .audit import AuditLogger
+from .rate_limit import RateLimiter
 from .config import (
     CACHE_DIR,
     BRIDGE_LOG,
@@ -270,7 +272,6 @@ class IDAMCPServer:
         )
         self._pointer_note_last_shown_at = 0.0
         self._pointer_note_pending_signal = 0.0
-        self._guardrail_auto_verify = _env_bool("IDA_MCP_GUARDRAIL_AUTO_VERIFY", False)
         self._guardrail_strict_writes = _env_bool("IDA_MCP_GUARDRAIL_STRICT_WRITES", False)
         # Controls whether tools/list returns the full monolithic description/schema payload.
         # Default OFF for context efficiency in LLM clients.
@@ -298,6 +299,8 @@ class IDAMCPServer:
         self.cartographer = CartographerMu(
             db_path=os.path.join(self.cache_dir, "cartographer_mu_q.db")
         )
+        self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
+        self.rate_limiter = RateLimiter()
         self._last_injected_entries: List[Dict[str, Any]] = []
         self._last_query_bridges: List[str] = []
         self._call_counter = 0
@@ -2161,62 +2164,6 @@ class IDAMCPServer:
         _walk(value)
         return found[:max_items]
 
-    def _build_llm_guardrail_actions(
-        self, tool_name: str, call_args: Any, payload: Any
-    ) -> list[dict]:
-        """Return executable calc/memory suggestions to prevent mental math mistakes."""
-        addrs = self._collect_hex_addresses(call_args)
-        if len(addrs) < 4:
-            addrs.extend([a for a in self._collect_hex_addresses(payload) if a not in addrs])
-        addrs = addrs[:6]
-        if not addrs:
-            return []
-
-        suggestions: list[dict] = []
-        # Always include a base alignment check for first address.
-        suggestions.append(
-            {
-                "why": "Verify canonical alignment and avoid hand-calculated page/slot mistakes",
-                "tool": "calc",
-                "arguments": {"action": "align", "value": addrs[0], "size": 16},
-            }
-        )
-
-        # Include pointer-safe deref for one or two addresses.
-        for addr in addrs[:2]:
-            suggestions.append(
-                {
-                    "why": "Read memory via tool instead of assuming pointer values",
-                    "tool": "calc",
-                    "arguments": {"action": "deref", "addr": addr, "type": "u32"},
-                }
-            )
-
-        # If at least two addresses are present, provide explicit offset math.
-        if len(addrs) >= 2:
-            suggestions.append(
-                {
-                    "why": "Compute offset delta explicitly (no mental subtraction)",
-                    "tool": "calc",
-                    "arguments": {
-                        "action": "eval",
-                        "expr": f"{addrs[1]} - {addrs[0]}",
-                    },
-                }
-            )
-
-        # Contextual disassembly verification for code-like workflows.
-        if str(tool_name or "") in {"code", "xref_analysis", "graph", "ctree", "static_trace"}:
-            suggestions.append(
-                {
-                    "why": "Confirm nearby instructions before reasoning about control flow",
-                    "tool": "code",
-                    "arguments": {"action": "disasm", "addr": addrs[0]},
-                }
-            )
-
-        return suggestions[:5]
-
     def _guardrail_mode_from_args(self, call_args: Any) -> str:
         """Resolve per-call guardrail mode: assist|enforce|off."""
         mode = ""
@@ -2227,26 +2174,6 @@ class IDAMCPServer:
         if mode in {"enforce", "strict", "block"}:
             return "enforce"
         return "assist"
-
-    def _guardrail_auto_verify_for_call(self, call_args: Any) -> bool:
-        if isinstance(call_args, dict) and "_guardrail_auto_verify" in call_args:
-            return _coerce_bool(call_args.get("_guardrail_auto_verify"), False)
-        return bool(self._guardrail_auto_verify)
-
-    def _guardrail_action_recipe(self, actions: list[dict]) -> list[str]:
-        """Human/LLM-friendly compact command recipe lines."""
-        recipe: list[str] = []
-        for row in actions[:5]:
-            tool = str(row.get("tool") or "")
-            args = row.get("arguments") or {}
-            if not tool or not isinstance(args, dict):
-                continue
-            action = str(args.get("action") or "")
-            if action:
-                recipe.append(f"{tool}:{action}")
-            else:
-                recipe.append(tool)
-        return recipe
 
     def _guardrail_reason_tags(self, tool_name: str, call_args: Any, payload: Any) -> list[str]:
         tags: list[str] = []
@@ -2265,39 +2192,6 @@ class IDAMCPServer:
         if len(addrs) >= 2:
             tags.append("multiple-hex-addresses")
         return tags
-
-    def _guardrail_preview(self, action_row: dict) -> dict:
-        """Deterministic preview for first guardrail action without recursive tool execution."""
-        try:
-            tool = str(action_row.get("tool") or "")
-            args = dict(action_row.get("arguments") or {})
-            if tool != "calc":
-                return {"ok": False, "note": "preview unsupported for non-calc action"}
-            action = str(args.get("action") or "")
-            if action == "align":
-                v = int(str(args.get("value")), 0)
-                size = int(args.get("size") or 1)
-                if size <= 0:
-                    return {"ok": False, "note": "invalid align size"}
-                aligned = (v + (size - 1)) & ~(size - 1)
-                return {"ok": True, "action": "align", "value": hex(v), "aligned": hex(aligned), "size": size}
-            if action == "eval":
-                expr = str(args.get("expr") or "").strip()
-                if not expr:
-                    return {"ok": False, "note": "empty expr"}
-                # Very restricted arithmetic parser: hex/dec + - * / ( ) and spaces.
-                if not re.fullmatch(r"[0-9a-fA-FxX+\-*/()\s]+", expr):
-                    return {"ok": False, "note": "expr contains unsupported characters"}
-                val = eval(expr, {"__builtins__": {}}, {})
-                if isinstance(val, (int, float)):
-                    out = {"ok": True, "action": "eval", "expr": expr, "value": val}
-                    if isinstance(val, int):
-                        out["value_hex"] = hex(val)
-                    return out
-                return {"ok": False, "note": "expr did not evaluate to numeric value"}
-            return {"ok": False, "note": f"preview unsupported for calc action '{action}'"}
-        except Exception as e:
-            return {"ok": False, "note": f"preview error: {e}"}
 
     def _apply_output_filters(self, payload: Any, opts: dict) -> Any:
         """Apply universal output filtering (grep, head, tail, skip, path, pluck)."""
@@ -2397,17 +2291,11 @@ class IDAMCPServer:
             if isinstance(payload, dict):
                 payload = dict(payload)
                 if include_pointer_note:
-                    guardrail_actions = self._build_llm_guardrail_actions(tool_name, call_args, payload)
                     reason_tags = self._guardrail_reason_tags(tool_name, call_args, payload)
                     guardrail_mode = self._guardrail_mode_from_args(call_args)
                     payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
-                    payload.setdefault("llm_guardrail_actions", guardrail_actions)
                     payload.setdefault("llm_guardrail_mode", guardrail_mode)
-                    payload.setdefault("llm_guardrail_recipe", self._guardrail_action_recipe(guardrail_actions))
-                    payload.setdefault("llm_guardrail_confidence", round(min(1.0, self._compute_pointer_note_signal(tool_name, call_args, payload) / 6.0), 3))
                     payload.setdefault("llm_guardrail_reason_tags", reason_tags)
-                    if self._guardrail_auto_verify_for_call(call_args) and guardrail_actions:
-                        payload.setdefault("llm_guardrail_preview", self._guardrail_preview(guardrail_actions[0]))
                     # Address lockstep: warn about unseen addresses
                     lockstep_warnings = self._validate_address_lockstep(call_args, payload)
                     if lockstep_warnings:
@@ -2448,17 +2336,11 @@ class IDAMCPServer:
         if isinstance(compacted, dict):
             compacted = dict(compacted)
             if include_pointer_note:
-                guardrail_actions = self._build_llm_guardrail_actions(tool_name, call_args, compacted)
                 reason_tags = self._guardrail_reason_tags(tool_name, call_args, compacted)
                 guardrail_mode = self._guardrail_mode_from_args(call_args)
                 compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
-                compacted.setdefault("llm_guardrail_actions", guardrail_actions)
                 compacted.setdefault("llm_guardrail_mode", guardrail_mode)
-                compacted.setdefault("llm_guardrail_recipe", self._guardrail_action_recipe(guardrail_actions))
-                compacted.setdefault("llm_guardrail_confidence", round(min(1.0, self._compute_pointer_note_signal(tool_name, call_args, compacted) / 6.0), 3))
                 compacted.setdefault("llm_guardrail_reason_tags", reason_tags)
-                if self._guardrail_auto_verify_for_call(call_args) and guardrail_actions:
-                    compacted.setdefault("llm_guardrail_preview", self._guardrail_preview(guardrail_actions[0]))
             # ---- Auto-Nudge Injection ----
             try:
                 from .auto_nudge import get_nudge
@@ -5711,8 +5593,59 @@ class IDAMCPServer:
         return out
 
     def _execute_tool(self, tool_name, args):
+        start_ts = time.perf_counter()
         original_tool_name = tool_name
-        tool_name = _resolve_tool_alias(tool_name)
+        resolved_tool = _resolve_tool_alias(tool_name)
+
+        # ---- Rate Limiting ----
+        allowed, reason = self.rate_limiter.check(resolved_tool)
+        if not allowed:
+            self.audit.log(
+                tool=resolved_tool,
+                action=str(args.get("action", "")) if isinstance(args, dict) else "",
+                args=args if isinstance(args, dict) else {},
+                result=None,
+                latency_ms=0.0,
+                session_id=getattr(self.current_session, "session_id", None) if self.current_session else None,
+                error=f"rate_limited: {reason}",
+            )
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Rate limit exceeded: {reason}",
+                hint="Reduce call frequency or increase limits via IDA_MCP_RATE_LIMIT_* env vars.",
+            )
+
+        result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
+        latency_ms = (time.perf_counter() - start_ts) * 1000.0
+        action_name = str(args.get("action", "")) if isinstance(args, dict) else ""
+        sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+        guardrail_mode = self._guardrail_mode_from_args(args) if isinstance(args, dict) else "assist"
+        guardrail_blocked = False
+        error_str = None
+        if isinstance(result, dict):
+            err = result.get("error")
+            if isinstance(err, dict):
+                guardrail_blocked = (
+                    err.get("code") == MCPError.INVALID_ARGS
+                    and "guardrail" in str(err.get("message", "")).lower()
+                )
+                error_str = str(err)[:500]
+            elif err is not None:
+                error_str = str(err)[:500]
+        self.audit.log(
+            tool=resolved_tool,
+            action=action_name,
+            args=args if isinstance(args, dict) else {},
+            result=result,
+            latency_ms=latency_ms,
+            session_id=sid,
+            guardrail_mode=guardrail_mode,
+            guardrail_blocked=guardrail_blocked,
+            error=error_str,
+        )
+        return result
+
+    def _execute_tool_inner(self, tool_name, original_tool_name, args):
         if tool_name not in TOOLS:
             return make_error(
                 MCPError.INVALID_ARGS,
@@ -5823,20 +5756,15 @@ class IDAMCPServer:
                 and tool_name in risky_tools
                 and (act in risky_actions or signal >= 2.0)
             ):
-                suggested = self._build_llm_guardrail_actions(tool_name, args, {})
                 return make_error(
                     MCPError.INVALID_ARGS,
                     "Guardrail strict mode blocked a risky write without acknowledgement",
-                    hint=(
-                        "Run one suggested calc/code guardrail action, then retry with _guardrail_ack=true "
-                        "or disable IDA_MCP_GUARDRAIL_STRICT_WRITES."
-                    ),
+                    hint="Retry with _guardrail_ack=true or disable IDA_MCP_GUARDRAIL_STRICT_WRITES.",
                     details={
                         "tool": tool_name,
                         "action": act,
                         "signal": round(signal, 3),
                         "guardrail_mode": guardrail_mode,
-                        "suggested_guardrails": suggested,
                     },
                 )
         if tool_name == "wiki":
@@ -6963,10 +6891,17 @@ class IDAMCPServer:
                 similarity_threshold=float(args.get("similarity_threshold", 0.85)),
             )
             return {"ok": True, **result}
+        if action == "prune":
+            result = store.prune(
+                max_entries=_bounded_int(args.get("max_entries", 1000), 1000, min_value=10, max_value=100000),
+                min_q_value=float(args.get("min_q_value", 0.0)),
+                older_than_days=int(args.get("older_than_days", 0)),
+            )
+            return {"ok": True, **result}
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",
-            hint="Valid actions: write, list, read, delete, clear, stats, merge",
+            hint="Valid actions: write, list, read, delete, clear, stats, merge, prune",
         )
 
     def _handle_predictor(self, args: dict) -> dict:

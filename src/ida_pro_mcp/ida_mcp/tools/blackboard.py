@@ -237,6 +237,50 @@ class BlackboardStore:
                 "by_category": by_cat,
             }
 
+    def prune(
+        self,
+        max_entries: int = 1000,
+        min_q_value: float = 0.0,
+        older_than_days: int = 0,
+    ) -> Dict:
+        """Evict low-quality or old entries to cap DB size."""
+        with self._conn() as conn:
+            cur = conn.cursor()
+            conditions = ["1=1"]
+            params: list = []
+            if min_q_value > 0:
+                conditions.append("q_value < ?")
+                params.append(min_q_value)
+            if older_than_days > 0:
+                cutoff = time.time() - (older_than_days * 86400)
+                conditions.append("updated_at < ?")
+                params.append(cutoff)
+            where = "WHERE " + " AND ".join(conditions)
+            # Count how many we'd delete
+            cur.execute(f"SELECT COUNT(*) FROM blackboard {where}", params)
+            would_delete = cur.fetchone()[0]
+            # Get total count
+            cur.execute("SELECT COUNT(*) FROM blackboard")
+            total = cur.fetchone()[0]
+            # If total exceeds max, delete oldest/lowest-q first
+            to_delete = max(0, total - max_entries)
+            if to_delete > 0:
+                cur.execute(
+                    f"""SELECT id FROM blackboard {where}
+                    ORDER BY q_value ASC, updated_at ASC LIMIT ?""",
+                    (*params, to_delete),
+                )
+                ids = [r[0] for r in cur.fetchall()]
+                for eid in ids:
+                    cur.execute("DELETE FROM blackboard WHERE id = ?", (eid,))
+                conn.commit()
+                return {"pruned": len(ids), "remaining": total - len(ids), "reason": "capacity"}
+            elif would_delete > 0:
+                cur.execute(f"DELETE FROM blackboard {where}", params)
+                conn.commit()
+                return {"pruned": would_delete, "remaining": total - would_delete, "reason": "quality"}
+            return {"pruned": 0, "remaining": total, "reason": "none"}
+
     def auto_merge(self, addr: str = "", category: str = "", similarity_threshold: float = 0.85) -> Dict:
         """Detect and merge duplicate entries by addr+category+title similarity."""
         with self._conn() as conn:
@@ -321,6 +365,9 @@ def blackboard(
     limit: int = 100,
     offset: int = 0,
     db_path: str = "",
+    max_entries: int = 1000,
+    min_q_value: float = 0.0,
+    older_than_days: int = 0,
     **kwargs,
 ) -> dict:
     """
@@ -334,6 +381,8 @@ def blackboard(
       delete  - Remove a single entry.
       clear   - Remove all entries (or by category).
       stats   - Show aggregate statistics.
+      prune   - Evict low-Q or old entries to cap DB size.
+      merge   - Deduplicate similar entries.
 
     Examples:
         blackboard(action="write", title="Buffer overflow at 0x401234",
@@ -342,6 +391,7 @@ def blackboard(
         blackboard(action="list", category="vuln", limit=10)
         blackboard(action="read", entry_id="abc123")
         blackboard(action="clear", category="vuln")
+        blackboard(action="prune", max_entries=500, min_q_value=0.1)
     """
     store = BlackboardStore(db_path=db_path or None)
 
@@ -395,6 +445,10 @@ def blackboard(
 
     elif action == "merge":
         result = store.auto_merge(addr=addr, category=category if category != "general" else "")
+        return {"ok": True, **result}
+
+    elif action == "prune":
+        result = store.prune(max_entries=max_entries, min_q_value=min_q_value, older_than_days=older_than_days)
         return {"ok": True, **result}
 
     else:
