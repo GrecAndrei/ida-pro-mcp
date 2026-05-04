@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""
+Token-bucket rate limiting for MCP tool calls.
+
+Two scopes:
+  - Per-tool: each tool gets its own bucket (prevents one tool from monopolizing)
+  - Global: shared bucket across all tools (prevents total overload)
+"""
+from __future__ import annotations
+
+import time
+import threading
+from typing import Dict, Optional, Tuple
+
+
+class TokenBucket:
+    """Thread-safe token bucket."""
+
+    def __init__(self, rate: float, burst: int):
+        self.rate = float(rate)      # tokens per second
+        self.burst = int(burst)      # max tokens
+        self.tokens = float(burst)   # current tokens
+        self.last_update = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self, tokens: float = 1.0) -> Tuple[bool, float]:
+        """Try to acquire tokens. Returns (ok, wait_seconds)."""
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last_update
+            self.tokens = min(self.burst, self.tokens + elapsed * self.rate)
+            self.last_update = now
+            if self.tokens >= tokens:
+                self.tokens -= tokens
+                return True, 0.0
+            wait = (tokens - self.tokens) / self.rate
+            return False, wait
+
+
+class RateLimiter:
+    """
+    Rate limiter with per-tool and global buckets.
+
+    Default: 10 calls/sec per tool, 30 calls/sec globally.
+    Configurable via env vars:
+      IDA_MCP_RATE_LIMIT_PER_TOOL  (default 10)
+      IDA_MCP_RATE_LIMIT_GLOBAL    (default 30)
+      IDA_MCP_RATE_LIMIT_BURST     (default 20)
+    """
+
+    def __init__(
+        self,
+        per_tool_rate: Optional[float] = None,
+        global_rate: Optional[float] = None,
+        burst: Optional[int] = None,
+    ):
+        import os
+        # Allow tests to disable rate limiting
+        if os.environ.get("IDA_MCP_DISABLE_RATE_LIMIT") == "1":
+            self.per_tool_rate = float("inf")
+            self.global_rate = float("inf")
+            self.burst = 999999
+        else:
+            self.per_tool_rate = per_tool_rate or float(
+                os.environ.get("IDA_MCP_RATE_LIMIT_PER_TOOL", "10")
+            )
+            self.global_rate = global_rate or float(
+                os.environ.get("IDA_MCP_RATE_LIMIT_GLOBAL", "30")
+            )
+            self.burst = burst or int(os.environ.get("IDA_MCP_RATE_LIMIT_BURST", "20"))
+        self._tool_buckets: Dict[str, TokenBucket] = {}
+        self._global_bucket = TokenBucket(self.global_rate, self.burst)
+        self._lock = threading.Lock()
+
+    def _get_tool_bucket(self, tool: str) -> TokenBucket:
+        with self._lock:
+            if tool not in self._tool_buckets:
+                self._tool_buckets[tool] = TokenBucket(self.per_tool_rate, self.burst)
+            return self._tool_buckets[tool]
+
+    def check(self, tool: str) -> Tuple[bool, str]:
+        """
+        Check if call is allowed. Returns (allowed, reason).
+        If not allowed, reason explains which limit was hit.
+        """
+        # Check global first
+        ok, wait = self._global_bucket.acquire()
+        if not ok:
+            return False, f"global rate limit ({self.global_rate}/s); wait {wait:.1f}s"
+        # Check per-tool
+        bucket = self._get_tool_bucket(tool)
+        ok, wait = bucket.acquire()
+        if not ok:
+            # Return global token since we're rejecting
+            self._global_bucket.tokens = min(
+                self._global_bucket.burst,
+                self._global_bucket.tokens + 1.0
+            )
+            return False, f"rate limit for tool '{tool}' ({self.per_tool_rate}/s); wait {wait:.1f}s"
+        return True, ""
+
+    def stats(self) -> Dict[str, any]:
+        """Current bucket levels for diagnostics."""
+        out = {
+            "global": {
+                "rate": self.global_rate,
+                "burst": self.burst,
+                "tokens": round(self._global_bucket.tokens, 2),
+            },
+            "per_tool_rate": self.per_tool_rate,
+        }
+        with self._lock:
+            for tool, bucket in self._tool_buckets.items():
+                out[tool] = {"tokens": round(bucket.tokens, 2)}
+        return out
