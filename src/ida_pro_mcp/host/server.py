@@ -155,7 +155,13 @@ except ImportError:
 
 
 class IDAMCPServer:
+    """
+    JSON-RPC stdio server for the IDA Pro MCP.
+    """
+
     _atexit_registered = False
+    _blackboard_module = None
+    _blackboard_store = None
 
     def __init__(self):
         mode = str(os.environ.get("IDA_MCP_RESPONSE_MODE", "compact")).strip().lower()
@@ -2110,6 +2116,7 @@ class IDAMCPServer:
             return
         try:
             next_bridges = self.cartographer.extract_bridges(payload, tool_name)
+            phase_after = payload.get("analysis_phase", "triage") if isinstance(payload, dict) else "triage"
             for entry in self._last_injected_entries:
                 entry_id = entry.get("id", "")
                 entry_bridges = entry.get("bridges", [])
@@ -2121,6 +2128,10 @@ class IDAMCPServer:
                     was_injected=was_injected,
                     next_bridges=next_bridges,
                     entry_bridges=entry_bridges,
+                    next_tool=tool_name,
+                    next_action=action,
+                    next_payload=payload,
+                    phase_after=phase_after,
                 )
             self._last_injected_entries = []
         except Exception:
@@ -6809,18 +6820,20 @@ class IDAMCPServer:
     def _handle_blackboard(self, args: dict) -> dict:
         """Host-side blackboard handler so it works without IDA runtime."""
         try:
-            import importlib.util
-            bb_path = os.path.join(SCRIPT_DIR, "..", "ida_mcp", "tools", "blackboard.py")
-            bb_path = os.path.abspath(bb_path)
-            spec = importlib.util.spec_from_file_location("_host_blackboard", bb_path)
-            mod = importlib.util.module_from_spec(spec)
-            # Inject minimal stubs so the module loads without IDA deps
-            mod.__dict__["tool"] = lambda f: f
-            mod.__dict__["idaread"] = lambda f: f
-            mod.__dict__["idawrite"] = lambda f: f
-            mod.__dict__["IDAError"] = Exception
-            spec.loader.exec_module(mod)
-            store = mod.BlackboardStore()
+            if IDAMCPServer._blackboard_module is None:
+                import importlib.util
+                bb_path = os.path.join(SCRIPT_DIR, "..", "ida_mcp", "tools", "blackboard.py")
+                bb_path = os.path.abspath(bb_path)
+                spec = importlib.util.spec_from_file_location("_host_blackboard", bb_path)
+                mod = importlib.util.module_from_spec(spec)
+                mod.__dict__["tool"] = lambda f: f
+                mod.__dict__["idaread"] = lambda f: f
+                mod.__dict__["idawrite"] = lambda f: f
+                mod.__dict__["IDAError"] = Exception
+                spec.loader.exec_module(mod)
+                IDAMCPServer._blackboard_module = mod
+                IDAMCPServer._blackboard_store = mod.BlackboardStore()
+            store = IDAMCPServer._blackboard_store
         except Exception as e:
             return make_error(MCPError.IDA_ERROR, f"BlackboardStore unavailable: {e}")
         action = str(args.get("action") or "list").strip().lower()
