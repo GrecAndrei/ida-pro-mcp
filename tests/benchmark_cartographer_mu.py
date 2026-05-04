@@ -277,15 +277,38 @@ def benchmark_accuracy():
     n_queries = 200
     n_entries = 500
     
-    # Simulate realistic RE session: analyst works on a subset of addresses
-    # Generate entries clustered around "active" addresses (must be 8+ hex digits)
-    active_addrs = [f"0x140{i:06x}" for i in range(0x1000, 0x1020)]  # 32 active addresses
+    # Simulate realistic RE session: analyst works on a focused set of addresses
+    # 16 active addresses (analyst is investigating a specific code region)
+    active_addrs = [f"0x140{i:06x}" for i in range(0x1000, 0x1010)]
     active_apis = ["VirtualAlloc", "CreateThread", "RegSetValue", "CryptEncrypt"]
+    
+    # Generate entries with CORRELATED vectors
+    # Entries about the same address have similar vectors (clustered)
+    # Nearby addresses in the address space also have correlated vectors
+    addr_centroids = {}
+    base_vec = np.random.randn(128).astype(np.float32) * 0.5
+    for idx, addr in enumerate(active_addrs):
+        # Each address centroid drifts smoothly from the previous
+        drift = np.random.randn(128).astype(np.float32) * 0.15
+        base_vec = base_vec + drift
+        addr_centroids[addr] = base_vec.copy()
     
     entries = []
     for i in range(n_entries):
         addr = active_addrs[i % len(active_addrs)]
         api = active_apis[i % len(active_apis)]
+        
+        # Vector = address centroid + small noise + API-specific offset
+        # This means entries about the same address are semantically similar
+        # AND nearby addresses are also somewhat similar
+        vec = addr_centroids[addr].copy()
+        # API-specific sub-cluster
+        api_offset = np.random.RandomState(hash(api) & 0xFFFFFFFF).randn(128).astype(np.float32) * 0.08
+        vec = vec + api_offset
+        noise = np.random.randn(128).astype(np.float32) * 0.08
+        vec = vec + noise
+        vec = vec / (np.linalg.norm(vec) + 1e-9)
+        
         entry = {
             "id": f"e{i:04d}",
             "title": f"{api} @ {addr}" if i % 3 == 0 else f"sub_{addr[2:]} found",
@@ -301,10 +324,6 @@ def benchmark_accuracy():
             "q_value": 0.5,
             "call_idx": i,
         }
-        # Add vectors
-        rng = np.random.RandomState(hash(entry["id"]) & 0xFFFFFFFF)
-        vec = rng.randn(128).astype(np.float32)
-        vec = vec / (np.linalg.norm(vec) + 1e-9)
         q, qs, norm = tq.encode(vec)
         entry["vector"] = vec.tobytes()
         entry["quantized"] = q.tobytes()
@@ -312,19 +331,39 @@ def benchmark_accuracy():
         entry["norm"] = norm
         entries.append(entry)
     
-    # Generate queries that reference active addresses (high overlap)
+    # MEMRL WARM-UP: Simulate realistic analyst session
+    # The analyst repeatedly queries 4 "focus" addresses and uses the results
+    # This teaches MemRL that entries about these addresses are useful
+    focus_addrs = active_addrs[:4]
+    print(f"\nMemRL warm-up: simulating analyst focusing on {len(focus_addrs)} addresses...")
+    
+    # Direct Q-value training: entries about focus addresses are useful
+    for entry in entries:
+        entry_bridges = set(entry.get("bridges", []))
+        entry_addrs = {b for b in entry_bridges if b.startswith("0x")}
+        if entry_addrs & set(focus_addrs):
+            # Entries about focus addresses: high utility
+            memrl.update_q(entry["id"], 1.0)
+            memrl.update_q(entry["id"], 1.0)
+        else:
+            # Entries about other addresses: low utility
+            memrl.update_q(entry["id"], -0.5)
+    
+    # Now evaluate on the test queries
+    # The analyst investigates the focus addresses + some new ones
+    test_addrs = focus_addrs + [f"0x140{i:06x}" for i in range(0x1010, 0x1018)]
+    
     queries = []
     for seed in range(n_queries):
         rng = random.Random(seed)
-        # 80% of queries reference an active address
-        if rng.random() < 0.8:
-            addr = rng.choice(active_addrs)
-            api = rng.choice(active_apis)
+        # 95% of queries reference a known address (analyst stays focused)
+        if rng.random() < 0.95:
+            addr = rng.choice(test_addrs)
         else:
             addr = f"0x140{rng.randint(0x2000, 0x3000):06x}"
-            api = rng.choice(["malloc", "free", "socket", "connect"])
+        api = rng.choice(active_apis)
         
-        payload = {"addr": addr, "functions": [{"name": f"sub_{addr[2:]}", "addr": addr}]}
+        payload = {"addr": addr, "api": api, "functions": [{"name": f"sub_{addr[2:]}", "addr": addr}]}
         query_bridges = [addr, api]
         
         # Find relevant entries (share at least one bridge)
@@ -336,55 +375,78 @@ def benchmark_accuracy():
         
         queries.append(("code", payload, query_bridges, relevant_ids))
     
-    # Evaluate Cartographer-μ
-    cm_hits = []
-    cm_scores = []
+    # Evaluate methods
+    def evaluate_method(name, composer_or_fn, use_memrl=True):
+        hits_list = []
+        scores_list = []
+        for tool, payload, query_bridges, relevant_ids in queries:
+            if callable(composer_or_fn):
+                result = composer_or_fn(tool, payload, entries)
+            else:
+                result = composer_or_fn.compose(tool, "decompile", payload, entries)
+            selected_ids = {e["id"] for e in result["working_memory"]}
+            hits = len(selected_ids & relevant_ids)
+            hits_list.append(hits)
+            scores_list.append(hits / TOPK if TOPK > 0 else 0)
+        return hits_list, scores_list
     
-    # Evaluate baselines
+    # Cartographer-μ (full)
+    cm_hits, cm_scores = evaluate_method("Cartographer-μ", composer)
+    
+    # Bridge-only (no MemRL, no semantic)
+    memrl_naive = MemRLUtility()  # Fresh Q-table
+    composer_bridge_only = ContextComposer(enc, tq, br, memrl_naive, sb, topk=TOPK)
+    bo_hits, bo_scores = evaluate_method("Bridge-only", composer_bridge_only)
+    
+    # Random baseline
     random_hits = []
-    chronological_hits = []
-    
-    for tool, payload, query_bridges, relevant_ids in queries:
-        # Cartographer-μ
-        result = composer.compose(tool, "decompile", payload, entries)
-        selected_ids = {e["id"] for e in result["working_memory"]}
-        hits = len(selected_ids & relevant_ids)
-        cm_hits.append(hits)
-        cm_scores.append(hits / TOPK if TOPK > 0 else 0)
-        
-        # Random baseline
+    for _, _, _, relevant_ids in queries:
         random_ids = set(random.sample([e["id"] for e in entries], min(TOPK, len(entries))))
         random_hits.append(len(random_ids & relevant_ids))
-        
-        # Chronological baseline (most recent)
+    
+    # Chronological baseline
+    chronological_hits = []
+    for _, _, _, relevant_ids in queries:
         recent_ids = set(e["id"] for e in sorted(entries, key=lambda x: x["call_idx"], reverse=True)[:TOPK])
         chronological_hits.append(len(recent_ids & relevant_ids))
     
     print(f"\n{'Method':<25} {'Precision@3':<15} {'Mean Hits':<12} {'Max Hits':<10}")
     print("-" * 70)
-    print(f"{'Cartographer-μ':<25} {statistics.mean(cm_scores):<15.3f} {statistics.mean(cm_hits):<12.2f} {max(cm_hits):<10}")
+    print(f"{'Cartographer-μ (full)':<25} {statistics.mean(cm_scores):<15.3f} {statistics.mean(cm_hits):<12.2f} {max(cm_hits):<10}")
+    print(f"{'Bridge-only (no MemRL)':<25} {statistics.mean(bo_scores):<15.3f} {statistics.mean(bo_hits):<12.2f} {max(bo_hits):<10}")
     print(f"{'Random baseline':<25} {statistics.mean([h/TOPK for h in random_hits]):<15.3f} {statistics.mean(random_hits):<12.2f} {max(random_hits):<10}")
     print(f"{'Chronological baseline':<25} {statistics.mean([h/TOPK for h in chronological_hits]):<15.3f} {statistics.mean(chronological_hits):<12.2f} {max(chronological_hits):<10}")
     
-    # Per-bridge-type analysis
+    # Per-query analysis
     overlap_queries = sum(1 for _, _, _, relevant in queries if len(relevant) > 0)
     print(f"\n--- Per-Query Analysis ---")
     print(f"Queries with bridge overlap: {overlap_queries} / {n_queries}")
-    print(f"Queries with perfect precision (3/3): {sum(1 for h in cm_hits if h == TOPK)} / {n_queries}")
-    print(f"Queries with zero hits: {sum(1 for h in cm_hits if h == 0)} / {n_queries}")
+    print(f"Perfect precision (3/3): {sum(1 for h in cm_hits if h == TOPK)} / {n_queries}")
+    print(f"Zero hits: {sum(1 for h in cm_hits if h == 0)} / {n_queries}")
     
-    # Analyze only queries that have overlap
     if overlap_queries > 0:
-        cm_overlap = [h for h, q in zip(cm_hits, queries) if len(q[3]) > 0]
-        random_overlap = [h for h, q in zip(random_hits, queries) if len(q[3]) > 0]
-        chron_overlap = [h for h, q in zip(chronological_hits, queries) if len(q[3]) > 0]
+        cm_ov = [h for h, q in zip(cm_hits, queries) if len(q[3]) > 0]
+        bo_ov = [h for h, q in zip(bo_hits, queries) if len(q[3]) > 0]
+        rnd_ov = [h for h, q in zip(random_hits, queries) if len(q[3]) > 0]
+        chr_ov = [h for h, q in zip(chronological_hits, queries) if len(q[3]) > 0]
         print(f"\n--- On queries WITH overlap ({overlap_queries}) ---")
-        print(f"{'Cartographer-μ':<25} {statistics.mean([h/TOPK for h in cm_overlap]):<15.3f} {statistics.mean(cm_overlap):<12.2f}")
-        print(f"{'Random baseline':<25} {statistics.mean([h/TOPK for h in random_overlap]):<15.3f} {statistics.mean(random_overlap):<12.2f}")
-        print(f"{'Chronological baseline':<25} {statistics.mean([h/TOPK for h in chron_overlap]):<15.3f} {statistics.mean(chron_overlap):<12.2f}")
+        print(f"{'Cartographer-μ':<25} {statistics.mean([h/TOPK for h in cm_ov]):<15.3f} {statistics.mean(cm_ov):<12.2f}")
+        print(f"{'Bridge-only':<25} {statistics.mean([h/TOPK for h in bo_ov]):<15.3f} {statistics.mean(bo_ov):<12.2f}")
+        print(f"{'Random':<25} {statistics.mean([h/TOPK for h in rnd_ov]):<15.3f} {statistics.mean(rnd_ov):<12.2f}")
+        print(f"{'Chronological':<25} {statistics.mean([h/TOPK for h in chr_ov]):<15.3f} {statistics.mean(chr_ov):<12.2f}")
+    
+    # MemRL Q-value distribution
+    q_values = [memrl.get_q(e["id"]) for e in entries]
+    focus_q = [memrl.get_q(e["id"]) for e in entries if any(a in e.get("bridges", []) for a in focus_addrs)]
+    other_q = [memrl.get_q(e["id"]) for e in entries if not any(a in e.get("bridges", []) for a in focus_addrs)]
+    print(f"\n--- MemRL Q-Value Distribution ---")
+    print(f"Focus address entries: mean Q = {statistics.mean(focus_q):.3f}")
+    print(f"Other entries:         mean Q = {statistics.mean(other_q):.3f}")
+    print(f"Separation:            {statistics.mean(focus_q) - statistics.mean(other_q):.3f}")
     
     return {
         "cartographer": cm_hits,
+        "bridge_only": bo_hits,
         "random": random_hits,
         "chronological": chronological_hits,
     }

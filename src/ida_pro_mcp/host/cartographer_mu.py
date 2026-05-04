@@ -348,9 +348,13 @@ class BridgeRAGLite:
     ) -> float:
         """
         Score relevance of a blackboard entry to current query.
-        s(query, entry) = 0.5*bridge + 0.3*semantic + 0.2*temporal
+        Domain-aware scoring for reverse engineering:
+        - Exact address match = maximum relevance
+        - Bridge overlap (addr/API/func_name) = primary signal
+        - Semantic similarity = tiebreaker when no bridges match
+        - Temporal decay = gentle for bridged entries, steep for orphans
         """
-        # Bridge overlap
+        # Parse entry bridges
         entry_bridges = entry.get("bridges", [])
         if isinstance(entry_bridges, str):
             try:
@@ -359,47 +363,73 @@ class BridgeRAGLite:
                 entry_bridges = []
         if not isinstance(entry_bridges, list):
             entry_bridges = []
+        
         q_set = set(query_bridges)
         e_set = set(entry_bridges)
+        
+        # EXACT ADDRESS MATCH: the strongest signal in RE
+        query_addrs = {b for b in q_set if b.startswith("0x")}
+        entry_addrs = {b for b in e_set if b.startswith("0x")}
+        shared_addrs = query_addrs & entry_addrs
+        if shared_addrs:
+            # Exact address match is the strongest signal in RE
+            shared_non_addrs = (q_set - query_addrs) & (e_set - entry_addrs)
+            if shared_non_addrs:
+                # Address + API/func match = perfect relevance
+                exact_bonus = 1.0
+            else:
+                # Address-only match = very high but not perfect
+                exact_bonus = 0.85
+            temporal = np.exp(-call_age / 20.0)  # Slower decay for exact matches
+            return exact_bonus * (0.7 + 0.3 * temporal)
+        
+        # Bridge overlap score (Jaccard)
         if q_set and e_set:
             bridge_score = len(q_set & e_set) / max(len(q_set), len(e_set))
         else:
             bridge_score = 0.0
-
-        # Semantic similarity
-        entry_quantized = entry.get("quantized")
-        entry_q_signs = entry.get("q_signs")
-        entry_norm = entry.get("norm", 0.0)
+        
+        # Semantic similarity (only meaningful when no bridge overlap)
         semantic_score = 0.0
-        if (
-            entry_quantized is not None
-            and entry_q_signs is not None
-            and entry_norm > 0
-        ):
-            try:
-                if isinstance(entry_quantized, str):
-                    entry_quantized = np.frombuffer(
-                        bytes.fromhex(entry_quantized), dtype=np.uint8
+        if bridge_score < 0.01:
+            entry_quantized = entry.get("quantized")
+            entry_q_signs = entry.get("q_signs")
+            entry_norm = entry.get("norm", 0.0)
+            if (
+                entry_quantized is not None
+                and entry_q_signs is not None
+                and entry_norm > 0
+            ):
+                try:
+                    if isinstance(entry_quantized, str):
+                        entry_quantized = np.frombuffer(
+                            bytes.fromhex(entry_quantized), dtype=np.uint8
+                        )
+                    if isinstance(entry_q_signs, str):
+                        entry_q_signs = np.frombuffer(
+                            bytes.fromhex(entry_q_signs), dtype=np.int8
+                        )
+                    semantic_score = self.quantizer.similarity(
+                        query_quantized[0],
+                        query_quantized[1],
+                        query_quantized[2],
+                        entry_quantized,
+                        entry_q_signs,
+                        entry_norm,
                     )
-                if isinstance(entry_q_signs, str):
-                    entry_q_signs = np.frombuffer(
-                        bytes.fromhex(entry_q_signs), dtype=np.int8
-                    )
-                semantic_score = self.quantizer.similarity(
-                    query_quantized[0],
-                    query_quantized[1],
-                    query_quantized[2],
-                    entry_quantized,
-                    entry_q_signs,
-                    entry_norm,
-                )
-            except Exception:
-                pass
-
-        # Temporal decay (Ebbinghaus-style)
-        temporal_decay = np.exp(-call_age / 10.0)
-
-        return 0.5 * bridge_score + 0.3 * semantic_score + 0.2 * temporal_decay
+                except Exception:
+                    pass
+        
+        # Temporal decay: gentler when bridges exist, much steeper for orphans
+        # Orphan entries (no bridge overlap) decay 3× faster
+        if bridge_score > 0:
+            temporal_decay = np.exp(-call_age / 10.0)
+        else:
+            temporal_decay = np.exp(-call_age / 3.0)
+        
+        # Weighted combination: bridge dominates, semantic is tiebreaker
+        # 0.7 bridge + 0.2 semantic + 0.1 temporal
+        return 0.7 * bridge_score + 0.2 * semantic_score + 0.1 * temporal_decay
 
 
 # =============================================================================
@@ -647,7 +677,7 @@ class ContextComposer:
         scored = []
         for entry in candidates:
             entry_call_idx = entry.get("call_idx", 0)
-            call_age = self._call_counter - entry_call_idx
+            call_age = max(0, self._call_counter - entry_call_idx)
             score = self.bridgerag.score_relevance(
                 query_bridges,
                 query_vector,
@@ -657,23 +687,24 @@ class ContextComposer:
             )
             scored.append((score, entry))
 
-        # Sort by relevance score
-        scored.sort(reverse=True, key=lambda x: x[0])
-
-        # 5. MEMRL: Re-rank by Q-value
-        candidate_ids = [entry.get("id", "") for _, entry in scored]
-        ranked = self.memrl.rank_entries(candidate_ids)
+        # 5. MEMRL: Combine relevance + Q-value for final ranking
+        # Utility = 0.8*relevance + 0.2*Q_value
+        # Relevance dominates (exact addr match always wins); Q is tiebreaker.
+        ranked = []
+        for score, entry in scored:
+            eid = entry.get("id", "")
+            q = self.memrl.get_q(eid)
+            utility = 0.8 * score + 0.2 * q
+            ranked.append((utility, score, q, entry))
+        ranked.sort(reverse=True, key=lambda x: x[0])
 
         # 6. SELECT: Take top-k
         top_entries = []
-        for q_score, entry_id in ranked[:self.topk]:
-            for score, entry in scored:
-                if entry.get("id") == entry_id:
-                    entry_copy = dict(entry)
-                    entry_copy["relevance_score"] = round(score, 2)
-                    entry_copy["q_value"] = round(q_score, 2)
-                    top_entries.append(entry_copy)
-                    break
+        for utility, score, q, entry in ranked[:self.topk]:
+            entry_copy = dict(entry)
+            entry_copy["relevance_score"] = round(score, 2)
+            entry_copy["q_value"] = round(q, 2)
+            top_entries.append(entry_copy)
 
         # 7. DENSITY OPTIMIZE: Compact to 1-line summaries
         compact_entries = []
