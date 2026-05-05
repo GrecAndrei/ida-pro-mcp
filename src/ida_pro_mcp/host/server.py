@@ -309,7 +309,8 @@ class IDAMCPServer:
         self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
         self.rate_limiter = RateLimiter()
         self.attention_kernel = AttentionKernel(
-            db_path=os.path.join(self.cache_dir, "attention_kernel.db")
+            db_path=os.path.join(self.cache_dir, "attention_kernel.db"),
+            autogenic_db_path=os.path.join(self.cache_dir, "autogenic_semantics.db"),
         )
         self._last_injected_entries: List[Dict[str, Any]] = []
         self._last_query_bridges: List[str] = []
@@ -5706,10 +5707,11 @@ class IDAMCPServer:
             args,
         )
         if pre.get("decision") == "block_high_impact":
+            hint = pre.get("hint", "Resolve required receipts via supporting read/exploration actions before high-impact writes.")
             return make_error(
                 MCPError.INVALID_ARGS,
                 "Action blocked by active blackboard obligations",
-                hint="Resolve required receipts via supporting read/exploration actions before high-impact writes.",
+                hint=hint,
                 details={
                     "blocked_by": pre.get("blocked_by", []),
                     "required_receipts": pre.get("required_receipts", []),
