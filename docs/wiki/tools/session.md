@@ -67,6 +67,10 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `bootstrap_policy_reweight`
 - `bootstrap_policy_reweight_history`
 - `bootstrap_autopilot`
+- `bootstrap_set_autopilot_policy`
+- `bootstrap_get_autopilot_policy`
+- `bootstrap_rollback_last_reweight`
+- `bootstrap_plan_status`
 
 ## Parameters
 - `_compact`: `boolean` — Shortcut for compact/full mode toggle.
@@ -80,7 +84,7 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
 - `_response_omit`: `array | string` — Optional top-level field omission list.
 - `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `69`
+- `action`: `string`; allowed_count: `73`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` — Advanced analysis options payload

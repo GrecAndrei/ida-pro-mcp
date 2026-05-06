@@ -447,6 +447,53 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         self.assertTrue(auto.get("ok"))
         self.assertTrue(auto.get("dry_run"))
 
+        setp = self.server._execute_tool(
+            "session",
+            {
+                "action": "bootstrap_set_autopilot_policy",
+                "session_id": self.sid,
+                "cooldown_seconds": 1,
+                "daily_budget": 3,
+                "max_live_actions": 2,
+                "rollback_on_regression": True,
+            },
+        )
+        self.assertTrue(setp.get("ok"))
+
+        getp = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_get_autopilot_policy", "session_id": self.sid},
+        )
+        self.assertTrue(getp.get("ok"))
+        self.assertEqual(getp.get("policy", {}).get("daily_budget"), 3)
+
+        live1 = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_autopilot", "session_id": self.sid, "window": 20},
+        )
+        self.assertTrue(live1.get("ok"))
+        live2 = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_autopilot", "session_id": self.sid, "window": 20},
+        )
+        self.assertTrue(live2.get("ok"))
+        self.assertTrue(live2.get("blocked"))
+        self.assertEqual(live2.get("reason"), "cooldown_active")
+
+        rb = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_rollback_last_reweight", "session_id": self.sid},
+        )
+        self.assertTrue(rb.get("ok"))
+
+        ps = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_plan_status", "session_id": self.sid},
+        )
+        self.assertTrue(ps.get("ok"))
+        self.assertIn("overall", ps)
+        self.assertIn("phases", ps)
+
 
 if __name__ == "__main__":
     unittest.main()
