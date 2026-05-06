@@ -16,6 +16,7 @@ Deterministic and ML-powered reverse engineering for IDA Pro via the Model Conte
 - [How LLMs Should Use It](#how-llms-should-use-it)
 - [Tool Surface](#tool-surface)
 - [Local ML Components](#local-ml-components)
+- [Bootstrap Control Loop](#bootstrap-control-loop)
 - [Production Hardening](#production-hardening)
 - [Auto-Blackboard and Context Injection](#auto-blackboard-and-context-injection)
 - [Session Management](#session-management)
@@ -38,6 +39,7 @@ It provides:
 - A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`) communicating over local TCP
 - 69 canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases
 - A local deterministic ML engine (Cartographer-mu) for relevance-ranked context injection
+- A full bootstrap evidence control loop in `session` actions (calibration, drift, mitigation, adaptation, readiness)
 - Structured audit logging, token-bucket rate limiting, and blackboard auto-pruning
 - Guardrail layer for safe writes: strict write mode, address lockstep validation, pointer safety notes
 - Persistent session/bookmark metadata in user runtime directory (`IDA_MCP_CACHE_DIR` or OS default)
@@ -136,6 +138,7 @@ Primary documentation now lives under `docs/`:
 - `docs/TECHNICAL_REFERENCE.md`: low-level technical details.
 - `docs/TOOLS_REFERENCE.md`: tool-focused reference.
 - `docs/DEDUPLICATION_PLAN.md`: canonical-vs-compat tool surface and consolidation rules.
+- `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`: phase-by-phase bootstrap plan implementation matrix.
 
 Legacy/superseded notes were moved to `docs/legacy/` to keep repo root clean.
 
@@ -253,6 +256,19 @@ Practical agent rules:
 - Save milestones via bookmarks, blackboard entries, and session notes.
 
 ## Tool Surface
+
+## Bootstrap Control Loop
+
+The `session` tool now includes a complete bootstrap evidence control loop designed for cold-start calibration and long-run governance:
+
+- Calibration core: `bootstrap_init`, `bootstrap_run_tournament`, `bootstrap_compute_blend`
+- Runtime outcomes: `bootstrap_ingest_outcome`, dispute lifecycle (`open/list/resolve`)
+- Observability: `bootstrap_summary`, `bootstrap_summary_detailed`, `bootstrap_calibration_report`
+- Drift and gating: snapshots, baseline update, alert evaluation, readiness gate/trend/guard
+- Closed-loop control: mitigation planning/apply, effectiveness scoring, policy reweight, autopilot safeguards
+- Finalization: `bootstrap_plan_status` and `bootstrap_finalize_report` for one-shot implementation + runtime readiness state
+
+For a complete phase matrix, see `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`.
 
 ### Canonical vs compatibility tool names
 
