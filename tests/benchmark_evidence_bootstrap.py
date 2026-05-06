@@ -578,6 +578,107 @@ def benchmark_plan_status(rounds=3000):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def benchmark_readiness_gate(rounds=2000):
+    tmpdir = tempfile.mkdtemp()
+    try:
+        binary = os.path.join(tmpdir, "ready.bin")
+        with open(binary, "wb") as f:
+            f.write(b"\xee" * 1024)
+        srv = IDAMCPServer()
+        sid = srv._execute_tool("session", {"action": "create", "binary_path": binary})["session"]["session_id"]
+        srv._execute_tool("session", {"action": "bootstrap_init", "session_id": sid, "overwrite": True})
+        srv._execute_tool("session", {"action": "bootstrap_run_tournament", "session_id": sid, "rounds": 2000, "seed": 700})
+        for i in range(20):
+            srv._execute_tool("session", {"action": "bootstrap_simulate_batch", "session_id": sid, "n": 25, "seed": 900 + i, "positive_rate": 0.5})
+            srv._execute_tool("session", {"action": "bootstrap_snapshot", "session_id": sid, "name": f"r{i}"})
+        srv._execute_tool("session", {"action": "bootstrap_update_baseline", "session_id": sid, "window": 20, "percentile": 95.0})
+
+        samples = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool(
+                "session",
+                {
+                    "action": "bootstrap_readiness_gate",
+                    "session_id": sid,
+                    "min_tournament_rounds": 1000,
+                    "min_snapshots": 10,
+                    "min_outcomes": 100,
+                    "max_ece": 0.5,
+                    "max_open_disputes": 100,
+                },
+            )
+            samples.append(time.perf_counter() - t0)
+        _summarize("bootstrap_readiness_gate", samples)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def benchmark_readiness_trend_controls(rounds=2000):
+    tmpdir = tempfile.mkdtemp()
+    try:
+        binary = os.path.join(tmpdir, "trend.bin")
+        with open(binary, "wb") as f:
+            f.write(b"\xef" * 1024)
+        srv = IDAMCPServer()
+        sid = srv._execute_tool("session", {"action": "create", "binary_path": binary})["session"]["session_id"]
+        srv._execute_tool("session", {"action": "bootstrap_init", "session_id": sid, "overwrite": True})
+        srv._execute_tool("session", {"action": "bootstrap_run_tournament", "session_id": sid, "rounds": 1200, "seed": 12345})
+        for i in range(25):
+            srv._execute_tool("session", {"action": "bootstrap_simulate_batch", "session_id": sid, "n": 20, "seed": 3000 + i, "positive_rate": 0.5})
+            srv._execute_tool("session", {"action": "bootstrap_snapshot", "session_id": sid, "name": f"t{i}"})
+            srv._execute_tool("session", {"action": "bootstrap_record_readiness", "session_id": sid, "tag": f"tick{i}"})
+
+        h = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_readiness_history", "session_id": sid, "limit": 100, "offset": 0})
+            h.append(time.perf_counter() - t0)
+        _summarize("bootstrap_readiness_history", h)
+
+        t = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_readiness_trend", "session_id": sid, "window": 20})
+            t.append(time.perf_counter() - t0)
+        _summarize("bootstrap_readiness_trend", t)
+
+        g = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_readiness_regression_guard", "session_id": sid, "window": 20, "auto_snapshot": False})
+            g.append(time.perf_counter() - t0)
+        _summarize("bootstrap_readiness_regression_guard", g)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def benchmark_finalize_report(rounds=2000):
+    tmpdir = tempfile.mkdtemp()
+    try:
+        binary = os.path.join(tmpdir, "final.bin")
+        with open(binary, "wb") as f:
+            f.write(b"\xf0" * 1024)
+        srv = IDAMCPServer()
+        sid = srv._execute_tool("session", {"action": "create", "binary_path": binary})["session"]["session_id"]
+        srv._execute_tool("session", {"action": "bootstrap_init", "session_id": sid, "overwrite": True})
+        srv._execute_tool("session", {"action": "bootstrap_run_tournament", "session_id": sid, "rounds": 1500, "seed": 42})
+        for i in range(20):
+            srv._execute_tool("session", {"action": "bootstrap_simulate_batch", "session_id": sid, "n": 20, "seed": 100 + i, "positive_rate": 0.5})
+            srv._execute_tool("session", {"action": "bootstrap_snapshot", "session_id": sid, "name": f"f{i}"})
+            srv._execute_tool("session", {"action": "bootstrap_record_readiness", "session_id": sid, "tag": f"f{i}"})
+        srv._execute_tool("session", {"action": "bootstrap_update_baseline", "session_id": sid, "window": 20, "percentile": 95.0})
+
+        samples = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_finalize_report", "session_id": sid, "trend_window": 20, "effectiveness_window": 20})
+            samples.append(time.perf_counter() - t0)
+        _summarize("bootstrap_finalize_report", samples)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     print("=" * 78)
     print("Evidence Physics Bootstrap Benchmarks")
@@ -599,3 +700,6 @@ if __name__ == "__main__":
     benchmark_policy_adaptation()
     benchmark_autopilot_safeguards()
     benchmark_plan_status()
+    benchmark_readiness_gate()
+    benchmark_readiness_trend_controls()
+    benchmark_finalize_report()

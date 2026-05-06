@@ -57,6 +57,12 @@ This document maps the Evidence Physics Engine bootstrap plan to concrete implem
 ## Phase 8: Plan Governance and Auditability
 
 - `session.bootstrap_plan_status`
+- `session.bootstrap_readiness_gate`
+- `session.bootstrap_record_readiness`
+- `session.bootstrap_readiness_history`
+- `session.bootstrap_readiness_trend`
+- `session.bootstrap_readiness_regression_guard`
+- `session.bootstrap_finalize_report`
 - `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`
 
 ## Validation Artifacts

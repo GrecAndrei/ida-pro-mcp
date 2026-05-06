@@ -1140,6 +1140,266 @@ class SessionManager:
                 "runtime": runtime,
             }
 
+    def bootstrap_readiness_gate(
+        self,
+        sid: str,
+        min_tournament_rounds: int = 1000,
+        min_snapshots: int = 10,
+        min_outcomes: int = 200,
+        max_ece: float = 0.2,
+        max_open_disputes: int = 25,
+    ) -> dict:
+        """Programmatic completion gate for the full bootstrap implementation plan."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+
+            plan = self.bootstrap_plan_status(sid)
+            if plan.get("error"):
+                return plan
+            summary = self.bootstrap_summary(sid)
+            if summary.get("error"):
+                return summary
+            calib = self.bootstrap_calibration_report(sid, min_bin_n=1)
+            if calib.get("error"):
+                return calib
+            eff = self.bootstrap_mitigation_effectiveness(sid, window=50)
+            if eff.get("error"):
+                return eff
+
+            runtime = plan.get("runtime") or {}
+            gates = {
+                "phase_coverage_100": float((plan.get("overall") or {}).get("coverage", 0.0)) >= 100.0,
+                "bootstrap_initialized": bool(runtime.get("bootstrap_initialized")),
+                "tournament_rounds": int(runtime.get("total_rounds", 0)) >= max(1, int(min_tournament_rounds)),
+                "snapshot_depth": int(runtime.get("snapshot_count", 0)) >= max(1, int(min_snapshots)),
+                "outcome_depth": int((summary.get("outcomes") or {}).get("count", 0)) >= max(1, int(min_outcomes)),
+                "ece_within_bound": float(calib.get("ece", 1.0)) <= float(max_ece),
+                "open_disputes_bound": int((summary.get("disputes") or {}).get("open", 0)) <= max(0, int(max_open_disputes)),
+                "mitigation_effectiveness_present": bool(eff.get("enough_data")),
+            }
+
+            passed = [k for k, v in gates.items() if bool(v)]
+            failed = [k for k, v in gates.items() if not bool(v)]
+            readiness = len(failed) == 0
+            stage = "production_ready" if readiness else "needs_more_runtime_data"
+
+            return {
+                "ok": True,
+                "readiness": readiness,
+                "stage": stage,
+                "passed": passed,
+                "failed": failed,
+                "gates": gates,
+                "plan_overall": plan.get("overall"),
+                "runtime": runtime,
+                "summary": {
+                    "ece": calib.get("ece"),
+                    "open_disputes": (summary.get("disputes") or {}).get("open"),
+                    "outcomes": (summary.get("outcomes") or {}).get("count"),
+                    "mitigation_effectiveness": eff.get("effectiveness_score") if eff.get("enough_data") else None,
+                },
+                "thresholds": {
+                    "min_tournament_rounds": int(min_tournament_rounds),
+                    "min_snapshots": int(min_snapshots),
+                    "min_outcomes": int(min_outcomes),
+                    "max_ece": float(max_ece),
+                    "max_open_disputes": int(max_open_disputes),
+                },
+            }
+
+    def bootstrap_record_readiness(self, sid: str, tag: str = "") -> dict:
+        """Record a readiness-gate snapshot into rolling history."""
+        with self._lock:
+            gate = self.bootstrap_readiness_gate(sid)
+            if gate.get("error"):
+                return gate
+            data = self._load_skills(sid)
+            bootstrap = data.get("bootstrap") or {}
+            hist = bootstrap.setdefault("readiness_history", [])
+            row = {
+                "timestamp": datetime.now().isoformat(),
+                "tag": str(tag or "").strip() or None,
+                "readiness": bool(gate.get("readiness")),
+                "stage": gate.get("stage"),
+                "passed": list(gate.get("passed") or []),
+                "failed": list(gate.get("failed") or []),
+                "coverage": float((gate.get("plan_overall") or {}).get("coverage", 0.0)),
+                "ece": (gate.get("summary") or {}).get("ece"),
+                "outcomes": (gate.get("summary") or {}).get("outcomes"),
+                "open_disputes": (gate.get("summary") or {}).get("open_disputes"),
+            }
+            hist.append(row)
+            bootstrap["readiness_history"] = hist[-5000:]
+            bootstrap["updated_at"] = datetime.now().isoformat()
+            data["bootstrap"] = bootstrap
+            self._save_skills(sid, data)
+            return {"ok": True, "entry": row, "history_count": len(bootstrap["readiness_history"])}
+
+    def bootstrap_readiness_history(self, sid: str, limit: int = 100, offset: int = 0) -> dict:
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            data = self._load_skills(sid)
+            rows = list((((data.get("bootstrap") or {}).get("readiness_history") or [])))
+            total = len(rows)
+            offset = max(0, int(offset))
+            limit = max(1, min(int(limit), 10000))
+            view = rows[offset: offset + limit]
+            return {
+                "ok": True,
+                "total": total,
+                "count": len(view),
+                "offset": offset,
+                "limit": limit,
+                "history": view,
+            }
+
+    def bootstrap_readiness_trend(self, sid: str, window: int = 50) -> dict:
+        """Readiness pass-rate, slope, and regression signal over history window."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            data = self._load_skills(sid)
+            rows = list((((data.get("bootstrap") or {}).get("readiness_history") or [])))
+            if len(rows) < 2:
+                return {
+                    "ok": True,
+                    "enough_data": False,
+                    "count": len(rows),
+                    "message": "Need at least 2 readiness records",
+                }
+
+            w = max(2, min(int(window), len(rows)))
+            recent = rows[-w:]
+            vals = [1.0 if bool(r.get("readiness")) else 0.0 for r in recent]
+            coverage = [float(r.get("coverage", 0.0)) for r in recent]
+            pass_rate = sum(vals) / max(1, len(vals))
+
+            # Simple slope from first/last halves.
+            mid = len(vals) // 2
+            first_avg = sum(vals[:mid]) / max(1, len(vals[:mid]))
+            last_avg = sum(vals[mid:]) / max(1, len(vals[mid:]))
+            slope = last_avg - first_avg
+            cov_slope = (coverage[-1] - coverage[0]) if coverage else 0.0
+
+            regressing = slope < -0.15 or cov_slope < -5.0
+            improving = slope > 0.15 or cov_slope > 5.0
+            status = "stable"
+            if regressing:
+                status = "regressing"
+            elif improving:
+                status = "improving"
+
+            return {
+                "ok": True,
+                "enough_data": True,
+                "window": w,
+                "pass_rate": round(pass_rate, 6),
+                "readiness_slope": round(slope, 6),
+                "coverage_slope": round(cov_slope, 6),
+                "status": status,
+                "regressing": regressing,
+            }
+
+    def bootstrap_readiness_regression_guard(
+        self,
+        sid: str,
+        window: int = 50,
+        auto_snapshot: bool = True,
+    ) -> dict:
+        """Guardrail action when readiness trend regresses."""
+        with self._lock:
+            trend = self.bootstrap_readiness_trend(sid, window=window)
+            if trend.get("error"):
+                return trend
+            if not trend.get("enough_data"):
+                return {"ok": True, "triggered": False, "reason": "insufficient_data", "trend": trend}
+
+            triggered = bool(trend.get("regressing"))
+            actions = []
+            if triggered:
+                actions.append(
+                    {
+                        "action": "bootstrap_update_baseline",
+                        "params": {"window": max(30, int(window)), "percentile": 97.0},
+                    }
+                )
+                actions.append(
+                    {
+                        "action": "bootstrap_mitigation_plan",
+                        "params": {"window": max(20, int(window // 2))},
+                    }
+                )
+                if auto_snapshot:
+                    actions.append(
+                        {
+                            "action": "bootstrap_snapshot",
+                            "params": {"name": "readiness_regression_guard"},
+                        }
+                    )
+
+            return {
+                "ok": True,
+                "triggered": triggered,
+                "trend": trend,
+                "actions": actions,
+            }
+
+    def bootstrap_finalize_report(
+        self,
+        sid: str,
+        trend_window: int = 50,
+        effectiveness_window: int = 50,
+    ) -> dict:
+        """Produce a one-shot final status report for implementation plan closure."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+
+            plan = self.bootstrap_plan_status(sid)
+            if plan.get("error"):
+                return plan
+            gate = self.bootstrap_readiness_gate(sid)
+            if gate.get("error"):
+                return gate
+            trend = self.bootstrap_readiness_trend(sid, window=trend_window)
+            if trend.get("error"):
+                return trend
+            eff = self.bootstrap_mitigation_effectiveness(sid, window=effectiveness_window)
+            if eff.get("error"):
+                return eff
+            summary = self.bootstrap_summary(sid)
+            if summary.get("error"):
+                return summary
+
+            release_ready = bool(gate.get("readiness")) and bool(plan.get("overall", {}).get("coverage", 0.0) >= 100.0)
+            risk_flags = []
+            if trend.get("enough_data") and trend.get("regressing"):
+                risk_flags.append("readiness_regressing")
+            if eff.get("enough_data") and str(eff.get("tier")) == "poor":
+                risk_flags.append("mitigation_effectiveness_poor")
+            if float((summary.get("calibration") or {}).get("ece", 0.0) or 0.0) > 0.2:
+                risk_flags.append("ece_above_recommended")
+
+            stage = "ready" if release_ready and not risk_flags else "needs_attention"
+            return {
+                "ok": True,
+                "stage": stage,
+                "release_ready": release_ready,
+                "risk_flags": risk_flags,
+                "plan": plan,
+                "readiness_gate": gate,
+                "readiness_trend": trend,
+                "mitigation_effectiveness": eff,
+                "bootstrap_summary": summary,
+                "generated_at": datetime.now().isoformat(),
+            }
+
     def _default_bootstrap_policies(self) -> List[dict]:
         """Synthetic analyst policies used for cold-start tournament calibration."""
         return [
