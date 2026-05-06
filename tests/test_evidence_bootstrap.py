@@ -494,6 +494,62 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         self.assertIn("overall", ps)
         self.assertIn("phases", ps)
 
+        rg = self.server._execute_tool(
+            "session",
+            {
+                "action": "bootstrap_readiness_gate",
+                "session_id": self.sid,
+                "min_tournament_rounds": 1,
+                "min_snapshots": 1,
+                "min_outcomes": 1,
+                "max_ece": 1.0,
+                "max_open_disputes": 1000,
+            },
+        )
+        self.assertTrue(rg.get("ok"))
+        self.assertIn("readiness", rg)
+        self.assertIn("gates", rg)
+
+        rr = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_record_readiness", "session_id": self.sid, "tag": "smoke"},
+        )
+        self.assertTrue(rr.get("ok"))
+
+        rh = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_readiness_history", "session_id": self.sid, "limit": 20, "offset": 0},
+        )
+        self.assertTrue(rh.get("ok"))
+        self.assertGreaterEqual(rh.get("count", 0), 1)
+
+        rt = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_readiness_trend", "session_id": self.sid, "window": 2},
+        )
+        self.assertTrue(rt.get("ok"))
+        self.assertIn("enough_data", rt)
+
+        rgd = self.server._execute_tool(
+            "session",
+            {"action": "bootstrap_readiness_regression_guard", "session_id": self.sid, "window": 2, "auto_snapshot": False},
+        )
+        self.assertTrue(rgd.get("ok"))
+        self.assertIn("triggered", rgd)
+
+        fr = self.server._execute_tool(
+            "session",
+            {
+                "action": "bootstrap_finalize_report",
+                "session_id": self.sid,
+                "trend_window": 2,
+                "effectiveness_window": 10,
+            },
+        )
+        self.assertTrue(fr.get("ok"))
+        self.assertIn("stage", fr)
+        self.assertIn("release_ready", fr)
+
 
 if __name__ == "__main__":
     unittest.main()

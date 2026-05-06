@@ -7186,6 +7186,80 @@ class IDAMCPServer:
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
                 return self.session_mgr.bootstrap_plan_status(sid)
+            if action == "bootstrap_readiness_gate":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                min_tournament_rounds = _bounded_int(args.get("min_tournament_rounds", 1000), 1000, min_value=1, max_value=10_000_000)
+                min_snapshots = _bounded_int(args.get("min_snapshots", 10), 10, min_value=1, max_value=100_000)
+                min_outcomes = _bounded_int(args.get("min_outcomes", 200), 200, min_value=1, max_value=10_000_000)
+                max_open_disputes = _bounded_int(args.get("max_open_disputes", 25), 25, min_value=0, max_value=1_000_000)
+                max_ece = args.get("max_ece", 0.2)
+                try:
+                    max_ece = float(max_ece)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "max_ece must be numeric")
+                return self.session_mgr.bootstrap_readiness_gate(
+                    sid,
+                    min_tournament_rounds=min_tournament_rounds,
+                    min_snapshots=min_snapshots,
+                    min_outcomes=min_outcomes,
+                    max_ece=max_ece,
+                    max_open_disputes=max_open_disputes,
+                )
+            if action == "bootstrap_record_readiness":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                tag = str(args.get("tag") or "").strip()
+                return self.session_mgr.bootstrap_record_readiness(sid, tag=tag)
+            if action == "bootstrap_readiness_history":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                limit = _bounded_int(args.get("limit", 100), 100, min_value=1, max_value=10000)
+                offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=1_000_000)
+                return self.session_mgr.bootstrap_readiness_history(sid, limit=limit, offset=offset)
+            if action == "bootstrap_readiness_trend":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 50), 50, min_value=2, max_value=10000)
+                return self.session_mgr.bootstrap_readiness_trend(sid, window=window)
+            if action == "bootstrap_readiness_regression_guard":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 50), 50, min_value=2, max_value=10000)
+                auto_snapshot = _coerce_bool(args.get("auto_snapshot"), True)
+                return self.session_mgr.bootstrap_readiness_regression_guard(
+                    sid,
+                    window=window,
+                    auto_snapshot=auto_snapshot,
+                )
+            if action == "bootstrap_finalize_report":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                trend_window = _bounded_int(args.get("trend_window", 50), 50, min_value=2, max_value=10000)
+                effectiveness_window = _bounded_int(args.get("effectiveness_window", 50), 50, min_value=1, max_value=10000)
+                return self.session_mgr.bootstrap_finalize_report(
+                    sid,
+                    trend_window=trend_window,
+                    effectiveness_window=effectiveness_window,
+                )
             if action == "macro_set":
                 macro_name = self._normalize_macro_name(
                     args.get("name") or args.get("macro")
