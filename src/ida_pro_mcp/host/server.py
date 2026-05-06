@@ -7148,6 +7148,44 @@ class IDAMCPServer:
                 window = _bounded_int(args.get("window", 30), 30, min_value=2, max_value=10000)
                 dry_run = _coerce_bool(args.get("dry_run"), False)
                 return self.session_mgr.bootstrap_autopilot(sid, window=window, dry_run=dry_run)
+            if action == "bootstrap_set_autopilot_policy":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                cooldown_seconds = _bounded_int(args.get("cooldown_seconds", 300), 300, min_value=0, max_value=86400)
+                daily_budget = _bounded_int(args.get("daily_budget", 100), 100, min_value=1, max_value=100000)
+                max_live_actions = _bounded_int(args.get("max_live_actions", 4), 4, min_value=1, max_value=10)
+                rollback_on_regression = _coerce_bool(args.get("rollback_on_regression"), True)
+                return self.session_mgr.bootstrap_set_autopilot_policy(
+                    sid,
+                    cooldown_seconds=cooldown_seconds,
+                    daily_budget=daily_budget,
+                    max_live_actions=max_live_actions,
+                    rollback_on_regression=rollback_on_regression,
+                )
+            if action == "bootstrap_get_autopilot_policy":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.bootstrap_get_autopilot_policy(sid)
+            if action == "bootstrap_rollback_last_reweight":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.bootstrap_rollback_last_reweight(sid)
+            if action == "bootstrap_plan_status":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.bootstrap_plan_status(sid)
             if action == "macro_set":
                 macro_name = self._normalize_macro_name(
                     args.get("name") or args.get("macro")

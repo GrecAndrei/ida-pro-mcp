@@ -1033,6 +1033,113 @@ class SessionManager:
         except Exception as e:
             log_rpc(f"Failed to save skills for {sid}: {e}")
 
+    def _bootstrap_plan_matrix(self) -> Dict[str, List[str]]:
+        return {
+            "phase1_bootstrap_core": [
+                "bootstrap_init",
+                "bootstrap_run_tournament",
+                "bootstrap_compute_blend",
+                "bootstrap_status",
+            ],
+            "phase2_scoring_integration": [
+                "suggest_strategy_blended",
+                "predictor_suggest_next_tool_blended",
+            ],
+            "phase3_outcome_dispute": [
+                "bootstrap_ingest_outcome",
+                "bootstrap_open_dispute",
+                "bootstrap_list_disputes",
+                "bootstrap_resolve_dispute",
+            ],
+            "phase4_observability_drift": [
+                "bootstrap_summary",
+                "bootstrap_summary_detailed",
+                "bootstrap_calibration_report",
+                "bootstrap_snapshot",
+                "bootstrap_list_snapshots",
+                "bootstrap_drift_report",
+                "bootstrap_update_baseline",
+                "bootstrap_evaluate_alerts",
+            ],
+            "phase5_mitigation_loop": [
+                "bootstrap_mitigation_plan",
+                "bootstrap_apply_mitigation",
+                "bootstrap_mitigation_history",
+                "bootstrap_mitigation_effectiveness",
+            ],
+            "phase6_adaptation_safeguards": [
+                "bootstrap_policy_reweight",
+                "bootstrap_policy_reweight_history",
+                "bootstrap_autopilot",
+                "bootstrap_set_autopilot_policy",
+                "bootstrap_get_autopilot_policy",
+                "bootstrap_rollback_last_reweight",
+            ],
+            "phase7_ops_hygiene": [
+                "bootstrap_export_metrics",
+                "bootstrap_prune_data",
+                "bootstrap_simulate_batch",
+            ],
+        }
+
+    def bootstrap_plan_status(self, sid: str) -> dict:
+        """Return machine-readable implementation plan coverage and runtime readiness."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+
+            data = self._load_skills(sid)
+            bootstrap = data.get("bootstrap") or {}
+            matrix = self._bootstrap_plan_matrix()
+
+            implemented_actions = set()
+            # Session manager methods present at runtime.
+            for phase_items in matrix.values():
+                for item in phase_items:
+                    if item in ("suggest_strategy_blended", "predictor_suggest_next_tool_blended"):
+                        implemented_actions.add(item)
+                    elif hasattr(self, item):
+                        implemented_actions.add(item)
+
+            phase_rows = []
+            total_items = 0
+            total_done = 0
+            for phase, items in matrix.items():
+                done = [i for i in items if i in implemented_actions]
+                total_items += len(items)
+                total_done += len(done)
+                phase_rows.append(
+                    {
+                        "phase": phase,
+                        "items": len(items),
+                        "done": len(done),
+                        "coverage": round((len(done) / max(1, len(items))) * 100.0, 2),
+                        "missing": [i for i in items if i not in done],
+                    }
+                )
+
+            runtime = {
+                "bootstrap_initialized": bool(bootstrap),
+                "tournament_runs": int(bootstrap.get("tournament_runs", 0)) if bootstrap else 0,
+                "total_rounds": int(bootstrap.get("total_rounds", 0)) if bootstrap else 0,
+                "snapshot_count": len(bootstrap.get("metric_snapshots") or []) if bootstrap else 0,
+                "dispute_count": len(bootstrap.get("disputes") or []) if bootstrap else 0,
+                "mitigation_history_count": len(bootstrap.get("mitigation_history") or []) if bootstrap else 0,
+                "reweight_history_count": len(bootstrap.get("policy_reweight_history") or []) if bootstrap else 0,
+            }
+
+            return {
+                "ok": True,
+                "overall": {
+                    "items": total_items,
+                    "done": total_done,
+                    "coverage": round((total_done / max(1, total_items)) * 100.0, 2),
+                },
+                "phases": phase_rows,
+                "runtime": runtime,
+            }
+
     def _default_bootstrap_policies(self) -> List[dict]:
         """Synthetic analyst policies used for cold-start tournament calibration."""
         return [
@@ -1965,10 +2072,12 @@ class SessionManager:
             blend = max(0.05, min(0.5, 0.1 + (0.4 * score)))
             updates = []
 
+            prior_weights = {}
             for pid, p in policies.items():
                 old = list(p.get("weights") or [0.25, 0.25, 0.25, 0.25])
                 if len(old) != 4:
                     old = [0.25, 0.25, 0.25, 0.25]
+                prior_weights[pid] = [round(float(x), 6) for x in old]
                 raw = [((1.0 - blend) * old[i]) + (blend * target[i]) for i in range(4)]
 
                 # Per-dimension shift guardrail.
@@ -2007,6 +2116,7 @@ class SessionManager:
                         "tier": tier,
                         "blend": round(blend, 6),
                         "max_shift": round(shift_cap, 6),
+                        "prior_weights": prior_weights,
                         "updates": updates,
                     }
                 )
@@ -2024,6 +2134,92 @@ class SessionManager:
                 "max_shift": round(shift_cap, 6),
                 "updates": updates,
             }
+
+    def bootstrap_set_autopilot_policy(
+        self,
+        sid: str,
+        cooldown_seconds: int = 300,
+        daily_budget: int = 100,
+        max_live_actions: int = 4,
+        rollback_on_regression: bool = True,
+    ) -> dict:
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            data = self._load_skills(sid)
+            bootstrap = data.get("bootstrap") or {}
+            policy = bootstrap.setdefault("autopilot_policy", {})
+            policy.update(
+                {
+                    "cooldown_seconds": max(0, min(int(cooldown_seconds), 86400)),
+                    "daily_budget": max(1, min(int(daily_budget), 100000)),
+                    "max_live_actions": max(1, min(int(max_live_actions), 10)),
+                    "rollback_on_regression": bool(rollback_on_regression),
+                    "updated_at": datetime.now().isoformat(),
+                }
+            )
+            bootstrap["autopilot_policy"] = policy
+            bootstrap["updated_at"] = datetime.now().isoformat()
+            data["bootstrap"] = bootstrap
+            self._save_skills(sid, data)
+            return {"ok": True, "policy": policy}
+
+    def bootstrap_get_autopilot_policy(self, sid: str) -> dict:
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            data = self._load_skills(sid)
+            bootstrap = data.get("bootstrap") or {}
+            policy = bootstrap.get("autopilot_policy") or {
+                "cooldown_seconds": 300,
+                "daily_budget": 100,
+                "max_live_actions": 4,
+                "rollback_on_regression": True,
+            }
+            return {"ok": True, "policy": policy}
+
+    def bootstrap_rollback_last_reweight(self, sid: str) -> dict:
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            data = self._load_skills(sid)
+            bootstrap = data.get("bootstrap") or {}
+            policies = bootstrap.get("policies") or {}
+            hist = bootstrap.get("policy_reweight_history") or []
+            if not hist:
+                return {"ok": True, "rolled_back": False, "message": "No reweight history"}
+            last = hist[-1]
+            prior = dict(last.get("prior_weights") or {})
+            if not prior:
+                return {"ok": True, "rolled_back": False, "message": "No prior weights in last reweight record"}
+
+            restored = 0
+            for pid, w in prior.items():
+                if pid in policies and isinstance(w, list) and len(w) == 4:
+                    s = sum(float(x) for x in w)
+                    if s > 0:
+                        policies[pid]["weights"] = [float(x) / s for x in w]
+                        restored += 1
+            if restored <= 0:
+                return {"ok": True, "rolled_back": False, "message": "No matching policies to restore"}
+
+            bootstrap["policies"] = policies
+            rb = bootstrap.setdefault("rollback_history", [])
+            rb.append(
+                {
+                    "timestamp": datetime.now().isoformat(),
+                    "restored_policies": restored,
+                    "source_reweight_at": last.get("timestamp"),
+                }
+            )
+            bootstrap["rollback_history"] = rb[-2000:]
+            bootstrap["updated_at"] = datetime.now().isoformat()
+            data["bootstrap"] = bootstrap
+            self._save_skills(sid, data)
+            return {"ok": True, "rolled_back": True, "restored_policies": restored}
 
     def bootstrap_policy_reweight_history(self, sid: str, limit: int = 100, offset: int = 0) -> dict:
         with self._lock:
@@ -2057,13 +2253,53 @@ class SessionManager:
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
 
+            data = self._load_skills(sid)
+            bootstrap = data.get("bootstrap") or {}
+            policy = bootstrap.get("autopilot_policy") or {
+                "cooldown_seconds": 300,
+                "daily_budget": 100,
+                "max_live_actions": 4,
+                "rollback_on_regression": True,
+            }
+
+            now = datetime.now()
+            runs = bootstrap.get("autopilot_runs") or []
+            day_key = now.strftime("%Y-%m-%d")
+            day_runs = [r for r in runs if str(r.get("day")) == day_key]
+            if len(day_runs) >= int(policy.get("daily_budget", 100)) and not dry_run:
+                return {
+                    "ok": True,
+                    "dry_run": False,
+                    "blocked": True,
+                    "reason": "daily_budget_exceeded",
+                    "daily_budget": int(policy.get("daily_budget", 100)),
+                }
+
+            last_run = runs[-1] if runs else None
+            if last_run and not dry_run:
+                try:
+                    ts = datetime.fromisoformat(str(last_run.get("timestamp")))
+                    delta = (now - ts).total_seconds()
+                    if delta < int(policy.get("cooldown_seconds", 300)):
+                        return {
+                            "ok": True,
+                            "dry_run": False,
+                            "blocked": True,
+                            "reason": "cooldown_active",
+                            "cooldown_seconds": int(policy.get("cooldown_seconds", 300)),
+                            "remaining_seconds": max(0, int(policy.get("cooldown_seconds", 300) - delta)),
+                        }
+                except Exception:
+                    pass
+
+            pre_eval = self.bootstrap_evaluate_alerts(sid, window=window)
             plan = self.bootstrap_mitigation_plan(sid, window=window)
             if plan.get("error"):
                 return plan
             apply_res = self.bootstrap_apply_mitigation(
                 sid,
                 window=window,
-                max_actions=4,
+                max_actions=int(policy.get("max_live_actions", 4)),
                 dry_run=dry_run,
             )
             if apply_res.get("error"):
@@ -2077,12 +2313,44 @@ class SessionManager:
             if reweight.get("error"):
                 return reweight
 
+            post_eval = self.bootstrap_evaluate_alerts(sid, window=window)
+            rollback = None
+            if not dry_run and bool(policy.get("rollback_on_regression", True)):
+                pre_sev = str((pre_eval or {}).get("severity") or "none")
+                post_sev = str((post_eval or {}).get("severity") or "none")
+                rank = {"none": 0, "low": 1, "medium": 2, "high": 3}
+                if rank.get(post_sev, 0) > rank.get(pre_sev, 0):
+                    rollback = self.bootstrap_rollback_last_reweight(sid)
+
+            if not dry_run:
+                data2 = self._load_skills(sid)
+                bootstrap2 = data2.get("bootstrap") or {}
+                log = bootstrap2.setdefault("autopilot_runs", [])
+                log.append(
+                    {
+                        "timestamp": now.isoformat(),
+                        "day": day_key,
+                        "window": int(window),
+                        "pre_severity": (pre_eval or {}).get("severity"),
+                        "post_severity": (post_eval or {}).get("severity"),
+                        "rollback": rollback,
+                    }
+                )
+                bootstrap2["autopilot_runs"] = log[-5000:]
+                bootstrap2["updated_at"] = datetime.now().isoformat()
+                data2["bootstrap"] = bootstrap2
+                self._save_skills(sid, data2)
+
             return {
                 "ok": True,
                 "dry_run": bool(dry_run),
                 "plan_severity": plan.get("severity"),
                 "mitigation": apply_res,
                 "policy_reweight": reweight,
+                "policy": policy,
+                "pre_eval": pre_eval,
+                "post_eval": post_eval,
+                "rollback": rollback,
             }
 
     def bootstrap_simulate_batch(

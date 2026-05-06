@@ -504,6 +504,80 @@ def benchmark_policy_adaptation(rounds=1500):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def benchmark_autopilot_safeguards(rounds=1000):
+    tmpdir = tempfile.mkdtemp()
+    try:
+        binary = os.path.join(tmpdir, "safe.bin")
+        with open(binary, "wb") as f:
+            f.write(b"\xcc" * 1024)
+        srv = IDAMCPServer()
+        sid = srv._execute_tool("session", {"action": "create", "binary_path": binary})["session"]["session_id"]
+        srv._execute_tool("session", {"action": "bootstrap_init", "session_id": sid, "overwrite": True})
+        srv._execute_tool("session", {"action": "bootstrap_run_tournament", "session_id": sid, "rounds": 1200, "seed": 999})
+        for i in range(20):
+            srv._execute_tool("session", {"action": "bootstrap_simulate_batch", "session_id": sid, "n": 30, "seed": 9000 + i, "positive_rate": 0.52})
+            srv._execute_tool("session", {"action": "bootstrap_snapshot", "session_id": sid, "name": f"s{i}"})
+
+        srv._execute_tool(
+            "session",
+            {
+                "action": "bootstrap_set_autopilot_policy",
+                "session_id": sid,
+                "cooldown_seconds": 0,
+                "daily_budget": 100000,
+                "max_live_actions": 3,
+                "rollback_on_regression": True,
+            },
+        )
+
+        p1 = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_set_autopilot_policy", "session_id": sid, "cooldown_seconds": 0, "daily_budget": 100000, "max_live_actions": 3, "rollback_on_regression": True})
+            p1.append(time.perf_counter() - t0)
+        _summarize("bootstrap_set_autopilot_policy", p1)
+
+        p2 = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_get_autopilot_policy", "session_id": sid})
+            p2.append(time.perf_counter() - t0)
+        _summarize("bootstrap_get_autopilot_policy", p2)
+
+        p3 = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_autopilot", "session_id": sid, "window": 20, "dry_run": False})
+            p3.append(time.perf_counter() - t0)
+        _summarize("bootstrap_autopilot(live,no-cool)", p3)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def benchmark_plan_status(rounds=3000):
+    tmpdir = tempfile.mkdtemp()
+    try:
+        binary = os.path.join(tmpdir, "plan.bin")
+        with open(binary, "wb") as f:
+            f.write(b"\xdd" * 1024)
+        srv = IDAMCPServer()
+        sid = srv._execute_tool("session", {"action": "create", "binary_path": binary})["session"]["session_id"]
+        srv._execute_tool("session", {"action": "bootstrap_init", "session_id": sid, "overwrite": True})
+        srv._execute_tool("session", {"action": "bootstrap_run_tournament", "session_id": sid, "rounds": 1000, "seed": 123})
+        for i in range(10):
+            srv._execute_tool("session", {"action": "bootstrap_simulate_batch", "session_id": sid, "n": 20, "seed": 400 + i, "positive_rate": 0.5})
+            srv._execute_tool("session", {"action": "bootstrap_snapshot", "session_id": sid, "name": f"pl{i}"})
+
+        samples = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            srv._execute_tool("session", {"action": "bootstrap_plan_status", "session_id": sid})
+            samples.append(time.perf_counter() - t0)
+        _summarize("bootstrap_plan_status", samples)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     print("=" * 78)
     print("Evidence Physics Bootstrap Benchmarks")
@@ -523,3 +597,5 @@ if __name__ == "__main__":
     benchmark_mitigation_pipeline()
     benchmark_mitigation_analytics()
     benchmark_policy_adaptation()
+    benchmark_autopilot_safeguards()
+    benchmark_plan_status()
