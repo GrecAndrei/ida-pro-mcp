@@ -6555,6 +6555,599 @@ class IDAMCPServer:
                         MCPError.SESSION_NOT_FOUND, "One or both sessions not found"
                     )
                 return {"ok": True, "session": result.to_dict()}
+            if action == "crystallize_skill":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                name = str(args.get("name") or "").strip()
+                description = str(args.get("description") or "").strip()
+                if not name:
+                    return make_error(MCPError.INVALID_ARGS, "name required")
+                if not description:
+                    return make_error(MCPError.INVALID_ARGS, "description required")
+                steps = args.get("steps")
+                if not isinstance(steps, list) or not steps:
+                    return make_error(MCPError.INVALID_ARGS, "steps must be a non-empty list")
+                tags = args.get("tags")
+                if isinstance(tags, str):
+                    tags = [t.strip() for t in tags.split(",") if t.strip()]
+                if tags is not None and not isinstance(tags, list):
+                    return make_error(MCPError.INVALID_ARGS, "tags must be a list or comma-separated string")
+                memrl_reward = args.get("memrl_reward")
+                if memrl_reward is not None:
+                    try:
+                        memrl_reward = float(memrl_reward)
+                    except (TypeError, ValueError):
+                        return make_error(MCPError.INVALID_ARGS, "memrl_reward must be a number")
+                return self.session_mgr.crystallize_skill(
+                    sid,
+                    name=name,
+                    description=description,
+                    steps=steps,
+                    tags=tags,
+                    memrl_reward=memrl_reward,
+                )
+            if action == "rate_skill":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                skill_id = str(args.get("skill_id") or "").strip()
+                if not skill_id:
+                    return make_error(MCPError.INVALID_ARGS, "skill_id required")
+                reward = args.get("reward")
+                try:
+                    reward_f = float(reward)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "reward must be a number")
+                return self.session_mgr.rate_skill(sid, skill_id=skill_id, reward=reward_f)
+            if action == "list_skills":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                min_q = args.get("min_q", 0.0)
+                try:
+                    min_q = float(min_q)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "min_q must be a number")
+                include_global = _coerce_bool(args.get("global_skills"), True)
+                return self.session_mgr.list_skills(
+                    sid,
+                    min_q=min_q,
+                    global_skills=include_global,
+                )
+            if action == "suggest_strategy":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                context = str(args.get("context") or "")
+                return self.session_mgr.suggest_strategy(sid, context=context)
+            if action == "log_activity":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                tool = str(args.get("tool") or "").strip()
+                tool_action = str(args.get("tool_action") or args.get("activity_action") or args.get("activity") or "").strip()
+                if not tool_action:
+                    tool_action = str(args.get("action_name") or args.get("name") or "").strip()
+                if not tool_action:
+                    tool_action = str(args.get("log_action") or "").strip()
+                if not tool_action:
+                    tool_action = str(args.get("event") or "").strip()
+                # Preferred field name is 'activity_action', but keep compatibility.
+                if not tool:
+                    return make_error(MCPError.INVALID_ARGS, "tool required")
+                if not tool_action:
+                    return make_error(MCPError.INVALID_ARGS, "activity_action required")
+                result = str(args.get("result") or "")
+                return self.session_mgr.log_activity(sid, tool=tool, action=tool_action, result=result)
+            if action == "get_activity_log":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500)
+                return self.session_mgr.get_activity_log(sid, limit=limit)
+            if action == "notebook_append":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                entry = str(args.get("note") or args.get("entry") or "").strip()
+                if not entry:
+                    return make_error(MCPError.INVALID_ARGS, "entry (or note) required")
+                section = str(args.get("section") or "").strip() or None
+                return self.session_mgr.notebook_append(sid, entry=entry, section=section)
+            if action == "notebook_read":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                lines = args.get("lines")
+                lines = str(lines).strip() if lines is not None else None
+                return self.session_mgr.notebook_read(sid, lines=lines)
+            if action == "notebook_section":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                section_name = str(args.get("section") or args.get("name") or "").strip()
+                if not section_name:
+                    return make_error(MCPError.INVALID_ARGS, "section required")
+                return self.session_mgr.notebook_section(sid, section_name=section_name)
+            if action == "track_hypothesis":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                statement = str(args.get("statement") or "").strip()
+                if not statement:
+                    return make_error(MCPError.INVALID_ARGS, "statement required")
+                evidence_for = args.get("evidence_for")
+                if isinstance(evidence_for, str):
+                    evidence_for = [s.strip() for s in evidence_for.split(",") if s.strip()]
+                evidence_against = args.get("evidence_against")
+                if isinstance(evidence_against, str):
+                    evidence_against = [s.strip() for s in evidence_against.split(",") if s.strip()]
+                confidence = args.get("confidence", 0.5)
+                try:
+                    confidence = float(confidence)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "confidence must be a number")
+                return self.session_mgr.track_hypothesis(
+                    sid,
+                    statement=statement,
+                    evidence_for=evidence_for,
+                    evidence_against=evidence_against,
+                    confidence=confidence,
+                )
+            if action == "confirm_hypothesis":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                hid = str(args.get("hypothesis_id") or args.get("id") or "").strip()
+                if not hid:
+                    return make_error(MCPError.INVALID_ARGS, "hypothesis_id required")
+                evidence = args.get("evidence")
+                if isinstance(evidence, str):
+                    evidence = [s.strip() for s in evidence.split(",") if s.strip()]
+                return self.session_mgr.confirm_hypothesis(sid, hid=hid, evidence=evidence)
+            if action == "refute_hypothesis":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                hid = str(args.get("hypothesis_id") or args.get("id") or "").strip()
+                if not hid:
+                    return make_error(MCPError.INVALID_ARGS, "hypothesis_id required")
+                reason = str(args.get("reason") or "").strip()
+                if not reason:
+                    return make_error(MCPError.INVALID_ARGS, "reason required")
+                evidence = args.get("evidence")
+                if isinstance(evidence, str):
+                    evidence = [s.strip() for s in evidence.split(",") if s.strip()]
+                return self.session_mgr.refute_hypothesis(
+                    sid,
+                    hid=hid,
+                    reason=reason,
+                    evidence=evidence,
+                )
+            if action == "list_hypotheses":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                status = str(args.get("status") or "").strip() or None
+                return self.session_mgr.list_hypotheses(sid, status=status)
+            if action == "dashboard":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.dashboard(sid)
+            if action == "get_phase":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.get_phase(sid)
+            if action == "advance_phase":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.advance_phase(sid)
+            if action == "link_session":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                other_sid = _normalize_session_id(args.get("other_session_id") or args.get("other_sid") or args.get("target_session_id"))
+                if not other_sid:
+                    return make_error(MCPError.INVALID_ARGS, "other_session_id required")
+                return self.session_mgr.link_session(sid, other_sid=other_sid)
+            if action == "cross_reference_sessions":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.cross_reference_sessions(sid)
+            if action == "list_snapshots":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.list_snapshots(sid)
+            if action == "bootstrap_init":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                overwrite = _coerce_bool(args.get("overwrite"), False)
+                decay_lambda = args.get("decay_lambda", 0.03)
+                min_bootstrap_weight = args.get("min_bootstrap_weight", 0.1)
+                try:
+                    decay_lambda = float(decay_lambda)
+                    min_bootstrap_weight = float(min_bootstrap_weight)
+                except (TypeError, ValueError):
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "decay_lambda and min_bootstrap_weight must be numeric",
+                    )
+                return self.session_mgr.bootstrap_init(
+                    sid,
+                    overwrite=overwrite,
+                    decay_lambda=decay_lambda,
+                    min_bootstrap_weight=min_bootstrap_weight,
+                )
+            if action == "bootstrap_run_tournament":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                rounds = _bounded_int(args.get("rounds", 200), 200, min_value=1, max_value=50000)
+                seed = _bounded_int(args.get("seed", 1337), 1337, min_value=0, max_value=2_147_483_647)
+                return self.session_mgr.bootstrap_run_tournament(
+                    sid,
+                    rounds=rounds,
+                    seed=seed,
+                )
+            if action == "bootstrap_compute_blend":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                if "session_samples" not in args:
+                    return make_error(MCPError.INVALID_ARGS, "session_samples required")
+                session_samples = _bounded_int(
+                    args.get("session_samples"),
+                    0,
+                    min_value=0,
+                    max_value=100_000_000,
+                )
+                return self.session_mgr.bootstrap_compute_blend(
+                    sid,
+                    session_samples=session_samples,
+                )
+            if action == "bootstrap_status":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.bootstrap_status(sid)
+            if action == "bootstrap_ingest_outcome":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                if "predicted" not in args:
+                    return make_error(MCPError.INVALID_ARGS, "predicted required")
+                if "observed" not in args:
+                    return make_error(MCPError.INVALID_ARGS, "observed required")
+                try:
+                    predicted = float(args.get("predicted"))
+                    observed = int(args.get("observed"))
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "predicted must be float and observed must be int")
+                skill_id = str(args.get("skill_id") or "").strip() or None
+                delay_seconds = _bounded_int(args.get("delay_seconds", 0), 0, min_value=0, max_value=31_536_000)
+                return self.session_mgr.bootstrap_ingest_outcome(
+                    sid,
+                    predicted=predicted,
+                    observed=observed,
+                    skill_id=skill_id,
+                    delay_seconds=delay_seconds,
+                )
+            if action == "bootstrap_open_dispute":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                claim_id = str(args.get("claim_id") or "").strip()
+                reason = str(args.get("reason") or "").strip()
+                if not claim_id:
+                    return make_error(MCPError.INVALID_ARGS, "claim_id required")
+                if not reason:
+                    return make_error(MCPError.INVALID_ARGS, "reason required")
+                if "predicted" not in args:
+                    return make_error(MCPError.INVALID_ARGS, "predicted required")
+                try:
+                    predicted = float(args.get("predicted"))
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "predicted must be float")
+                skill_id = str(args.get("skill_id") or "").strip() or None
+                return self.session_mgr.bootstrap_open_dispute(
+                    sid,
+                    claim_id=claim_id,
+                    predicted=predicted,
+                    reason=reason,
+                    skill_id=skill_id,
+                )
+            if action == "bootstrap_list_disputes":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                status = str(args.get("status") or "").strip() or None
+                return self.session_mgr.bootstrap_list_disputes(sid, status=status)
+            if action == "bootstrap_resolve_dispute":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                dispute_id = str(args.get("dispute_id") or "").strip()
+                if not dispute_id:
+                    return make_error(MCPError.INVALID_ARGS, "dispute_id required")
+                if "observed" not in args:
+                    return make_error(MCPError.INVALID_ARGS, "observed required")
+                try:
+                    observed = int(args.get("observed"))
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "observed must be int")
+                delay_seconds = _bounded_int(args.get("delay_seconds", 0), 0, min_value=0, max_value=31_536_000)
+                return self.session_mgr.bootstrap_resolve_dispute(
+                    sid,
+                    dispute_id=dispute_id,
+                    observed=observed,
+                    delay_seconds=delay_seconds,
+                )
+            if action == "bootstrap_summary":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                return self.session_mgr.bootstrap_summary(sid)
+            if action == "bootstrap_snapshot":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                name = str(args.get("name") or "").strip()
+                return self.session_mgr.bootstrap_snapshot(sid, name=name)
+            if action == "bootstrap_list_snapshots":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                limit = _bounded_int(args.get("limit", 50), 50, min_value=1, max_value=1000)
+                offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=1_000_000)
+                return self.session_mgr.bootstrap_list_snapshots(
+                    sid,
+                    limit=limit,
+                    offset=offset,
+                )
+            if action == "bootstrap_drift_report":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 20), 20, min_value=2, max_value=1000)
+                return self.session_mgr.bootstrap_drift_report(sid, window=window)
+            if action == "bootstrap_simulate_batch":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                n = _bounded_int(args.get("n", 500), 500, min_value=1, max_value=200000)
+                seed = _bounded_int(args.get("seed", 2026), 2026, min_value=0, max_value=2_147_483_647)
+                positive_rate = args.get("positive_rate", 0.5)
+                try:
+                    positive_rate = float(positive_rate)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "positive_rate must be numeric")
+                return self.session_mgr.bootstrap_simulate_batch(
+                    sid,
+                    n=n,
+                    seed=seed,
+                    positive_rate=positive_rate,
+                )
+            if action == "bootstrap_prune_data":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                max_outcomes = _bounded_int(args.get("max_outcomes", 1000), 1000, min_value=10, max_value=200000)
+                max_disputes = _bounded_int(args.get("max_disputes", 500), 500, min_value=10, max_value=50000)
+                max_snapshots = _bounded_int(args.get("max_snapshots", 2000), 2000, min_value=10, max_value=100000)
+                return self.session_mgr.bootstrap_prune_data(
+                    sid,
+                    max_outcomes=max_outcomes,
+                    max_disputes=max_disputes,
+                    max_snapshots=max_snapshots,
+                )
+            if action == "bootstrap_export_metrics":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                status = str(args.get("status") or "all").strip().lower()
+                since = str(args.get("since") or "").strip()
+                until = str(args.get("until") or "").strip()
+                limit = _bounded_int(args.get("limit", 5000), 5000, min_value=1, max_value=200000)
+                return self.session_mgr.bootstrap_export_metrics(
+                    sid,
+                    status=status,
+                    since=since,
+                    until=until,
+                    limit=limit,
+                )
+            if action == "bootstrap_summary_detailed":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                top_policies = _bounded_int(args.get("top_policies", 10), 10, min_value=1, max_value=50)
+                return self.session_mgr.bootstrap_summary_detailed(sid, top_policies=top_policies)
+            if action == "bootstrap_calibration_report":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                min_bin_n = _bounded_int(args.get("min_bin_n", 20), 20, min_value=1, max_value=1000000)
+                return self.session_mgr.bootstrap_calibration_report(sid, min_bin_n=min_bin_n)
+            if action == "bootstrap_update_baseline":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 50), 50, min_value=5, max_value=10000)
+                percentile = args.get("percentile", 95.0)
+                try:
+                    percentile = float(percentile)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "percentile must be numeric")
+                return self.session_mgr.bootstrap_update_baseline(
+                    sid,
+                    window=window,
+                    percentile=percentile,
+                )
+            if action == "bootstrap_evaluate_alerts":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 20), 20, min_value=2, max_value=10000)
+                return self.session_mgr.bootstrap_evaluate_alerts(sid, window=window)
+            if action == "bootstrap_mitigation_plan":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 20), 20, min_value=2, max_value=10000)
+                return self.session_mgr.bootstrap_mitigation_plan(sid, window=window)
+            if action == "bootstrap_apply_mitigation":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 20), 20, min_value=2, max_value=10000)
+                max_actions = _bounded_int(args.get("max_actions", 4), 4, min_value=1, max_value=10)
+                dry_run = _coerce_bool(args.get("dry_run"), False)
+                return self.session_mgr.bootstrap_apply_mitigation(
+                    sid,
+                    window=window,
+                    max_actions=max_actions,
+                    dry_run=dry_run,
+                )
+            if action == "bootstrap_mitigation_history":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                limit = _bounded_int(args.get("limit", 100), 100, min_value=1, max_value=5000)
+                offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=1_000_000)
+                return self.session_mgr.bootstrap_mitigation_history(sid, limit=limit, offset=offset)
+            if action == "bootstrap_mitigation_effectiveness":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 50), 50, min_value=1, max_value=10000)
+                return self.session_mgr.bootstrap_mitigation_effectiveness(sid, window=window)
+            if action == "bootstrap_policy_reweight":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 50), 50, min_value=1, max_value=10000)
+                max_shift = args.get("max_shift", 0.08)
+                try:
+                    max_shift = float(max_shift)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "max_shift must be numeric")
+                dry_run = _coerce_bool(args.get("dry_run"), False)
+                return self.session_mgr.bootstrap_policy_reweight(
+                    sid,
+                    window=window,
+                    max_shift=max_shift,
+                    dry_run=dry_run,
+                )
+            if action == "bootstrap_policy_reweight_history":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                limit = _bounded_int(args.get("limit", 100), 100, min_value=1, max_value=5000)
+                offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=1_000_000)
+                return self.session_mgr.bootstrap_policy_reweight_history(sid, limit=limit, offset=offset)
+            if action == "bootstrap_autopilot":
+                sid, sid_err = _sid_arg()
+                if sid_err:
+                    return sid_err
+                if not sid:
+                    return make_error(MCPError.INVALID_ARGS, "session_id required")
+                window = _bounded_int(args.get("window", 30), 30, min_value=2, max_value=10000)
+                dry_run = _coerce_bool(args.get("dry_run"), False)
+                return self.session_mgr.bootstrap_autopilot(sid, window=window, dry_run=dry_run)
             if action == "macro_set":
                 macro_name = self._normalize_macro_name(
                     args.get("name") or args.get("macro")
@@ -7014,22 +7607,36 @@ class IDAMCPServer:
             seq_suggestions = self._predict_next_tool_from_activity(log, limit=limit)
             strategy = self.session_mgr.suggest_strategy(str(sid), context=context)
             strategy_rows = []
+            strategy_confidence = 0.5
+            bootstrap_prior = 0.5
             if isinstance(strategy, dict) and not strategy.get("error"):
+                bootstrap_prior = float(strategy.get("bootstrap_prior", 0.5))
                 for s in (strategy.get("suggestions") or [])[:limit]:
+                    score = float(s.get("score", s.get("q_value", 0.0)))
+                    blended = float(s.get("blended_score", score))
+                    strategy_confidence = max(strategy_confidence, blended)
                     strategy_rows.append(
                         {
                             "skill_id": s.get("skill_id"),
-                            "score": s.get("score", s.get("q_value", 0.0)),
+                            "score": score,
+                            "blended_score": blended,
+                            "blend_weights": s.get("blend_weights", {}),
+                            "bootstrap_prior": s.get("bootstrap_prior", bootstrap_prior),
                             "source": s.get("source", "local"),
                             "tags": s.get("tags", []),
                         }
                     )
+            for row in seq_suggestions:
+                base = float(row.get("score", 0.0))
+                row["blended_confidence"] = round((0.7 * base) + (0.3 * bootstrap_prior), 4)
             return {
                 "ok": True,
                 "session_id": sid,
                 "model": "markov_plus_qvalue",
                 "suggestions": seq_suggestions,
                 "strategy_suggestions": strategy_rows,
+                "strategy_confidence": round(strategy_confidence, 4),
+                "bootstrap_prior": round(bootstrap_prior, 4),
                 "activity_window": len(log),
                 "context": context,
             }
