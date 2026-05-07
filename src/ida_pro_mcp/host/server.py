@@ -7034,9 +7034,9 @@ class IDAMCPServer:
                     return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
-                max_outcomes = _bounded_int(args.get("max_outcomes", 1000), 1000, min_value=10, max_value=200000)
-                max_disputes = _bounded_int(args.get("max_disputes", 500), 500, min_value=10, max_value=50000)
-                max_snapshots = _bounded_int(args.get("max_snapshots", 2000), 2000, min_value=10, max_value=100000)
+                max_outcomes = _bounded_int(args.get("max_outcomes", 1000), 1000, min_value=1, max_value=200000)
+                max_disputes = _bounded_int(args.get("max_disputes", 500), 500, min_value=1, max_value=50000)
+                max_snapshots = _bounded_int(args.get("max_snapshots", 2000), 2000, min_value=1, max_value=100000)
                 return self.session_mgr.bootstrap_prune_data(
                     sid,
                     max_outcomes=max_outcomes,
