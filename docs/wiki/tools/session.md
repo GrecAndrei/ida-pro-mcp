@@ -164,6 +164,10 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 
 ## Notes
 - `create` requires `binary_path` and rejects `idb_path`/`use_existing`.
+- Preferred architecture preload input is `architecture={processor, bitness, endian, loader, loader_options}` on `create`.
+- If architecture/loader preload options are provided on `create`, the server creates a fresh session instead of silently reusing an existing IDB for the same binary.
+- Avoid mixing conflicting values between top-level (`processor`, `bitness`, etc), `analysis_options`, and `architecture`; conflicts now return `INVALID_ARGS`.
+- Practical example for non-x86 firmware: `session(action='create', binary_path='...', architecture={'processor':'arm','bitness':32,'endian':'little'})`.
 - High-noise action aliases are normalized (examples: `metrics` -> `stats`, `new` -> `create`, `clone` -> `duplicate`).
 - High-noise argument aliases are normalized (examples: `id` -> `session_id`, `binary` -> `binary_path`, `label` -> `tag`, `save_macro` -> `macro_set` action alias route).
 - Noisy wrapper payloads such as `[ABCD1234]` for `session_id` are tolerated where unambiguous.
