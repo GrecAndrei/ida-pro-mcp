@@ -41,6 +41,42 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `macro_delete`
 - `macro_run`
 - `recent_workset`
+- `bootstrap_init`
+- `bootstrap_run_tournament`
+- `bootstrap_compute_blend`
+- `bootstrap_status`
+- `bootstrap_ingest_outcome`
+- `bootstrap_open_dispute`
+- `bootstrap_list_disputes`
+- `bootstrap_resolve_dispute`
+- `bootstrap_summary`
+- `bootstrap_snapshot`
+- `bootstrap_list_snapshots`
+- `bootstrap_drift_report`
+- `bootstrap_simulate_batch`
+- `bootstrap_prune_data`
+- `bootstrap_export_metrics`
+- `bootstrap_summary_detailed`
+- `bootstrap_calibration_report`
+- `bootstrap_update_baseline`
+- `bootstrap_evaluate_alerts`
+- `bootstrap_mitigation_plan`
+- `bootstrap_apply_mitigation`
+- `bootstrap_mitigation_history`
+- `bootstrap_mitigation_effectiveness`
+- `bootstrap_policy_reweight`
+- `bootstrap_policy_reweight_history`
+- `bootstrap_autopilot`
+- `bootstrap_set_autopilot_policy`
+- `bootstrap_get_autopilot_policy`
+- `bootstrap_rollback_last_reweight`
+- `bootstrap_plan_status`
+- `bootstrap_readiness_gate`
+- `bootstrap_record_readiness`
+- `bootstrap_readiness_history`
+- `bootstrap_readiness_trend`
+- `bootstrap_readiness_regression_guard`
+- `bootstrap_finalize_report`
 
 ## Parameters
 - `_compact`: `boolean` — Shortcut for compact/full mode toggle.
@@ -54,7 +90,7 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
 - `_response_omit`: `array | string` — Optional top-level field omission list.
 - `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `42`
+- `action`: `string`; allowed_count: `79`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` — Advanced analysis options payload

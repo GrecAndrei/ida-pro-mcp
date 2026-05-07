@@ -291,6 +291,16 @@ class TestCalcTool:
         result = mcp_client.call_tool("calc", action="align", addr="0x401003", value="0x10")
         assert isinstance(result, dict)
 
+    def test_calc_convert_suffix_value(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="convert", value="4k")
+        assert isinstance(result, dict)
+
+    def test_calc_align_nearest(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="align", value="0x1003", size=0x10)
+        assert isinstance(result, dict)
+        if result.get("ok"):
+            assert "nearest" in result
+
 
 class TestAnalysisTool:
     def test_analysis_no_session(self, mcp_client):
