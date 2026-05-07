@@ -68,6 +68,11 @@ Analysis configuration and reanalysis. Actions: get_options, set_options, set_pr
 
 ## Notes
 - `idb` is optional for most tools and resolves from active session when omitted.
+- For architecture-sensitive binaries, set architecture at `session.create` time (pre-load) rather than relying on post-load `analysis.set_architecture`.
+- Recommended flow:
+  1) `session(action='create', binary_path='...', architecture={'processor':'arm','bitness':32,'endian':'little'})`
+  2) `analysis(action='get_options')` to verify effective processor/bitness/endian.
+  3) optionally `analysis(action='reanalyze')` with range if you changed options post-load.
 
 ---
 Doc status: Auto-generated from live tool metadata.

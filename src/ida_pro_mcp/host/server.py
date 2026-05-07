@@ -6008,9 +6008,43 @@ class IDAMCPServer:
                     )
 
                 analysis_options = {}
-                if isinstance(args.get("analysis_options"), dict):
-                    analysis_options.update(args.get("analysis_options") or {})
-                for key in (
+                raw_analysis_options = args.get("analysis_options")
+                if raw_analysis_options is not None and not isinstance(raw_analysis_options, dict):
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "analysis_options must be an object",
+                        details={"analysis_options_type": type(raw_analysis_options).__name__},
+                    )
+                if isinstance(raw_analysis_options, dict):
+                    analysis_options.update(raw_analysis_options or {})
+
+                architecture = args.get("architecture")
+                if architecture is not None and not isinstance(architecture, dict):
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "architecture must be an object",
+                        details={"architecture_type": type(architecture).__name__},
+                    )
+                if isinstance(architecture, dict):
+                    arch_aliases = {
+                        "arch": "processor",
+                        "proc": "processor",
+                        "architecture": "processor",
+                        "bits": "bitness",
+                        "endianness": "endian",
+                    }
+                    for k, v in architecture.items():
+                        canon = arch_aliases.get(str(k), str(k))
+                        if canon in ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value"):
+                            if canon in analysis_options and analysis_options[canon] != v:
+                                return make_error(
+                                    MCPError.INVALID_ARGS,
+                                    f"Conflicting architecture value for '{canon}'",
+                                    details={"analysis_options": analysis_options.get(canon), "architecture": v},
+                                )
+                            analysis_options[canon] = v
+
+                merged_keys = (
                     "processor",
                     "flags",
                     "loader",
@@ -6031,9 +6065,24 @@ class IDAMCPServer:
                     "start_ea",
                     "min_ea",
                     "max_ea",
-                ):
+                )
+                for key in merged_keys:
                     if key in args:
-                        analysis_options[key] = args.get(key)
+                        top_val = args.get(key)
+                        if key in analysis_options and analysis_options[key] != top_val:
+                            return make_error(
+                                MCPError.INVALID_ARGS,
+                                f"Conflicting value for '{key}' between top-level and analysis_options/architecture",
+                                details={"top_level": top_val, "analysis_options": analysis_options.get(key)},
+                            )
+                        analysis_options[key] = top_val
+
+                # Canonicalize convenience aliases.
+                if "loader_options" in analysis_options and "value" not in analysis_options:
+                    analysis_options["value"] = analysis_options.get("loader_options")
+
+                preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
+                has_preload_request = any(k in analysis_options and analysis_options.get(k) is not None for k in preload_keys)
 
                 ida_args = None
                 if "ida_args" in args:
@@ -6068,7 +6117,7 @@ class IDAMCPServer:
                 existing = None
                 if binary_path:
                     existing = self.session_mgr.find_session_by_path(binary_path)
-                if existing and not force_new:
+                if existing and not force_new and not has_preload_request:
                     # Update the REAL session through the manager, not the shallow copy
                     update_kwargs = {"analysis_applied": False}
                     if analysis_options:
@@ -6092,6 +6141,13 @@ class IDAMCPServer:
                         "note": "Reusing existing session. Use force_new=true to create a new session.",
                     }
 
+                create_note = None
+                if existing and not force_new and has_preload_request:
+                    create_note = (
+                        "Created a fresh session because architecture/loader options were provided; "
+                        "reusing an old IDB can preserve previous metapc/default analysis state."
+                    )
+
                 if not analysis_options:
                     analysis_options = None
 
@@ -6108,7 +6164,10 @@ class IDAMCPServer:
                     tags=tags,
                     notes=notes,
                 )
-                return {"ok": True, "session": self.current_session.to_dict()}
+                out = {"ok": True, "session": self.current_session.to_dict()}
+                if create_note:
+                    out["note"] = create_note
+                return out
             if action == "discover":
                 self.session_mgr._load_orphaned_idbs()
                 q = args.get("query", "")
