@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import sqlite3
 from typing import Dict, List, Optional, Set, Tuple
-import numpy as np
 
 try:
     from ._common import *
@@ -264,10 +263,14 @@ class BridgeRAGSearch:
         def _pit(scores: List[float]) -> List[float]:
             if not scores:
                 return []
-            sorted_idx = np.argsort(scores)
-            ranks = np.empty_like(sorted_idx, dtype=float)
-            ranks[sorted_idx] = np.linspace(0.0, 1.0, len(scores))
-            return ranks.tolist()
+            sorted_idx = sorted(range(len(scores)), key=lambda i: scores[i])
+            ranks = [0.0] * len(scores)
+            if len(scores) == 1:
+                ranks[sorted_idx[0]] = 1.0
+                return ranks
+            for rank, idx in enumerate(sorted_idx):
+                ranks[idx] = rank / float(len(scores) - 1)
+            return ranks
         
         pit_judge = _pit(judge_scores)
         pit_bridge = _pit(bridge_scores)

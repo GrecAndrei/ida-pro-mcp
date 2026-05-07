@@ -2676,9 +2676,9 @@ class SessionManager:
                 "disputes": len(bootstrap.get("disputes") or []),
                 "metric_snapshots": len(bootstrap.get("metric_snapshots") or []),
             }
-            max_outcomes = max(10, min(int(max_outcomes), 200000))
-            max_disputes = max(10, min(int(max_disputes), 50000))
-            max_snapshots = max(10, min(int(max_snapshots), 100000))
+            max_outcomes = max(1, min(int(max_outcomes), 200000))
+            max_disputes = max(1, min(int(max_disputes), 50000))
+            max_snapshots = max(1, min(int(max_snapshots), 100000))
             bootstrap["outcomes"] = (bootstrap.get("outcomes") or [])[-max_outcomes:]
             bootstrap["disputes"] = (bootstrap.get("disputes") or [])[-max_disputes:]
             bootstrap["metric_snapshots"] = (bootstrap.get("metric_snapshots") or [])[-max_snapshots:]
