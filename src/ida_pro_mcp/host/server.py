@@ -2308,6 +2308,7 @@ class IDAMCPServer:
             action_name = str(opts.get("action") or "")
         # Apply universal output filters first
         payload = self._apply_output_filters(payload, opts)
+        payload = self._json_safe_value(payload)
         full_mode = opts.get("mode") == "full"
         if full_mode:
             if isinstance(payload, dict):
@@ -2733,7 +2734,32 @@ class IDAMCPServer:
                 pass
         return compacted
 
+    def _json_safe_value(self, value: Any) -> Any:
+        """Recursively convert non-JSON-safe values to safe representations."""
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except Exception:
+                return {"_bytes_hex": value.hex()}
+        if isinstance(value, bytearray):
+            return self._json_safe_value(bytes(value))
+        if isinstance(value, dict):
+            out = {}
+            for k, v in value.items():
+                try:
+                    key = k if isinstance(k, str) else str(k)
+                except Exception:
+                    key = "<non_string_key>"
+                out[key] = self._json_safe_value(v)
+            return out
+        if isinstance(value, (list, tuple)):
+            return [self._json_safe_value(v) for v in value]
+        if isinstance(value, set):
+            return [self._json_safe_value(v) for v in value]
+        return value
+
     def _serialize_payload(self, payload: Any, opts: dict) -> str:
+        payload = self._json_safe_value(payload)
         if opts.get("mode") == "full":
             return json.dumps(payload, ensure_ascii=False, indent=2)
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
