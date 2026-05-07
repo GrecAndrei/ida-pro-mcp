@@ -38,6 +38,9 @@ _CALC_ACTION_ALIASES = {
 }
 
 
+_INT_SUFFIX_RE = re.compile(r"^\s*([+-]?(?:0x[0-9a-fA-F_]+|\d[\d_]*))(?:\s*([kKmMgGtT]))?\s*$")
+
+
 def _semantic_tokens(text: str) -> list[str]:
     """Extract lowercase alphanumeric semantic tokens (length >= 2)."""
     return semantic_tokens(text)
@@ -185,6 +188,19 @@ def calc(
             if isinstance(val, int):
                 return val
             if isinstance(val, str):
+                m = _INT_SUFFIX_RE.match(val)
+                if m:
+                    base_txt = m.group(1).replace("_", "")
+                    suffix = (m.group(2) or "").lower()
+                    n = int(base_txt, 0)
+                    scale = {
+                        "": 1,
+                        "k": 1024,
+                        "m": 1024 ** 2,
+                        "g": 1024 ** 3,
+                        "t": 1024 ** 4,
+                    }[suffix]
+                    return n * scale
                 try:
                     return int(val, 0)
                 except ValueError:
@@ -200,6 +216,19 @@ def calc(
             if isinstance(val, int):
                 return val
             if isinstance(val, str):
+                m = _INT_SUFFIX_RE.match(val)
+                if m:
+                    base_txt = m.group(1).replace("_", "")
+                    suffix = (m.group(2) or "").lower()
+                    n = int(base_txt, 0)
+                    scale = {
+                        "": 1,
+                        "k": 1024,
+                        "m": 1024 ** 2,
+                        "g": 1024 ** 3,
+                        "t": 1024 ** 4,
+                    }[suffix]
+                    return n * scale
                 try:
                     return int(val, 0)
                 except ValueError:
@@ -405,6 +434,8 @@ def calc(
                 "bin": bin(v),
                 "oct": oct(v),
                 "ascii": ascii_val,
+                "bytes_le_64": " ".join(f"{b:02x}" for b in struct.pack("<Q", v & 0xFFFFFFFFFFFFFFFF)),
+                "bytes_be_64": " ".join(f"{b:02x}" for b in struct.pack(">Q", v & 0xFFFFFFFFFFFFFFFF)),
                 "bitmask": f"{v:064b}" if v >= 0 else "n/a",
                 "signed32": ((v + (1 << 31)) % (1 << 32)) - (1 << 31),
                 "unsigned32": v & 0xFFFFFFFF,
@@ -417,6 +448,13 @@ def calc(
             source = addr if addr is not None else value
             if source is None and nl_query:
                 source = nl_query
+            if isinstance(source, str) and source:
+                sl = source.lower()
+                if any(k in sl for k in ("foa", "file", "offset")):
+                    reverse = True
+                m = re.search(r"(0x[0-9a-fA-F_]+|\d[\d_]*)", source)
+                if m:
+                    source = m.group(1)
             if source is None:
                 return make_error(MCPError.INVALID_ARGS, "addr or value required")
             try:
@@ -475,8 +513,19 @@ def calc(
                     steps = []
                     cur = ea
                     value_out = None
+                    seen = set()
                     for depth in range(1, deref_depth + 1):
+                        if cur in seen:
+                            steps.append({"depth": depth, "addr": hex(cur), "terminated": "loop_detected"})
+                            break
+                        seen.add(cur)
                         value_out = read_typed(cur, val_type, size)
+                        if not isinstance(value_out, int):
+                            steps.append({"depth": depth, "addr": hex(cur), "terminated": "non_pointer_value"})
+                            break
+                        if value_out in (0, idaapi.BADADDR):
+                            steps.append({"depth": depth, "addr": hex(cur), "value": value_out, "terminated": "null_or_badaddr"})
+                            break
                         nxt = value_out
                         steps.append({"depth": depth, "addr": hex(cur), "value": value_out, "value_hex": hex(value_out)})
                         cur = nxt
@@ -515,6 +564,11 @@ def calc(
                 return make_error(MCPError.INVALID_ARGS, str(e))
             try:
                 offs = normalize_list_input(offsets)
+                if len(offs) == 1 and isinstance(offs[0], str):
+                    compact = offs[0].replace("->", ",").replace(";", ",")
+                    parts = [p.strip() for p in compact.split(",") if p.strip()]
+                    if len(parts) > 1:
+                        offs = parts
                 if not offs:
                     return make_error(MCPError.INVALID_ARGS, "offsets required")
                 offs_int = [resolve_int(o) for o in offs]
@@ -525,6 +579,9 @@ def calc(
             try:
                 for off in offs_int:
                     pval = read_ptr(current, size)
+                    if pval in (0, idaapi.BADADDR):
+                        steps.append({"ptr": hex(pval), "offset": off, "terminated": "null_or_badaddr"})
+                        break
                     next_addr = pval + off
                     steps.append({"ptr": hex(pval), "offset": off, "addr": hex(next_addr)})
                     current = next_addr
@@ -533,6 +590,13 @@ def calc(
             return _finalize({"ok": True, "base": hex(ea), "offsets": offs_int, "steps": steps, "final": hex(current)})
 
         elif action == "align":
+            if size is None:
+                # Backward-compatible fallback: if caller passed value and addr/expr, treat value as alignment.
+                if value is not None and (addr is not None or expr is not None):
+                    try:
+                        size = resolve_int(value)
+                    except ValueError:
+                        pass
             if size is None:
                 return make_error(MCPError.INVALID_ARGS, "size (alignment) required")
             try:
@@ -559,14 +623,17 @@ def calc(
             else:
                 aligned_down = (align_val // alignment) * alignment
             aligned_up = aligned_down if align_val == aligned_down else aligned_down + alignment
+            nearest = aligned_down if abs(align_val - aligned_down) <= abs(aligned_up - align_val) else aligned_up
             return _finalize({
                 "ok": True,
                 "value": align_val,
                 "alignment": alignment,
                 "aligned_down": aligned_down,
                 "aligned_up": aligned_up,
+                "nearest": nearest,
                 "aligned_down_hex": hex(aligned_down),
                 "aligned_up_hex": hex(aligned_up),
+                "nearest_hex": hex(nearest),
             })
 
         else:
