@@ -437,6 +437,9 @@ def relocate_self(dest_dir: Path):
             ".agents",
             "scripts",
             "ida_mcp_stdio.py",
+            "ida_mcp_http.py",
+            "install.py",
+            "client_configs.json",
             "pyproject.toml",
         ]
         for item in core_items:
