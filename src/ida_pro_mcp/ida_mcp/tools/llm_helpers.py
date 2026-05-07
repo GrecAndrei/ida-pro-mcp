@@ -184,6 +184,8 @@ def _save_llm_feature_state(state: dict) -> None:
 
 def _infer_question_type(query: str) -> str:
     q = (query or "").lower()
+    if any(k in q for k in ("firmware", "raw binary", "blob", "rom", "flat binary", "binwalk", "uimage", "bootloader")):
+        return "raw_firmware_retyping"
     if any(k in q for k in ("vuln", "overflow", "exploit", "dangerous", "sink")):
         return "vulnerability_triage"
     if any(k in q for k in ("decrypt", "decode", "crypto", "algorithm")):
@@ -209,6 +211,19 @@ def _build_tool_plan(query: str, addr: Optional[str]) -> list[dict]:
             [
                 {"tool": "code", "action": "decompile", "addr": addr},
                 {"tool": "code", "action": "disasm", "addr": addr},
+            ]
+        )
+    if qtype == "raw_firmware_retyping":
+        base.extend(
+            [
+                {"tool": "firmware_view", "action": "scan_region"},
+                {"tool": "firmware_view", "action": "smart_carve", "apply": False, "limit": 80},
+                {"tool": "firmware_view", "action": "table_candidates", "limit": 50},
+                {"tool": "data_ops", "action": "cycle_data", "addr": addr or "0x0"},
+                {"tool": "data_ops", "action": "set_repr", "addr": addr or "0x0", "repr": "offset"},
+                {"tool": "data_ops", "action": "make_ptr", "addr": addr or "0x0"},
+                {"tool": "search", "action": "semantic", "pattern": query or "entry init parser", "limit": 80},
+                {"tool": "blackboard", "action": "list", "category": "firmware_view", "limit": 30},
             ]
         )
     if qtype == "vulnerability_triage":
@@ -315,7 +330,9 @@ def _handle_feature_expansion_action(
         return {"ok": True, "feature": feature, "plan": _build_tool_plan(q, addr), "fallback": [{"tool": "search", "action": "find", "pattern": q or "main"}]}
     if action == "adaptive_query_planner":
         plan = _build_tool_plan(q, addr)
-        if qtype == "vulnerability_triage":
+        if qtype == "raw_firmware_retyping":
+            order = ["idb.summary", "firmware_view.scan_region", "firmware_view.smart_carve", "firmware_view.table_candidates", "data_ops.set_repr", "search.semantic", "blackboard.list"]
+        elif qtype == "vulnerability_triage":
             order = ["search.vulnerable", "vuln_scan.dangerous_flow", "code.decompile", "code.decomp_dataflow"]
         elif qtype == "threat_hunting":
             order = ["string_ops.suspicious", "imports_deep.summary", "trace_analysis.anti_analysis_detect", "search.find"]
@@ -499,11 +516,25 @@ def _handle_feature_expansion_action(
             return {"ok": True, "feature": feature, "playbook": playbook_name, "steps": steps}
         if action == "next_best_action_recommender":
             plan = _build_tool_plan(q, addr)
+            if qtype == "raw_firmware_retyping":
+                return {
+                    "ok": True,
+                    "feature": feature,
+                    "next_best_actions": plan[: max(1, min(limit, 6))],
+                    "why": "Raw firmware usually needs iterative data/code reinterpretation and representation shaping before deeper semantic analysis.",
+                }
             return {"ok": True, "feature": feature, "next_best_actions": plan[: max(1, min(limit, 5))]}
         if action == "analysis_dead_end_detector":
             h = (history or "").lower()
             repeated = len(re.findall(r"search", h))
-            return {"ok": True, "feature": feature, "dead_end_risk": "high" if repeated >= 4 else "low", "pivot_suggestions": ["Switch from broad search to caller/callee graph.", "Run capability matrix and focus on top category."]}
+            pivots = ["Switch from broad search to caller/callee graph.", "Run capability matrix and focus on top category."]
+            if qtype == "raw_firmware_retyping":
+                pivots = [
+                    "Cycle current address type (data_ops.cycle_data) before repeating broad search.",
+                    "Switch operand view to offset/hex (data_ops.set_repr) and retry semantic search.",
+                    "Persist local conversion decisions into blackboard category 'firmware_view'.",
+                ]
+            return {"ok": True, "feature": feature, "dead_end_risk": "high" if repeated >= 4 else "low", "pivot_suggestions": pivots}
         if action == "workset_intelligence_capsules":
             capsule = {
                 "query": q,

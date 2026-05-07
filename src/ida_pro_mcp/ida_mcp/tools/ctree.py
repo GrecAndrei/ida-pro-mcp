@@ -239,6 +239,122 @@ def _ctree_build_dominance_map(cfunc, max_nodes=600):
     }
 
 
+def _ctree_build_logic_graph(cfunc, max_nodes=1200):
+    """Build token-efficient logic graph with typed edges for RE workflows."""
+    nodes = []
+    edges = []
+    edge_seen = set()
+    node_ids = set()
+
+    def _add_node(ea, kind, text, depth):
+        nid = f"n_{len(nodes)}"
+        node = {
+            "id": nid,
+            "ea": hex(int(ea)) if ea is not None and ea != idaapi.BADADDR else None,
+            "kind": kind,
+            "text": (text or "").strip(),
+            "depth": int(depth),
+        }
+        nodes.append(node)
+        node_ids.add(nid)
+        return nid
+
+    def _add_edge(src, dst, rel):
+        if not src or not dst or src == dst:
+            return
+        key = (src, dst, rel)
+        if key in edge_seen:
+            return
+        edge_seen.add(key)
+        edges.append({"from": src, "to": dst, "relation": rel})
+
+    class LogicGraphVisitor(ida_hexrays.ctree_visitor_t):
+        def __init__(self):
+            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            self.count = 0
+            self.control_stack = []
+
+        def _control_parent(self):
+            return self.control_stack[-1] if self.control_stack else None
+
+        def visit_insn(self, i):
+            if self.count >= max_nodes:
+                return 1
+            op = i.op
+            depth = int(getattr(self, "level", 0))
+
+            if op == ida_hexrays.cit_if:
+                cond = "complex_expression"
+                try:
+                    if i.cif.expr:
+                        cond = ida_lines.tag_remove(i.cif.expr.print1(None))
+                except Exception:
+                    pass
+                nid = _add_node(getattr(i, "ea", idaapi.BADADDR), "if", cond, depth)
+                _add_edge(self._control_parent(), nid, "controls")
+                self.control_stack.append(nid)
+                self.count += 1
+                return 0
+
+            if op in [ida_hexrays.cit_while, ida_hexrays.cit_for, ida_hexrays.cit_do]:
+                cond = "loop"
+                try:
+                    if op == ida_hexrays.cit_while and i.cwhile.expr:
+                        cond = ida_lines.tag_remove(i.cwhile.expr.print1(None))
+                    elif op == ida_hexrays.cit_for and i.cfor.cond:
+                        cond = ida_lines.tag_remove(i.cfor.cond.print1(None))
+                    elif op == ida_hexrays.cit_do and i.cdo.expr:
+                        cond = ida_lines.tag_remove(i.cdo.expr.print1(None))
+                except Exception:
+                    pass
+                nid = _add_node(getattr(i, "ea", idaapi.BADADDR), "loop", cond, depth)
+                _add_edge(self._control_parent(), nid, "controls")
+                self.control_stack.append(nid)
+                self.count += 1
+                return 0
+
+            if op == ida_hexrays.cit_return:
+                nid = _add_node(getattr(i, "ea", idaapi.BADADDR), "return", "return", depth)
+                _add_edge(self._control_parent(), nid, "exits")
+                self.count += 1
+                return 0
+            return 0
+
+        def leave_insn(self, i):
+            if i.op in [ida_hexrays.cit_if, ida_hexrays.cit_while, ida_hexrays.cit_for, ida_hexrays.cit_do]:
+                if self.control_stack:
+                    self.control_stack.pop()
+            return 0
+
+        def visit_expr(self, e):
+            if self.count >= max_nodes:
+                return 1
+            if e.op == ida_hexrays.cot_call:
+                depth = int(getattr(self, "level", 0))
+                txt = "call"
+                try:
+                    txt = ida_lines.tag_remove(e.print1(None))
+                except Exception:
+                    pass
+                nid = _add_node(getattr(e, "ea", idaapi.BADADDR), "call", txt, depth)
+                _add_edge(self._control_parent(), nid, "contains_call")
+                self.count += 1
+            return 0
+
+    try:
+        v = LogicGraphVisitor()
+        v.apply_to(cfunc.body, None)
+    except Exception:
+        pass
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
+
+
 @tool
 @idaread
 def ctree(
@@ -283,37 +399,31 @@ def ctree(
             return filter_matcher((text or ""))
 
         if action == "get_logic_flow":
-            flow = []
-            class LogicVisitor(ida_hexrays.ctree_visitor_t):
-                def __init__(self):
-                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
-                    self.count = 0
-                def visit_expr(self, e):
-                    if self.count > 500: return 1 # Limit
-                    if e.op == ida_hexrays.cot_call:
-                        self.count += 1
-                        text = ida_lines.tag_remove(e.print1(None))
-                        flow.append(f"{hex(e.ea)}  call  {text}")
-                    return 0
-                def visit_insn(self, i):
-                    if self.count > 500: return 1
-                    if i.op == ida_hexrays.cit_if:
-                        self.count += 1
-                        cond = "complex_expression"
-                        try:
-                            if i.cif.expr: cond = ida_lines.tag_remove(i.cif.expr.print1(None))
-                        except Exception:
-                            pass
-                        flow.append(f"{hex(i.ea)}  if  {cond}")
-                    elif i.op == ida_hexrays.cit_return:
-                        flow.append(f"{hex(i.ea)}  return")
-                    elif i.op in [ida_hexrays.cit_while, ida_hexrays.cit_for, ida_hexrays.cit_do]:
-                        flow.append(f"{hex(i.ea)}  loop")
-                    return 0
+            graph = _ctree_build_logic_graph(cfunc, max_nodes=max(200, min(5000, int(depth) * 180)))
+            nodes = graph.get("nodes", [])
+            if filter_matcher:
+                nodes = [n for n in nodes if match_filter(n.get("text", "")) or match_filter(n.get("kind", ""))]
+                allowed = {n.get("id") for n in nodes}
+                edges = [e for e in graph.get("edges", []) if e.get("from") in allowed and e.get("to") in allowed]
+            else:
+                edges = graph.get("edges", [])
 
-            visitor = LogicVisitor()
-            visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "logic_flow": "\n".join(flow), "count": len(flow)}
+            lines = [
+                f"{n.get('ea') or 'None'}  {n.get('kind')}  depth={n.get('depth')}  {n.get('text', '')}"
+                for n in nodes[:1200]
+            ]
+            edge_lines = [
+                f"{e.get('from')} -> {e.get('to')}  {e.get('relation')}"
+                for e in edges[:1200]
+            ]
+            return {
+                "ok": True,
+                "function": func_name,
+                "logic_flow": "\n".join(lines),
+                "edges": "\n".join(edge_lines),
+                "logic_graph": {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges)},
+                "count": len(nodes),
+            }
 
         if action == "get":
             node_lines = []

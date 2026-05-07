@@ -77,6 +77,7 @@ TOOLS = [
     "comment_mgr",
     "colorize",
     "data_ops",
+    "firmware_view",
     "fixups",
     # Instrumentation
     "hooks",
@@ -166,6 +167,7 @@ ADVERTISED_TOOLS = [
     "workflow",
     "compare",
     "governance",
+    "firmware_view",
 ]
 
 # Keep tools/list compact for LLM context windows while preserving backward-compatible calls.
@@ -181,6 +183,9 @@ _EXTRA_TOOL_ALIASES = {
     "code_tool": "code",
     "database": "idb",
     "decompiler": "code",
+    "firmware": "firmware_view",
+    "firmware_ops": "firmware_view",
+    "firmware_view_tool": "firmware_view",
     "decomp": "code",
     "diag": "misc",
     "disasm": "code",
@@ -368,7 +373,7 @@ TOOL_DESCRIPTIONS = {
     "idb": "Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
     "code": "Code logic, decompilation, and flow analysis. Actions: decompile, semantic_decompile, decomp_dataflow, disasm, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, analyze, callgraph, export, find_paths, strings_in_func, decompile_chain, diff_functions.",
     "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.",
-    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled. Supports semantic matching, case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
+    "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, semantic, callers, callees, api, vulnerable, constants, decompiled. Supports semantic matching, case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
     "memory": "Direct database memory access. Actions: read, write, hexdump.",
     # Modification tools
@@ -406,7 +411,8 @@ TOOL_DESCRIPTIONS = {
     "history": "Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff.",
     "comment_mgr": "Comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "colorize": "Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
-    "data_ops": "Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.",
+    "data_ops": "Data type conversion and view shaping. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr, make_ptr.",
+    "firmware_view": "Raw firmware view-shaping assistant. Actions: scan_region, auto_retype, pointer_sweep, table_candidates, smart_carve, recommend, rollback_last, review_contradictions. Integrates memrl + blackboard suggestions for iterative code/data reinterpretation.",
     "fixups": "Relocation/fixup management. Actions: list, get, add, delete.",
     # Instrumentation
     "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
@@ -606,6 +612,7 @@ TOOL_ACTIONS = {
         "regex",
         "func_by_sig",
         "find",
+        "semantic",
         "callers",
         "callees",
         "api",
@@ -802,7 +809,8 @@ TOOL_ACTIONS = {
         "palette",
         "highlight_pattern",
     ],
-    "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code"],
+    "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code", "cycle_data", "set_repr", "make_ptr"],
+    "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "table_candidates", "smart_carve", "recommend", "rollback_last", "review_contradictions"],
     "fixups": ["list", "get", "add", "delete"],
     # Instrumentation
     "hooks": [
@@ -1874,6 +1882,7 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         "regex": {"regexp", "re", "pattern_regex"},
         "func_by_sig": {"signature", "sig", "func_signature", "signature_search"},
         "find": {"search", "lookup", "query", "locate", "discover"},
+        "semantic": {"semantic_find", "nl", "natural_language", "intent_search"},
         "callers": {"incoming", "inbound_calls", "who_calls"},
         "callees": {"outgoing", "outbound_calls", "calls_from"},
         "api": {"apis", "import_api", "api_calls"},

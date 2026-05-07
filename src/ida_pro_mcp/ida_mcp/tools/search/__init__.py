@@ -33,7 +33,7 @@ from .core import (
 from .basic import search_bytes, search_string, search_immediate, search_name
 from .code import search_insns, search_mnemonic, search_instruction, search_text, search_operand, search_comment
 from .refs import search_data_ref, search_code_ref, search_regex, search_func_by_sig
-from .unified import search_find, search_callers, search_callees, search_api
+from .unified import search_find, search_semantic, search_callers, search_callees, search_api
 from .advanced import search_vulnerable, search_constants, search_decompiled, search_structured
 from .meta import search_type, search_export, search_summary
 from ..query_lang import run_query_lang
@@ -128,9 +128,9 @@ def search(
     action: Annotated[Literal[
         "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
-        "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
+        "find", "semantic", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang"],
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -155,6 +155,7 @@ def search(
     
     QUICK ACTIONS:
     - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs)
+    - semantic: Natural-language semantic ranking across symbols/imports/strings/disasm
     - callers: Functions calling a target
     - callees: Functions called by a target
     - api: Find usages of an imported API
@@ -282,6 +283,8 @@ def search(
             response = search_func_by_sig(actual_pattern, offset, limit)
         elif action == "find":
             response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
+        elif action == "semantic":
+            response = search_semantic(actual_pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms)
         elif action == "callers":
             response = search_callers(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items)
         elif action == "callees":
