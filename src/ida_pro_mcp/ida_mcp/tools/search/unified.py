@@ -151,6 +151,129 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
     return result
 
 
+def search_semantic(pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms=0):
+    """Natural-language semantic search across symbols, imports, strings, and code lines."""
+    query = (pattern or "").strip()
+    if not query:
+        return make_error(MCPError.INVALID_ARGS, "pattern or query required")
+
+    ranked_heap = []
+    heap_cap = max(_FIND_INSTRUCTION_CAP, limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
+    timer = SearchTimeout(timeout_ms)
+    timed_out = False
+
+    def add_hit(kind, ea, line, score, feature):
+        if score <= 0:
+            return
+        key = (float(score), int(ea))
+        record = {
+            "type": kind,
+            "address": hex(ea),
+            "address_ea": ea,
+            "score": round(float(score), 2),
+            "feature": feature,
+            "line": line,
+        }
+        if len(ranked_heap) < heap_cap:
+            heapq.heappush(ranked_heap, (key, record))
+        elif key > ranked_heap[0][0]:
+            heapq.heapreplace(ranked_heap, (key, record))
+
+    # Symbols/functions
+    for ea, name in idautils.Names():
+        if not name:
+            continue
+        score = semantic_score(query, name, substring_bonus=SCORE_SUBSTRING)
+        if score >= 42.0:
+            kind = "func" if idaapi.get_func(ea) else "symbol"
+            xr = xref_count_limited(ea, 64)
+            line = f"{hex(ea)}  {kind}  {name}  xrefs={xr}"
+            add_hit("name", ea, line, score + min(xr, 30), "symbol_name")
+
+    # Imports/API names
+    for irec in get_cached_imports():
+        name = irec.get("name") or ""
+        if not name:
+            continue
+        score = semantic_score(query, name, substring_bonus=SCORE_SUBSTRING)
+        if score >= 40.0:
+            ea = irec["ea"]
+            module = irec.get("module") or "unknown"
+            xr = xref_count_limited(ea, 64)
+            line = f"{hex(ea)}  import  {module}!{name}  xrefs={xr}"
+            add_hit("import", ea, line, score + min(xr, 36), "import_name")
+
+    # String literals
+    for srec in get_cached_strings():
+        s = srec.get("string") or ""
+        if not s:
+            continue
+        score = semantic_score(query, s, substring_bonus=SCORE_SUBSTRING)
+        if score >= 50.0:
+            ea = srec["ea"]
+            xr = xref_count_limited(ea, 64)
+            line = f"{hex(ea)}  string  xrefs={xr}  {clip_text(s, 180)}"
+            add_hit("string", ea, line, score + min(xr, 24), "string_literal")
+
+    # Disassembly semantics
+    insn_hits = 0
+    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+        if insn_hits >= _FIND_INSTRUCTION_CAP or timed_out:
+            break
+        for ea in iter_code(seg_start, seg_end):
+            if insn_hits >= _FIND_INSTRUCTION_CAP:
+                break
+            try:
+                timer.check()
+            except TimeoutError:
+                timed_out = True
+                break
+            line = safe_generate_disasm_line(ea)
+            if not line:
+                continue
+            line_clean = ida_lines.tag_remove(line) or ""
+            mnem = (idc.print_insn_mnem(ea) or "").lower()
+            semantic_blob = f"{mnem} {line_clean}"
+            score = semantic_score(query, semantic_blob, substring_bonus=SCORE_SUBSTRING)
+            if score >= FIND_INSTRUCTION_MIN_SCORE:
+                out_line = f"{hex(ea)}  insn  {mnem}  {clip_text(line_clean, 180)}"
+                add_hit("instruction", ea, out_line, 60.0 + min(score, 120.0), "instruction_text")
+                insn_hits += 1
+
+    ranked = [item[1] for item in ranked_heap]
+    page, total, is_truncated = paginate_records(
+        ranked,
+        offset,
+        limit,
+        sort_key=lambda r: (r["score"], r["address_ea"]),
+    )
+
+    result = build_response(
+        [r["line"] for r in page],
+        offset,
+        limit,
+        total,
+        is_truncated,
+        query=query,
+        search_mode="semantic",
+    )
+    if timed_out:
+        result["timed_out"] = True
+        result["hint"] = "Semantic scan timed out. Narrow with range or increase timeout_ms."
+    if include_items:
+        result["items"] = [
+            {
+                "type": r["type"],
+                "address": r["address"],
+                "score": r["score"],
+                "feature": r["feature"],
+                "text": r["line"],
+            }
+            for r in page
+        ]
+    return result
+
+
 def search_callers(pattern, include_context, offset, limit, semantic_min_score, include_alternatives, include_items):
     """Find functions calling target."""
     target_ea, error, sem_meta = resolve_target(

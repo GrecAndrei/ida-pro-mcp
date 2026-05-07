@@ -23,6 +23,7 @@ __all__ = [
     "trace",
     "fixups",
     "data_ops",
+    "firmware_view",
     "agent",
     "microcode",
     "graph",

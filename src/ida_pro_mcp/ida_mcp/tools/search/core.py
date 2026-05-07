@@ -196,7 +196,7 @@ CALL_XREF_TYPES = frozenset([getattr(idaapi, "fl_CN", 17), getattr(idaapi, "fl_C
 SEARCH_ACTIONS = {
     "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
     "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
-    "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
+    "find", "semantic", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
     "type", "export", "summary",
 }
 
@@ -217,6 +217,7 @@ SEARCH_ALIASES = {
     "datarefs": "data_ref", "coderefs": "code_ref",
     "function_signature": "func_by_sig", "signature": "func_by_sig",
     "lookup": "find", "discover": "find",
+    "semantic_find": "semantic", "nl": "semantic", "natural_language": "semantic",
     "caller": "callers", "callee": "callees",
     "imports": "api", "import": "api", "apis": "api",
     "vuln": "vulnerable", "vulns": "vulnerable",
