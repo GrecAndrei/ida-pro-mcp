@@ -6081,6 +6081,56 @@ class IDAMCPServer:
                 if "loader_options" in analysis_options and "value" not in analysis_options:
                     analysis_options["value"] = analysis_options.get("loader_options")
 
+                # Canonicalize processor/endian user-facing aliases so IDA gets
+                # stable names even when callers use architecture-family labels.
+                proc_val = analysis_options.get("processor")
+                if proc_val is not None:
+                    proc_txt = str(proc_val).strip().lower()
+                    proc_aliases = {
+                        "aarch64": "arm",
+                        "arm64": "arm",
+                        "armv8": "arm",
+                        "x64": "metapc",
+                        "x86_64": "metapc",
+                        "amd64": "metapc",
+                        "i386": "metapc",
+                        "i486": "metapc",
+                        "i586": "metapc",
+                        "i686": "metapc",
+                        "x86": "metapc",
+                        "mipsel": "mipsl",
+                        "mipseb": "mipsb",
+                        "ppc": "powerpc",
+                    }
+                    canonical_proc = proc_aliases.get(proc_txt, proc_txt)
+                    analysis_options["processor"] = canonical_proc
+                    if "bitness" not in analysis_options or analysis_options.get("bitness") is None:
+                        implied_bits = {
+                            "aarch64": 64,
+                            "arm64": 64,
+                            "armv8": 64,
+                            "x64": 64,
+                            "x86_64": 64,
+                            "amd64": 64,
+                            "i386": 32,
+                            "i486": 32,
+                            "i586": 32,
+                            "i686": 32,
+                            "x86": 32,
+                            "mipsel": 32,
+                            "mipseb": 32,
+                        }.get(proc_txt)
+                        if implied_bits is not None:
+                            analysis_options["bitness"] = implied_bits
+
+                end_val = analysis_options.get("endian")
+                if end_val is not None:
+                    e = str(end_val).strip().lower()
+                    if e in ("little", "little_endian", "little-endian", "littleendian", "le", "0", "false"):
+                        analysis_options["endian"] = "little"
+                    elif e in ("big", "big_endian", "big-endian", "bigendian", "be", "1", "true"):
+                        analysis_options["endian"] = "big"
+
                 preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
                 has_preload_request = any(k in analysis_options and analysis_options.get(k) is not None for k in preload_keys)
 
