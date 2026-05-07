@@ -627,6 +627,30 @@ def setup_virtualenv(install_path: Path):
         return False
 
 
+def verify_runtime_imports(install_path: Path) -> bool:
+    """Verify core runtime imports inside the installed venv."""
+    python_exe = install_path / (
+        ".venv/Scripts/python.exe" if sys.platform == "win32" else ".venv/bin/python"
+    )
+    if not python_exe.exists():
+        error(f"Venv python not found: {python_exe}")
+        return False
+    try:
+        _run_checked(
+            [
+                str(python_exe),
+                "-c",
+                "import numpy, tomli_w, requests, ida_pro_mcp.host.server; print('ok')",
+            ],
+            cwd=install_path,
+        )
+        success("Runtime import check passed (numpy/tomli_w/requests/server)")
+        return True
+    except Exception as e:
+        error(f"Runtime import check failed: {e}")
+        return False
+
+
 def _load_client_configs():
     """Load MCP client configuration paths from JSON data file."""
     script_dir = Path(__file__).parent.resolve()
@@ -1167,6 +1191,10 @@ def do_install(skills_mode: str = "router"):
         success(f"Active server at: {server_script}")
     else:
         error(f"Server script not found!")
+
+    if not verify_runtime_imports(install_path):
+        warning("Runtime imports failed. Re-run installer after fixing environment.")
+        return False
 
     # Summary
     print(f"""
