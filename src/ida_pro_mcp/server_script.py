@@ -345,6 +345,41 @@ def _apply_pre_analysis_options():
     changed = []
     warnings_list = []
 
+    # Normalize common architecture aliases used by MCP/LLMs.
+    if processor is not None:
+        ptxt = str(processor).strip().lower()
+        proc_aliases = {
+            "aarch64": "arm",
+            "arm64": "arm",
+            "armv8": "arm",
+            "x64": "metapc",
+            "x86_64": "metapc",
+            "amd64": "metapc",
+            "x86": "metapc",
+            "i386": "metapc",
+            "i686": "metapc",
+            "mipsel": "mipsl",
+            "mipseb": "mipsb",
+            "ppc": "powerpc",
+        }
+        processor = proc_aliases.get(ptxt, ptxt)
+        if bitness is None:
+            implied_bits = {
+                "aarch64": 64,
+                "arm64": 64,
+                "armv8": 64,
+                "x64": 64,
+                "x86_64": 64,
+                "amd64": 64,
+                "x86": 32,
+                "i386": 32,
+                "i686": 32,
+                "mipsel": 32,
+                "mipseb": 32,
+            }.get(ptxt)
+            if implied_bits is not None:
+                bitness = implied_bits
+
     # Processor
     if processor:
         try:
