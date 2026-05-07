@@ -296,6 +296,49 @@ class TestSessionExecuteTool(unittest.TestCase):
         self.assertEqual(session["analysis_options"]["processor"], "arm")
         self.assertEqual(session["analysis_options"]["bitness"], 32)
 
+    def test_session_create_architecture_block(self):
+        result = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary,
+            "architecture": {
+                "processor": "arm",
+                "bitness": 32,
+                "endian": "little",
+            },
+        })
+        self.assertTrue(result.get("ok"))
+        opts = result["session"].get("analysis_options", {})
+        self.assertEqual(opts.get("processor"), "arm")
+        self.assertEqual(opts.get("bitness"), 32)
+        self.assertEqual(opts.get("endian"), "little")
+
+    def test_session_create_conflicting_arch_values_rejected(self):
+        result = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary,
+            "processor": "arm",
+            "analysis_options": {"processor": "mipsl"},
+        })
+        self.assertTrue(result.get("error"))
+
+    def test_session_create_with_arch_does_not_reuse_existing(self):
+        first = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary,
+        })
+        self.assertTrue(first.get("ok"))
+        sid1 = first["session"]["session_id"]
+
+        second = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary,
+            "processor": "arm",
+            "bitness": 32,
+        })
+        self.assertTrue(second.get("ok"))
+        sid2 = second["session"]["session_id"]
+        self.assertNotEqual(sid1, sid2)
+
     def test_list_pagination(self):
         # Create multiple sessions
         for i in range(5):
