@@ -339,6 +339,17 @@ class TestSessionExecuteTool(unittest.TestCase):
         sid2 = second["session"]["session_id"]
         self.assertNotEqual(sid1, sid2)
 
+    def test_session_create_canonicalizes_processor_aliases(self):
+        result = self.server._execute_tool("session", {
+            "action": "create",
+            "binary_path": self.test_binary,
+            "processor": "aarch64",
+        })
+        self.assertTrue(result.get("ok"))
+        opts = result["session"].get("analysis_options", {})
+        self.assertEqual(opts.get("processor"), "arm")
+        self.assertEqual(opts.get("bitness"), 64)
+
     def test_list_pagination(self):
         # Create multiple sessions
         for i in range(5):
