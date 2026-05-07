@@ -67,6 +67,9 @@ Mathematical and address resolution. Actions: eval, offset, convert, resolve, de
 
 ## Notes
 - `idb` is optional for most tools and resolves from active session when omitted.
+- `convert`/`resolve`/`align` accept integer suffixes (`k`, `m`, `g`, `t`) such as `4k` or `2m`.
+- `align` returns `nearest` in addition to `aligned_down` and `aligned_up`.
+- Pointer traversal actions (`deref`, `chain`) now stop cleanly on null/BADADDR and annotate termination.
 
 ---
 Doc status: Auto-generated from live tool metadata.
