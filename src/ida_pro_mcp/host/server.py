@@ -2802,7 +2802,32 @@ class IDAMCPServer:
             return backup_path
         except Exception as e:
             log_rpc(f"Failed to backup corrupt IDB {idb_path}: {e}")
-        return None
+            return None
+
+    def _cleanup_stale_idb_family(self, idb_path: str) -> None:
+        """Remove stale sidecar files that can block fresh IDB creation."""
+        if not idb_path:
+            return
+        base, ext = os.path.splitext(idb_path)
+        family_exts = [
+            ".id0",
+            ".id1",
+            ".nam",
+            ".til",
+            ".dmp",
+            ".asm",
+            ".i64",
+            ".idb",
+        ]
+        for fam_ext in family_exts:
+            path = f"{base}{fam_ext}"
+            if not os.path.exists(path):
+                continue
+            try:
+                os.remove(path)
+                log_rpc(f"Removed stale IDB artifact: {path}")
+            except Exception as e:
+                log_rpc(f"Failed to remove stale IDB artifact {path}: {e}")
 
     def _nuclear_reset(self, idb_path, aggressive: bool = False):
         if not idb_path:
@@ -2930,6 +2955,7 @@ class IDAMCPServer:
             )
             # Ensure session directory exists
             os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
+            self._cleanup_stale_idb_family(session.idb_path)
         cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb)
 
         log_rpc(f"Launching IDA: {' '.join(cmd)}")
