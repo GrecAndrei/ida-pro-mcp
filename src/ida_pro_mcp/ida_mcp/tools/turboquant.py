@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import struct
+import os
 from typing import Dict, List, Tuple, Optional, Union
 import numpy as np
 
@@ -574,7 +575,6 @@ def turboquant(
         turboquant(action="stats")
         turboquant(action="delete")
     """
-    import os
     import sqlite3
 
     # Resolve bank path
@@ -609,14 +609,46 @@ def turboquant(
         }
 
     if action == "ingest":
-        # Find schemaboot DB
+        # Find SchemaBoot DB (support both legacy <idb>.i64.schemaboot.db and new SID_*_<binary>.schemaboot.db naming)
+        candidates = []
         sb_path = db_path.replace(".turboquant.bin", ".schemaboot.db")
-        if not os.path.exists(sb_path):
-            return {"ok": False, "error": f"SchemaBoot DB not found at {sb_path}. Run schemaboot(action='ingest') first."}
+        candidates.append(sb_path)
+        if sb_path.endswith(".i64.schemaboot.db"):
+            candidates.append(sb_path.replace(".i64.schemaboot.db", ".schemaboot.db"))
+        # Last resort: scan sibling session directory by basename
+        parent = os.path.dirname(sb_path) or "."
+        base = os.path.basename(sb_path)
+        if ".i64." in base:
+            suffix = base.split(".i64.", 1)[-1]
+            try:
+                for name in os.listdir(parent):
+                    if name.endswith(suffix):
+                        candidates.append(os.path.join(parent, name))
+            except Exception:
+                pass
+        def _has_function_attrs(path: str) -> bool:
+            try:
+                conn = sqlite3.connect(path)
+                cur = conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='function_attrs'")
+                ok = cur.fetchone() is not None
+                conn.close()
+                return ok
+            except Exception:
+                return False
+
+        existing = next((p for p in candidates if p and os.path.exists(p) and _has_function_attrs(p)), None)
+        if not existing:
+            return {"ok": False, "error": f"SchemaBoot DB not found. Tried: {candidates}. Run schemaboot(action='ingest') first."}
+        sb_path = existing
 
         conn = sqlite3.connect(sb_path)
         cur = conn.cursor()
-        cur.execute("SELECT ea, name, size, entropy, bb_count, call_count, cyclomatic_complexity, api_count, string_count, xref_count, loop_count, xor_count FROM function_attrs")
+        cur.execute(
+            "SELECT ea, name, size, entropy, bb_count, call_count, cyclomatic_complexity, "
+            "api_count, string_count, (incoming_xrefs + outgoing_xrefs) AS xref_count, has_loops, xor_count "
+            "FROM function_attrs"
+        )
         rows = cur.fetchall()
         conn.close()
 

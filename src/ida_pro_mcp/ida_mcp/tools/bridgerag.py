@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from typing import Dict, List, Optional, Set, Tuple
+import numpy as np
 
 try:
     from ._common import *
@@ -53,6 +54,70 @@ def _db_path() -> str:
     return "unknown.schemaboot.db"
 
 
+def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
+    base = candidate or _db_path()
+    candidates = [base]
+    if base.endswith(".i64.schemaboot.db"):
+        candidates.append(base.replace(".i64.schemaboot.db", ".schemaboot.db"))
+    parent = os.path.dirname(base) or "."
+    bname = os.path.basename(base)
+    if ".i64." in bname:
+        suffix = bname.split(".i64.", 1)[-1]
+        try:
+            for name in os.listdir(parent):
+                if name.endswith(suffix):
+                    candidates.append(os.path.join(parent, name))
+        except Exception:
+            pass
+    for path in candidates:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            conn = sqlite3.connect(path)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='function_attrs'")
+            ok = cur.fetchone() is not None
+            conn.close()
+            if ok:
+                return path
+        except Exception:
+            continue
+    return base
+
+
+def _build_where_clause_local(constraints: Dict) -> Tuple[str, List[object]]:
+    conditions: List[str] = []
+    params: List[object] = []
+    for key, val in (constraints or {}).items():
+        if val is None:
+            continue
+        if key == "apis":
+            conditions.append(
+                "EXISTS (SELECT 1 FROM function_apis WHERE function_apis.func_ea = function_attrs.ea AND function_apis.api_name = ?)"
+            )
+            params.append(val)
+        elif key in ("strings_like", "string_contains"):
+            conditions.append(
+                "EXISTS (SELECT 1 FROM function_strings WHERE function_strings.func_ea = function_attrs.ea AND function_strings.string_text LIKE ?)"
+            )
+            params.append(f"%{val}%")
+        elif key == "name_like":
+            conditions.append("name LIKE ?")
+            params.append(f"%{val}%")
+        elif key == "segment":
+            conditions.append("segment = ?")
+            params.append(val)
+        elif key == "min_size":
+            conditions.append("size >= ?")
+            params.append(int(val))
+        elif key == "max_size":
+            conditions.append("size <= ?")
+            params.append(int(val))
+    if not conditions:
+        return "", []
+    return "WHERE " + " AND ".join(conditions), params
+
+
 # ---------------------------------------------------------------------------
 # BridgeRAG Engine
 # ---------------------------------------------------------------------------
@@ -63,7 +128,7 @@ class BridgeRAGSearch:
     """
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or _db_path()
+        self.db_path = _resolve_schemaboot_db_path(db_path)
 
     def _conn(self):
         return sqlite3.connect(self.db_path)
@@ -89,7 +154,7 @@ class BridgeRAGSearch:
             where = "fa.func_ea = ?"
             param = (func_ea,)
         elif func_name is not None:
-            where = "fa.name = ?"
+            where = "attrs.name = ?"
             param = (func_name,)
         else:
             return bridges
@@ -113,7 +178,7 @@ class BridgeRAGSearch:
             if "strings" in bridge_types:
                 cur.execute(
                     f"""
-                    SELECT string_value FROM function_strings fs
+                    SELECT string_text FROM function_strings fs
                     JOIN function_attrs attrs ON fs.func_ea = attrs.ea
                     WHERE {where}
                     ORDER BY fs.func_ea
@@ -270,7 +335,7 @@ class BridgeRAGSearch:
         if string_bridges:
             placeholders = ",".join("?" * len(string_bridges))
             cur.execute(
-                f"SELECT func_ea FROM function_strings WHERE string_value IN ({placeholders})",
+                f"SELECT func_ea FROM function_strings WHERE string_text IN ({placeholders})",
                 tuple(string_bridges),
             )
             for row in cur.fetchall():
@@ -367,14 +432,13 @@ class BridgeRAGSearch:
         cur = conn.cursor()
 
         # Step 1: Find seed functions
-        try:
-            import importlib
-            _sb = importlib.import_module("ida_mcp.tools.schemaboot")
-            _build_where_clause = _sb._build_where_clause
-            where, params = _build_where_clause(query_constraints or {})
-            sql = f"SELECT * FROM function_attrs WHERE {where} LIMIT 5" if where else "SELECT * FROM function_attrs LIMIT 5"
-        except Exception:
-            return {"ok": False, "error": "SchemaBoot module not available - run schemaboot(action='ingest') first"}
+        where, params = _build_where_clause_local(query_constraints or {})
+        sql = (
+            "SELECT ea, name, segment, size, entropy, bb_count, call_count, "
+            "cyclomatic_complexity, api_count, string_count, (incoming_xrefs + outgoing_xrefs) AS xref_count, "
+            "has_loops, is_thunk, is_library FROM function_attrs "
+            f"{where} LIMIT 5"
+        )
         cur.execute(sql, params)
         seeds = []
         for row in cur.fetchall():

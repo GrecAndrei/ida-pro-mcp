@@ -225,7 +225,7 @@ class IDAMCPServer:
                 "char_budget": 12_000,
                 "drop_empty": True,
                 "drop_false": True,
-                "drop_ok": True,
+                "drop_ok": False,
                 "dedupe_counts": True,
                 "strip_meta": True,
                 "table_mode": False,
@@ -239,7 +239,7 @@ class IDAMCPServer:
                 "char_budget": self.default_compact_char_budget,
                 "drop_empty": True,
                 "drop_false": True,
-                "drop_ok": True,
+                "drop_ok": False,
                 "dedupe_counts": True,
                 "strip_meta": True,
                 "table_mode": self.default_table_mode,
@@ -1639,7 +1639,7 @@ class IDAMCPServer:
             "char_budget": self.default_compact_char_budget,
             "drop_empty": True,
             "drop_false": True,
-            "drop_ok": True,
+            "drop_ok": False,
             "dedupe_counts": True,
             "strip_meta": True,
             "table_mode": self.default_table_mode,
@@ -3349,9 +3349,22 @@ class IDAMCPServer:
             runtime = self.session_runtimes.get(session.session_id)
 
         try:
+            rpc_args = {
+                k: v
+                for k, v in kwargs.items()
+                if not (isinstance(k, str) and k.startswith("_"))
+            }
+            try:
+                allowed = set((TOOL_ARG_SCHEMAS.get(tool_name) or {}).keys())
+                if allowed:
+                    rpc_args = {k: v for k, v in rpc_args.items() if k in allowed}
+            except Exception:
+                pass
             res = self._send_rpc_raw(
-                {"tool": tool_name, "args": kwargs}, runtime["port"]
+                {"tool": tool_name, "args": rpc_args}, runtime["port"]
             )
+            if isinstance(res, dict) and "error" not in res and "ok" not in res:
+                res = {"ok": True, **res}
             res = truncate_response(res, max_tokens=self.default_truncate_tokens)
             # MemRL observation for IDA-side tools
             if isinstance(res, dict):
@@ -5706,11 +5719,28 @@ class IDAMCPServer:
             str(args.get("action", "") or ""),
             args,
         )
+        high_impact_tools = {
+            "modify",
+            "funcs",
+            "segments",
+            "bulk",
+            "annotation",
+            "memory",
+            "patch",
+            "edit",
+        }
+        # Never block state-persistence helpers; they are the mechanism to satisfy obligations.
+        if tool_name in {"blackboard", "session", "bookmarks", "batch", "predictor", "workflow"}:
+            pre = {"decision": "allow"}
+        if pre.get("decision") == "block_high_impact":
+            # Guardrail should only hard-block high-impact write surfaces.
+            if tool_name not in high_impact_tools:
+                pre = {"decision": "allow"}
         if pre.get("decision") == "block_high_impact":
             hint = pre.get("hint", "Resolve required receipts via supporting read/exploration actions before high-impact writes.")
             return make_error(
                 MCPError.INVALID_ARGS,
-                "Action blocked by active blackboard obligations",
+                "Action blocked by active blackboard obligations (session state contract)",
                 hint=hint,
                 details={
                     "blocked_by": pre.get("blocked_by", []),
