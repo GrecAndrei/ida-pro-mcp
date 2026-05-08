@@ -56,15 +56,14 @@ def _is_be():
     except Exception:
         pass
     try:
-        inf = idaapi.get_inf_structure()
-        return inf.is_be() if hasattr(inf, "is_be") else False
+                return _inf_is_be() if hasattr(inf, "is_be") else False
     except Exception:
         return False
 
 
 def _find_pointers(data, start_ea):
     """Find all valid pointers in a byte sequence."""
-    is_64 = idaapi.inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
+    is_64 = _inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
     ptr_size = 8 if is_64 else 4
     endian = ">" if _is_be() else "<"
     fmt = f"{endian}Q" if is_64 else f"{endian}I"
@@ -72,7 +71,7 @@ def _find_pointers(data, start_ea):
     pointers = []
     for i in range(0, len(data) - ptr_size + 1, ptr_size):
         val = struct.unpack_from(fmt, data, i)[0]
-        if val != 0 and idaapi.is_loaded(val):
+        if val != 0 and ida_bytes.is_loaded(val):
             pointers.append((start_ea + i, hex(val), idc.get_name(val) or ""))
     return pointers
 
@@ -166,7 +165,7 @@ def memory(
                 endian = ">" if _is_be() else "<"
                 value = struct.unpack(f"{endian}d", raw)[0]
             elif type == "ptr":
-                is_64 = idaapi.inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
+                is_64 = _inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
                 value = ida_bytes.get_qword(ea) if is_64 else ida_bytes.get_wide_dword(ea)
             elif type == "string":
                 s = idc.get_strlit_contents(ea, -1, 0)
@@ -306,7 +305,7 @@ def memory(
             return {"ok": True, "strings": lines, "count": len(strings), "region": f"{hex(ea)}-{hex(ea + region_size)}"}
 
         elif action == "struct_walk":
-            is_64 = idaapi.inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
+            is_64 = _inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
             ptr_size = 8 if is_64 else 4
             endian = ">" if _is_be() else "<"
             fmt = f"{endian}Q" if is_64 else f"{endian}I"
@@ -325,7 +324,7 @@ def memory(
                 val = struct.unpack(fmt, raw)[0]
                 name = idc.get_name(val) or ""
                 nodes.append({"level": level, "addr": hex(cur_ea), "points_to": hex(val), "name": name})
-                if val != 0 and idaapi.is_loaded(val) and level < depth:
+                if val != 0 and ida_bytes.is_loaded(val) and level < depth:
                     queue.append((val, level + 1))
             return {"ok": True, "nodes": nodes, "depth": depth}
 

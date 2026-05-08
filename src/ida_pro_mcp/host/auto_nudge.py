@@ -364,9 +364,9 @@ _REROUTE_MAP: Dict[Tuple[str, str], Tuple[str, str]] = {
 
 # Heuristic reroutes: when the call signature matches one pattern but another is better
 _HEURISTIC_REROUTES = [
-    # memory.read with code-like args -> code.disasm
-    (lambda t, a, args: t == "memory" and a == "read" and 
-     isinstance(args.get("size"), int) and 0 < args.get("size", 0) <= 4096 and args.get("addr"),
+    # memory.read with explicit disasm intent -> code.disasm
+    # Keep typed reads (u8/u16/u32/...) in memory.read to avoid incorrect reroutes.
+    (lambda t, a, args: t == "memory" and a == "read" and args.get("addr") and str(args.get("type", "")).lower() == "bytes" and bool(args.get("as_code") or args.get("disasm") or args.get("decode")),
      ("code", "disasm", {"addr": "__ADDR__", "limit": 50})),
 ]
 

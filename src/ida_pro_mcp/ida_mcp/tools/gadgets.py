@@ -520,7 +520,6 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
 def _detect_mitigations(addr, _limit, _max_insns, _query):
     """Detect exploit mitigations (ASLR, DEP/NX, CFI, CET, stack cookies)."""
     mitigations = {}
-    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
     filetype = info.filetype if info else 0
 
     # PE mitigations

@@ -47,8 +47,8 @@ def fixups(
             else:
                 # Fallback for older IDA
                 try:
-                    min_ea = idaapi.cvar.inf.min_ea
-                    max_ea = idaapi.cvar.inf.max_ea
+                    min_ea = idaapi.cvar._inf_min_ea()
+                    max_ea = idaapi.cvar._inf_max_ea()
                 except AttributeError:
                     min_ea = idc.get_inf_attr(idc.INF_MIN_EA)
                     max_ea = idc.get_inf_attr(idc.INF_MAX_EA)

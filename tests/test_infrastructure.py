@@ -151,6 +151,153 @@ class TestUniversalOutputFiltering:
 
 
 # =============================================================================
+# Compatibility Normalization
+# =============================================================================
+
+class TestCompatibilityNormalization:
+    def test_query_wrapper_noise_removed_for_direct_actions(self):
+        server = IDAMCPServer()
+        normalized = server._normalize_tool_call_args(
+            "query",
+            {
+                "action": "data",
+                "subaction": "functions",
+                "source_action": "list",
+                "grep": "malloc",
+                "token": "abc",
+                "args": {"count": 1},
+            },
+        )
+        assert normalized["action"] == "data"
+        assert normalized["subaction"] == "functions"
+        assert "source_action" not in normalized
+        assert "grep" not in normalized
+        assert "token" not in normalized
+
+    def test_query_wrapper_fields_preserved_for_wrapper_action(self):
+        server = IDAMCPServer()
+        normalized = server._normalize_tool_call_args(
+            "query",
+            {
+                "action": "grep",
+                "source_action": "data",
+                "grep": "malloc",
+                "grep_field": "matches",
+            },
+        )
+        assert normalized["action"] == "grep"
+        assert normalized["source_action"] == "data"
+        assert normalized["grep"] == "malloc"
+
+    def test_calc_direct_action_strips_wrapper_meta_fields(self):
+        server = IDAMCPServer()
+        normalized = server._normalize_tool_call_args(
+            "calc",
+            {
+                "action": "eval",
+                "expr": "0x10+1",
+                "source_action": "",
+                "grep": "",
+                "token": "",
+                "head_n": 0,
+            },
+        )
+        assert normalized["action"] == "eval"
+        assert normalized["expr"] == "0x10+1"
+        assert "source_action" not in normalized
+        assert "grep" not in normalized
+        assert "token" not in normalized
+        assert "head_n" not in normalized
+
+    def test_search_arg_aliases_normalize_to_canonical_fields(self):
+        server = IDAMCPServer()
+        normalized = server._normalize_tool_call_args(
+            "search",
+            {"action": "find", "ea": "0x401000", "needle": "malloc"},
+        )
+        assert normalized["addr"] == "0x401000"
+        assert normalized["pattern"] == "malloc"
+
+    def test_funcs_wrapper_noise_removed_for_direct_action(self):
+        server = IDAMCPServer()
+        normalized = server._normalize_tool_call_args(
+            "funcs",
+            {"action": "info", "addr": "0x401000", "source_action": "list", "token": "abc"},
+        )
+        assert normalized["action"] == "info"
+        assert normalized["addr"] == "0x401000"
+        assert "source_action" not in normalized
+        assert "token" not in normalized
+
+
+# =============================================================================
+# Telemetry Activity Recording
+# =============================================================================
+
+class TestActivityRecording:
+    def test_record_activity_logs_to_session_manager(self):
+        server = IDAMCPServer()
+
+        class StubSessionMgr:
+            def __init__(self):
+                self.calls = []
+
+            def log_activity(self, sid, tool, action, result):
+                self.calls.append(
+                    {
+                        "sid": sid,
+                        "tool": tool,
+                        "action": action,
+                        "result": result,
+                    }
+                )
+
+        stub = StubSessionMgr()
+        server.session_mgr = stub
+        server._record_activity(
+            "search",
+            {"action": "find", "session_id": "ABCD1234", "query": "malloc"},
+            {"ok": True, "matches": "hit at 0x401000 and 0x401020"},
+        )
+
+        assert len(stub.calls) == 1
+        call = stub.calls[0]
+        assert call["sid"] == "ABCD1234"
+        assert call["tool"] == "search"
+        assert call["action"] == "find"
+        assert "0x401000" in call["result"]
+
+
+# =============================================================================
+# Auto-nudge Rerouting Safety
+# =============================================================================
+
+class TestAutoNudgeReroutes:
+    def test_memory_read_u32_is_not_rerouted(self):
+        from ida_pro_mcp.host.auto_nudge import get_reroute
+
+        reroute = get_reroute(
+            "memory",
+            "read",
+            {"addr": "0x401000", "type": "u32", "size": 16},
+        )
+        assert reroute is None
+
+    def test_memory_read_bytes_with_disasm_intent_is_rerouted(self):
+        from ida_pro_mcp.host.auto_nudge import get_reroute
+
+        reroute = get_reroute(
+            "memory",
+            "read",
+            {"addr": "0x401000", "type": "bytes", "size": 32, "disasm": True},
+        )
+        assert reroute is not None
+        tool_name, new_args = reroute
+        assert tool_name == "code"
+        assert new_args.get("action") == "disasm"
+
+
+# =============================================================================
 # Batch Macro DSL
 # =============================================================================
 

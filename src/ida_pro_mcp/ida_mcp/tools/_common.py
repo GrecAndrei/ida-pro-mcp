@@ -104,6 +104,127 @@ except ImportError:
         ARITHMETIC_MNEMONICS, INTERESTING_INSTRUCTIONS,
     )
 
+
+# ============================================================================
+# Safe IDA info API wrappers — compatible IDA 7.x through 9.x
+# IDA 9 removed get_inf_structure() and cvar.inf in favour of ida_ida.inf_*
+# Always use these helpers instead of calling idaapi.get_inf_structure() directly.
+# ============================================================================
+
+def _inf_is_64bit() -> bool:
+    """Return True if the current IDB is 64-bit."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_is_64bit"):
+            return bool(ida_ida.inf_is_64bit())
+    except Exception:
+        pass
+    try:
+        if hasattr(idaapi, "inf_is_64bit"):
+            return bool(idaapi.inf_is_64bit())
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None and hasattr(inf, "is_64bit"):
+            return bool(inf.is_64bit())
+    except Exception:
+        pass
+    return False
+
+
+def _inf_is_be() -> bool:
+    """Return True if the current IDB is big-endian."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_is_be"):
+            return bool(ida_ida.inf_is_be())
+    except Exception:
+        pass
+    try:
+        if hasattr(idaapi, "inf_is_be"):
+            return bool(idaapi.inf_is_be())
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None and hasattr(inf, "is_be"):
+            return bool(inf.is_be())
+    except Exception:
+        pass
+    return False
+
+
+def _inf_min_ea() -> int:
+    """Return the lowest address in the IDB."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_get_min_ea"):
+            return int(ida_ida.inf_get_min_ea())
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            v = getattr(inf, "min_ea", None)
+            if v is not None:
+                return int(v)
+    except Exception:
+        pass
+    try:
+        return int(idaapi.cvar.inf.min_ea)
+    except Exception:
+        pass
+    return 0
+
+
+def _inf_max_ea() -> int:
+    """Return the highest address in the IDB."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_get_max_ea"):
+            return int(ida_ida.inf_get_max_ea())
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            v = getattr(inf, "max_ea", None)
+            if v is not None:
+                return int(v)
+    except Exception:
+        pass
+    try:
+        return int(idaapi.cvar.inf.max_ea)
+    except Exception:
+        pass
+    return idaapi.BADADDR
+
+
+def _inf_start_ea() -> int:
+    """Return the program entry point address."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_get_start_ea"):
+            return int(ida_ida.inf_get_start_ea())
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            v = getattr(inf, "start_ea", None)
+            if v is not None and v != idaapi.BADADDR:
+                return int(v)
+    except Exception:
+        pass
+    return idaapi.BADADDR
+
+
+def _inf_ptr_size() -> int:
+    """Return pointer size in bytes (4 or 8)."""
+    return 8 if _inf_is_64bit() else 4
+
+
 __all__ = [
     # typing
     "Annotated", "Optional", "Literal", "Union", "Any",
@@ -138,4 +259,7 @@ __all__ = [
     "CONDITIONAL_BRANCH_MNEMONICS", "TERMINATOR_MNEMONICS", "SYSCALL_MNEMONICS",
     "MOV_MNEMONICS", "COMPARISON_MNEMONICS", "XOR_MNEMONICS",
     "ARITHMETIC_MNEMONICS", "INTERESTING_INSTRUCTIONS",
+    # Safe IDA info API helpers
+    "_inf_is_64bit", "_inf_is_be", "_inf_min_ea", "_inf_max_ea",
+    "_inf_start_ea", "_inf_ptr_size",
 ]

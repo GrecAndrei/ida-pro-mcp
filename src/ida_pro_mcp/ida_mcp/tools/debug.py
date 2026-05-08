@@ -81,10 +81,10 @@ def _get_reg_dict(tid=None):
     target_tid = tid if tid is not None else ida_dbg.get_current_thread()
     dbg = ida_idd.get_dbg()
     if not dbg:
-        return {}
+        return {"error": True, "message": "No debugger backend attached"}
     regvals = ida_dbg.get_reg_vals(target_tid)
     if not regvals:
-        return {}
+        return {"error": True, "message": "Could not read register values (debugger not running?)"}
     regs = {}
     for i, rv in enumerate(regvals):
         if i < dbg.nregs:
@@ -112,12 +112,7 @@ def _read_dbg_ptr(ea: int, size: int):
 def _get_ptr_size():
     """Get pointer size for current architecture."""
     try:
-        if hasattr(idaapi, "get_inf_structure"):
-            return 8 if idaapi.get_inf_structure().is_64bit() else 4
-    except Exception:
-        pass
-    try:
-        return 8 if idaapi.inf_is_64bit() else 4
+        return 8 if _inf_is_64bit() else 4
     except Exception:
         return 4
 

@@ -376,7 +376,7 @@ TOOL_DESCRIPTIONS = {
     "data": "Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.",
     "search": "Pattern and reference search. Actions: bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, semantic, callers, callees, api, vulnerable, constants, decompiled. Supports semantic matching, case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \\bfoo\\b), glob, or plain substring.",
     "types": "Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.",
-    "memory": "Direct database memory access. Actions: read, write, hexdump.",
+    "memory": "Direct database memory access. Actions: read, write, hexdump. Prefer minimal calls: memory(action='read', addr='0x401000', type='u32') or memory(action='hexdump', addr='0x401000', size=64). Do not add wrapper fields (source_action/grep/pick/head/next) unless using wrapper actions.",
     # Modification tools
     "modify": "Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set_type, patch_asm (assembles instruction(s) and patches bytes, supports multi-line separated by semicolons).",
     "funcs": "Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force deletion of overlaps), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).",
@@ -384,7 +384,7 @@ TOOL_DESCRIPTIONS = {
     "bulk": "Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.",
     # Utilities
     "misc": "Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. plugin_* manages IDA plugins. health runs host diagnostics without requiring a session.",
-    "calc": "Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.",
+    "calc": "Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align. For eval use only calc(action='eval', expr='0x2019b0 - 0x200000'); avoid empty placeholder args and wrapper fields.",
     "nav": "Navigation and triage. Actions: goto, cursor, interesting.",
     # Debugging and tracing
     "debug": "Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem.",
@@ -413,7 +413,7 @@ TOOL_DESCRIPTIONS = {
     "comment_mgr": "Comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "colorize": "Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
     "data_ops": "Data type conversion and view shaping. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr, make_ptr.",
-    "firmware_view": "Raw firmware view-shaping assistant. Actions: scan_region, auto_retype, pointer_sweep, table_candidates, smart_carve, recommend, rollback_last, review_contradictions. Integrates memrl + blackboard suggestions for iterative code/data reinterpretation.",
+    "firmware_view": "Raw firmware view-shaping assistant. Actions: scan_region, auto_retype, pointer_sweep, table_candidates, smart_carve, recommend, rollback_last, review_contradictions. Integrates memrl + blackboard suggestions for iterative code/data reinterpretation. Typical start: firmware_view(action='scan_region', start='0x...', end='0x...') then firmware_view(action='pointer_sweep', start='0x...', end='0x...').",
     "fixups": "Relocation/fixup management. Actions: list, get, add, delete.",
     # Instrumentation
     "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
@@ -824,11 +824,8 @@ TOOL_ACTIONS = {
     # Documentation and YARA
     "wiki": ["list_topics", "read", "search", "semantic_search", "sections", "index"],
     "yara_hunt": [
-        "scan",
         "compile",
         "list_rules",
-        "match_context",
-        "extract_strings",
         "xref_matches",
     ],
     # --- New LLM-optimized tools ---
@@ -858,10 +855,7 @@ TOOL_ACTIONS = {
     ],
     "deobfuscate": [
         "detect_encoding",
-        "xor_scan",
         "stack_strings",
-        "opaque_predicates",
-        "control_flow_flatten",
         "dead_code",
         "api_hashing",
         "dynamic_dispatch",
@@ -871,14 +865,10 @@ TOOL_ACTIONS = {
     "crypto_id": [
         "identify",
         "constants",
-        "key_schedule",
-        "block_cipher",
-        "hash_detect",
-        "rng_detect",
-        "asymmetric",
-        "custom_crypto",
         "encoding",
         "checksums",
+        "entropy_analysis",
+        "aes_ni",
     ],
     "abi": [
         "detect",
@@ -963,7 +953,6 @@ TOOL_ACTIONS = {
         "mitigations",
         "seh_handlers",
         "pivot_chains",
-        "semantic_find",
     ],
     "annotation": [
         "auto_comment",
@@ -1009,11 +998,6 @@ TOOL_ACTIONS = {
         "find_databases",
         "find_crypto_addrs",
         "entropy_rank",
-        "score_c2",
-        "indicators",
-        "persistence",
-        "evasion",
-        "ioc_extract",
     ],
     "cfg_analysis": [
         "complexity",

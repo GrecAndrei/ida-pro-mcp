@@ -263,7 +263,7 @@ def trace_analysis(
             regions = []
             # Detect target endianness to avoid data corruption on big-endian archs
             try:
-                _endian = "big" if idaapi.get_inf_structure().is_be() else "little"
+                _endian = "big" if _inf_is_be() else "little"
             except Exception:
                 _endian = "little"
             for i in range(0, len(values) - window + 1, window // 2):
@@ -452,7 +452,7 @@ def trace_analysis(
             
             # Entry point resolution compatible with IDA 7.x-9.x
             try:
-                start_ea = idaapi.get_inf_structure().start_ea
+                start_ea = _inf_start_ea()
             except AttributeError:
                 import ida_ida
                 start_ea = ida_ida.inf_get_start_ea()
