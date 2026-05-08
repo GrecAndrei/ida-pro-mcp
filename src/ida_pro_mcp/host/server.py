@@ -186,6 +186,9 @@ class IDAMCPServer:
         self.default_tools_list_mode = tools_list_mode
         self.default_error_detail_level = detail_level
         self.default_batch_compact = _env_bool("IDA_MCP_BATCH_COMPACT", True)
+        # Heavy response enrichments are useful but can inflate context usage.
+        # Keep disabled by default; callers can opt in via env.
+        self.enable_response_enrichment = _env_bool("IDA_MCP_RESPONSE_ENRICH", False)
         self.default_table_mode = _env_bool("IDA_MCP_TABLE_COMPACT", False)
         self.default_compact_max_items = _bounded_int(
             os.environ.get("IDA_MCP_COMPACT_MAX_ITEMS", 48),
@@ -2400,21 +2403,22 @@ class IDAMCPServer:
                 compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
                 compacted.setdefault("llm_guardrail_mode", guardrail_mode)
                 compacted.setdefault("llm_guardrail_reason_tags", reason_tags)
-            # ---- Auto-Nudge Injection ----
-            try:
-                from .auto_nudge import get_nudge
-                idb_key = (self.current_session.idb_path if self.current_session else "")
-                nudge = get_nudge(
-                    idb_key,
-                    tool_name,
-                    action_name,
-                    compacted,
-                    call_args if isinstance(call_args, dict) else {},
-                )
-                if nudge:
-                    compacted["_nudge"] = nudge
-            except Exception:
-                pass
+            if self.enable_response_enrichment:
+                # ---- Auto-Nudge Injection ----
+                try:
+                    from .auto_nudge import get_nudge
+                    idb_key = (self.current_session.idb_path if self.current_session else "")
+                    nudge = get_nudge(
+                        idb_key,
+                        tool_name,
+                        action_name,
+                        compacted,
+                        call_args if isinstance(call_args, dict) else {},
+                    )
+                    if nudge:
+                        compacted["_nudge"] = nudge
+                except Exception:
+                    pass
             
             # ---- Address Patching ----
             try:
@@ -2431,54 +2435,59 @@ class IDAMCPServer:
             except Exception:
                 pass
             
-            # ---- Auto-Digest ----
-            try:
-                if tool_name == "code" and action_name in ("decompile", "semantic_decompile"):
-                    from .response_enrichment import digest_decompiled
-                    if "pseudocode" in compacted:
-                        pseudo_key = "pseudocode"
-                    elif "code" in compacted:
-                        pseudo_key = "code"
+            if self.enable_response_enrichment:
+                # ---- Auto-Digest ----
+                try:
+                    if tool_name == "code" and action_name in ("decompile", "semantic_decompile"):
+                        from .response_enrichment import digest_decompiled
+                        if "pseudocode" in compacted:
+                            pseudo_key = "pseudocode"
+                        elif "code" in compacted:
+                            pseudo_key = "code"
+                        else:
+                            pseudo_key = "output"
+                        if pseudo_key in compacted and isinstance(compacted[pseudo_key], str):
+                            addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
+                            # Try to get SchemaBoot attributes for richer classification
+                            schema_attrs = None
+                            try:
+                                if addr and hasattr(self, '_insight_index') and self._insight_index:
+                                    func_data = self._insight_index.get_function(addr) if hasattr(self._insight_index, 'get_function') else None
+                                    if func_data:
+                                        schema_attrs = func_data
+                            except Exception:
+                                pass
+                            digest = digest_decompiled(compacted[pseudo_key], func_addr=addr, schema_attrs=schema_attrs)
+                            if digest and any(digest.values()):
+                                compacted["_digest"] = digest
+                except Exception:
+                    pass
+            
+            if self.enable_response_enrichment:
+                # ---- Session Resume ----
+                try:
+                    if hasattr(self, 'session_mgr') and self.current_session:
+                        from .response_enrichment import build_session_resume
+                        sid = self.current_session.session_id
+                        # Only inject on first few calls
+                        if call_args and isinstance(call_args, dict):
+                            call_count = call_args.get("_call_seq", 0)
+                            if not isinstance(call_count, int) or call_count <= 2:
+                                resume = build_session_resume(self.session_mgr, sid)
+                                if resume:
+                                    compacted["_session_resume"] = resume
+                except Exception:
+                    pass
+            
+            if self.enable_response_enrichment:
+                # ---- Ghost Chain Inlining ----
+                try:
+                    addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
+                    ghost_action = action_name
+                    if tool_name == "code" and addr and ghost_action in ("decompile", "semantic_decompile"):
+                        from .response_enrichment import GHOST_CHAINS
                     else:
-                        pseudo_key = "output"
-                    if pseudo_key in compacted and isinstance(compacted[pseudo_key], str):
-                        addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                        # Try to get SchemaBoot attributes for richer classification
-                        schema_attrs = None
-                        try:
-                            if addr and hasattr(self, '_insight_index') and self._insight_index:
-                                func_data = self._insight_index.get_function(addr) if hasattr(self._insight_index, 'get_function') else None
-                                if func_data:
-                                    schema_attrs = func_data
-                        except Exception:
-                            pass
-                        digest = digest_decompiled(compacted[pseudo_key], func_addr=addr, schema_attrs=schema_attrs)
-                        if digest and any(digest.values()):
-                            compacted["_digest"] = digest
-            except Exception:
-                pass
-            
-            # ---- Session Resume ----
-            try:
-                if hasattr(self, 'session_mgr') and self.current_session:
-                    from .response_enrichment import build_session_resume
-                    sid = self.current_session.session_id
-                    # Only inject on first few calls
-                    if call_args and isinstance(call_args, dict):
-                        call_count = call_args.get("_call_seq", 0)
-                        if not isinstance(call_count, int) or call_count <= 2:
-                            resume = build_session_resume(self.session_mgr, sid)
-                            if resume:
-                                compacted["_session_resume"] = resume
-            except Exception:
-                pass
-            
-            # ---- Ghost Chain Inlining ----
-            try:
-                addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                ghost_action = action_name
-                if tool_name == "code" and addr and ghost_action in ("decompile", "semantic_decompile"):
-                    from .response_enrichment import GHOST_CHAINS
+                        GHOST_CHAINS = {}
                     ghost_results = {}
                     ghost_key = (tool_name, ghost_action)
                     
@@ -2618,8 +2627,8 @@ class IDAMCPServer:
                     
                     if ghost_results:
                         compacted["_inline"] = ghost_results
-            except Exception:
-                pass
+                except Exception:
+                    pass
             
             # ---- Auto-Advance Phase ----
             try:

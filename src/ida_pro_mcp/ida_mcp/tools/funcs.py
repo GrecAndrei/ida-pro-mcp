@@ -52,9 +52,31 @@ def _collect_callees(func_start_ea: int, max_items=50000) -> list[int]:
     return sorted(callees)
 
 
+def _resolve_func_addr(addr: Any) -> tuple[Optional[int], Optional[dict]]:
+    """Resolve function address from hex/int/name and normalize to function start when available."""
+    if addr is None:
+        return None, make_error(MCPError.INVALID_ARGS, "addr required")
+    if isinstance(addr, int):
+        ea = addr
+    else:
+        txt = str(addr).strip()
+        if not txt:
+            return None, make_error(MCPError.INVALID_ARGS, "addr required")
+        ea, err = validate_addr(txt)
+        if err:
+            sym = idc.get_name_ea_simple(txt)
+            if sym == idaapi.BADADDR:
+                return None, err
+            ea = sym
+    fn = ida_funcs.get_func(ea)
+    if fn:
+        return fn.start_ea, None
+    return ea, None
+
+
 def _funcs_impl(
-    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info"],
-                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info"],
+    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar"],
+                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name"] = None,
@@ -91,6 +113,11 @@ def _funcs_impl(
     - info: Detailed info about a single function.
     """
     try:
+        if addr is None:
+            addr = kwargs.get("ea") or kwargs.get("start") or kwargs.get("function") or kwargs.get("target")
+        if end is None:
+            end = kwargs.get("end_ea") or kwargs.get("stop")
+
         # "rename" is an alias for "set_name"
         if action == "rename":
             action = "set_name"
@@ -229,7 +256,7 @@ def _funcs_impl(
             return make_error(MCPError.IDA_ERROR, f"Failed to create function at {hex(ea)}", "Ensure code exists at the address and there are no overlapping functions. Try specifying an explicit end address.")
 
         elif action == "delete":
-            ea, err = validate_addr(addr)
+            ea, err = _resolve_func_addr(addr)
             if err: return err
             # If the address is inside a function but not at its start, delete the containing function
             func = ida_funcs.get_func(ea)
@@ -245,7 +272,7 @@ def _funcs_impl(
             return make_error(MCPError.IDA_ERROR, f"Failed to delete function at {hex(target_ea)}")
 
         elif action == "set_flags":
-            ea, err = validate_addr(addr)
+            ea, err = _resolve_func_addr(addr)
             if err: return err
             func = ida_funcs.get_func(ea)
             if not func:
@@ -262,7 +289,7 @@ def _funcs_impl(
             return make_error(MCPError.IDA_ERROR, "Failed to update flags")
 
         elif action == "set_name":
-            ea, err = validate_addr(addr)
+            ea, err = _resolve_func_addr(addr)
             if err: return err
             if not name: return make_error(MCPError.INVALID_ARGS, "name required")
             # Find the function containing this address
@@ -278,7 +305,7 @@ def _funcs_impl(
             return make_error(MCPError.IDA_ERROR, "Failed to set name", "Check if name is a valid C identifier")
 
         elif action == "add_comment":
-            ea, err = validate_addr(addr)
+            ea, err = _resolve_func_addr(addr)
             if err: return err
             if comment is None: return make_error(MCPError.INVALID_ARGS, "comment required")
             # Find function start for the comment
@@ -359,7 +386,7 @@ def _funcs_impl(
             return result
 
         elif action == "info":
-            ea, err = validate_addr(addr)
+            ea, err = _resolve_func_addr(addr)
             if err: return err
             fn = ida_funcs.get_func(ea)
             if not fn:
@@ -398,7 +425,7 @@ def _funcs_impl(
             return {"ok": True, "function": info}
 
         elif action == "metrics":
-            ea, err = validate_addr(addr)
+            ea, err = _resolve_func_addr(addr)
             if err: return err
             fn = ida_funcs.get_func(ea)
             if not fn:
@@ -472,7 +499,7 @@ def _funcs_impl(
         elif action == "find_similar":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr)
+            ea, err = _resolve_func_addr(addr)
             if err: return err
             target_fn = ida_funcs.get_func(ea)
             if not target_fn:
