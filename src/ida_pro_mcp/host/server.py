@@ -2901,6 +2901,8 @@ class IDAMCPServer:
 
     def _start_server(self, session):
         opts = session.analysis_options or {}
+        preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
+        has_preload_request = any(k in opts and opts.get(k) is not None for k in preload_keys)
         self._nuclear_reset(
             session.idb_path, aggressive=bool(opts.get("aggressive_cleanup"))
         )
@@ -2936,6 +2938,7 @@ class IDAMCPServer:
         env["IDA_MCP_SESSION_ID"] = session.session_id
         env["IDA_MCP_CACHE_DIR"] = self.cache_dir
         env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
+        env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
 
         # Determine whether to open existing IDB or create new one
         use_existing_idb = os.path.exists(session.idb_path)
@@ -3036,6 +3039,10 @@ class IDAMCPServer:
         env["IDA_MCP_SESSION_ID"] = session.session_id
         env["IDA_MCP_CACHE_DIR"] = self.cache_dir
         env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
+        opts = session.analysis_options or {}
+        preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
+        has_preload_request = any(k in opts and opts.get(k) is not None for k in preload_keys)
+        env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
         use_existing_idb = os.path.exists(session.idb_path)
         env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
         if sanitize_env:
@@ -3258,6 +3265,46 @@ class IDAMCPServer:
             current_options = self._send_rpc_raw(
                 {"tool": "analysis", "args": {"action": "get_options"}}, port
             )
+        except Exception:
+            pass
+
+        # Strict verification for architecture-sensitive loads.
+        try:
+            expected_proc = opts.get("processor")
+            expected_bits = opts.get("bitness")
+            expected_end = opts.get("endian")
+            got = current_options.get("result") if isinstance(current_options, dict) else None
+            if isinstance(got, dict):
+                got_proc = str(got.get("procname") or "").strip().lower()
+                got_bits = got.get("app_bitness")
+                got_be = got.get("is_be")
+                mismatches = []
+                if expected_proc is not None:
+                    eproc = str(expected_proc).strip().lower()
+                    if got_proc and got_proc != eproc:
+                        mismatches.append(f"processor expected={eproc} got={got_proc}")
+                if expected_bits is not None:
+                    try:
+                        if int(got_bits) != int(expected_bits):
+                            mismatches.append(f"bitness expected={expected_bits} got={got_bits}")
+                    except Exception:
+                        mismatches.append(f"bitness expected={expected_bits} got={got_bits}")
+                if expected_end is not None:
+                    end_norm = str(expected_end).strip().lower()
+                    want_be = end_norm in ("be", "big", "big_endian", "big-endian", "bigendian", "1", "true")
+                    if got_be is not None and bool(got_be) != bool(want_be):
+                        mismatches.append(f"endian expected={'be' if want_be else 'le'} got={'be' if bool(got_be) else 'le'}")
+                if mismatches:
+                    return make_error(
+                        MCPError.IDA_ERROR,
+                        "Architecture preload did not stick after analysis option application",
+                        details={
+                            "mismatches": mismatches,
+                            "expected": {"processor": expected_proc, "bitness": expected_bits, "endian": expected_end},
+                            "current_options": got,
+                            "hint": "Create a fresh session with architecture block and avoid reusing existing IDBs for incompatible binaries.",
+                        },
+                    )
         except Exception:
             pass
         return {

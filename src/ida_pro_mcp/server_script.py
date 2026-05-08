@@ -327,8 +327,9 @@ def _apply_pre_analysis_options():
     if not opts:
         return
 
-    # Skip if opening an existing IDB — don't clobber saved settings.
-    if os.environ.get("IDA_MCP_USE_EXISTING_IDB") == "1":
+    # Skip for existing IDBs unless the host explicitly requests forced
+    # pre-analysis application (used for architecture-sensitive firmware sessions).
+    if os.environ.get("IDA_MCP_USE_EXISTING_IDB") == "1" and os.environ.get("IDA_MCP_FORCE_PRE_ANALYSIS_OPTS") != "1":
         return
 
     import idaapi
