@@ -174,6 +174,11 @@ def search(
     try:
         # Resolve pattern
         actual_pattern = pattern or query or intent
+        if not actual_pattern:
+            # Compatibility: data_ref/code_ref callers often send addr/target.
+            compat_target = kwargs.get("addr") or kwargs.get("target") or kwargs.get("ea")
+            if compat_target is not None:
+                actual_pattern = str(compat_target)
         try:
             semantic_min_score = max(0.0, min(200.0, float(semantic_min_score)))
         except Exception:
