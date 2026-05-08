@@ -63,7 +63,15 @@ def query(
         Example: query(action="patterns", subaction="list_sigs")
     """
     try:
-        args = args or {}
+        merged_args = {}
+        if isinstance(args, dict):
+            merged_args.update(args)
+        # Accept direct top-level arguments too, so callers don't have to nest
+        # everything inside args={...} for query wrappers.
+        for k, v in (kwargs or {}).items():
+            if k not in ("action", "subaction", "args") and k not in merged_args:
+                merged_args[k] = v
+        args = merged_args
         
         if action == "data":
             from .data import data as data_tool
