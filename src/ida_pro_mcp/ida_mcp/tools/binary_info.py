@@ -17,6 +17,7 @@ def binary_info(
                       "Binary info action"],
     addr: Annotated[Optional[str], "Address for specific queries"] = None,
     limit: Annotated[int, "Max results"] = 50,
+    **kwargs,
 ) -> dict:
     """
     Binary metadata and format analysis.

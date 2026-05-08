@@ -584,7 +584,24 @@ def batch(
     # Lazy-load the tool registry
     tools_registry = {}
 
+    def _normalize_tool_name(name):
+        if not isinstance(name, str):
+            return name
+        n = name.strip()
+        if not n:
+            return n
+        if "." in n:
+            n = n.split(".")[-1]
+        if ":" in n:
+            n = n.split(":")[-1]
+        if "/" in n:
+            n = n.split("/")[-1]
+        if n.startswith("ida-pro-mcp_"):
+            n = n[len("ida-pro-mcp_"):]
+        return n
+
     def get_tool(name):
+        name = _normalize_tool_name(name)
         if not isinstance(name, str) or not name.replace("_", "").isalnum():
             return None
         if name not in tools_registry:

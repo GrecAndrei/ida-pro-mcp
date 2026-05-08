@@ -56,8 +56,28 @@ def _seg_bounds(start: str | None, end: str | None):
         if start is None or end is None:
             return None, None, make_error(MCPError.INVALID_ARGS, "start and end must be provided together")
         return validate_range(start, end)
-    min_ea = idaapi.cvar.inf.min_ea
-    max_ea = idaapi.cvar.inf.max_ea
+    min_ea = None
+    max_ea = None
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            min_ea = getattr(inf, "min_ea", None)
+            max_ea = getattr(inf, "max_ea", None)
+    except Exception:
+        pass
+    if min_ea is None or max_ea is None:
+        try:
+            import ida_ida
+            min_ea = ida_ida.inf_get_min_ea()
+            max_ea = ida_ida.inf_get_max_ea()
+        except Exception:
+            min_ea = idaapi.BADADDR
+            max_ea = idaapi.BADADDR
+    if min_ea in (None, idaapi.BADADDR) or max_ea in (None, idaapi.BADADDR):
+        return None, None, make_error(
+            MCPError.IDA_ERROR,
+            "IDB bounds are unavailable; create/open a session before firmware_view range actions",
+        )
     return min_ea, max_ea, None
 
 
