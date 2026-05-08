@@ -1162,6 +1162,23 @@ class IDAMCPServer:
                     if mapped:
                         out["action"] = mapped
                         break
+
+        # Compatibility cleanup: many clients send wrapper/meta keys to direct
+        # tool actions. Keep them for wrapper actions, otherwise drop unknown
+        # wrapper noise so strict tool signatures don't fail with INVALID_ARGS.
+        action_name = out.get("action")
+        if not (isinstance(action_name, str) and action_name in WRAPPER_ACTIONS):
+            schema_keys = set((TOOL_ARG_SCHEMAS.get(tool_name, {}) or {}).keys())
+            wrapper_noise = {
+                "source_action", "target_action", "on", "subaction",
+                "grep", "grep_pattern", "grep_regex", "grep_case_sensitive",
+                "grep_invert", "grep_field", "grep_limit", "grep_offset",
+                "pick_fields", "pick_omit", "head_n", "tail_n",
+                "next_token", "token", "cursor", "stats_include_payload",
+            }
+            for k in tuple(wrapper_noise):
+                if k in out and k not in schema_keys:
+                    out.pop(k, None)
         return self._normalize_field_variants(tool_name, out)
 
     def _wrapper_source_action(
