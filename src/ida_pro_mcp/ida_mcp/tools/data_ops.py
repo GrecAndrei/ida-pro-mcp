@@ -167,8 +167,7 @@ def data_ops(
             return make_error(MCPError.IDA_ERROR, "Failed to create instruction")
 
         elif action == "make_ptr":
-            inf = idaapi.get_inf_structure()
-            ptr_size = 8 if inf.is_64bit() else 4
+            ptr_size = _inf_ptr_size()
             if ida_bytes.create_data(ea, _flag_for_size(ptr_size), ptr_size, idaapi.BADADDR):
                 try:
                     idc.op_offset(ea, 0, idc.REF_OFF64 if ptr_size == 8 else idc.REF_OFF32, 0, 0, 0)
@@ -202,8 +201,7 @@ def data_ops(
                 ok = bool(idc.op_chr(ea, 0))
             elif m == "offset":
                 try:
-                    inf = idaapi.get_inf_structure()
-                    reft = idc.REF_OFF64 if inf.is_64bit() else idc.REF_OFF32
+                    reft = idc.REF_OFF64 if _inf_is_64bit() else idc.REF_OFF32
                     ok = bool(idc.op_offset(ea, 0, reft, 0, 0, 0))
                 except Exception:
                     ok = False

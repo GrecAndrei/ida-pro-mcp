@@ -598,6 +598,178 @@ class HybridSearchEngine:
         finally:
             conn.close()
 
+    def phase2_bm25(
+        self,
+        candidate_eas: List[int],
+        query_apis: Optional[List[str]] = None,
+        query_strings: Optional[List[str]] = None,
+        k1: float = 1.5,
+        b: float = 0.75,
+    ) -> Dict[int, float]:
+        """
+        Phase 2: BM25 scoring on textual features (APIs and strings) over
+        the Phase-1 SQL candidate pool.
+
+        This is the missing component from the flexvec paper adaptation —
+        SQL pre-filter narrows the pool, BM25 re-ranks it by query relevance.
+
+        BM25(d, q) = sum_t [ IDF(t) * tf(t,d)*(k1+1) / (tf(t,d) + k1*(1-b+b*dl/avgdl)) ]
+
+        Returns {ea: score} for each candidate.  Callers should use these
+        scores to rerank the Phase-1 results before returning to the LLM.
+        """
+        import math as _math
+
+        if not candidate_eas or not (query_apis or query_strings):
+            return {ea: 0.0 for ea in candidate_eas}
+
+        conn = self._connect()
+        if conn is None:
+            return {ea: 0.0 for ea in candidate_eas}
+
+        try:
+            cur = conn.cursor()
+            N = len(candidate_eas)
+
+            # Average document length across candidates
+            ph = ",".join("?" * N)
+            cur.execute(
+                f"SELECT AVG(api_count + string_count) FROM function_attrs WHERE ea IN ({ph})",
+                candidate_eas,
+            )
+            row = cur.fetchone()
+            avgdl = float(row[0]) if row and row[0] else 1.0
+
+            # Pre-fetch APIs and strings for all candidates in two bulk queries
+            cur.execute(
+                f"SELECT func_ea, api_name FROM function_apis WHERE func_ea IN ({ph})",
+                candidate_eas,
+            )
+            apis_by_ea: Dict[int, set] = {}
+            for func_ea, api_name in cur.fetchall():
+                apis_by_ea.setdefault(func_ea, set()).add(api_name)
+
+            cur.execute(
+                f"SELECT func_ea, string_text FROM function_strings WHERE func_ea IN ({ph})",
+                candidate_eas,
+            )
+            strings_by_ea: Dict[int, set] = {}
+            for func_ea, string_text in cur.fetchall():
+                strings_by_ea.setdefault(func_ea, set()).add(string_text)
+
+            # Pre-compute IDF for each query term (document frequency across *all* functions)
+            idf: Dict[str, float] = {}
+            for term in (query_apis or []):
+                cur.execute(
+                    "SELECT COUNT(DISTINCT func_ea) FROM function_apis WHERE api_name = ?",
+                    (term,),
+                )
+                r = cur.fetchone()
+                df = r[0] if r else 1
+                idf[term] = _math.log((N - df + 0.5) / (df + 0.5) + 1)
+
+            for term in (query_strings or []):
+                cur.execute(
+                    "SELECT COUNT(DISTINCT func_ea) FROM function_strings WHERE string_text = ?",
+                    (term,),
+                )
+                r = cur.fetchone()
+                df = r[0] if r else 1
+                # Strings slightly down-weighted vs. API names (more noise)
+                idf[term] = _math.log((N - df + 0.5) / (df + 0.5) + 1) * 0.7
+
+            # Score each candidate
+            scores: Dict[int, float] = {}
+            for ea in candidate_eas:
+                doc_apis    = apis_by_ea.get(ea, set())
+                doc_strings = strings_by_ea.get(ea, set())
+                dl = len(doc_apis) + len(doc_strings)
+                score = 0.0
+
+                for term in (query_apis or []):
+                    tf = 1 if term in doc_apis else 0
+                    score += idf.get(term, 0.0) * (tf * (k1 + 1)) / (
+                        tf + k1 * (1 - b + b * dl / avgdl) + 1e-12
+                    )
+
+                for term in (query_strings or []):
+                    tf = 1 if term in doc_strings else 0
+                    score += idf.get(term, 0.0) * (tf * (k1 + 1)) / (
+                        tf + k1 * (1 - b + b * dl / avgdl) + 1e-12
+                    )
+
+                scores[ea] = score
+
+            return scores
+
+        except sqlite3.Error:
+            return {ea: 0.0 for ea in candidate_eas}
+        finally:
+            conn.close()
+
+    def search_ranked(
+        self,
+        constraints: Dict[str, Any],
+        query_apis: Optional[List[str]] = None,
+        query_strings: Optional[List[str]] = None,
+        top_k: int = 50,
+        bm25_weight: float = 0.4,
+    ) -> Dict[str, Any]:
+        """
+        Full two-phase search: Phase 1 SQL pre-filter + Phase 2 BM25 rerank.
+
+        Phase 1 (SQL) guarantees 100% recall on structured constraints.
+        Phase 2 (BM25) reranks the pool by semantic relevance to query terms.
+        Combined score: (1 - bm25_weight) * sql_rank + bm25_weight * bm25_score.
+        """
+        import math as _math
+
+        phase1 = self.search(constraints, top_k=min(top_k * 4, 2000))
+        if not phase1.get("ok") or not phase1.get("candidates"):
+            return phase1
+
+        candidates = phase1["candidates"]
+        if not (query_apis or query_strings):
+            phase1["phase"] = "sql_only"
+            return phase1
+
+        # Build EA list for Phase 2
+        eas = []
+        for c in candidates:
+            try:
+                eas.append(int(c["ea"], 16))
+            except (KeyError, ValueError):
+                pass
+
+        bm25_scores = self.phase2_bm25(eas, query_apis=query_apis, query_strings=query_strings)
+
+        # Normalize BM25 scores to [0,1]
+        max_bm25 = max(bm25_scores.values()) if bm25_scores else 1.0
+        if max_bm25 < 1e-12:
+            max_bm25 = 1.0
+
+        # SQL rank score: 1 - (rank / N) so top SQL result = 1.0
+        n = len(candidates)
+        for i, c in enumerate(candidates):
+            try:
+                ea = int(c["ea"], 16)
+            except (KeyError, ValueError):
+                ea = 0
+            sql_rank_score = 1.0 - i / max(n - 1, 1)
+            bm25_norm = bm25_scores.get(ea, 0.0) / max_bm25
+            c["_score"] = (1 - bm25_weight) * sql_rank_score + bm25_weight * bm25_norm
+            c["_bm25"] = round(bm25_scores.get(ea, 0.0), 4)
+
+        candidates.sort(key=lambda x: x.get("_score", 0.0), reverse=True)
+        candidates = candidates[:top_k]
+
+        phase1["candidates"] = candidates
+        phase1["returned"] = len(candidates)
+        phase1["phase"] = "sql+bm25"
+        phase1["query_apis"] = query_apis
+        phase1["query_strings"] = query_strings
+        return phase1
+
 
 # ============================================================================
 # Application-level filters (regex, contains, etc.)

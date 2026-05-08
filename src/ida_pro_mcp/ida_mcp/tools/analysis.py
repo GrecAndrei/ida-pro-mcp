@@ -50,19 +50,7 @@ def analysis(
                     return int(ida_ida.inf_get_app_bitness())
                 except Exception:
                     pass
-            inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
-            if inf and hasattr(inf, "is_64bit") and inf.is_64bit():
-                return 64
-            if inf and hasattr(inf, "is_32bit_exactly") and inf.is_32bit_exactly():
-                return 32
-            lflags = getattr(idc, "INF_LFLAGS", None)
-            if lflags is not None:
-                try:
-                    if idc.get_inf_attr(lflags) & 0x100:
-                        return 64
-                except Exception:
-                    pass
-            return None
+            return 64 if _inf_is_64bit() else 32
 
         def _get_loader_name():
             if hasattr(ida_loader, "get_loader_name"):
@@ -83,15 +71,13 @@ def analysis(
             return None
 
         if action == "get_options":
-            inf = None
-            if hasattr(idaapi, "get_inf_structure"):
-                try:
-                    inf = idaapi.get_inf_structure()
-                except Exception:
-                    inf = None
             def safe_inf_attr(attr, default=None):
-                if inf is not None and hasattr(inf, attr):
-                    return getattr(inf, attr)
+                try:
+                    inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+                    if inf is not None and hasattr(inf, attr):
+                        return getattr(inf, attr)
+                except Exception:
+                    pass
                 return default
             def safe_idc_attr(name, default=None):
                 key = getattr(idc, name, None)
@@ -104,8 +90,8 @@ def analysis(
 
             procname = safe_inf_attr("procname", None) or safe_idc_attr("INF_PROCNAME", "")
             filetype = safe_inf_attr("filetype", None) or safe_idc_attr("INF_FILETYPE", None)
-            is_64bit = inf.is_64bit() if inf and hasattr(inf, "is_64bit") else bool(safe_idc_attr("INF_LFLAGS", 0) & 0x100)
-            is_be = inf.is_be() if inf and hasattr(inf, "is_be") else (ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else False)
+            is_64bit = _inf_is_64bit() if inf and hasattr(inf, "is_64bit") else bool(safe_idc_attr("INF_LFLAGS", 0) & 0x100)
+            is_be = _inf_is_be() if inf and hasattr(inf, "is_be") else (ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else False)
             app_bitness = _get_app_bitness()
             loader_name = _get_loader_name()
 
@@ -162,8 +148,7 @@ def analysis(
             )
             prev = ""
             try:
-                inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
-                prev = getattr(inf, "procname", "") if inf else ""
+                                prev = getattr(inf, "procname", "") if inf else ""
             except Exception:
                 pass
             if prev == processor:
@@ -253,8 +238,7 @@ def analysis(
             warnings_list = []
             prev = ""
             try:
-                inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
-                prev = getattr(inf, "procname", "") if inf else ""
+                                prev = getattr(inf, "procname", "") if inf else ""
             except Exception:
                 pass
             if processor:

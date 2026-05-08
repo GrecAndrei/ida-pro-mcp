@@ -650,10 +650,30 @@ def turboquant(
             "FROM function_attrs"
         )
         rows = cur.fetchall()
-        conn.close()
 
         if not rows:
+            conn.close()
             return {"ok": False, "error": "No functions in SchemaBoot index."}
+
+        # Bulk-fetch APIs and strings grouped by func_ea so we only do 2 queries
+        # instead of 2*N — critical for large binaries.
+        try:
+            cur.execute("SELECT func_ea, api_name FROM function_apis")
+            apis_by_ea: Dict[int, List[str]] = {}
+            for func_ea, api_name in cur.fetchall():
+                apis_by_ea.setdefault(func_ea, []).append(api_name)
+        except Exception:
+            apis_by_ea = {}
+
+        try:
+            cur.execute("SELECT func_ea, string_text FROM function_strings")
+            strings_by_ea: Dict[int, List[str]] = {}
+            for func_ea, string_text in cur.fetchall():
+                strings_by_ea.setdefault(func_ea, []).append(string_text)
+        except Exception:
+            strings_by_ea = {}
+
+        conn.close()
 
         engine = FunctionEmbeddingEngine(dim=4096)
         bank = TurboQuantV2(dim=4096)
@@ -666,7 +686,14 @@ def turboquant(
                 "api_count": row[7], "string_count": row[8],
                 "xref_count": row[9], "loop_count": row[10], "xor_count": row[11],
             }
-            vec = engine.vectorize(numeric_attrs=numeric)
+            # Include APIs and strings so the embedding covers semantic content,
+            # not just tabular numerics. This puts the vector into the distribution
+            # that PolarQuant+QJL was designed for (dense, diverse, L2-normalized).
+            vec = engine.vectorize(
+                numeric_attrs=numeric,
+                apis=apis_by_ea.get(ea),
+                strings=strings_by_ea.get(ea),
+            )
             key = name or hex(ea)
             bank.ingest(key, vec)
 

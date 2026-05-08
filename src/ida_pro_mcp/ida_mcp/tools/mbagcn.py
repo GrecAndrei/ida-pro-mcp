@@ -36,133 +36,116 @@ if "idaread" not in globals():
 class MbaGCNEncoder:
     """
     MbaGCN encoder for Control Flow Graphs.
-    
-    Architecture:
-      MAL:  H^(l+1) = D^-1/2 * A * D^-1/2 * H^(l)
-      S3TL: h_t = A_bar * h_t-1 + B_bar * x_t  (selective SSM update)
-      NSPL: y = C * h_t  (node embedding)
+
+    Uses spectral graph embedding (Laplacian eigenvectors) instead of
+    untrained random SSM matrices.  The normalized graph Laplacian
+    L = I - D^{-1/2} A D^{-1/2} has eigenvectors that encode structural
+    position optimally (spectral graph theory) without any training.
+    Node features are concatenated with spectral positions and projected
+    via a fixed Johnson-Lindenstrauss random projection, giving a
+    theoretically grounded, training-free CFG embedding.
+
+    Architecture (revised):
+      Step 1 — Spectral positioning: k smallest eigenvectors of L
+      Step 2 — Feature fusion: [spectral | node_features] per node
+      Step 3 — JL random projection → output_dim (L2-normalized)
+      Step 4 — Degree-weighted graph pooling → function embedding
     """
 
     def __init__(self, input_dim: int = 64, hidden_dim: int = 256, output_dim: int = 4096):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
-        
-        # MAL projection
-        rng = np.random.default_rng(42)
-        self.W_mal = rng.normal(0, 0.01, size=(input_dim, hidden_dim)).astype(np.float32)
-        
-        # S3TL state space matrices (initialized for stable dynamics)
-        self.A = -rng.exponential(1.0, size=(hidden_dim,)).astype(np.float32) * 0.1
-        self.B = rng.normal(0, 0.1, size=(hidden_dim,)).astype(np.float32)
-        self.C = rng.normal(0, 0.1, size=(hidden_dim,)).astype(np.float32)
-        
-        # NSPL output projection
-        self.W_nspl = rng.normal(0, 0.01, size=(hidden_dim, output_dim)).astype(np.float32)
+        self.spectral_k = min(hidden_dim, 32)  # number of Laplacian eigenvectors
 
-    def _normalize_adjacency(self, adj: np.ndarray) -> np.ndarray:
-        """Symmetric normalization: D^-1/2 * A * D^-1/2."""
-        n = adj.shape[0]
+    def _normalized_laplacian(self, adj: np.ndarray) -> np.ndarray:
+        """Compute symmetric normalized Laplacian L = I - D^{-1/2} A D^{-1/2}."""
         degree = np.sum(adj, axis=1)
-        degree[degree == 0] = 1.0  # avoid division by zero
+        degree = np.where(degree == 0, 1.0, degree)
         d_inv_sqrt = np.diag(1.0 / np.sqrt(degree))
-        return d_inv_sqrt @ adj @ d_inv_sqrt
+        return np.eye(adj.shape[0]) - d_inv_sqrt @ adj @ d_inv_sqrt
 
-    def _mal(self, node_features: np.ndarray, adj_norm: np.ndarray) -> np.ndarray:
-        """Message Aggregation Layer."""
-        # Aggregate neighbor features
-        aggregated = adj_norm @ node_features  # (n_nodes, input_dim)
-        # Project to hidden dim
-        return aggregated @ self.W_mal  # (n_nodes, hidden_dim)
-
-    def _s3tl(self, mal_output: np.ndarray) -> np.ndarray:
+    def _spectral_embed(self, adj: np.ndarray) -> np.ndarray:
         """
-        Selective State Space Transition Layer.
-        
-        For each node, apply discretized SSM:
-          h_t = exp(delta * A) * h_{t-1} + delta * B * x_t
-        
-        where delta is input-dependent (selective).
+        Compute spectral node positions from Laplacian eigenvectors.
+        Returns (n_nodes, k) matrix where each row is the spectral position.
+        Uses the k smallest non-trivial eigenvectors (skip the constant first).
         """
-        n_nodes = mal_output.shape[0]
-        hidden_states = np.zeros((n_nodes, self.hidden_dim), dtype=np.float32)
-        
-        for t in range(n_nodes):
-            x_t = mal_output[t]
-            # Selective step size based on input magnitude
-            delta_t = np.log(1 + np.exp(np.dot(x_t, x_t) / self.hidden_dim))
-            
-            # Discretize: A_bar = exp(delta * A)
-            A_bar = np.exp(delta_t * self.A)
-            
-            # State update
-            if t > 0:
-                hidden_states[t] = A_bar * hidden_states[t - 1] + delta_t * self.B * x_t
-            else:
-                hidden_states[t] = delta_t * self.B * x_t
-        
-        return hidden_states
+        n = adj.shape[0]
+        k = min(self.spectral_k, n)
+        if n == 1:
+            return np.zeros((1, k), dtype=np.float32)
+        L = self._normalized_laplacian(adj)
+        # eigh returns eigenvalues in ascending order (smallest first)
+        # for real symmetric matrices — guaranteed for graph Laplacians
+        eigenvalues, eigenvectors = np.linalg.eigh(L)
+        # Skip eigenvector 0 (constant), take next k
+        spec = eigenvectors[:, 1:k + 1]
+        if spec.shape[1] < k:
+            pad = np.zeros((n, k - spec.shape[1]), dtype=np.float32)
+            spec = np.concatenate([spec, pad], axis=1)
+        return spec.astype(np.float32)
 
-    def _nspl(self, hidden_states: np.ndarray) -> np.ndarray:
-        """Node State Prediction Layer."""
-        # y = C * h (element-wise, broadcasted)
-        node_embeddings = hidden_states * self.C  # (n_nodes, hidden_dim)
-        # Project to output dimension
-        return node_embeddings @ self.W_nspl  # (n_nodes, output_dim)
+    def _jl_project(self, fused: np.ndarray) -> np.ndarray:
+        """
+        Fixed JL random projection from fused_dim → output_dim.
+        Seeded deterministically so the same fused_dim always maps the
+        same way, enabling cross-binary embedding comparison.
+        """
+        fused_dim = fused.shape[1]
+        rng = np.random.default_rng(42 + fused_dim)
+        P = rng.normal(0.0, 1.0 / math.sqrt(fused_dim),
+                       size=(fused_dim, self.output_dim)).astype(np.float32)
+        return fused @ P
 
     def encode_cfg(self, node_features: np.ndarray, adjacency: np.ndarray) -> np.ndarray:
         """
-        Encode a Control Flow Graph.
-        
+        Encode a CFG into per-node embeddings.
+
         Args:
-            node_features: (n_nodes, input_dim) - feature vectors for each basic block
-            adjacency: (n_nodes, n_nodes) - adjacency matrix (0/1)
-        
+            node_features: (n_nodes, input_dim)
+            adjacency:     (n_nodes, n_nodes)
+
         Returns:
-            node_embeddings: (n_nodes, output_dim) - embedding for each node
+            embeddings: (n_nodes, output_dim) L2-normalized
         """
+        n = node_features.shape[0]
         if node_features.shape[1] != self.input_dim:
-            raise ValueError(f"Expected input_dim={self.input_dim}, got {node_features.shape[1]}")
-        
-        adj_norm = self._normalize_adjacency(adjacency)
-        
-        # Layer 1: MAL
-        mal_out = self._mal(node_features, adj_norm)
-        mal_out = np.tanh(mal_out)  # activation
-        
-        # Layer 2: S3TL
-        hidden = self._s3tl(mal_out)
-        
-        # Layer 3: NSPL
-        embeddings = self._nspl(hidden)
-        
-        # L2 normalize each embedding
+            pad = np.zeros((n, self.input_dim - node_features.shape[1]), dtype=np.float32)
+            node_features = np.concatenate([node_features, pad], axis=1)
+
+        # Step 1: spectral positions (structure, no training)
+        spec = self._spectral_embed(adjacency)           # (n, k)
+
+        # Step 2: fuse spectral + node features
+        fused = np.concatenate([spec, node_features], axis=1)   # (n, k+input_dim)
+
+        # Step 3: JL random projection
+        embeddings = self._jl_project(fused)             # (n, output_dim)
+        embeddings = np.tanh(embeddings)
+
+        # L2-normalize each node embedding
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         norms[norms < 1e-12] = 1.0
-        embeddings = embeddings / norms
-        
-        return embeddings
+        return (embeddings / norms).astype(np.float32)
 
     def encode_function(self, node_features: np.ndarray, adjacency: np.ndarray) -> np.ndarray:
         """
-        Encode a function's CFG to a single function-level embedding.
-        
-        Returns the mean of all node embeddings, weighted by out-degree.
+        Pool per-node embeddings into a single function-level embedding.
+        Weight by out-degree so structurally important blocks (branchy)
+        contribute more.
         """
         node_embeddings = self.encode_cfg(node_features, adjacency)
-        
-        # Weight by out-degree (entry points have higher influence)
-        out_degrees = np.sum(adjacency, axis=1)
-        weights = out_degrees / (np.sum(out_degrees) + 1e-12)
-        
+
+        out_degrees = np.sum(adjacency, axis=1).astype(np.float32)
+        total = out_degrees.sum()
+        weights = out_degrees / (total + 1e-12) if total > 0 else np.ones(len(out_degrees)) / len(out_degrees)
+
         func_embedding = np.average(node_embeddings, axis=0, weights=weights)
-        
-        # Renormalize
         norm = np.linalg.norm(func_embedding)
         if norm > 1e-12:
             func_embedding = func_embedding / norm
-        
-        return func_embedding
+        return func_embedding.astype(np.float32)
 
 
 class CFGExtractor:

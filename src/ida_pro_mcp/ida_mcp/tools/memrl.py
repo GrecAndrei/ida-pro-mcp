@@ -370,6 +370,66 @@ class MemRLBank:
             conn.commit()
         return suggestion_id
 
+    def auto_reward_for_addr(
+        self,
+        addr: str,
+        reward: float = 0.7,
+        alpha: float = DEFAULT_ALPHA,
+        max_age_seconds: float = 1800.0,
+    ) -> int:
+        """
+        Auto-infer a reward signal when the LLM visits an address that was
+        previously emitted as a MemRL suggestion.
+
+        Called by the server's _record_activity after each successful tool
+        call to close the feedback loop without requiring explicit LLM
+        cooperation.  If the LLM navigated to an address we suggested, that's
+        an implicit accept — reward ≈ 0.7 (not 1.0 because we can't confirm
+        the suggestion was the cause rather than coincidence).
+
+        Returns the number of suggestions updated.
+        """
+        cutoff = time.time() - max_age_seconds
+        updated = 0
+        try:
+            with self._conn() as conn:
+                cur = conn.cursor()
+                # Look for recent pending suggestions whose context_addr matches
+                cur.execute(
+                    """
+                    SELECT suggestion_id, intent_key, experience_key, q_value
+                    FROM memrl_suggestions
+                    WHERE context_addr = ?
+                      AND (feedback_type IS NULL OR feedback_type = 'neutral')
+                      AND created_at >= ?
+                    ORDER BY created_at DESC
+                    LIMIT 5
+                    """,
+                    (addr, cutoff),
+                )
+                rows = cur.fetchall()
+                now = time.time()
+                for suggestion_id, intent_key, experience_key, old_q in rows:
+                    old_q = old_q or 0.5
+                    new_q = old_q + alpha * (reward - old_q)
+                    new_q = max(Q_FLOOR, min(Q_CEILING, new_q))
+                    cur.execute(
+                        """
+                        UPDATE memrl_suggestions
+                        SET q_value = ?, reward = ?, feedback_type = 'auto_accept',
+                            feedback_timestamp = ?, last_updated = ?
+                        WHERE suggestion_id = ?
+                        """,
+                        (new_q, reward, now, now, suggestion_id),
+                    )
+                    # Propagate to underlying triplet
+                    self.update_q(intent_key, experience_key, reward, alpha)
+                    updated += 1
+                conn.commit()
+        except Exception:
+            pass
+        return updated
+
     def _classify_reward(self, reward: float) -> str:
         """Classify reward value into a human-readable feedback type."""
         if reward >= 0.8:

@@ -319,8 +319,12 @@ def _disasm_range(
         lines.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
         next_ea = idc.next_head(curr, hard_end)
         if next_ea == idaapi.BADADDR or next_ea <= curr:
-            break
-        curr = next_ea
+            item_size = int(idc.get_item_size(curr) or 1)
+            if item_size < 1:
+                item_size = 1
+            curr = curr + item_size
+        else:
+            curr = next_ea
         count += 1
     return lines
 

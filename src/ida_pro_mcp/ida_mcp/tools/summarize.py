@@ -239,7 +239,6 @@ def _get_func_strings(func_ea):
 
 def _get_file_type_name():
     """Get IDA's file type description."""
-    info = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
     if info and hasattr(info, "filetype"):
         ft = info.filetype
         type_map = {

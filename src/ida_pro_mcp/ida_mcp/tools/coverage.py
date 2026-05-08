@@ -535,7 +535,7 @@ def coverage(
 
         elif action == "report":
             try:
-                start_ea = idaapi.get_inf_structure().start_ea
+                start_ea = _inf_start_ea()
             except AttributeError:
                 import ida_ida
 

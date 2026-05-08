@@ -37,8 +37,6 @@ def binary_info(
     try:
         import ida_entry
         from collections import Counter
-
-        info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
         file_type = info.filetype if info else 0
         proc_name = info.procname if info else ""
 
@@ -60,12 +58,12 @@ def binary_info(
                 if len(entries) >= limit:
                     break
 
-            min_ea = info.min_ea if info else 0
-            max_ea = info.max_ea if info else 0
+            min_ea = _inf_min_ea() if info else 0
+            max_ea = _inf_max_ea() if info else 0
 
             bitness = 32
             if info:
-                bitness = 16 if info.is_16bit() else (64 if info.is_64bit() else 32)
+                bitness = 16 if info.is_16bit() else (64 if _inf_is_64bit() else 32)
             lines = [
                 f"format: {fmt_name}",
                 f"processor: {proc_name}",
@@ -356,7 +354,7 @@ def binary_info(
                     results.append(f"File size: {hex_size(file_size)}")
                     results.append(f"Max segment end: {hex(max_seg_end)}")
                     # Check if IDA loaded all of the file
-                    image_size = info.max_ea - info.min_ea
+                    image_size = _inf_max_ea() - _inf_min_ea()
                     if file_size > image_size:
                         overlay_size = file_size - image_size
                         results.append(f"Potential overlay: {hex_size(overlay_size)} bytes beyond mapped image")
