@@ -1412,6 +1412,25 @@ class IDAMCPServer:
         if len(self._activity_log) > self._activity_log_max:
             self._activity_log = self._activity_log[-self._activity_log_max :]
 
+        # Also persist into session skill/activity store so dashboard counters,
+        # phase progression, and dead-end detection reflect real tool usage.
+        try:
+            self.session_mgr.log_activity(
+                sid,
+                tool=tool_name,
+                action=action or "",
+                result=json.dumps(
+                    {
+                        "addresses": deduped_addresses[:4],
+                        "topic": entry.get("topic"),
+                        "target": entry.get("target"),
+                    },
+                    ensure_ascii=False,
+                )[:400],
+            )
+        except Exception:
+            pass
+
     def _build_recent_workset(
         self,
         sid: str,
