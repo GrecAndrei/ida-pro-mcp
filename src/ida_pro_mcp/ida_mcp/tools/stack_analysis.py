@@ -109,8 +109,7 @@ def _iter_frame_members(frame):
 
 def _get_arch_info():
     """Return architecture info dict for context."""
-    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
-    is_64 = info.is_64bit() if hasattr(info, "is_64bit") else False
+    is_64 = _inf_is_64bit() if hasattr(info, "is_64bit") else False
     is_32 = info.is_32bit() if hasattr(info, "is_32bit") else (not is_64)
     proc = info.procname if hasattr(info, "procname") else ""
     ptr_size = 8 if is_64 else 4

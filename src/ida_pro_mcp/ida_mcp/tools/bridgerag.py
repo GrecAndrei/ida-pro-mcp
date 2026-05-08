@@ -209,44 +209,105 @@ class BridgeRAGSearch:
     # Hop-2: Candidate retrieval via bridges
     # ------------------------------------------------------------------
 
+    def _compute_bridge_idf(
+        self, bridge_apis: List[str], bridge_strings: List[str]
+    ) -> Dict[str, float]:
+        """
+        IDF weights for bridge entities.  Rare bridges (appearing in few
+        functions) are more discriminative: IDF(b) = log(N / DF(b) + 1).
+
+        This is the key improvement over flat per-entity counting — a bridge
+        that appears in every function tells us nothing; one that appears in
+        only 3 functions is highly informative.
+        """
+        import math as _math
+        idf: Dict[str, float] = {}
+        try:
+            conn = self._conn()
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM function_attrs")
+            row = cur.fetchone()
+            N = row[0] if row else 1
+
+            for api in bridge_apis:
+                cur.execute(
+                    "SELECT COUNT(DISTINCT func_ea) FROM function_apis WHERE api_name = ?",
+                    (api,),
+                )
+                r = cur.fetchone()
+                df = r[0] if r else 1
+                idf[api] = _math.log(N / max(df, 1) + 1)
+
+            for s in bridge_strings:
+                cur.execute(
+                    "SELECT COUNT(DISTINCT func_ea) FROM function_strings WHERE string_text = ?",
+                    (s,),
+                )
+                r = cur.fetchone()
+                df = r[0] if r else 1
+                idf[s] = _math.log(N / max(df, 1) + 1)
+
+            conn.close()
+        except Exception:
+            # Fall back to uniform weight
+            for k in bridge_apis + bridge_strings:
+                idf[k] = 1.0
+        return idf
+
     def _tripartite_score(
         self,
         seed_attrs: Dict,
         bridge_attrs: Dict,
         candidate_attrs: Dict,
+        idf_weights: Optional[Dict[str, float]] = None,
     ) -> float:
         """
-        Tripartite judge: s(q, b, c) = conditional utility of candidate c
+        Tripartite scorer s(q, b, c): conditional utility of candidate c
         given query q and bridge b.
-        
+
+        Implements IDF-weighted bridge overlap so rare APIs/strings count
+        more than ubiquitous ones (e.g. malloc, free).  This is the key
+        mechanism from the BridgeRAG paper — conditioning on bridge entity
+        specificity rather than raw co-occurrence counts.
+
         Returns score in [0, 1].
         """
-        score = 0.0
-        
-        # Bridge overlap: how many bridge entities does candidate share?
-        shared_apis = set(bridge_attrs.get("apis", [])) & set(candidate_attrs.get("apis", []))
-        shared_strings = set(bridge_attrs.get("strings", [])) & set(candidate_attrs.get("strings", []))
-        score += len(shared_apis) * 0.15
-        score += len(shared_strings) * 0.08
-        
-        # Structural similarity
+        import math as _math
+        idf = idf_weights or {}
+
+        bridge_apis    = set(bridge_attrs.get("apis", []))
+        bridge_strings = set(bridge_attrs.get("strings", []))
+        cand_apis      = set(candidate_attrs.get("apis", []))
+        cand_strings   = set(candidate_attrs.get("strings", []))
+
+        shared_apis    = bridge_apis & cand_apis
+        shared_strings = bridge_strings & cand_strings
+
+        # IDF-weighted coverage: sum(IDF(b)) for each shared bridge entity
+        api_score    = sum(idf.get(a, 1.0) for a in shared_apis)
+        string_score = sum(idf.get(s, 1.0) for s in shared_strings) * 0.6
+
+        # Normalize by the maximum possible IDF mass for these bridges
+        max_idf = sum(idf.values()) if idf else max(len(bridge_apis) + len(bridge_strings), 1)
+        bridge_component = (api_score + string_score) / max(max_idf, 1.0)
+
+        # Structural similarity (smaller but still contributes)
         seed_size = seed_attrs.get("size", 0)
         cand_size = candidate_attrs.get("size", 0)
+        size_sim = 0.0
         if seed_size > 0 and cand_size > 0:
-            size_ratio = min(seed_size, cand_size) / max(seed_size, cand_size)
-            score += size_ratio * 0.1
-        
-        # Complexity match
-        seed_cc = seed_attrs.get("cyclomatic_complexity", 0)
-        cand_cc = candidate_attrs.get("cyclomatic_complexity", 0)
-        if seed_cc > 0:
-            cc_ratio = min(seed_cc, cand_cc) / max(seed_cc, cand_cc)
-            score += cc_ratio * 0.1
-        
-        # Segment affinity
-        if seed_attrs.get("segment") == candidate_attrs.get("segment"):
-            score += 0.05
-        
+            size_sim = min(seed_size, cand_size) / max(seed_size, cand_size)
+
+        seed_cc = seed_attrs.get("cyclomatic_complexity", 1)
+        cand_cc = candidate_attrs.get("cyclomatic_complexity", 1)
+        cc_sim = min(seed_cc, cand_cc) / max(seed_cc, cand_cc) if seed_cc > 0 else 0.0
+
+        seg_bonus = 0.05 if seed_attrs.get("segment") == candidate_attrs.get("segment") else 0.0
+
+        structural = (size_sim + cc_sim) * 0.1 + seg_bonus
+
+        # Combine: bridge coverage dominates (0.85 weight), structure is secondary
+        score = 0.85 * bridge_component + 0.15 * structural
         return min(score, 1.0)
 
     def _pit_fusion(
@@ -297,6 +358,12 @@ class BridgeRAGSearch:
 
         conn = self._conn()
         cur = conn.cursor()
+
+        # Precompute IDF weights for all bridge entities once
+        idf_weights = self._compute_bridge_idf(
+            bridge_apis=bridges.get("apis", []),
+            bridge_strings=bridges.get("strings", []),
+        )
 
         # Get seed attributes for tripartite judging
         seed_attrs = {}
@@ -377,8 +444,10 @@ class BridgeRAGSearch:
                 "is_library": bool(row[13]),
             }
             
-            # Tripartite judging
-            judge_score = self._tripartite_score(seed_attrs, seed_attrs, cand_attrs) if seed_attrs else 0.5
+            # IDF-weighted tripartite scoring (core of the BridgeRAG algorithm)
+            judge_score = self._tripartite_score(
+                seed_attrs, seed_attrs, cand_attrs, idf_weights=idf_weights
+            ) if seed_attrs else 0.5
             
             # Bridge overlap score
             bscore = bridge_scores.get(ea, 0.0)

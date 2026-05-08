@@ -25,6 +25,10 @@ import os
 import time
 
 
+def _is_64bit() -> bool:
+    return _inf_is_64bit()
+
+
 def _fw_state_path() -> str:
     root = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp")
     os.makedirs(root, exist_ok=True)
@@ -56,23 +60,11 @@ def _seg_bounds(start: str | None, end: str | None):
         if start is None or end is None:
             return None, None, make_error(MCPError.INVALID_ARGS, "start and end must be provided together")
         return validate_range(start, end)
-    min_ea = None
-    max_ea = None
-    try:
-        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
-        if inf is not None:
-            min_ea = getattr(inf, "min_ea", None)
-            max_ea = getattr(inf, "max_ea", None)
-    except Exception:
-        pass
-    if min_ea is None or max_ea is None:
-        try:
-            import ida_ida
-            min_ea = ida_ida.inf_get_min_ea()
-            max_ea = ida_ida.inf_get_max_ea()
-        except Exception:
-            min_ea = idaapi.BADADDR
-            max_ea = idaapi.BADADDR
+    min_ea = _inf_min_ea()
+    max_ea = _inf_max_ea()
+    if min_ea == 0 or max_ea == idaapi.BADADDR:
+        min_ea = idaapi.BADADDR
+        max_ea = idaapi.BADADDR
     if min_ea in (None, idaapi.BADADDR) or max_ea in (None, idaapi.BADADDR):
         return None, None, make_error(
             MCPError.IDA_ERROR,
@@ -146,8 +138,7 @@ def firmware_view(
         stride = max(1, min(int(stride), 16))
         min_run = max(4, min(int(min_run), 4096))
 
-        inf = idaapi.get_inf_structure()
-        ptr_size = 8 if inf.is_64bit() else 4
+        ptr_size = 8 if _is_64bit() else 4
 
         def _log_ml(result: dict, act: str, details: str):
             try:
@@ -572,8 +563,8 @@ def firmware_view(
                 if aerr:
                     return aerr
                 anchor = a
-            around_start = max(idaapi.cvar.inf.min_ea, anchor - 0x200)
-            around_end = min(idaapi.cvar.inf.max_ea, anchor + 0x200)
+            around_start = max(idaapi.cvar._inf_min_ea(), anchor - 0x200)
+            around_end = min(idaapi.cvar._inf_max_ea(), anchor + 0x200)
             result = {
                 "ok": True,
                 "action": action,

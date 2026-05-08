@@ -189,17 +189,30 @@ def _funcs_impl(
             # Ensure code exists at the start address - auto-convert if possible
             byte_flags = ida_bytes.get_flags(ea)
             if not ida_bytes.is_code(byte_flags):
-                # Try to make code at this address
                 created = idc.create_insn(ea)
                 if created == 0 or not ida_bytes.is_code(ida_bytes.get_flags(ea)):
-                    # Try harder: undefine first, then make code
-                    ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, 16)
-                    created = idc.create_insn(ea)
-                    if created == 0 or not ida_bytes.is_code(ida_bytes.get_flags(ea)):
+                    # Raw/firmware regions often need wider undefine + auto-analysis nudges.
+                    converted = False
+                    for carve_size in (16, 64, 256):
+                        try:
+                            ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, carve_size)
+                        except Exception:
+                            pass
+                        try:
+                            import ida_auto
+                            if hasattr(ida_auto, "auto_make_code"):
+                                ida_auto.auto_make_code(ea)
+                        except Exception:
+                            pass
+                        created = idc.create_insn(ea)
+                        if created != 0 and ida_bytes.is_code(ida_bytes.get_flags(ea)):
+                            converted = True
+                            break
+                    if not converted:
                         return make_error(
                             MCPError.ADDRESS_INVALID,
                             f"Address {hex(ea)} cannot be converted to code",
-                            "The bytes at this address may not form valid instructions. Try data_ops(action='make_code', addr=...) first.",
+                            "Tried carve-and-convert retries (16/64/256 bytes). Bytes may be invalid for current processor; verify architecture or use firmware_view(action='auto_retype').",
                         )
 
             if ida_funcs.add_func(ea, end_ea or idaapi.BADADDR):

@@ -145,13 +145,7 @@ _STACK_STRING_MOV_PATTERNS = [
 
 def _is_be():
     """Detect if the target binary is big-endian."""
-    try:
-        inf = idaapi.get_inf_structure()
-        if inf and hasattr(inf, 'is_be'):
-            return inf.is_be()
-    except Exception:
-        pass
-    return False
+    return _inf_is_be()
 
 
 def _iter_strings(limit=500):

@@ -454,7 +454,7 @@ def types(
                                   "Use 'get' action to inspect the type or choose a different name.")
 
             # Determine pointer size from the database
-            is_64 = hasattr(idaapi, 'inf_is_64bit') and idaapi.inf_is_64bit()
+            is_64 = hasattr(idaapi, 'inf_is_64bit') and _inf_is_64bit()
             ptr_size = 8 if is_64 else 4
 
             members = []

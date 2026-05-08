@@ -41,7 +41,14 @@ def misc(
         result = execute_python(script)
         if isinstance(result, dict) and result.get("error"):
             return result
-        return {"ok": True, **result}
+        if isinstance(result, dict):
+            out = {"ok": True, **result}
+            out.setdefault("output", "")
+            out.setdefault("result", None)
+            if out.get("output") == "" and out.get("result") is None:
+                out["note"] = "Script executed with no stdout and no expression result"
+            return out
+        return {"ok": True, "output": "", "result": None}
     if action == "idc":
         script = expr if expr else code
         if not script:
@@ -215,7 +222,7 @@ def execute_python(script: str):
         # Multi-line or compound statements should go straight to exec.
         if "\n" in script or ";" in script:
             exec(script, _safe_globals)
-            return {"output": output.getvalue()}
+            return {"output": output.getvalue(), "result": None}
 
         try:
             res = eval(script, _safe_globals)
@@ -223,7 +230,8 @@ def execute_python(script: str):
                 print(res)
         except SyntaxError:
             exec(script, _safe_globals)
-        return {"output": output.getvalue()}
+            res = None
+        return {"output": output.getvalue(), "result": res}
     except SyntaxError as e:
         line = getattr(e, "lineno", None)
         offset = getattr(e, "offset", None)

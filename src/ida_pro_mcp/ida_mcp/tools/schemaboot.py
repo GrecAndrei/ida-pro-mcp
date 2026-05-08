@@ -873,6 +873,49 @@ def schemaboot(
             if not os.path.exists(db_path):
                 return make_error(MCPError.FILE_NOT_FOUND, "No index found. Run schemaboot(action='ingest') first.")
 
+            # Extract semantic query terms from constraints for Phase 2 BM25 rerank
+            _query_apis: list = []
+            _query_strings: list = []
+            if isinstance(constraints, dict):
+                if "apis" in constraints:
+                    _query_apis = [constraints["apis"]] if isinstance(constraints["apis"], str) else list(constraints["apis"])
+                if "strings_like" in constraints or "string_contains" in constraints:
+                    v = constraints.get("strings_like") or constraints.get("string_contains")
+                    if v:
+                        _query_strings = [v]
+
+            # Use HybridSearchEngine for Phase 1 + Phase 2 BM25 when we have semantic terms
+            if _query_apis or _query_strings:
+                try:
+                    from .hybrid_search import HybridSearchEngine
+                    engine = HybridSearchEngine(db_path)
+                    ranked = engine.search_ranked(
+                        constraints or {},
+                        query_apis=_query_apis or None,
+                        query_strings=_query_strings or None,
+                        top_k=limit,
+                        bm25_weight=0.4,
+                    )
+                    if ranked.get("ok"):
+                        cands = ranked.get("candidates") or []
+                        # Map to schemaboot response format
+                        results = []
+                        for c in cands[offset:offset + limit]:
+                            d = {k: v for k, v in c.items() if not k.startswith("_")}
+                            d.setdefault("has_loops", bool(d.get("has_loops", False)))
+                            results.append(d)
+                        return {
+                            "ok": True,
+                            "total_matches": ranked.get("total_matches", len(results)),
+                            "returned": len(results),
+                            "offset": offset,
+                            "limit": limit,
+                            "phase": ranked.get("phase", "sql+bm25"),
+                            "functions": results,
+                        }
+                except Exception:
+                    pass  # fall through to original implementation
+
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 

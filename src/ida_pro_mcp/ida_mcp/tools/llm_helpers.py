@@ -768,7 +768,6 @@ def llm_helpers(
         Returns: {enriched, confidence, coverage, estimated_tokens, budget_pct, suggested_next_actions, summary, original}
     """
     try:
-        info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
         expansion_result = _handle_feature_expansion_action(
             action=action,
             addr=addr,
@@ -965,13 +964,13 @@ def llm_helpers(
             else:
                 file_type_name = "unknown"
 
-            image_size = (info.max_ea - info.min_ea) if info else 0
+            image_size = (_inf_max_ea() - _inf_min_ea()) if info else 0
             seg_count = sum(1 for _ in idautils.Segments())
 
             proc_name = info.procname if info else ""
-            bits = (64 if info.is_64bit() else 32) if info else 0
-            min_ea = info.min_ea if info else 0
-            max_ea = info.max_ea if info else 0
+            bits = (64 if _inf_is_64bit() else 32) if info else 0
+            min_ea = _inf_min_ea() if info else 0
+            max_ea = _inf_max_ea() if info else 0
             lines = [
                 f"Format: {file_type_name} | Arch: {proc_name} | Bits: {bits}",
                 f"Image: {hex(min_ea)}-{hex(max_ea)} ({hex_size(image_size)})",
@@ -1254,7 +1253,7 @@ def llm_helpers(
 
             else:
                 # General overview
-                answer_parts.append(f"Binary: {info.procname if info else ''} {'64-bit' if (info and info.is_64bit()) else '32-bit'}")
+                answer_parts.append(f"Binary: {info.procname if info else ''} {'64-bit' if (info and _inf_is_64bit()) else '32-bit'}")
                 answer_parts.append(f"Functions: {_count_functions()}")
                 modules, imports = _get_imports_summary()
                 answer_parts.append(f"Imports: {len(imports)} from {len(modules)} modules")
@@ -1434,7 +1433,7 @@ def llm_helpers(
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
 
             cheat = ["=== Quick Reference for This Binary ==="]
-            cheat.append(f"Arch: {info.procname if info else ''} | {'64-bit' if (info and info.is_64bit()) else '32-bit'}")
+            cheat.append(f"Arch: {info.procname if info else ''} | {'64-bit' if (info and _inf_is_64bit()) else '32-bit'}")
             cheat.append("")
             cheat.append("-- Overview --")
             cheat.append("binary_info(action='headers')        # PE/ELF headers")

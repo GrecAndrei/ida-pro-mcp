@@ -33,10 +33,9 @@ warnings.filterwarnings("ignore")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from .resources import list_resources, ResourceResolver
-from .cartographer_mu import CartographerMu
 from .audit import AuditLogger
 from .rate_limit import RateLimiter
-from .attention_kernel import AttentionKernel
+from .intelligence import get_assembler
 from .config import (
     CACHE_DIR,
     BRIDGE_LOG,
@@ -188,7 +187,7 @@ class IDAMCPServer:
         self.default_batch_compact = _env_bool("IDA_MCP_BATCH_COMPACT", True)
         # Heavy response enrichments are useful but can inflate context usage.
         # Keep disabled by default; callers can opt in via env.
-        self.enable_response_enrichment = _env_bool("IDA_MCP_RESPONSE_ENRICH", False)
+        self.enable_response_enrichment = _env_bool("IDA_MCP_RESPONSE_ENRICH", True)
         self.default_table_mode = _env_bool("IDA_MCP_TABLE_COMPACT", False)
         self.default_compact_max_items = _bounded_int(
             os.environ.get("IDA_MCP_COMPACT_MAX_ITEMS", 48),
@@ -306,15 +305,9 @@ class IDAMCPServer:
         os.makedirs(self.cache_dir, exist_ok=True)
         self.session_mgr = SessionManager(self.cache_dir)
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
-        self.cartographer = CartographerMu(
-            db_path=os.path.join(self.cache_dir, "cartographer_mu_q.db")
-        )
         self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
         self.rate_limiter = RateLimiter()
-        self.attention_kernel = AttentionKernel(
-            db_path=os.path.join(self.cache_dir, "attention_kernel.db"),
-            autogenic_db_path=os.path.join(self.cache_dir, "autogenic_semantics.db"),
-        )
+        self.assembler = get_assembler()  # bge-code-v1 intelligence layer
         self._last_injected_entries: List[Dict[str, Any]] = []
         self._last_query_bridges: List[str] = []
         self._call_counter = 0
@@ -1171,7 +1164,9 @@ class IDAMCPServer:
         # wrapper noise so strict tool signatures don't fail with INVALID_ARGS.
         action_name = out.get("action")
         if not (isinstance(action_name, str) and action_name in WRAPPER_ACTIONS):
-            schema_keys = set((TOOL_ARG_SCHEMAS.get(tool_name, {}) or {}).keys())
+            # Always strip wrapper-only helper keys for direct actions, even if
+            # a broad schema includes them. This keeps noisy client payloads
+            # (empty grep/pick/head/next fields) from polluting tool calls.
             wrapper_noise = {
                 "source_action", "target_action", "on", "subaction",
                 "grep", "grep_pattern", "grep_regex", "grep_case_sensitive",
@@ -1180,8 +1175,11 @@ class IDAMCPServer:
                 "next_token", "token", "cursor", "stats_include_payload",
             }
             for k in tuple(wrapper_noise):
-                if k in out and k not in schema_keys:
-                    out.pop(k, None)
+                if k == "subaction" and tool_name == "query":
+                    continue
+                if tool_name == "truncation" and k in {"token", "next_token", "cursor"}:
+                    continue
+                out.pop(k, None)
         return self._normalize_field_variants(tool_name, out)
 
     def _wrapper_source_action(
@@ -1450,6 +1448,19 @@ class IDAMCPServer:
             )
         except Exception:
             pass
+
+        # MemRL auto-reward: when the LLM navigates to an address we previously
+        # suggested, record an implicit accept reward (~0.7) to close the feedback
+        # loop without requiring explicit LLM cooperation.  This is the missing
+        # link that keeps Q-values from being frozen at their initial 0.5.
+        if deduped_addresses:
+            try:
+                from ida_pro_mcp.ida_mcp.tools.memrl import MemRLBank
+                bank = MemRLBank()
+                for addr in deduped_addresses[:4]:
+                    bank.auto_reward_for_addr(addr, reward=0.7)
+            except Exception:
+                pass
 
     def _build_recent_workset(
         self,
@@ -2034,158 +2045,51 @@ class IDAMCPServer:
                 )
         return warnings
 
-    def _auto_blackboard_from_response(self, tool_name: str, action: str, payload: dict) -> None:
-        """Deterministic auto-extraction: silently write interesting findings to blackboard."""
+    def _assemble_and_inject_context(
+        self,
+        tool_name: str,
+        action: str,
+        payload: dict,
+        addr: str,
+    ) -> None:
+        """
+        Build a context_pack via the intelligence layer (bge-code-v1) and inject
+        it into the payload so the LLM receives relevant context alongside results.
+        Replaces the cartographer + attention_kernel + cognitive_layer pipeline.
+        """
         if not isinstance(payload, dict) or payload.get("error"):
             return
-        if tool_name in {"session", "blackboard", "batch", "truncation", "wiki"}:
+        if tool_name in {"session", "blackboard", "batch", "truncation", "wiki",
+                         "predictor", "workflow"}:
             return
 
-        self._call_counter += 1
-
-        # Encode payload for Cartographer-μ
         try:
-            vector = self.cartographer.encode_payload(payload, tool_name)
-            quantized, q_signs, norm = self.cartographer.quantize(vector)
-            bridges = self.cartographer.extract_bridges(payload, tool_name)
-            schema = self.cartographer.induce_schema(payload, tool_name)
-            q_value = 0.5  # Initial Q-value
-        except Exception:
-            vector = None
-            quantized = None
-            q_signs = None
-            norm = 0.0
-            bridges = []
-            schema = {}
-            q_value = 0.5
-
-        findings: list[dict] = []
-        for key in ("findings", "items", "matches", "results", "indicators", "iocs", "apis", "functions", "entries"):
-            val = payload.get(key)
-            if isinstance(val, list):
-                for item in val[:5]:
-                    if isinstance(item, dict):
-                        title = str(item.get("name") or item.get("title") or item.get("summary") or item.get("value") or "finding")[:120]
-                        addr = str(item.get("addr") or item.get("address") or item.get("ea") or "")
-                        category = str(item.get("category") or item.get("type") or item.get("kind") or "finding")
-                        if title and title != "finding":
-                            findings.append({"title": title, "addr": addr, "category": category})
-                    elif isinstance(item, (str, int, float)):
-                        title = str(item)[:120]
-                        if title:
-                            findings.append({"title": title, "addr": "", "category": "finding"})
-            elif isinstance(val, str) and val.strip():
-                findings.append({"title": val.strip()[:120], "addr": "", "category": "finding"})
-
-        if not findings:
-            summary = payload.get("summary")
-            if summary and isinstance(summary, dict):
-                title = str(summary.get("description") or summary.get("name") or f"{tool_name}.{action} result")[:120]
-                findings.append({"title": title, "addr": "", "category": "summary"})
-
-        for f in findings[:3]:
-            try:
-                args = {
-                    "action": "write",
-                    "name": f["title"],
-                    "addr": f["addr"],
-                    "category": f["category"],
-                    "notes": f"Auto-captured from {tool_name}.{action}",
-                    "confidence": 0.7,
-                    "tags": "auto",
-                }
-                # Add Cartographer-μ metadata if available
-                if vector is not None:
-                    args["vector"] = vector.tobytes()
-                    args["quantized"] = quantized.tobytes()
-                    args["q_signs"] = q_signs.tobytes()
-                    args["norm"] = norm
-                    args["bridges"] = ",".join(bridges)
-                    args["schema"] = json.dumps(schema)
-                    args["q_value"] = q_value
-                    args["call_idx"] = self._call_counter
-                self._execute_tool("blackboard", args)
-            except Exception:
-                pass
-
-    def _inject_session_memory(self, payload: dict, tool_name: str, action: str = "") -> None:
-        """Inject relevance-ranked working memory via Cartographer-μ."""
-        if not isinstance(payload, dict) or payload.get("error"):
-            return
-        if tool_name in {"session", "blackboard", "batch", "truncation", "wiki", "predictor", "workflow"}:
-            return
-        if not (hasattr(self, "session_mgr") and self.current_session):
-            return
-        try:
-            # Get all recent blackboard entries
-            bb = self._execute_tool("blackboard", {"action": "list", "limit": 100})
-            entries = []
-            if isinstance(bb, dict) and bb.get("ok"):
-                entries = bb.get("entries", [])
-
-            # Run Cartographer-μ pipeline
-            context = self.cartographer.inject_context(
-                current_tool=tool_name,
-                current_action=action,
+            session_id = (
+                getattr(self.current_session, "session_id", None)
+                if self.current_session else "default"
+            )
+            idb_path = (
+                getattr(self.current_session, "idb_path", None)
+                if self.current_session else None
+            )
+            bb_store = self._get_blackboard_store()
+            pack = self.assembler.assemble(
+                tool=tool_name,
+                action=action,
                 payload=payload,
-                blackboard_entries=entries,
+                addr=addr,
+                session_id=session_id or "default",
+                idb_path=idb_path or "",
+                bb_store=bb_store,
             )
-            self.attention_kernel.observe_context(
-                getattr(self.current_session, "session_id", None) if self.current_session else None,
-                tool_name,
-                str(action or ""),
-                context,
-            )
-
-            # Inject compact working memory
-            if context.get("working_memory"):
-                payload["working_memory"] = context["working_memory"]
-                payload["memory_stats"] = context.get("memory_stats", {})
-                payload["analysis_phase"] = context.get("analysis_phase", "triage")
-                payload["bridges_detected"] = context.get("bridges_detected", [])
-
-                # Store for MemRL observation
-                self._last_injected_entries = list(context["working_memory"])
-                self._last_query_bridges = list(context.get("bridges_detected", []))
-            else:
-                self._last_injected_entries = []
-                self._last_query_bridges = []
-
-            # State contract check
-            contract = self.session_mgr.check_state_contract(
-                self.current_session.session_id, window=8
-            )
-            if isinstance(contract, dict) and contract.get("ok"):
-                payload["state_contract_met"] = contract.get("contract_met", True)
+            if pack:
+                payload["context_pack"] = pack
         except Exception:
             pass
 
     def _observe_memrl(self, tool_name: str, action: str, payload: dict) -> None:
-        """Observe LLM behavior and update MemRL Q-values for previously injected entries."""
-        if not self._last_injected_entries:
-            return
-        try:
-            next_bridges = self.cartographer.extract_bridges(payload, tool_name)
-            phase_after = payload.get("analysis_phase", "triage") if isinstance(payload, dict) else "triage"
-            for entry in self._last_injected_entries:
-                entry_id = entry.get("id", "")
-                entry_bridges = entry.get("bridges", [])
-                if isinstance(entry_bridges, str):
-                    entry_bridges = [b.strip() for b in entry_bridges.split(",") if b.strip()]
-                was_injected = True
-                self.cartographer.observe_usage(
-                    entry_id=entry_id,
-                    was_injected=was_injected,
-                    next_bridges=next_bridges,
-                    entry_bridges=entry_bridges,
-                    next_tool=tool_name,
-                    next_action=action,
-                    next_payload=payload,
-                    phase_after=phase_after,
-                )
-            self._last_injected_entries = []
-        except Exception:
-            pass
+        """No-op stub — MemRL feedback now runs via auto_reward_for_addr in _record_activity."""
+        pass
 
     def _collect_hex_addresses(self, value: Any, max_items: int = 8) -> list[str]:
         found: list[str] = []
@@ -2666,29 +2570,32 @@ class IDAMCPServer:
                 bb_entries = auto_blackboard_write(tool_name, str(opts.get("action", "")), compacted, addr)
                 bb_written = 0
                 if bb_entries:
-                    # Actually call blackboard.write (not just activity log)
+                    # Write to blackboard with dedup check: skip entries whose
+                    # addr+category+title already exist to avoid unbounded noise.
                     try:
+                        bb_store = self._get_blackboard_store()
                         for entry in bb_entries:
+                            e_addr = str(entry.get("addr", addr) or "")
+                            e_title = str(entry.get("name") or entry.get("title") or "")
+                            e_category = str(entry.get("category") or "general")
+                            if not e_title:
+                                continue
+                            # Skip if identical entry already exists
+                            if bb_store and bb_store.exists(e_addr, e_category, e_title):
+                                continue
                             wr = self._execute_tool("blackboard", {
                                 "action": "write",
-                                "addr": entry.get("addr", addr),
-                                "name": entry.get("name", ""),
-                                "notes": entry.get("notes", ""),
-                                "category": entry.get("category", "general"),
-                                "priority": entry.get("priority", 4),
-                                "tags": ",".join(entry.get("tags", [])),
+                                "addr": e_addr,
+                                "title": e_title,
+                                "content": str(entry.get("notes") or entry.get("content") or ""),
+                                "category": e_category,
+                                "tags": entry.get("tags") or [],
+                                "confidence": float(entry.get("confidence", 0.6)),
                             })
                             if isinstance(wr, dict) and wr.get("ok"):
                                 bb_written += 1
                     except Exception:
-                        # Fallback: log to activity as before
-                        if hasattr(self, 'session_mgr') and self.current_session:
-                            sid = self.current_session.session_id
-                            for entry in bb_entries:
-                                try:
-                                    self.session_mgr.log_activity(sid, tool_name, "auto_blackboard", json.dumps(entry)[:200])
-                                except Exception:
-                                    pass
+                        pass
 
                 # LLM-visible state-sync guidance: make blackboard usage explicit.
                 if isinstance(compacted, dict):
@@ -2770,11 +2677,15 @@ class IDAMCPServer:
             except Exception:
                 pass
 
-            # ---- Universal Auto-Blackboard + Session Memory Injection ----
+            # ---- Intelligence Layer: assemble real context and inject ----
             try:
                 if isinstance(compacted, dict):
-                    self._auto_blackboard_from_response(tool_name, action_name, compacted)
-                    self._inject_session_memory(compacted, tool_name, action_name)
+                    addr = ""
+                    if isinstance(call_args, dict):
+                        addr = str(call_args.get("addr") or call_args.get("addrs") or "")
+                    self._assemble_and_inject_context(
+                        tool_name, action_name, compacted, addr
+                    )
             except Exception:
                 pass
         return compacted
@@ -5798,13 +5709,8 @@ class IDAMCPServer:
         sid = getattr(self.current_session, "session_id", None) if self.current_session else None
         # Active Blackboard Kernel: result shaping + observation logging
         try:
-            pre = self.attention_kernel.preflight(
-                sid,
-                resolved_tool,
-                str(args.get("action", "") if isinstance(args, dict) else ""),
-                args if isinstance(args, dict) else {},
-            )
-            result = self.attention_kernel.shape_result(pre, result)
+            pre = {"decision": "allow"}
+
             self.attention_kernel.observe_result(
                 sid,
                 resolved_tool,
@@ -5857,12 +5763,8 @@ class IDAMCPServer:
 
         # ---- Active Blackboard Kernel (preflight) ----
         sid = getattr(self.current_session, "session_id", None) if self.current_session else None
-        pre = self.attention_kernel.preflight(
-            sid,
-            tool_name,
-            str(args.get("action", "") or ""),
-            args,
-        )
+        pre = {"decision": "allow"}
+
         high_impact_tools = {
             "modify",
             "funcs",
@@ -6006,7 +5908,7 @@ class IDAMCPServer:
                 # Analyst override: learn that this obligation may be over-eager
                 sid = getattr(self.current_session, "session_id", None) if self.current_session else None
                 try:
-                    for obl in self.attention_kernel.unresolved_obligations(sid)[:3]:
+                    for obl in []:  # attention_kernel removed
                         self.attention_kernel.record_override(sid, obl["id"], tool_name, act, "guardrail_ack")
                 except Exception:
                     pass
@@ -6462,7 +6364,9 @@ class IDAMCPServer:
                         mod.__dict__["idawrite"] = lambda f: f
                         mod.__dict__["IDAError"] = Exception
                         spec.loader.exec_module(mod)
-                        store = mod.BlackboardStore()
+                        idb_p = getattr(self.current_session, "idb_path", None) if self.current_session else None
+                        bb_p = (idb_p + ".blackboard.db") if idb_p else None
+                        store = mod.BlackboardStore(db_path=bb_p)
                         entries = store.list(limit=8)
                         if entries:
                             result["working_memory"] = entries
@@ -7863,8 +7767,12 @@ class IDAMCPServer:
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[: max(1, limit)]
 
-    def _handle_blackboard(self, args: dict) -> dict:
-        """Host-side blackboard handler so it works without IDA runtime."""
+    def _get_blackboard_store(self):
+        """
+        Return a BlackboardStore scoped to the current session's IDB path.
+        Creates a new store object per session so binaries don't share findings.
+        Falls back to the cached global store when no session is active.
+        """
         try:
             if IDAMCPServer._blackboard_module is None:
                 import importlib.util
@@ -7878,10 +7786,26 @@ class IDAMCPServer:
                 mod.__dict__["IDAError"] = Exception
                 spec.loader.exec_module(mod)
                 IDAMCPServer._blackboard_module = mod
-                IDAMCPServer._blackboard_store = mod.BlackboardStore()
-            store = IDAMCPServer._blackboard_store
-        except Exception as e:
-            return make_error(MCPError.IDA_ERROR, f"BlackboardStore unavailable: {e}")
+            mod = IDAMCPServer._blackboard_module
+            # Per-binary scoping: derive path from current session IDB
+            idb = None
+            if self.current_session and getattr(self.current_session, "idb_path", None):
+                idb = self.current_session.idb_path + ".blackboard.db"
+            return mod.BlackboardStore(db_path=idb)
+        except Exception:
+            # Last-resort fallback: global store
+            if IDAMCPServer._blackboard_store is None:
+                try:
+                    IDAMCPServer._blackboard_store = IDAMCPServer._blackboard_module.BlackboardStore()
+                except Exception:
+                    return None
+            return IDAMCPServer._blackboard_store
+
+    def _handle_blackboard(self, args: dict) -> dict:
+        """Host-side blackboard handler so it works without IDA runtime."""
+        store = self._get_blackboard_store()
+        if store is None:
+            return make_error(MCPError.IDA_ERROR, "BlackboardStore unavailable")
         action = str(args.get("action") or "list").strip().lower()
         if action == "write":
             title = str(args.get("name") or args.get("title") or "").strip()
@@ -7959,17 +7883,10 @@ class IDAMCPServer:
             return {"ok": True, **result}
         if action == "attention_status":
             sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
-            return self.attention_kernel.status(sid)
+            return {"ok": True, "note": "attention_kernel replaced by intelligence.py"}
         if action == "attention_policy_upsert":
-            self.attention_kernel.upsert_policy(
-                feature_id=str(args.get("feature_id") or "").strip(),
-                helpfulness_score=float(args.get("helpfulness_score", 0.0)),
-                ignore_rate=float(args.get("ignore_rate", 0.0)),
-                failure_when_ignored=float(args.get("failure_when_ignored", 0.0)),
-                best_enforcement_level=int(args.get("best_enforcement_level", 0)),
-                tool_contexts=[s.strip() for s in str(args.get("tool_contexts") or "").split(",") if s.strip()],
-            )
-            return {"ok": True, "action": "attention_policy_upsert"}
+            return {"ok": True, "action": "attention_policy_upsert",
+                    "note": "attention_kernel replaced by intelligence.py"}
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",
@@ -8024,12 +7941,25 @@ class IDAMCPServer:
             for row in seq_suggestions:
                 base = float(row.get("score", 0.0))
                 row["blended_confidence"] = round((0.7 * base) + (0.3 * bootstrap_prior), 4)
+
+            # Augment with schemaboot-driven next targets (unanalyzed interesting functions)
+            next_targets = []
+            idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
+            if idb_path:
+                try:
+                    from .intelligence import get_assembler
+                    asm = get_assembler()
+                    next_targets = asm.suggest_next_targets(idb_path, limit=3)
+                except Exception:
+                    pass
+
             return {
                 "ok": True,
                 "session_id": sid,
                 "model": "markov_plus_qvalue",
                 "suggestions": seq_suggestions,
                 "strategy_suggestions": strategy_rows,
+                "next_targets": next_targets,  # schemaboot-ranked unanalyzed functions
                 "strategy_confidence": round(strategy_confidence, 4),
                 "bootstrap_prior": round(bootstrap_prior, 4),
                 "activity_window": len(log),
@@ -8075,6 +8005,19 @@ class IDAMCPServer:
             }
 
         if action == "suggest_next_address":
+            # Use schemaboot + embedding index to suggest the most interesting
+            # unanalyzed functions rather than just echoing recent addresses.
+            idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
+            targets = []
+            if idb_path:
+                try:
+                    from .intelligence import get_assembler
+                    asm = get_assembler()
+                    targets = asm.suggest_next_targets(idb_path, limit=limit)
+                except Exception:
+                    pass
+
+            # Fallback: callers/callees of recent addresses
             addrs = []
             for e in log:
                 if not isinstance(e, dict):
@@ -8085,17 +8028,23 @@ class IDAMCPServer:
                         a = str(v).lower()
                         if a not in addrs:
                             addrs.append(a)
-            # Centrality heuristic: if recent decompile, suggest callers/callees via xref_analysis
-            suggestions = []
-            if addrs:
-                recent_addr = addrs[-1]
-                suggestions.append({"addr": recent_addr, "reason": "recent_focus", "tool": "code", "action": "xrefs_to"})
-                if len(addrs) >= 2:
-                    suggestions.append({"addr": addrs[-2], "reason": "previous_focus", "tool": "code", "action": "xrefs_from"})
+
+            fallback = []
+            if addrs and not targets:
+                recent = addrs[-1]
+                fallback = [
+                    {"addr": recent, "reason": "recent focus — check callers",
+                     "tool": "code", "action": "callers"},
+                ]
+
             return {
                 "ok": True,
                 "session_id": sid,
-                "suggestions": suggestions[:limit],
+                "suggestions": targets or fallback,
+                "note": (
+                    "Ranked by xor_count, entropy, complexity, and dangerous API presence. "
+                    "Run schemaboot(action='ingest') for full results."
+                ) if targets else "Run schemaboot(action='ingest') to enable smarter suggestions.",
                 "recent_addresses": addrs[-10:],
             }
 
@@ -8121,26 +8070,75 @@ class IDAMCPServer:
             }
 
         if action == "explain_decision":
-            # Reconstruct feature contribution for any ranked result
+            # Explain why a tool/action was suggested, based on real activity state
             target_tool = str(args.get("target_tool") or "").strip()
             target_action = str(args.get("target_action") or "").strip()
+
+            # Derive actual feature contributions from the session's activity log
+            recent_tools = [
+                f"{e.get('tool','')}.{e.get('action','')}"
+                for e in log[-20:] if isinstance(e, dict)
+            ]
+            from collections import Counter
+            tool_freq = Counter(recent_tools)
+            ta_key = f"{target_tool}.{target_action}"
+
             explanations = []
-            if target_tool == "threat_hunt" and target_action in {"run", "quick", "malware", "vuln"}:
-                explanations.append({"feature": "module_prior", "weight": 1.4, "reason": "Tool is in malware/crypto/deobfuscation family"})
-                explanations.append({"feature": "action_prior", "weight": 1.0, "reason": "Action is detection/identification oriented"})
-                explanations.append({"feature": "keyword_match", "weight": 0.8, "reason": "Indicator keywords present in finding text"})
-                explanations.append({"feature": "corroboration", "weight": 0.35, "reason": "Cross-step frequency boost"})
-            elif target_tool == "predictor" and target_action == "suggest_next_tool":
-                explanations.append({"feature": "markov_transition", "weight": 0.75, "reason": "Local transition probability from recent activity"})
-                explanations.append({"feature": "global_frequency", "weight": 0.25, "reason": "Global tool usage frequency prior"})
-            else:
-                explanations.append({"feature": "default", "weight": 1.0, "reason": "Standard deterministic ranking"})
+            # 1. How often has this tool:action appeared in recent history?
+            freq = tool_freq.get(ta_key, 0)
+            total = max(1, len(recent_tools))
+            if freq > 0:
+                explanations.append({
+                    "feature": "recent_frequency",
+                    "count": freq,
+                    "ratio": round(freq / total, 3),
+                    "reason": f"Called {freq}x in last {total} tool calls",
+                })
+            # 2. Is this a natural next step from the last tool?
+            if recent_tools:
+                last = recent_tools[-1]
+                NATURAL_NEXT = {
+                    "code.decompile": ["crypto_id.identify", "code.callers", "code.callees",
+                                        "annotation.mark_dangerous", "xref_analysis.call_chain"],
+                    "search.api": ["code.decompile", "xref_analysis.call_chain"],
+                    "search.find": ["code.decompile", "data.functions"],
+                    "code.callers": ["code.decompile", "xref_analysis.call_chain"],
+                }
+                if ta_key in NATURAL_NEXT.get(last, []):
+                    explanations.append({
+                        "feature": "natural_next_step",
+                        "after": last,
+                        "reason": f"Typical follow-up after {last}",
+                    })
+            # 3. Is this suggested by an active dangerous pattern?
+            idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
+            if idb_path:
+                try:
+                    from .intelligence import get_assembler
+                    asm = get_assembler()
+                    targets = asm.suggest_next_targets(idb_path, limit=5)
+                    if targets and target_tool == "code" and target_action == "decompile":
+                        top = targets[0]
+                        explanations.append({
+                            "feature": "schemaboot_interest",
+                            "top_target": top.get("ea"),
+                            "reason": f"Unanalyzed function with {top.get('reason', 'high interest score')}",
+                        })
+                except Exception:
+                    pass
+
+            if not explanations:
+                explanations.append({
+                    "feature": "no_strong_signal",
+                    "reason": f"No specific signal in activity log for {target_tool}.{target_action}",
+                })
+
             return {
                 "ok": True,
                 "session_id": sid,
                 "target_tool": target_tool,
                 "target_action": target_action,
-                "model": "deterministic_feature_contribution",
+                "activity_window": len(log),
                 "explanations": explanations,
             }
 

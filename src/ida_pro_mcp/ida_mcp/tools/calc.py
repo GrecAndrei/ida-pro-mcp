@@ -242,10 +242,9 @@ def calc(
 
         def ptr_size():
             if hasattr(idaapi, "inf_is_64bit"):
-                return 8 if idaapi.inf_is_64bit() else 4
+                return 8 if _inf_is_64bit() else 4
             try:
-                inf = idaapi.get_inf_structure()
-                return 8 if inf.is_64bit() else 4
+                                return 8 if _inf_is_64bit() else 4
             except Exception:
                 return 8 if (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100) else 4
 
@@ -257,8 +256,7 @@ def calc(
             except Exception:
                 pass
             try:
-                inf = idaapi.get_inf_structure()
-                return inf.is_be() if hasattr(inf, "is_be") else False
+                                return _inf_is_be() if hasattr(inf, "is_be") else False
             except Exception:
                 return False
 

@@ -41,13 +41,31 @@ if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
 
+def _resolve_db_path(db_path: Optional[str] = None) -> str:
+    """
+    Resolve blackboard DB path.  Prefer per-binary scoping (same pattern as
+    schemaboot/turboquant) so findings from binary A don't pollute binary B.
+    Falls back to a global path if IDA is not running.
+    """
+    if db_path:
+        return db_path
+    # Try to get the current IDB path from IDA
+    try:
+        import idc as _idc
+        p = _idc.get_idb_path()
+        if p:
+            return p + ".blackboard.db"
+    except Exception:
+        pass
+    # Global fallback (host-side / no IDA session)
+    return os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "blackboard.db")
+
+
 class BlackboardStore:
     """SQLite-backed persistent blackboard for analysis context."""
 
     def __init__(self, db_path: Optional[str] = None):
-        if db_path is None:
-            db_path = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "blackboard.db")
-        self.db_path = db_path
+        self.db_path = _resolve_db_path(db_path)
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
 
@@ -281,8 +299,27 @@ class BlackboardStore:
                 return {"pruned": would_delete, "remaining": total - would_delete, "reason": "quality"}
             return {"pruned": 0, "remaining": total, "reason": "none"}
 
+    def exists(self, addr: str, category: str, title: str) -> bool:
+        """
+        Check if an entry with the same addr+category+title already exists.
+        Used to prevent duplicate auto-writes without a full merge pass.
+        """
+        with self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM blackboard WHERE addr = ? AND category = ? AND title = ? LIMIT 1",
+                (addr, category, title),
+            )
+            return cur.fetchone() is not None
+
     def auto_merge(self, addr: str = "", category: str = "", similarity_threshold: float = 0.85) -> Dict:
-        """Detect and merge duplicate entries by addr+category+title similarity."""
+        """
+        Detect and merge duplicate entries by addr+category+title similarity.
+
+        Similarity uses Jaccard on word tokens rather than first-word matching
+        so "buffer overflow at 0x401234" and "buffer read at 0x502000" no
+        longer get incorrectly merged (they share 'buffer' but Jaccard ≈ 0.2).
+        """
         with self._conn() as conn:
             cur = conn.cursor()
             conditions = ["1=1"]
@@ -299,35 +336,39 @@ class BlackboardStore:
 
         entries = [self._row_to_dict(r) for r in rows]
         merged_count = 0
-        kept_ids: set = set()
+        deleted_ids: set = set()
+
+        def _jaccard_words(a: str, b: str) -> float:
+            wa = set(a.lower().split())
+            wb = set(b.lower().split())
+            if not wa or not wb:
+                return 0.0
+            return len(wa & wb) / len(wa | wb)
 
         for i, entry in enumerate(entries):
-            if entry["id"] in kept_ids:
+            if entry["id"] in deleted_ids:
                 continue
-            for other in entries[i + 1 :]:
-                if other["id"] in kept_ids:
+            for other in entries[i + 1:]:
+                if other["id"] in deleted_ids:
                     continue
-                # Simple similarity: same addr/category and title containment
                 if (
                     entry.get("addr") == other.get("addr")
                     and entry.get("category") == other.get("category")
                 ):
-                    t1 = str(entry.get("title") or "").lower().strip()
-                    t2 = str(other.get("title") or "").lower().strip()
-                    sim = 0.0
-                    if t1 and t2:
-                        if t1 in t2 or t2 in t1:
-                            sim = 0.9
-                        elif t1.split()[0] == t2.split()[0]:
-                            sim = 0.85
-                    if sim >= similarity_threshold:
-                        # Merge: keep newer, delete older
+                    t1 = str(entry.get("title") or "")
+                    t2 = str(other.get("title") or "")
+                    # Exact match OR high Jaccard similarity on title tokens
+                    if t1 == t2 or _jaccard_words(t1, t2) >= similarity_threshold:
                         self.delete(other["id"])
-                        kept_ids.add(other["id"])
+                        deleted_ids.add(other["id"])
                         merged_count += 1
         return {"merged": merged_count, "remaining": len(entries) - merged_count}
 
     def _row_to_dict(self, row) -> Dict:
+        # Binary blob columns (vector/quantized/q_signs) are Cartographer-μ
+        # internals — never return them in MCP responses because:
+        #   (a) bytes aren't JSON-serializable → crash if non-None
+        #   (b) they're meaningless to the LLM
         return {
             "id": row[0],
             "category": row[1],
@@ -339,18 +380,12 @@ class BlackboardStore:
             "created_at": row[7],
             "updated_at": row[8],
             "bridges": json.loads(row[9]) if row[9] else [],
-            "schema": json.loads(row[10]) if row[10] else {},
-            "vector": row[11],
-            "quantized": row[12],
-            "q_signs": row[13],
-            "norm": row[14] or 0.0,
+            # row[10] schema, row[11-13] binary blobs — omitted from output
             "q_value": row[15] if row[15] is not None else 0.5,
-            "call_idx": row[16] or 0,
         }
 
 
 @tool
-@idawrite
 def blackboard(
     action: str = "list",
     entry_id: str = "",
@@ -410,8 +445,11 @@ def blackboard(
         return {"ok": True, "entry": entry}
 
     elif action == "list":
+        # Pass category as-is; None means "all categories".
+        # Previously "general" was silently converted to None, making it
+        # impossible to list only the "general" category specifically.
         entries = store.list(
-            category=category if category != "general" else None,
+            category=category or None,
             addr=addr or None,
             tag=tag or None,
             min_confidence=min_confidence,
@@ -423,9 +461,28 @@ def blackboard(
     elif action == "update":
         if not entry_id:
             return {"ok": False, "error": "entry_id required for update"}
-        ok = store.update(entry_id, **kwargs)
+        # Build update dict from named parameters (they're captured in the
+        # function signature, NOT in **kwargs, so we must forward explicitly).
+        update_fields: Dict = {}
+        if title:
+            update_fields["title"] = title
+        if content:
+            update_fields["content"] = content
+        if category:
+            update_fields["category"] = category
+        if addr:
+            update_fields["addr"] = addr
+        if tags is not None:
+            update_fields["tags"] = tags
+        if confidence != 0.5:   # non-default
+            update_fields["confidence"] = confidence
+        # Also pass through any extra kwargs not in the signature
+        update_fields.update(kwargs)
+        if not update_fields:
+            return {"ok": False, "error": "No fields to update. Pass title, content, category, addr, tags, or confidence."}
+        ok = store.update(entry_id, **update_fields)
         if not ok:
-            return {"ok": False, "error": f"Entry '{entry_id}' not found or no changes"}
+            return {"ok": False, "error": f"Entry '{entry_id}' not found"}
         return {"ok": True, "entry_id": entry_id, "action": "update"}
 
     elif action == "delete":
