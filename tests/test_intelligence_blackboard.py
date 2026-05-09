@@ -229,6 +229,25 @@ def test_analysis_focus_falls_back_to_structural_blocks_on_high_entropy():
     assert focus["action"] == "blocks"
 
 
+def test_llm_payload_builders_produce_action_uncertainty_and_evidence():
+    asm = ContextAssembler()
+    pack = {
+        "api_calls": ["VirtualAllocEx", "WriteProcessMemory"],
+        "structural": {"entropy": 6.7, "xor_count": 5},
+        "related_findings": [{"title": "Process injection", "retrieval_source": "api_linked"}],
+        "analysis_focus": {"tool": "code", "action": "callers", "addr": "0x401000", "reason": "expand"},
+        "analysis_focus_alternatives": [{"tool": "search", "action": "api", "pattern": "VirtualAllocEx", "reason": "pivot"}],
+        "retrieval_stats": {"semantic_threshold": 0.7},
+    }
+    card = asm._build_llm_action_card(pack, "0x401000")
+    unc = asm._build_llm_uncertainty(pack)
+    evid = asm._build_llm_evidence_snippets(pack)
+
+    assert card["primary"]["call"]["tool"] == "code"
+    assert unc["risk"] in ("medium", "high")
+    assert evid and len(evid) >= 3
+
+
 def test_focus_feedback_closed_loop_updates_stats():
     asm = ContextAssembler()
     sess = "sess-loop"
