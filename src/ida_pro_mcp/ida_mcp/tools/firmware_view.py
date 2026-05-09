@@ -27,19 +27,23 @@ import time
 try:
     from .firmware_heuristics import (
         ascii_run_stats,
+        build_campaign_execution_plan,
         build_carve_plan,
         cluster_pointer_hits,
         rank_region_plans,
         region_priority_score,
+        summarize_campaign_regions,
         shannon_entropy,
     )
 except ImportError:
     from firmware_heuristics import (  # type: ignore[import-not-found]
         ascii_run_stats,
+        build_campaign_execution_plan,
         build_carve_plan,
         cluster_pointer_hits,
         rank_region_plans,
         region_priority_score,
+        summarize_campaign_regions,
         shannon_entropy,
     )
 
@@ -187,7 +191,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -707,6 +711,71 @@ def firmware_view(
                 ],
             }
             return _log_ml(result, action, f"segments={len(segs)}; ranked={len(ranked)}")
+
+        if action == "multi_region_campaign":
+            segs = []
+            seg = idaapi.get_first_seg()
+            while seg:
+                if seg.end_ea > seg.start_ea:
+                    try:
+                        sname = idaapi.get_segm_name(seg) or ""
+                    except Exception:
+                        sname = ""
+                    segs.append((int(seg.start_ea), int(seg.end_ea), sname))
+                seg = idaapi.get_next_seg(seg.start_ea)
+
+            regions = []
+            for ss, ee, name in segs[: max(1, min(limit * 4, 128))]:
+                if ee - ss < 64:
+                    continue
+                prof = _profile_range(ss, ee, ptr_size)
+                plan = build_carve_plan(
+                    {
+                        "unknown_ratio": prof["unknown_ratio"],
+                        "entropy": prof["entropy"],
+                        "ascii_runs": prof["ascii_runs"],
+                    },
+                    ptr_count=prof.get("ptr_hits_sampled", 0),
+                    table_count=0,
+                )
+                pri = region_priority_score(prof, plan, cluster_count=0)
+                regions.append(
+                    {
+                        "segment": name,
+                        "start": hex(ss),
+                        "end": hex(ee),
+                        "profile": {
+                            "entropy": prof["entropy"],
+                            "unknown_ratio": prof["unknown_ratio"],
+                            "pointer_density": prof["pointer_density"],
+                            "ascii_runs": prof["ascii_runs"],
+                        },
+                        "plan": plan,
+                        "priority_score": pri,
+                    }
+                )
+
+            ranked = rank_region_plans(regions, limit=max(1, min(limit, 24)))
+            campaign_summary = summarize_campaign_regions(ranked)
+            exec_plan = build_campaign_execution_plan(ranked, max_steps=min(32, max(6, limit * 2)))
+
+            result = {
+                "ok": True,
+                "action": action,
+                "summary": campaign_summary,
+                "regions": ranked,
+                "execution_plan": exec_plan,
+                "rollback_guardrails": {
+                    "default_apply": False,
+                    "require_force_for_code_overwrite": True,
+                    "recommend_snapshot": True,
+                },
+                "next_actions": [
+                    "Execute execution_plan step-by-step with apply=false first.",
+                    "Re-run firmware_view(action='multi_region_campaign') after dry-runs to reprioritize.",
+                ],
+            }
+            return _log_ml(result, action, f"regions={campaign_summary.get('count',0)}; high={campaign_summary.get('risk_counts',{}).get('high',0)}")
 
         if action == "smart_carve":
             if apply and snapshot_before_apply:

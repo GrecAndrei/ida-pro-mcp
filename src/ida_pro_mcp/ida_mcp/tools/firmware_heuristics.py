@@ -150,3 +150,76 @@ def rank_region_plans(items: List[Dict], limit: int = 12) -> List[Dict]:
         reverse=True,
     )
     return ranked[: max(1, int(limit))]
+
+
+def summarize_campaign_regions(regions: List[Dict]) -> Dict:
+    """Aggregate high-level campaign stats across ranked regions."""
+    risk_counts = {"high": 0, "medium": 0, "low": 0}
+    if not regions:
+        return {
+            "count": 0,
+            "risk_counts": risk_counts,
+            "avg_priority": 0.0,
+            "max_priority": 0.0,
+        }
+    total_pri = 0.0
+    max_pri = 0.0
+    for r in regions:
+        p = float(r.get("priority_score") or 0.0)
+        total_pri += p
+        if p > max_pri:
+            max_pri = p
+        rk = str((r.get("plan") or {}).get("risk") or "low")
+        if rk not in risk_counts:
+            rk = "low"
+        risk_counts[rk] += 1
+    return {
+        "count": len(regions),
+        "risk_counts": risk_counts,
+        "avg_priority": round(total_pri / max(1, len(regions)), 4),
+        "max_priority": round(max_pri, 4),
+    }
+
+
+def build_campaign_execution_plan(regions: List[Dict], max_steps: int = 18) -> List[Dict]:
+    """
+    Build a safe staged execution plan for top campaign regions.
+    Defaults to dry-run first to reduce destructive mistakes.
+    """
+    steps: List[Dict] = []
+    for idx, r in enumerate(regions):
+        if len(steps) >= max_steps:
+            break
+        start = r.get("start")
+        end = r.get("end")
+        seg = r.get("segment") or f"region_{idx + 1}"
+        steps.append({
+            "step": len(steps) + 1,
+            "tool": "firmware_view",
+            "action": "campaign",
+            "start": start,
+            "end": end,
+            "note": f"Deep profile and cluster review for {seg}",
+        })
+        if len(steps) >= max_steps:
+            break
+        steps.append({
+            "step": len(steps) + 1,
+            "tool": "firmware_view",
+            "action": "smart_carve",
+            "start": start,
+            "end": end,
+            "apply": False,
+            "note": f"Dry-run carve for {seg}",
+        })
+        if len(steps) >= max_steps:
+            break
+        steps.append({
+            "step": len(steps) + 1,
+            "tool": "firmware_view",
+            "action": "table_candidates",
+            "start": start,
+            "end": end,
+            "note": f"Validate tables/pointers for {seg}",
+        })
+    return steps[:max_steps]
