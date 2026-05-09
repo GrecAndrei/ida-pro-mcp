@@ -6,6 +6,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from ida_pro_mcp.host.intelligence import ContextAssembler
+from ida_pro_mcp.host.intelligence_helpers import prune_policy_store
 
 
 class _FakeEmbedder:
@@ -317,6 +318,14 @@ def test_policy_compaction_keeps_top_action_stats_and_caps_sessions():
     assert len(action_keys) <= 48
 
 
+def test_helper_prune_policy_store_standalone():
+    data = {"schema_version": 1, "sessions": {"s1": {"saved_at": 1.0}, "s2": {"saved_at": 2.0}}}
+    out = prune_policy_store(data, max_sessions=1)
+    assert out.get("schema_version") == 2
+    assert len(out.get("sessions") or {}) == 1
+    assert "s2" in (out.get("sessions") or {})
+
+
 def test_housekeeping_expires_stale_pending_focus():
     asm = ContextAssembler()
     sess = "sess-hk"
@@ -350,3 +359,30 @@ def test_analysis_focus_alternatives_are_ranked():
     assert cands
     assert len(cands) >= 2
     assert float(cands[0]["score"]) >= float(cands[1]["score"])
+
+
+def test_focus_explainability_has_margin_with_runner_up():
+    asm = ContextAssembler()
+    cands = [
+        {"tool": "code", "action": "callers", "score": 1.4, "reason": "r1"},
+        {"tool": "search", "action": "api", "score": 1.1, "reason": "r2"},
+    ]
+    ex = asm._focus_explainability(cands)
+    assert ex.get("selected") == "code:callers"
+    assert ex.get("runner_up") == "search:api"
+    assert float(ex.get("score_margin") or 0.0) > 0
+
+
+def test_semantic_circuit_breaker_opens_for_persistently_weak_signal():
+    asm = ContextAssembler()
+    sess = "sess-cb"
+    # Build weak semantic stats and low cache hit rate.
+    with asm._retrieval_metrics_lock:
+        asm._retrieval_metrics[sess]["semantic_linked.total"] = 20
+        asm._retrieval_metrics[sess]["semantic_linked.accepted"] = 20
+        asm._retrieval_metrics[sess]["semantic_linked.kept"] = 1
+    with asm._bb_cache_stats_lock:
+        asm._bb_cache_hits = 0
+        asm._bb_cache_misses = 30
+    asm._update_semantic_circuit_breaker(sess)
+    assert asm._semantic_circuit_open(sess) is True

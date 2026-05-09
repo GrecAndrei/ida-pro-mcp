@@ -37,6 +37,8 @@ import urllib.request
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from .intelligence_helpers import compact_policy_blob, derive_focus_candidates, prune_policy_store
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -969,6 +971,8 @@ class ContextAssembler:
         self._housekeeping_lock = threading.Lock()
         self._pending_focus_ttl_sec = 420.0
         self._related_graph_max_edges = 1200
+        self._semantic_circuit_breaker_until: Dict[str, int] = {}
+        self._circuit_breaker_lock = threading.Lock()
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
@@ -1226,6 +1230,7 @@ class ContextAssembler:
             out["relation_graph"] = {"nodes": rel_nodes}
             if session_id:
                 out["semantic_threshold"] = self._get_semantic_threshold(session_id)
+                out["semantic_circuit_open"] = self._semantic_circuit_open(session_id)
         except Exception:
             return {}
         return out
@@ -1236,92 +1241,10 @@ class ContextAssembler:
         return os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "focus_policy.json")
 
     def _compact_policy_blob(self, sess_blob: Dict[str, Any]) -> Dict[str, Any]:
-        """Bound policy size by pruning low-value/high-cardinality history."""
-        out = dict(sess_blob or {})
-        rm = dict(out.get("retrieval_metrics") or {})
-        ff = dict(out.get("focus_feedback") or {})
-
-        # Keep only known retrieval metric keys.
-        keep_rm: Dict[str, int] = {}
-        for src in ("address_linked", "relation_linked", "api_linked", "semantic_linked"):
-            for key in ("total", "accepted", "kept"):
-                k = f"{src}.{key}"
-                if k in rm:
-                    try:
-                        keep_rm[k] = int(rm[k])
-                    except Exception:
-                        pass
-        out["retrieval_metrics"] = keep_rm
-
-        # Keep scalar focus counters + top-N action stats by volume.
-        keep_ff: Dict[str, int] = {}
-        for k in ("suggested", "followed", "successful", "failed"):
-            if k in ff:
-                try:
-                    keep_ff[k] = int(ff[k])
-                except Exception:
-                    pass
-        action_totals: Dict[str, int] = {}
-        for k, v in ff.items():
-            if not str(k).startswith("action."):
-                continue
-            parts = str(k).split(".")
-            if len(parts) != 3:
-                continue
-            ta = parts[1]
-            try:
-                action_totals[ta] = action_totals.get(ta, 0) + int(v)
-            except Exception:
-                pass
-        top_actions = sorted(action_totals.items(), key=lambda kv: kv[1], reverse=True)[:24]
-        top_set = {ta for ta, _ in top_actions}
-        for k, v in ff.items():
-            if not str(k).startswith("action."):
-                continue
-            parts = str(k).split(".")
-            if len(parts) != 3:
-                continue
-            ta = parts[1]
-            if ta in top_set:
-                try:
-                    keep_ff[k] = int(v)
-                except Exception:
-                    pass
-        out["focus_feedback"] = keep_ff
-
-        # Clamp threshold range.
-        try:
-            thr = float(out.get("semantic_threshold") or 0.5)
-        except Exception:
-            thr = 0.5
-        out["semantic_threshold"] = max(0.35, min(0.75, thr))
-        out["schema_version"] = 2
-        return out
+        return compact_policy_blob(sess_blob)
 
     def _prune_policy_store(self, data: Dict[str, Any], max_sessions: int = 24) -> Dict[str, Any]:
-        """Prune policy store to bounded session count and compact blobs."""
-        if not isinstance(data, dict):
-            return {"schema_version": 2, "sessions": {}}
-        sessions = data.get("sessions")
-        if not isinstance(sessions, dict):
-            sessions = {}
-        # Compact each session blob first.
-        compacted: Dict[str, Dict[str, Any]] = {}
-        for sid, blob in sessions.items():
-            if not isinstance(blob, dict):
-                continue
-            compacted[str(sid)] = self._compact_policy_blob(blob)
-        # Keep most recently saved sessions.
-        ordered = sorted(
-            compacted.items(),
-            key=lambda kv: float((kv[1] or {}).get("saved_at") or 0.0),
-            reverse=True,
-        )[:max(1, max_sessions)]
-        return {
-            "schema_version": 2,
-            "updated_at": time.time(),
-            "sessions": {sid: blob for sid, blob in ordered},
-        }
+        return prune_policy_store(data, max_sessions=max_sessions)
 
     def _bind_session_store(self, session_id: str, idb_path: str) -> None:
         if not session_id or not idb_path:
@@ -1516,88 +1439,61 @@ class ContextAssembler:
         except Exception:
             return None
 
+    def _focus_explainability(self, cands: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Explain why top focus won vs alternatives."""
+        if not cands:
+            return {}
+        top = cands[0]
+        out: Dict[str, Any] = {
+            "selected": f"{top.get('tool')}:{top.get('action')}",
+            "selected_score": float(top.get("score") or 0.0),
+            "selected_reason": top.get("reason") or "",
+        }
+        if len(cands) > 1:
+            second = cands[1]
+            out["runner_up"] = f"{second.get('tool')}:{second.get('action')}"
+            out["score_margin"] = round(float(top.get("score") or 0.0) - float(second.get("score") or 0.0), 3)
+        return out
+
+    def _semantic_circuit_open(self, session_id: str) -> bool:
+        if not session_id:
+            return False
+        with self._circuit_breaker_lock:
+            return int(self._semantic_circuit_breaker_until.get(session_id, 0)) > int(time.time())
+
+    def _update_semantic_circuit_breaker(self, session_id: str) -> None:
+        """Open semantic circuit briefly when quality is persistently weak."""
+        if not session_id:
+            return
+        try:
+            stats = self._session_retrieval_stats(session_id)
+            sem = stats.get("semantic_linked") or {}
+            sem_total = int(sem.get("total") or 0)
+            sem_hit = float(sem.get("hit_rate") or 0.0)
+            health = self._collect_intelligence_health(session_id)
+            cache_hit = float((health.get("bb_cache") or {}).get("hit_rate") or 0.0)
+            if sem_total >= 10 and sem_hit < 0.2 and cache_hit < 0.15:
+                with self._circuit_breaker_lock:
+                    self._semantic_circuit_breaker_until[session_id] = int(time.time()) + 120
+        except Exception:
+            return
+
     def _derive_focus_candidates(
         self,
         pack: Dict[str, Any],
         addr: str,
         session_id: str,
     ) -> List[Dict[str, Any]]:
-        """Return ranked focus candidates (best first)."""
-        if not addr:
-            return []
         try:
             policy = self._session_source_policy(session_id)
             stats = self._session_retrieval_stats(session_id)
-            structural = pack.get("structural") or {}
-            related = pack.get("related_findings") or []
-            apis = pack.get("api_calls") or []
-            candidates: List[Dict[str, Any]] = []
-
-            sem_weight = float((policy.get("semantic_linked") or {}).get("weight", 0.9))
-            rel_weight = float((policy.get("relation_linked") or {}).get("weight", 1.2))
-            api_weight = float((policy.get("api_linked") or {}).get("weight", 1.0))
-            sem_hit = float(((stats.get("semantic_linked") or {}) if isinstance(stats, dict) else {}).get("hit_rate", 0.0))
-            rel_hit = float(((stats.get("relation_linked") or {}) if isinstance(stats, dict) else {}).get("hit_rate", 0.0))
-            api_hit = float(((stats.get("api_linked") or {}) if isinstance(stats, dict) else {}).get("hit_rate", 0.0))
-
-            if related and rel_weight >= 1.1 and rel_hit >= 0.35:
-                bias = self._focus_action_bias(session_id, "code", "callers")
-                candidates.append({
-                    "tool": "code",
-                    "action": "callers",
-                    "addr": addr,
-                    "reason": "High-yield relation-linked findings; expand call-chain context",
-                    "score": round((rel_weight + rel_hit) * bias, 3),
-                    "bias": bias,
-                })
-
-            entropy = float(structural.get("entropy") or 0.0)
-            xor_count = int(structural.get("xor_count") or 0)
-            cyclo = int(structural.get("cyclomatic_complexity") or 0)
-            if entropy >= 6.0 or xor_count >= 4 or cyclo >= 18:
-                bias = self._focus_action_bias(session_id, "code", "blocks")
-                candidates.append({
-                    "tool": "code",
-                    "action": "blocks",
-                    "addr": addr,
-                    "reason": "Structural complexity/obfuscation indicators are elevated",
-                    "score": round(max(1.0, entropy / 6.0 + xor_count * 0.2 + cyclo * 0.03) * bias, 3),
-                    "bias": bias,
-                })
-
-            if apis and api_weight >= 1.0 and api_hit >= 0.25:
-                bias = self._focus_action_bias(session_id, "search", "api")
-                candidates.append({
-                    "tool": "search",
-                    "action": "api",
-                    "pattern": apis[0],
-                    "reason": "API-linked retrieval is productive; pivot on top API behavior",
-                    "score": round((api_weight + api_hit) * bias, 3),
-                    "bias": bias,
-                })
-
-            if sem_weight >= 0.95 or sem_hit >= 0.4:
-                bias = self._focus_action_bias(session_id, "search", "semantic")
-                candidates.append({
-                    "tool": "search",
-                    "action": "semantic",
-                    "addr": addr,
-                    "reason": "Semantic retrieval quality is acceptable; broaden semantic neighborhood",
-                    "score": round((sem_weight + sem_hit) * bias, 3),
-                    "bias": bias,
-                })
-
-            bias = self._focus_action_bias(session_id, "code", "callees")
-            candidates.append({
-                "tool": "code",
-                "action": "callees",
-                "addr": addr,
-                "reason": "Default structural pivot to progress analysis graph",
-                "score": round(0.5 * bias, 3),
-                "bias": bias,
-            })
-            candidates = sorted(candidates, key=lambda x: float(x.get("score") or 0.0), reverse=True)
-            return candidates[:4]
+            return derive_focus_candidates(
+                pack=pack,
+                addr=addr,
+                policy=policy,
+                stats=stats,
+                bias_fn=lambda t, a: self._focus_action_bias(session_id, t, a),
+            )
         except Exception:
             return []
 
@@ -2263,7 +2159,7 @@ class ContextAssembler:
                 pass
 
         # ── Step 8: Semantic blackboard retrieval (if bb_store populated) ─
-        if query_vec is not None and bb_store is not None:
+        if query_vec is not None and bb_store is not None and not self._semantic_circuit_open(session_id):
             try:
                 sem_thr = self._get_semantic_threshold(session_id)
                 sem_bb = self._get_bb_semantic_vec(query_vec, bb_store, top_k=3, threshold=sem_thr)
@@ -2273,16 +2169,19 @@ class ContextAssembler:
                 pass
 
         self._tune_semantic_threshold(session_id)
+        self._update_semantic_circuit_breaker(session_id)
         stats = self._session_retrieval_stats(session_id)
         if stats:
             pack["retrieval_stats"] = stats
-        focus = self._derive_analysis_focus(pack, addr, session_id)
-        if focus:
-            pack["analysis_focus"] = focus
-            self._record_focus_suggestion(session_id, focus)
-            alts = self._derive_focus_candidates(pack, addr, session_id)
-            if alts and len(alts) > 1:
+        alts = self._derive_focus_candidates(pack, addr, session_id)
+        if alts:
+            pack["analysis_focus"] = alts[0]
+            self._record_focus_suggestion(session_id, alts[0])
+            if len(alts) > 1:
                 pack["analysis_focus_alternatives"] = alts[1:3]
+            explain = self._focus_explainability(alts)
+            if explain:
+                pack["analysis_focus_explain"] = explain
 
 
 
