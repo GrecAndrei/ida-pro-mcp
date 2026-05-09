@@ -1954,6 +1954,29 @@ class ContextAssembler:
             notes.append(f"api: {a}")
         return notes
 
+    def _build_llm_nudge(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
+        """Strong, explicit nudge that makes tool-first behavior obvious."""
+        must_call = bool(pack.get("must_call_before_answer"))
+        req = pack.get("required_followup_call") or ((pack.get("llm_action_card") or {}).get("primary") or {}).get("call") or {}
+        call_txt = f"{req.get('tool')}.{req.get('action')}" if req.get("tool") and req.get("action") else "code.callers"
+        protocol = [
+            "Do not conclude yet.",
+            f"Run required MCP call now: {call_txt}",
+            "Only after call result, update hypothesis and confidence.",
+        ]
+        if not must_call:
+            protocol = [
+                "Prefer MCP-first: run one call before final answer.",
+                f"Recommended call: {call_txt}",
+                "Use returned evidence snippets in your conclusion.",
+            ]
+        return {
+            "must_call": must_call,
+            "required_call": req if req else {"tool": "code", "action": "callers", "addr": addr},
+            "protocol": protocol,
+            "short": protocol[1],
+        }
+
     def _focus_explainability(self, cands: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Explain why top focus won vs alternatives."""
         if not cands:
@@ -2867,6 +2890,7 @@ class ContextAssembler:
             pack["llm_verification_checklist"] = self._llm_verification_checklist(pack, addr)
             pack["llm_next_best_question"] = self._llm_next_best_question(pack)
             pack["llm_auto_notes"] = self._llm_auto_notes(pack)
+            pack["llm_nudge"] = self._build_llm_nudge(pack, addr)
 
 
 

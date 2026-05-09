@@ -320,6 +320,18 @@ def test_ten_llm_feature_payload_builders_shapes():
     assert asm._llm_auto_notes(pack)
 
 
+def test_llm_nudge_requires_call_when_gate_is_active():
+    asm = ContextAssembler()
+    pack = {
+        "must_call_before_answer": True,
+        "required_followup_call": {"tool": "code", "action": "callers", "addr": "0x401000"},
+    }
+    n = asm._build_llm_nudge(pack, "0x401000")
+    assert n["must_call"] is True
+    assert n["required_call"]["tool"] == "code"
+    assert "Run required MCP call now" in " ".join(n["protocol"])
+
+
 def test_focus_feedback_closed_loop_updates_stats():
     asm = ContextAssembler()
     sess = "sess-loop"
