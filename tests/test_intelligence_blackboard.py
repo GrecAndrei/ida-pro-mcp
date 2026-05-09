@@ -5,6 +5,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import ida_pro_mcp.host.intelligence as intel_mod
 from ida_pro_mcp.host.intelligence import ContextAssembler
 from ida_pro_mcp.host.intelligence_helpers import prune_policy_store
 
@@ -386,3 +387,30 @@ def test_semantic_circuit_breaker_opens_for_persistently_weak_signal():
         asm._bb_cache_misses = 30
     asm._update_semantic_circuit_breaker(sess)
     assert asm._semantic_circuit_open(sess) is True
+
+
+def test_session_retrieval_stats_cache_invalidation_on_merge():
+    asm = ContextAssembler()
+    sess = "sess-cache"
+    pack = {}
+    asm._merge_related_findings(pack, [{"id": "a", "confidence": 0.9}], "api_linked", session_id=sess)
+    s1 = asm._session_retrieval_stats(sess)
+    # Add more metrics; cache should be invalidated and totals updated.
+    asm._merge_related_findings(pack, [{"id": "b", "confidence": 0.8}], "api_linked", session_id=sess)
+    s2 = asm._session_retrieval_stats(sess)
+    assert s2["api_linked"]["total"] >= s1["api_linked"]["total"]
+
+
+def test_intelligence_health_perf_block_when_profile_enabled():
+    old = intel_mod.INTEL_PROFILE
+    intel_mod.INTEL_PROFILE = True
+    try:
+        asm = ContextAssembler()
+        sess = "sess-perf"
+        t0 = asm._perf_start()
+        asm._perf_end(sess, "assemble", t0)
+        health = asm._collect_intelligence_health(sess)
+        assert "perf" in health
+        assert "assemble" in health["perf"]
+    finally:
+        intel_mod.INTEL_PROFILE = old
