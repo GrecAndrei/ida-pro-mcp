@@ -168,6 +168,21 @@ def _record_contradiction(state: dict, ea: int, old: str, new: str, reason: str,
     )
 
 
+def _parse_executed_feedback(value) -> list:
+    """Parse optional executed-step feedback payload for campaign_resume."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            v = json.loads(value)
+            return v if isinstance(v, list) else []
+        except Exception:
+            return []
+    return []
+
+
 def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
     """Collect lightweight region profile primitives."""
     raw = _read_bytes_safe(s_ea, e_ea)
@@ -890,6 +905,41 @@ def firmware_view(
             if not camp:
                 return make_error(MCPError.NOT_FOUND, f"Unknown campaign_id: {cid}")
             plan = list(camp.get("execution_plan") or [])
+            # Optional auto-feedback: executed outcomes from prior chunk.
+            executed = _parse_executed_feedback(kwargs.get("executed"))
+            ingested = 0
+            if executed:
+                step_map = {int(st.get("step") or 0): st for st in plan}
+                for rec in executed:
+                    try:
+                        step_id = int(rec.get("step") or 0)
+                    except Exception:
+                        continue
+                    outcome = str(rec.get("outcome") or "").strip().lower()
+                    if outcome not in ("success", "failure"):
+                        continue
+                    st = step_map.get(step_id)
+                    if not st:
+                        continue
+                    fp = str(st.get("fingerprint") or "")
+                    if not fp:
+                        continue
+                    state.setdefault("fingerprint_corpus", []).append(
+                        {
+                            "ts": int(time.time()),
+                            "fingerprint": fp,
+                            "priority_score": float(rec.get("priority_score") or 0.5),
+                            "outcome": outcome,
+                            "segment": rec.get("segment") or "",
+                            "start": st.get("start") or "",
+                            "end": st.get("end") or "",
+                        }
+                    )
+                    ingested += 1
+                corpus = state.setdefault("fingerprint_corpus", [])
+                if len(corpus) > 2000:
+                    del corpus[:-2000]
+
             cursor = int(camp.get("cursor") or 0)
             chunk_n = max(1, min(limit, 10))
             chunk = plan[cursor : cursor + chunk_n]
@@ -914,6 +964,7 @@ def firmware_view(
                 "cursor": camp["cursor"],
                 "total_steps": len(plan),
                 "next_chunk": chunk,
+                "feedback_ingested": ingested,
                 "next_actions": [
                     (f"firmware_view(action='campaign_resume', addr='{cid}')" if not finished else "campaign complete"),
                     "Execute chunk actions manually with apply=false first.",
