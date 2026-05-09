@@ -113,3 +113,40 @@ def build_carve_plan(region_stats: Dict, ptr_count: int, table_count: int) -> Di
         "table_count": int(table_count),
         "phases": phases,
     }
+
+
+def region_priority_score(profile: Dict, plan: Dict, cluster_count: int = 0) -> float:
+    """Compute triage priority for a firmware region."""
+    unknown_ratio = float(profile.get("unknown_ratio") or 0.0)
+    entropy = float(profile.get("entropy") or 0.0)
+    ptr_density = float(profile.get("pointer_density") or 0.0)
+    ascii_runs = int(profile.get("ascii_runs") or 0)
+    risk = str(plan.get("risk") or "low")
+    risk_boost = 0.0
+    if risk == "high":
+        risk_boost = 0.35
+    elif risk == "medium":
+        risk_boost = 0.18
+    score = (
+        unknown_ratio * 0.28
+        + min(1.0, entropy / 8.0) * 0.24
+        + min(1.0, ptr_density * 3.0) * 0.22
+        + min(1.0, cluster_count / 12.0) * 0.16
+        + min(1.0, ascii_runs / 20.0) * 0.10
+        + risk_boost
+    )
+    return round(min(1.99, score), 4)
+
+
+def rank_region_plans(items: List[Dict], limit: int = 12) -> List[Dict]:
+    """Rank campaign/segment region plans by computed priority."""
+    ranked = sorted(
+        items,
+        key=lambda x: (
+            float(x.get("priority_score") or 0.0),
+            float((x.get("plan") or {}).get("entropy") or 0.0),
+            float((x.get("profile") or {}).get("unknown_ratio") or 0.0),
+        ),
+        reverse=True,
+    )
+    return ranked[: max(1, int(limit))]
