@@ -215,6 +215,9 @@ class BgeCodeEmbedder:
                               and not EMBED_DISABLED)
         # Cached anchor embeddings for BehaviorClassifier
         self._anchor_cache: Dict[str, List[float]] = {}
+        self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "16"))
+        self._batch_size = max(1, min(64, self._batch_size))
+        self._batch_lock = threading.Lock()
 
     # ── subprocess management ──────────────────────────────────────────────
 
@@ -347,9 +350,28 @@ class BgeCodeEmbedder:
         if not texts:
             return []
         if self._use_llama:
-            vecs = self._llama_embed_batch(texts)
-            if vecs is not None:
-                return vecs
+            out: List[List[float]] = []
+            i = 0
+            while i < len(texts):
+                with self._batch_lock:
+                    bs = self._batch_size
+                chunk = texts[i : i + bs]
+                vecs = self._llama_embed_batch(chunk)
+                if vecs is None:
+                    with self._batch_lock:
+                        self._batch_size = max(1, self._batch_size // 2)
+                    # fallback chunk-by-chunk to preserve forward progress
+                    for t in chunk:
+                        out.append(self.embed(t))
+                    i += len(chunk)
+                    continue
+                out.extend(vecs)
+                # gentle increase when stable
+                with self._batch_lock:
+                    if self._batch_size < 64 and len(chunk) == self._batch_size:
+                        self._batch_size += 1
+                i += len(chunk)
+            return out
         return [self._fallback.embed(t) for t in texts]
 
     @property
@@ -1023,6 +1045,8 @@ class ContextAssembler:
         self._semantic_result_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
         self._semantic_result_cache_lock = threading.Lock()
         self._semantic_result_cache_ttl_sec = 3.0
+        self._semantic_budget_cache: Dict[str, Tuple[float, int]] = {}
+        self._semantic_budget_lock = threading.Lock()
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
@@ -1318,6 +1342,7 @@ class ContextAssembler:
             if session_id:
                 out["semantic_threshold"] = self._get_semantic_threshold(session_id)
                 out["semantic_circuit_open"] = self._semantic_circuit_open(session_id)
+                out["semantic_budget"] = self._adaptive_semantic_budget(session_id, default_max=24)
                 if INTEL_PROFILE:
                     with self._perf_lock:
                         b = dict(self._perf_buckets.get(session_id, {}))
@@ -1627,6 +1652,41 @@ class ContextAssembler:
             return False
         with self._circuit_breaker_lock:
             return int(self._semantic_circuit_breaker_until.get(session_id, 0)) > int(time.time())
+
+    def _adaptive_semantic_budget(self, session_id: str, default_max: int = 24) -> int:
+        """Dynamically tune semantic candidate budget using quality/perf signals."""
+        if not session_id:
+            return default_max
+        now = time.time()
+        with self._semantic_budget_lock:
+            cached = self._semantic_budget_cache.get(session_id)
+            if cached and (now - cached[0] <= 2.0):
+                return int(cached[1])
+        budget = int(default_max)
+        try:
+            stats = self._session_retrieval_stats(session_id)
+            sem = stats.get("semantic_linked") or {}
+            hit = float(sem.get("hit_rate") or 0.0)
+            health = self._collect_intelligence_health(session_id)
+            perf = (health.get("perf") or {}).get("decompile_enrich") or {}
+            avg_ms = float(perf.get("avg_ms") or 0.0)
+
+            if hit >= 0.7:
+                budget += 8
+            elif hit <= 0.25:
+                budget -= 6
+            if avg_ms > 70.0:
+                budget -= 5
+            elif avg_ms > 0 and avg_ms < 20.0:
+                budget += 3
+            if self._semantic_circuit_open(session_id):
+                budget = min(budget, 8)
+        except Exception:
+            pass
+        budget = max(8, min(48, budget))
+        with self._semantic_budget_lock:
+            self._semantic_budget_cache[session_id] = (now, budget)
+        return budget
 
     def _update_semantic_circuit_breaker(self, session_id: str) -> None:
         """Open semantic circuit briefly when quality is persistently weak."""
@@ -2416,12 +2476,13 @@ class ContextAssembler:
         if query_vec is not None and bb_store is not None and not self._semantic_circuit_open(session_id):
             try:
                 sem_thr = self._get_semantic_threshold(session_id)
+                sem_budget = self._adaptive_semantic_budget(session_id, default_max=24)
                 sem_bb = self._get_bb_semantic_vec(
                     query_vec,
                     bb_store,
                     top_k=3,
                     threshold=sem_thr,
-                    max_entries=24,
+                    max_entries=sem_budget,
                     api_calls=api_calls,
                     session_id=session_id,
                 )
@@ -2684,6 +2745,7 @@ class ContextAssembler:
                 for idb, idx in self._indexes.items()
             },
             "policy_save_queue": len(self._policy_save_due_at),
+            "embed_batch_size": getattr(self._embedder, "_batch_size", 1),
         }
 
 

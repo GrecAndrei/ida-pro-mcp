@@ -466,3 +466,39 @@ def test_semantic_result_cache_avoids_repeated_scoring_pass():
     # second request should be served from semantic result cache path
     assert miss2 == miss1
     assert hit2 == hit1
+
+
+def test_adaptive_semantic_budget_bounds_and_direction():
+    asm = ContextAssembler()
+    sess = "sess-budget"
+    with asm._retrieval_metrics_lock:
+        asm._retrieval_metrics[sess]["semantic_linked.total"] = 20
+        asm._retrieval_metrics[sess]["semantic_linked.accepted"] = 20
+        asm._retrieval_metrics[sess]["semantic_linked.kept"] = 18
+    b_hi = asm._adaptive_semantic_budget(sess, default_max=24)
+    assert 24 <= b_hi <= 48
+
+    asm._semantic_budget_cache.pop(sess, None)
+    with asm._retrieval_metrics_lock:
+        asm._retrieval_metrics[sess]["semantic_linked.kept"] = 1
+    asm._invalidate_session_caches(sess)
+    b_lo = asm._adaptive_semantic_budget(sess, default_max=24)
+    assert 8 <= b_lo <= 24
+
+
+def test_embedder_batch_controller_backoff_and_growth():
+    class _TestEmbedder(_FakeEmbedder):
+        def __init__(self):
+            self._use_llama = True
+            self._batch_size = 8
+            self._batch_lock = type("L", (), {"__enter__": lambda s: None, "__exit__": lambda s, a, b, c: None})()
+
+        def _llama_embed_batch(self, texts):
+            if len(texts) > 4:
+                return None
+            return [self.embed(t) for t in texts]
+
+    emb = _TestEmbedder()
+    out = emb.embed_batch(["a", "b", "c", "d", "e", "f"])
+    assert len(out) == 6
+    assert emb._batch_size <= 8
