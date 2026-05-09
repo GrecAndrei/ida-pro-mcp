@@ -981,6 +981,10 @@ class ContextAssembler:
         self._policy_cache_lock = threading.Lock()
         self._perf_buckets: Dict[str, Dict[str, float]] = defaultdict(dict)
         self._perf_lock = threading.Lock()
+        self._policy_save_due_at: Dict[str, float] = {}
+        self._policy_save_inflight: set = set()
+        self._policy_save_lock = threading.Lock()
+        self._policy_save_debounce_sec = 0.35
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
@@ -1093,7 +1097,7 @@ class ContextAssembler:
                     ))
                     metrics[key_kept] = int(metrics.get(key_kept, 0)) + kept
                 self._invalidate_session_caches(session_id)
-                self._save_session_policy(session_id)
+                self._schedule_policy_save(session_id)
             except Exception:
                 pass
 
@@ -1368,6 +1372,57 @@ class ContextAssembler:
         except Exception:
             return
 
+    def _schedule_policy_save(self, session_id: str, force: bool = False) -> None:
+        """Debounce policy saves to reduce disk churn in bursty sessions."""
+        if not session_id:
+            return
+        now = time.time()
+        with self._policy_save_lock:
+            due = now if force else (now + self._policy_save_debounce_sec)
+            prev = self._policy_save_due_at.get(session_id)
+            if prev is None or due < prev:
+                self._policy_save_due_at[session_id] = due
+            if session_id in self._policy_save_inflight:
+                return
+            self._policy_save_inflight.add(session_id)
+
+        def _worker(sid: str) -> None:
+            try:
+                while True:
+                    with self._policy_save_lock:
+                        due_at = self._policy_save_due_at.get(sid)
+                    if due_at is None:
+                        break
+                    wait = due_at - time.time()
+                    if wait > 0:
+                        time.sleep(min(wait, 0.1))
+                        continue
+                    self._save_session_policy(sid)
+                    with self._policy_save_lock:
+                        # If no newer deadline was scheduled while saving, clear and exit.
+                        latest = self._policy_save_due_at.get(sid)
+                        if latest is None or latest <= due_at:
+                            self._policy_save_due_at.pop(sid, None)
+                            break
+            finally:
+                with self._policy_save_lock:
+                    self._policy_save_inflight.discard(sid)
+
+        threading.Thread(target=_worker, args=(session_id,), daemon=True).start()
+
+    def flush_policy_saves(self, session_id: str = "") -> None:
+        """Force-flush pending debounced policy saves (best-effort)."""
+        targets: List[str]
+        with self._policy_save_lock:
+            if session_id:
+                targets = [session_id]
+            else:
+                targets = list(self._policy_save_due_at.keys())
+            for sid in targets:
+                self._policy_save_due_at[sid] = time.time()
+        for sid in targets:
+            self._schedule_policy_save(sid, force=True)
+
     def _record_focus_suggestion(self, session_id: str, focus: Dict[str, Any]) -> None:
         if not session_id or not focus:
             return
@@ -1382,7 +1437,7 @@ class ContextAssembler:
                     "action": focus.get("action"),
                     "ts": time.time(),
                 }
-            self._save_session_policy(session_id)
+            self._schedule_policy_save(session_id)
         except Exception:
             return
 
@@ -1418,7 +1473,7 @@ class ContextAssembler:
                     m["failed"] = int(m.get("failed", 0)) + 1
                     m[f"action.{ta}.fail"] = int(m.get(f"action.{ta}.fail", 0)) + 1
             self._invalidate_session_caches(session_id)
-            self._save_session_policy(session_id)
+            self._schedule_policy_save(session_id)
         except Exception:
             return
 
@@ -1594,7 +1649,7 @@ class ContextAssembler:
                 if abs(nxt - cur) >= 0.005:
                     self._session_semantic_threshold[session_id] = round(nxt, 3)
                     self._invalidate_session_caches(session_id)
-                    self._save_session_policy(session_id)
+                    self._schedule_policy_save(session_id)
         except Exception:
             return
 
@@ -2478,6 +2533,9 @@ class ContextAssembler:
 
     def stop(self) -> None:
         """Shut down the llama-server subprocess cleanly."""
+        self.flush_policy_saves()
+        # Give background save workers a short chance to flush.
+        time.sleep(0.05)
         self._embedder.stop()
 
     @property
@@ -2492,6 +2550,7 @@ class ContextAssembler:
                 idb: {"functions_indexed": idx.size}
                 for idb, idx in self._indexes.items()
             },
+            "policy_save_queue": len(self._policy_save_due_at),
         }
 
 

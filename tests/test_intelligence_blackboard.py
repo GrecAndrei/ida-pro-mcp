@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import time
 
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -414,3 +415,17 @@ def test_intelligence_health_perf_block_when_profile_enabled():
         assert "assemble" in health["perf"]
     finally:
         intel_mod.INTEL_PROFILE = old
+
+
+def test_debounced_policy_save_and_flush_persists_file():
+    with tempfile.TemporaryDirectory() as td:
+        idb_path = os.path.join(td, "debounce.idb")
+        sess = "sess-debounce"
+        asm = ContextAssembler()
+        asm._policy_save_debounce_sec = 0.05
+        asm._load_session_policy(sess, idb_path)
+        asm._merge_related_findings({}, [{"id": "d1", "confidence": 0.9}], "api_linked", session_id=sess)
+        asm.flush_policy_saves(sess)
+        time.sleep(0.08)
+        p = idb_path + ".focus_policy.json"
+        assert os.path.exists(p)
