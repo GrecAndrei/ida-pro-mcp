@@ -607,6 +607,25 @@ class TestResponseCompaction(unittest.TestCase):
             )
         self.assertIn("llm_pointer_note", shown_again)
 
+    def test_execution_directive_injected_for_required_mcp_call(self):
+        opts = self.server._default_response_options()
+        payload = {
+            "must_call_before_answer": True,
+            "required_followup_call": {"tool": "code", "action": "callers", "addr": "0x401000"},
+        }
+        out = self.server._prepare_response_payload(payload, opts, tool_name="session", call_args={"action": "status"})
+        self.assertIn("llm_execution_directive", out)
+        self.assertIn("MCP_REQUIRED_CALL", out["llm_execution_directive"])
+        self.assertIn("code.callers", out["llm_execution_directive"])
+
+    def test_execution_directive_recommended_when_only_followup_call_present(self):
+        directive = self.server._build_llm_execution_directive(
+            {"required_followup_call": {"tool": "code", "action": "callees", "addr": "0x401020"}}
+        )
+        self.assertIsNotNone(directive)
+        self.assertIn("MCP_RECOMMENDED_CALL", directive)
+        self.assertIn("code.callees", directive)
+
     def test_normalize_search_aliases_accept_noisy_variants(self):
         normalized = self.server._normalize_tool_call_args(
             "search",
