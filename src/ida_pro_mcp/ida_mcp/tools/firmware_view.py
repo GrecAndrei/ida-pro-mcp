@@ -33,6 +33,7 @@ try:
         cluster_pointer_hits,
         dedup_regions_by_fingerprint,
         aggregate_fingerprint_scores,
+        apply_fingerprint_boost,
         rank_region_plans,
         region_fingerprint,
         region_priority_score,
@@ -47,6 +48,7 @@ except ImportError:
         cluster_pointer_hits,
         dedup_regions_by_fingerprint,
         aggregate_fingerprint_scores,
+        apply_fingerprint_boost,
         rank_region_plans,
         region_fingerprint,
         region_priority_score,
@@ -787,6 +789,10 @@ def firmware_view(
 
             ranked = rank_region_plans(regions, limit=max(1, min(limit * 2, 48)))
             ranked = dedup_regions_by_fingerprint(ranked)
+            # Cross-image fingerprint assist: boost regions with historically
+            # high-yield fingerprints from prior campaigns.
+            fp_rank = aggregate_fingerprint_scores(state.get("fingerprint_corpus", []), limit=64)
+            ranked = apply_fingerprint_boost(ranked, fp_rank, boost_cap=0.35)
             ranked = ranked[: max(1, min(limit, 24))]
             campaign_summary = summarize_campaign_regions(ranked)
             exec_plan = build_campaign_execution_plan(ranked, max_steps=min(32, max(6, limit * 2)))
@@ -795,6 +801,10 @@ def firmware_view(
                 "ok": True,
                 "action": action,
                 "summary": campaign_summary,
+                "fingerprint_assist": {
+                    "enabled": True,
+                    "indexed_fingerprints": len(fp_rank),
+                },
                 "regions": ranked,
                 "execution_plan": exec_plan,
                 "rollback_guardrails": {

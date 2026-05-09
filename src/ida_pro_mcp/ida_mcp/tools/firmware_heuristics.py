@@ -285,3 +285,23 @@ def aggregate_fingerprint_scores(rows: List[Dict], limit: int = 24) -> List[Dict
         out.append(v)
     out.sort(key=lambda x: (x["score"], x["count"]), reverse=True)
     return out[: max(1, int(limit))]
+
+
+def apply_fingerprint_boost(regions: List[Dict], fp_rank: List[Dict], boost_cap: float = 0.35) -> List[Dict]:
+    """Boost region priority scores using prior fingerprint corpus evidence."""
+    if not regions or not fp_rank:
+        return list(regions)
+    fp_map = {str(x.get("fingerprint")): float(x.get("score") or 0.0) for x in fp_rank if x.get("fingerprint")}
+    out = []
+    for r in regions:
+        nr = dict(r)
+        fp = str(nr.get("fingerprint") or "")
+        base = float(nr.get("priority_score") or 0.0)
+        signal = fp_map.get(fp, 0.0)
+        boost = min(boost_cap, signal * 0.22)
+        if boost > 0:
+            nr["priority_boost"] = round(boost, 4)
+            nr["priority_score"] = round(base + boost, 4)
+        out.append(nr)
+    out.sort(key=lambda x: float(x.get("priority_score") or 0.0), reverse=True)
+    return out

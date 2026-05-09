@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro
 
 from firmware_heuristics import (
     aggregate_fingerprint_scores,
+    apply_fingerprint_boost,
     ascii_run_stats,
     build_campaign_execution_plan,
     build_carve_plan,
@@ -130,3 +131,17 @@ def test_aggregate_fingerprint_scores_ranks_by_score():
     assert out
     assert out[0]["fingerprint"] == "a"
     assert out[0]["count"] == 2
+
+
+def test_apply_fingerprint_boost_increases_known_regions():
+    regions = [
+        {"fingerprint": "a", "priority_score": 0.8},
+        {"fingerprint": "b", "priority_score": 1.0},
+    ]
+    fp_rank = [
+        {"fingerprint": "a", "score": 1.5},
+    ]
+    out = apply_fingerprint_boost(regions, fp_rank, boost_cap=0.35)
+    boosted = next(x for x in out if x.get("fingerprint") == "a")
+    assert boosted["priority_score"] > 0.8
+    assert boosted.get("priority_boost", 0) > 0
