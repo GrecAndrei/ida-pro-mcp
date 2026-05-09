@@ -2233,6 +2233,34 @@ class IDAMCPServer:
 
         return payload
 
+    def _build_llm_execution_directive(self, payload: dict) -> Optional[str]:
+        """Build a compact directive from tool-first gating fields."""
+        if not isinstance(payload, dict):
+            return None
+        must_call = bool(payload.get("must_call_before_answer"))
+        req = payload.get("required_followup_call")
+        if not isinstance(req, dict):
+            req = None
+        if not must_call and not req:
+            return None
+
+        call_txt = "code.callers"
+        if req:
+            tool = str(req.get("tool") or "").strip()
+            action = str(req.get("action") or "").strip()
+            if tool and action:
+                call_txt = f"{tool}.{action}"
+
+        if must_call:
+            return (
+                f"MCP_REQUIRED_CALL: Execute `{call_txt}` before concluding. "
+                "Do not finalize claims until new tool evidence is incorporated."
+            )
+        return (
+            f"MCP_RECOMMENDED_CALL: Prefer `{call_txt}` before final answer "
+            "and cite returned evidence."
+        )
+
     def _prepare_response_payload(
         self,
         payload: Any,
@@ -2323,6 +2351,14 @@ class IDAMCPServer:
                         compacted["_nudge"] = nudge
                 except Exception:
                     pass
+
+            # ---- Explicit tool-first directive ----
+            try:
+                directive = self._build_llm_execution_directive(compacted)
+                if directive:
+                    compacted.setdefault("llm_execution_directive", directive)
+            except Exception:
+                pass
             
             # ---- Address Patching ----
             try:
