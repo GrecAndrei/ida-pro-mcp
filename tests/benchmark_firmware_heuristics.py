@@ -14,7 +14,9 @@ from firmware_heuristics import (
     build_campaign_execution_plan,
     build_carve_plan,
     cluster_pointer_hits,
+    dedup_regions_by_fingerprint,
     rank_region_plans,
+    region_fingerprint,
     region_priority_score,
     shannon_entropy,
     summarize_campaign_regions,
@@ -123,6 +125,32 @@ def bench_campaign_summary_and_plan(rounds=12000):
     _summ("build_execution_plan", p_samples)
 
 
+def bench_region_fingerprint_dedup(rounds=12000):
+    rows = []
+    for i in range(180):
+        profile = {
+            "entropy": 5.5 + (i % 20) * 0.1,
+            "unknown_ratio": (i % 50) / 100.0,
+            "pointer_density": (i % 12) / 20.0,
+            "ascii_runs": i % 6,
+        }
+        plan = {"risk": "high" if i % 8 == 0 else "medium", "phases": [{"phase": "pointer-first"}]}
+        rows.append({"segment": f"s{i%20}", "profile": profile, "plan": plan, "priority_score": 1.2 - i / 500.0})
+        rows.append({"segment": f"s{i%20}", "profile": profile, "plan": plan, "priority_score": 1.0 - i / 500.0})
+    f_samples = []
+    d_samples = []
+    for _ in range(rounds):
+        t0 = time.perf_counter()
+        for r in rows[:32]:
+            region_fingerprint(r)
+        f_samples.append(time.perf_counter() - t0)
+        t1 = time.perf_counter()
+        dedup_regions_by_fingerprint(rows)
+        d_samples.append(time.perf_counter() - t1)
+    _summ("region_fingerprint(32)", f_samples)
+    _summ("dedup_regions", d_samples)
+
+
 if __name__ == "__main__":
     print("=" * 72)
     print("Firmware Heuristic Benchmarks")
@@ -133,3 +161,4 @@ if __name__ == "__main__":
     bench_plan()
     bench_region_ranking()
     bench_campaign_summary_and_plan()
+    bench_region_fingerprint_dedup()

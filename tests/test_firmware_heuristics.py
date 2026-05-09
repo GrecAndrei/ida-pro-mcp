@@ -8,7 +8,9 @@ from firmware_heuristics import (
     build_campaign_execution_plan,
     build_carve_plan,
     cluster_pointer_hits,
+    dedup_regions_by_fingerprint,
     rank_region_plans,
+    region_fingerprint,
     region_priority_score,
     shannon_entropy,
     summarize_campaign_regions,
@@ -98,3 +100,20 @@ def test_build_campaign_execution_plan_generates_staged_steps():
     assert steps
     assert steps[0]["action"] == "campaign"
     assert any(s.get("action") == "smart_carve" for s in steps)
+
+
+def test_region_fingerprint_and_dedup_keep_highest_priority():
+    r1 = {
+        "segment": "A",
+        "profile": {"entropy": 6.9, "unknown_ratio": 0.5, "pointer_density": 0.3, "ascii_runs": 1},
+        "plan": {"risk": "high", "phases": [{"phase": "pointer-first"}]},
+        "priority_score": 0.9,
+    }
+    r2 = dict(r1)
+    r2["priority_score"] = 1.3
+    fp1 = region_fingerprint(r1)
+    fp2 = region_fingerprint(r2)
+    assert fp1 == fp2
+    out = dedup_regions_by_fingerprint([r1, r2])
+    assert len(out) == 1
+    assert out[0]["priority_score"] == 1.3

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 from typing import Dict, List
 
 
@@ -223,3 +224,35 @@ def build_campaign_execution_plan(regions: List[Dict], max_steps: int = 18) -> L
             "note": f"Validate tables/pointers for {seg}",
         })
     return steps[:max_steps]
+
+
+def region_fingerprint(region: Dict) -> str:
+    """Stable region fingerprint for cross-image/cross-session deduping."""
+    profile = region.get("profile") or {}
+    plan = region.get("plan") or {}
+    key = {
+        "segment": region.get("segment") or "",
+        "entropy": round(float(profile.get("entropy") or 0.0), 2),
+        "unknown_ratio": round(float(profile.get("unknown_ratio") or 0.0), 2),
+        "pointer_density": round(float(profile.get("pointer_density") or 0.0), 2),
+        "ascii_runs": int(profile.get("ascii_runs") or 0),
+        "risk": plan.get("risk") or "low",
+        "phases": [p.get("phase") for p in (plan.get("phases") or [])[:3]],
+    }
+    raw = repr(sorted(key.items())).encode()
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def dedup_regions_by_fingerprint(regions: List[Dict]) -> List[Dict]:
+    """Keep highest-priority representative per region fingerprint."""
+    best: Dict[str, Dict] = {}
+    for r in regions:
+        fp = region_fingerprint(r)
+        cur = best.get(fp)
+        if cur is None or float(r.get("priority_score") or 0.0) > float(cur.get("priority_score") or 0.0):
+            nr = dict(r)
+            nr["fingerprint"] = fp
+            best[fp] = nr
+    out = list(best.values())
+    out.sort(key=lambda x: float(x.get("priority_score") or 0.0), reverse=True)
+    return out

@@ -413,7 +413,7 @@ TOOL_DESCRIPTIONS = {
     "comment_mgr": "Comment management. Actions: get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "colorize": "Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
     "data_ops": "Data type conversion and view shaping. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr, make_ptr.",
-    "firmware_view": "Raw firmware view-shaping assistant. Actions: scan_region, region_profile, segment_sweep, campaign, multi_region_campaign, pointer_sweep, pointer_clusters, table_candidates, carve_plan, auto_retype, smart_carve, recommend, rollback_last, review_contradictions. Integrates memrl + blackboard suggestions for iterative code/data reinterpretation and firmware triage planning. Typical start: firmware_view(action='multi_region_campaign') to get ranked regions + safe execution plan.",
+    "firmware_view": "Raw firmware view-shaping assistant. Actions: scan_region, region_profile, segment_sweep, campaign, multi_region_campaign, campaign_checkpoint, campaign_resume, pointer_sweep, pointer_clusters, table_candidates, carve_plan, auto_retype, smart_carve, recommend, rollback_last, review_contradictions. Integrates memrl + blackboard suggestions for iterative code/data reinterpretation and firmware triage planning. Typical start: firmware_view(action='multi_region_campaign') then firmware_view(action='campaign_checkpoint') for resumable execution.",
     "fixups": "Relocation/fixup management. Actions: list, get, add, delete.",
     # Instrumentation
     "hooks": "Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
@@ -811,7 +811,7 @@ TOOL_ACTIONS = {
         "highlight_pattern",
     ],
     "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code", "cycle_data", "set_repr", "make_ptr"],
-    "firmware_view": ["scan_region", "region_profile", "segment_sweep", "campaign", "multi_region_campaign", "auto_retype", "pointer_sweep", "pointer_clusters", "table_candidates", "carve_plan", "smart_carve", "recommend", "rollback_last", "review_contradictions"],
+    "firmware_view": ["scan_region", "region_profile", "segment_sweep", "campaign", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "auto_retype", "pointer_sweep", "pointer_clusters", "table_candidates", "carve_plan", "smart_carve", "recommend", "rollback_last", "review_contradictions"],
     "fixups": ["list", "get", "add", "delete"],
     # Instrumentation
     "hooks": [
