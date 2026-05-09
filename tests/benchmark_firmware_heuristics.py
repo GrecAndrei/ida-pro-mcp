@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro
 
 from firmware_heuristics import (
     aggregate_fingerprint_scores,
+    apply_fingerprint_boost,
     ascii_run_stats,
     build_campaign_execution_plan,
     build_carve_plan,
@@ -172,6 +173,19 @@ def bench_fingerprint_aggregate(rounds=12000):
     _summ("aggregate_fingerprint", samples)
 
 
+def bench_fingerprint_boost(rounds=12000):
+    regions = []
+    for i in range(220):
+        regions.append({"fingerprint": f"fp_{i%60}", "priority_score": 0.4 + (i % 30) * 0.03})
+    fp_rank = [{"fingerprint": f"fp_{i}", "score": 0.6 + i * 0.02} for i in range(45)]
+    samples = []
+    for _ in range(rounds):
+        t0 = time.perf_counter()
+        apply_fingerprint_boost(regions, fp_rank, boost_cap=0.35)
+        samples.append(time.perf_counter() - t0)
+    _summ("apply_fingerprint_boost", samples)
+
+
 if __name__ == "__main__":
     print("=" * 72)
     print("Firmware Heuristic Benchmarks")
@@ -184,3 +198,4 @@ if __name__ == "__main__":
     bench_campaign_summary_and_plan()
     bench_region_fingerprint_dedup()
     bench_fingerprint_aggregate()
+    bench_fingerprint_boost()
