@@ -12,6 +12,13 @@ import subprocess
 import tempfile
 import time
 
+try:
+    from ...host.casefile_helpers import build_chain_of_custody, build_risk_summary, to_markdown_casefile
+except Exception:
+    build_chain_of_custody = None  # type: ignore
+    build_risk_summary = None  # type: ignore
+    to_markdown_casefile = None  # type: ignore
+
 
 # ============================================================================
 # 12. FILES - Database and file operations
@@ -758,7 +765,11 @@ def project(
             findings = _read_json(os.path.join(pdir, "findings.json"), [])
             hyps = _read_json(os.path.join(pdir, "hypotheses.json"), [])
             ai_records = _read_json(os.path.join(pdir, "ai_annotations.json"), [])
+            replay = _read_json(os.path.join(pdir, "replay_log.json"), [])
             sessions = _discover_sessions(limit=200)
+            export_format = str(kwargs.get("format") or "json").lower()
+            risk_summary = build_risk_summary(findings, hyps, ai_records) if build_risk_summary else {}
+            chain = build_chain_of_custody(sessions, replay, ai_records) if build_chain_of_custody else []
             payload = {
                 "generated_at": _now_iso(),
                 "source_binary": idaapi.get_input_file_path() if hasattr(idaapi, "get_input_file_path") else None,
@@ -767,6 +778,8 @@ def project(
                 "findings": findings[-500:],
                 "hypotheses": hyps[-500:],
                 "ai_governance": ai_records[-500:],
+                "risk_summary": risk_summary,
+                "chain_of_custody": chain,
             }
             payload_bytes = json.dumps(payload, sort_keys=True).encode("utf-8", errors="replace")
             payload_digest = hashlib.sha256(payload_bytes).hexdigest()
@@ -781,13 +794,27 @@ def project(
                 out_path, err = validate_path_safe(out_path)
                 if err:
                     return err
-                with open(out_path, "w", encoding="utf-8") as fh:
-                    json.dump(payload, fh, indent=2)
+                if export_format == "markdown" and to_markdown_casefile is not None:
+                    with open(out_path, "w", encoding="utf-8") as fh:
+                        fh.write(to_markdown_casefile({
+                            **payload,
+                            "summary": {
+                                "sessions": len(sessions),
+                                "findings": len(payload["findings"]),
+                                "hypotheses": len(payload["hypotheses"]),
+                                "ai_records": len(payload["ai_governance"]),
+                            },
+                        }))
+                else:
+                    with open(out_path, "w", encoding="utf-8") as fh:
+                        json.dump(payload, fh, indent=2)
             return {"ok": True, "exported": bool(out_path), "path": out_path, "integrity": payload["integrity"], "summary": {
                 "sessions": len(sessions),
                 "findings": len(payload["findings"]),
                 "hypotheses": len(payload["hypotheses"]),
                 "ai_records": len(payload["ai_governance"]),
+                "chain_events": len(chain),
+                "risk_level": risk_summary.get("risk_level") if isinstance(risk_summary, dict) else None,
             }}
         
         else:
