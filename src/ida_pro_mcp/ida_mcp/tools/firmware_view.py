@@ -24,6 +24,21 @@ import json
 import os
 import time
 
+try:
+    from .firmware_heuristics import (
+        ascii_run_stats,
+        build_carve_plan,
+        cluster_pointer_hits,
+        shannon_entropy,
+    )
+except ImportError:
+    from firmware_heuristics import (  # type: ignore[import-not-found]
+        ascii_run_stats,
+        build_carve_plan,
+        cluster_pointer_hits,
+        shannon_entropy,
+    )
+
 
 def _is_64bit() -> bool:
     return _inf_is_64bit()
@@ -104,10 +119,21 @@ def _addr_in_mapped(v: int) -> bool:
         return False
 
 
+def _read_bytes_safe(start: int, end: int, cap: int = 1 << 20) -> bytes:
+    """Best-effort range read, bounded to avoid huge allocations."""
+    size = max(0, min(end - start, cap))
+    if size <= 0:
+        return b""
+    try:
+        return ida_bytes.get_bytes(start, size) or b""
+    except Exception:
+        return b""
+
+
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -223,6 +249,45 @@ def firmware_view(
                 ],
             }
             return _log_ml(result, action, f"unknown_ratio={unknown_ratio:.3f}; strategy={strategy}")
+
+        if action == "region_profile":
+            raw = _read_bytes_safe(s_ea, e_ea)
+            hist = [0] * 256
+            for b in raw:
+                hist[b] += 1
+            total = len(raw)
+            ent = shannon_entropy(hist, total)
+            ascii_stats = ascii_run_stats(raw, min_len=6)
+            # quick pointer density sample
+            ptr_hits = 0
+            step = max(1, ptr_size)
+            ea = s_ea
+            scanned = 0
+            while ea + ptr_size <= e_ea and scanned < 4096:
+                v = _read_u64(ea, ptr_size)
+                if v is not None and _addr_in_mapped(int(v)):
+                    ptr_hits += 1
+                scanned += 1
+                ea += step
+            ptr_density = (ptr_hits / max(1, scanned)) if scanned else 0.0
+            result = {
+                "ok": True,
+                "action": action,
+                "range": {"start": hex(s_ea), "end": hex(e_ea)},
+                "profile": {
+                    "sampled_bytes": total,
+                    "entropy": round(ent, 4),
+                    "ascii_runs": ascii_stats["runs"],
+                    "longest_ascii_run": ascii_stats["longest"],
+                    "pointer_density": round(ptr_density, 4),
+                    "likely_packed": bool(ent >= 7.2 and ascii_stats["runs"] == 0),
+                },
+                "next_actions": [
+                    f"firmware_view(action='pointer_clusters', start='{hex(s_ea)}', end='{hex(e_ea)}', stride={ptr_size})",
+                    f"firmware_view(action='carve_plan', start='{hex(s_ea)}', end='{hex(e_ea)}')",
+                ],
+            }
+            return _log_ml(result, action, f"entropy={ent:.3f}; ptr_density={ptr_density:.3f}")
 
         if action == "pointer_sweep":
             candidates = []
@@ -396,6 +461,116 @@ def firmware_view(
                 ],
             }
             return _log_ml(result, action, f"table_candidates={len(candidates)}")
+
+        if action == "pointer_clusters":
+            hits = []
+            ea = s_ea
+            while ea + ptr_size <= e_ea and len(hits) < limit * 12:
+                v = _read_u64(ea, ptr_size)
+                if v is not None and _addr_in_mapped(int(v)):
+                    score = 0.55
+                    if idaapi.get_func(int(v)):
+                        score += 0.25
+                    if ida_bytes.is_loaded(int(v)):
+                        score += 0.1
+                    hits.append({"ea": ea, "value": int(v), "score": round(min(score, 0.99), 3)})
+                ea += max(1, stride)
+            clusters = cluster_pointer_hits(hits, ptr_size, max_gap_entries=2)
+            page = clusters[:limit]
+            result = {
+                "ok": True,
+                "action": action,
+                "range": {"start": hex(s_ea), "end": hex(e_ea)},
+                "pointer_size": ptr_size,
+                "clusters": [
+                    {
+                        "start": hex(c["start"]),
+                        "end": hex(c["end"]),
+                        "entries": c["entries"],
+                        "score": c["score"],
+                        "targets_preview": [hex(v) for v in c["targets_preview"]],
+                    }
+                    for c in page
+                ],
+                "count": len(page),
+                "total_hits": len(hits),
+                "next_actions": [
+                    "firmware_view(action='table_candidates', start='<same_start>', end='<same_end>')",
+                    "firmware_view(action='carve_plan', start='<same_start>', end='<same_end>')",
+                ],
+            }
+            return _log_ml(result, action, f"clusters={len(clusters)}; hits={len(hits)}")
+
+        if action == "carve_plan":
+            # Build a richer triage plan by combining region and pointer/table signals.
+            unknown = code = data = strings = 0
+            ea = s_ea
+            while ea < e_ea:
+                k = _item_kind(ea)
+                if k == "unknown":
+                    unknown += 1
+                elif k == "code":
+                    code += 1
+                elif k == "string":
+                    strings += 1
+                else:
+                    data += 1
+                ea += 1
+            total_items = max(1, unknown + code + data + strings)
+            raw = _read_bytes_safe(s_ea, e_ea)
+            hist = [0] * 256
+            for b in raw:
+                hist[b] += 1
+            ent = shannon_entropy(hist, len(raw))
+            ar = ascii_run_stats(raw, min_len=6)
+
+            # light pointer/table evidence
+            ptr_hits = 0
+            ea = s_ea
+            while ea + ptr_size <= e_ea and ptr_hits < limit * 16:
+                v = _read_u64(ea, ptr_size)
+                if v is not None and _addr_in_mapped(int(v)):
+                    ptr_hits += 1
+                ea += ptr_size
+            table_ev = 0
+            ea = s_ea
+            while ea + ptr_size * 4 <= e_ea and table_ev < limit * 4:
+                vals = []
+                ok = 0
+                for i in range(4):
+                    vv = _read_u64(ea + i * ptr_size, ptr_size)
+                    if vv is None:
+                        break
+                    vals.append(int(vv))
+                    if _addr_in_mapped(int(vv)):
+                        ok += 1
+                if len(vals) == 4 and ok >= 3:
+                    table_ev += 1
+                    ea += ptr_size * 4
+                else:
+                    ea += ptr_size
+
+            plan = build_carve_plan(
+                {
+                    "unknown_ratio": unknown / total_items,
+                    "entropy": ent,
+                    "ascii_runs": ar["runs"],
+                },
+                ptr_count=ptr_hits,
+                table_count=table_ev,
+            )
+            result = {
+                "ok": True,
+                "action": action,
+                "range": {"start": hex(s_ea), "end": hex(e_ea)},
+                "plan": plan,
+                "next_actions": [
+                    "firmware_view(action='smart_carve', start='<same_start>', end='<same_end>', apply=false)",
+                    "firmware_view(action='pointer_clusters', start='<same_start>', end='<same_end>')",
+                    "firmware_view(action='region_profile', start='<same_start>', end='<same_end>')",
+                ],
+            }
+            return _log_ml(result, action, f"risk={plan.get('risk')}; ptr={ptr_hits}; table={table_ev}")
 
         if action == "smart_carve":
             if apply and snapshot_before_apply:
