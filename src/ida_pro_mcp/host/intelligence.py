@@ -23,6 +23,7 @@ Environment variables:
 from __future__ import annotations
 
 import hashlib
+import atexit
 import json
 import math
 import os
@@ -45,6 +46,7 @@ from .intelligence_helpers import compact_policy_blob, derive_focus_candidates, 
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
+_EMBED_LEASE_FILE = os.path.join("/tmp", "ida-mcp-embed-server.json")
 
 def _find_llama_server() -> str:
     """Locate llama-server binary from env, project dir, or PATH."""
@@ -218,6 +220,7 @@ class BgeCodeEmbedder:
         self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "16"))
         self._batch_size = max(1, min(64, self._batch_size))
         self._batch_lock = threading.Lock()
+        self._owns_proc = False
 
     # ── subprocess management ──────────────────────────────────────────────
 
@@ -236,6 +239,26 @@ class BgeCodeEmbedder:
                 return True
             if not self._use_llama:
                 return False
+            # Reuse existing shared embed server when available.
+            try:
+                if os.path.isfile(_EMBED_LEASE_FILE):
+                    with open(_EMBED_LEASE_FILE, "r", encoding="utf-8") as f:
+                        lease = json.load(f)
+                    port = int(lease.get("port") or 0)
+                    if port > 0:
+                        try:
+                            req = urllib.request.urlopen(
+                                f"http://127.0.0.1:{port}/health", timeout=2
+                            )
+                            if b'"ok"' in req.read():
+                                self._port = port
+                                self._ready = True
+                                self._owns_proc = False
+                                return True
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             self._port = self._pick_port()
             cmd = [
                 self._server_bin,
@@ -253,6 +276,7 @@ class BgeCodeEmbedder:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                self._owns_proc = True
             except OSError:
                 self._use_llama = False
                 return False
@@ -267,6 +291,11 @@ class BgeCodeEmbedder:
                     )
                     if b'"ok"' in req.read():
                         self._ready = True
+                        try:
+                            with open(_EMBED_LEASE_FILE, "w", encoding="utf-8") as f:
+                                json.dump({"pid": self._proc.pid if self._proc else None, "port": self._port, "updated_at": time.time()}, f)
+                        except Exception:
+                            pass
                         return True
                 except Exception:
                     pass
@@ -278,13 +307,15 @@ class BgeCodeEmbedder:
             return False
 
     def stop(self) -> None:
-        if self._proc and self._proc.poll() is None:
+        if self._owns_proc and self._proc and self._proc.poll() is None:
             self._proc.terminate()
             try:
                 self._proc.wait(timeout=5)
             except Exception:
                 self._proc.kill()
         self._ready = False
+        self._proc = None
+        self._owns_proc = False
 
     # ── embedding ──────────────────────────────────────────────────────────
 
@@ -3149,3 +3180,15 @@ def get_assembler() -> ContextAssembler:
         if _assembler is None:
             _assembler = ContextAssembler()
     return _assembler
+
+
+def _shutdown_intelligence_singleton() -> None:
+    global _assembler
+    try:
+        if _assembler is not None:
+            _assembler.stop()
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_intelligence_singleton)
