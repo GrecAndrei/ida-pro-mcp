@@ -623,6 +623,11 @@ class IDAMCPServer:
                 self._global_facts.close()
         except Exception as e:
             log_rpc(f"Failed to close global facts DB: {e}")
+        try:
+            if hasattr(self, "assembler") and self.assembler is not None:
+                self.assembler.stop()
+        except Exception as e:
+            log_rpc(f"Failed to stop intelligence embedder: {e}")
 
     def _ida_binary_names(self) -> List[str]:
         if sys.platform == "win32":

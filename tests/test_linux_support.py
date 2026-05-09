@@ -192,12 +192,14 @@ class TestRuntimeLeaseCleanup(unittest.TestCase):
         server._shutdown_requested = False
         server._stop_runtime_lease_heartbeat = Mock()
         server._cleanup_all_runtimes = Mock()
+        server.assembler = Mock()
 
         server.shutdown()
         server.shutdown()
 
         server._stop_runtime_lease_heartbeat.assert_called_once()
         server._cleanup_all_runtimes.assert_called_once()
+        server.assembler.stop.assert_called_once()
 
     def test_cleanup_skips_mismatched_session_id_and_filename(self):
         with tempfile.TemporaryDirectory() as td:
