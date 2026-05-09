@@ -1708,6 +1708,71 @@ class ContextAssembler:
             out.append({"fact": ttl, "source": f"blackboard/{f.get('retrieval_source') or 'unknown'}"})
         return out[:8]
 
+    def _build_llm_tool_call_contract(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
+        """Strict call contract the LLM can emit with low ambiguity."""
+        focus = pack.get("analysis_focus") or {}
+        primary = {
+            "tool": focus.get("tool") or "code",
+            "action": focus.get("action") or "callers",
+            "addr": focus.get("addr") or addr,
+        }
+        if focus.get("pattern"):
+            primary["pattern"] = focus.get("pattern")
+        return {
+            "format": "json",
+            "required_fields": ["tool", "action"],
+            "optional_fields": ["addr", "pattern", "limit"],
+            "primary": primary,
+            "example": {"tool": primary["tool"], "action": primary["action"], "addr": primary.get("addr")},
+        }
+
+    def _build_llm_failover_route(self, pack: Dict[str, Any], addr: str) -> List[Dict[str, Any]]:
+        """Fallback route when primary call yields weak/empty signal."""
+        alts = list(pack.get("analysis_focus_alternatives") or [])
+        route = []
+        for a in alts[:2]:
+            if not (a.get("tool") and a.get("action")):
+                continue
+            route.append(
+                {
+                    "if": "primary_empty_or_low_signal",
+                    "call": {
+                        "tool": a.get("tool"),
+                        "action": a.get("action"),
+                        "addr": a.get("addr") or addr,
+                        "pattern": a.get("pattern"),
+                    },
+                    "expect": "new hit_details or related_findings",
+                }
+            )
+        if not route:
+            route.append(
+                {
+                    "if": "primary_empty_or_low_signal",
+                    "call": {"tool": "code", "action": "callees", "addr": addr},
+                    "expect": "graph expansion",
+                }
+            )
+        return route
+
+    def _build_llm_response_style_guard(self, pack: Dict[str, Any]) -> Dict[str, Any]:
+        """Claim-style guardrails to keep LLM outputs evidence-backed."""
+        evid_n = len(pack.get("llm_evidence") or [])
+        unc = pack.get("llm_uncertainty") or {}
+        risk = str(unc.get("risk") or "low")
+        mode = "assertive" if evid_n >= 3 and risk == "low" else "cautious"
+        return {
+            "mode": mode,
+            "must_include": [
+                "at least one cited evidence fact",
+                "explicit next verification call when uncertainty is medium/high",
+            ],
+            "forbidden": [
+                "definitive malware/vuln claims without cited evidence",
+                "omitting uncertainty when risk is high",
+            ],
+        }
+
     def _focus_explainability(self, cands: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Explain why top focus won vs alternatives."""
         if not cands:
@@ -2586,10 +2651,13 @@ class ContextAssembler:
         # LLM-first payloads: action card, uncertainty, and provenance snippets.
         if addr:
             pack["llm_action_card"] = self._build_llm_action_card(pack, addr)
+            pack["llm_tool_call_contract"] = self._build_llm_tool_call_contract(pack, addr)
+            pack["llm_failover_route"] = self._build_llm_failover_route(pack, addr)
         pack["llm_uncertainty"] = self._build_llm_uncertainty(pack)
         evid = self._build_llm_evidence_snippets(pack)
         if evid:
             pack["llm_evidence"] = evid
+        pack["llm_response_style_guard"] = self._build_llm_response_style_guard(pack)
 
 
 

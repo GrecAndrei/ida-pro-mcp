@@ -248,6 +248,26 @@ def test_llm_payload_builders_produce_action_uncertainty_and_evidence():
     assert evid and len(evid) >= 3
 
 
+def test_llm_contract_failover_and_style_guard_shapes():
+    asm = ContextAssembler()
+    pack = {
+        "analysis_focus": {"tool": "code", "action": "callers", "addr": "0x401000", "reason": "expand"},
+        "analysis_focus_alternatives": [
+            {"tool": "search", "action": "api", "pattern": "VirtualAllocEx", "reason": "pivot"}
+        ],
+        "llm_evidence": [{"fact": "API observed: VirtualAllocEx", "source": "decompile/api_extract"}],
+        "llm_uncertainty": {"risk": "high", "checks": ["semantic_circuit_open"]},
+    }
+    contract = asm._build_llm_tool_call_contract(pack, "0x401000")
+    failover = asm._build_llm_failover_route(pack, "0x401000")
+    style = asm._build_llm_response_style_guard(pack)
+
+    assert contract["format"] == "json"
+    assert contract["primary"]["tool"] == "code"
+    assert failover and failover[0]["call"]["tool"] == "search"
+    assert style["mode"] == "cautious"
+
+
 def test_focus_feedback_closed_loop_updates_stats():
     asm = ContextAssembler()
     sess = "sess-loop"
