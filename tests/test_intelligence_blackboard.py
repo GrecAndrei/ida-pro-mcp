@@ -268,6 +268,35 @@ def test_llm_contract_failover_and_style_guard_shapes():
     assert style["mode"] == "cautious"
 
 
+def test_compiled_plan_budget_and_mode_profiles_are_emitted():
+    asm = ContextAssembler()
+    pack = {
+        "api_calls": ["VirtualAllocEx", "WriteProcessMemory"],
+        "structural": {"entropy": 6.9},
+        "llm_evidence": [{"fact": "API observed", "source": "x"}],
+        "llm_uncertainty": {"risk": "high", "checks": ["semantic_circuit_open"]},
+    }
+    plan = asm._compile_question_tool_plan(pack, "0x401000")
+    budget = asm._evidence_budget_gate(pack, "0x401000")
+    mode = asm._mode_profile(pack)
+    esc = asm._dead_end_escalation("sess-z", "0x401000", pack)
+
+    assert plan["intent"] == "malware_triage"
+    assert budget["claim_blocked"] is True
+    assert mode["mode"] in ("triage_mode", "firmware_mode", "analysis_mode")
+    assert "loop_detected" in esc
+
+
+def test_record_call_outcome_updates_mcp_value_score():
+    asm = ContextAssembler()
+    sess = "sess-score"
+    asm._record_call_outcome(sess, {"related_findings": []})
+    s1 = asm._mcp_value_score(sess, {})
+    asm._record_call_outcome(sess, {"related_findings": [{"id": "x"}]})
+    s2 = asm._mcp_value_score(sess, {"related_findings": [{"id": "x"}]})
+    assert s2 >= s1
+
+
 def test_focus_feedback_closed_loop_updates_stats():
     asm = ContextAssembler()
     sess = "sess-loop"

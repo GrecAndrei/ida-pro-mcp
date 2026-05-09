@@ -1014,6 +1014,8 @@ class ContextAssembler:
         self._focus_feedback_lock = threading.Lock()
         self._pending_focus: Dict[str, Dict[str, Any]] = {}
         self._pending_focus_lock = threading.Lock()
+        self._session_call_outcomes: Dict[str, Dict[str, int]] = defaultdict(dict)
+        self._session_call_outcomes_lock = threading.Lock()
         self._session_store_binding: Dict[str, str] = {}
         self._store_binding_lock = threading.Lock()
         # Cache blackboard entry embeddings by stable key to avoid repeated
@@ -1773,6 +1775,98 @@ class ContextAssembler:
             ],
         }
 
+    def _compile_question_tool_plan(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
+        """Deterministic question->tool first-step compiler for RE workflows."""
+        apis = set(pack.get("api_calls") or [])
+        structural = pack.get("structural") or {}
+        if {"VirtualAllocEx", "WriteProcessMemory"}.intersection(apis):
+            return {
+                "intent": "malware_triage",
+                "first_calls": [
+                    {"tool": "code", "action": "callers", "addr": addr},
+                    {"tool": "xref_analysis", "action": "call_chain", "addr": addr},
+                ],
+            }
+        if float(structural.get("entropy") or 0.0) >= 6.0:
+            return {
+                "intent": "packed_or_obfuscated",
+                "first_calls": [
+                    {"tool": "code", "action": "blocks", "addr": addr},
+                    {"tool": "search", "action": "semantic", "addr": addr},
+                ],
+            }
+        return {
+            "intent": "function_understanding",
+            "first_calls": [
+                {"tool": "code", "action": "decompile", "addr": addr},
+                {"tool": "code", "action": "callers", "addr": addr},
+            ],
+        }
+
+    def _evidence_budget_gate(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
+        """Block high-risk claims unless evidence budget is satisfied."""
+        evid = list(pack.get("llm_evidence") or [])
+        apis = set(pack.get("api_calls") or [])
+        claim_type = "general"
+        required = 1
+        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
+            claim_type = "malware_behavior"
+            required = 2
+        if any("overflow" in str(x.get("fact", "")).lower() for x in evid):
+            claim_type = "vulnerability"
+            required = 3
+        met = len(evid) >= required
+        out = {
+            "claim_type": claim_type,
+            "required_evidence": required,
+            "observed_evidence": len(evid),
+            "claim_blocked": not met,
+        }
+        if not met:
+            out["required_followup_call"] = {"tool": "code", "action": "callers", "addr": addr}
+        return out
+
+    def _dead_end_escalation(self, session_id: str, addr: str, pack: Dict[str, Any]) -> Dict[str, Any]:
+        with self._activity_lock:
+            recent = list(self._activity.get(session_id, []))[-12:]
+        if not recent:
+            return {"loop_detected": False}
+        same_addr = sum(1 for r in recent if r.get("addr") == addr)
+        repetitive = sum(1 for r in recent if f"{r.get('tool')}:{r.get('action')}" in ("code:decompile", "search:semantic"))
+        no_findings = not bool(pack.get("related_findings") or pack.get("hit_details"))
+        loop = same_addr >= 4 and repetitive >= 4 and no_findings
+        if not loop:
+            return {"loop_detected": False}
+        return {
+            "loop_detected": True,
+            "required_followup_call": {"tool": "xref_analysis", "action": "call_chain", "addr": addr},
+            "secondary": {"tool": "firmware_view", "action": "campaign", "start": addr, "end": addr},
+        }
+
+    def _mcp_value_score(self, session_id: str, pack: Dict[str, Any]) -> float:
+        with self._session_call_outcomes_lock:
+            o = self._session_call_outcomes[session_id]
+            calls = int(o.get("calls", 0))
+            wins = int(o.get("wins", 0))
+        base = wins / max(1, calls)
+        lift = 0.1 if (pack.get("related_findings") or pack.get("hit_details")) else 0.0
+        return round(min(1.0, base + lift), 3)
+
+    def _record_call_outcome(self, session_id: str, pack: Dict[str, Any]) -> None:
+        with self._session_call_outcomes_lock:
+            o = self._session_call_outcomes[session_id]
+            o["calls"] = int(o.get("calls", 0)) + 1
+            if pack.get("related_findings") or pack.get("hit_details") or pack.get("analysis_focus"):
+                o["wins"] = int(o.get("wins", 0)) + 1
+
+    def _mode_profile(self, pack: Dict[str, Any]) -> Dict[str, Any]:
+        apis = set(pack.get("api_calls") or [])
+        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
+            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "xref_analysis.call_chain"]}
+        if pack.get("structural") and float((pack.get("structural") or {}).get("entropy") or 0.0) >= 6.0:
+            return {"mode": "firmware_mode", "mandatory_sequence": ["firmware_view.region_profile", "firmware_view.pointer_clusters", "firmware_view.carve_plan"]}
+        return {"mode": "analysis_mode", "mandatory_sequence": ["code.decompile", "code.callers"]}
+
     def _focus_explainability(self, cands: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Explain why top focus won vs alternatives."""
         if not cands:
@@ -2350,6 +2444,23 @@ class ContextAssembler:
         health = self._collect_intelligence_health(session_id)
         if health:
             pack["intelligence_health"] = health
+
+        if addr:
+            pack["compiled_plan"] = self._compile_question_tool_plan(pack, addr)
+            budget = self._evidence_budget_gate(pack, addr)
+            pack["evidence_budget"] = budget
+            escalation = self._dead_end_escalation(session_id, addr, pack)
+            pack["dead_end_escalation"] = escalation
+            # default-to-call policy: force at least one call under uncertainty/blocks
+            must_call = bool(budget.get("claim_blocked") or escalation.get("loop_detected") or (pack.get("llm_uncertainty") or {}).get("risk") in ("medium", "high"))
+            pack["must_call_before_answer"] = must_call
+            req = budget.get("required_followup_call") or escalation.get("required_followup_call")
+            if must_call and req:
+                pack["required_followup_call"] = req
+            pack["mode_profile"] = self._mode_profile(pack)
+
+        self._record_call_outcome(session_id, pack)
+        pack["mcp_value_score"] = self._mcp_value_score(session_id, pack)
 
         self._perf_end(session_id, "assemble", t_all)
 
