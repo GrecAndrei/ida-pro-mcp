@@ -1631,6 +1631,83 @@ class ContextAssembler:
         except Exception:
             return None
 
+    def _build_llm_action_card(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
+        """
+        Compact, execution-ready card intended for direct LLM consumption.
+        Keeps one primary call + two fallbacks with concrete args.
+        """
+        focus = pack.get("analysis_focus") or {}
+        alts = list(pack.get("analysis_focus_alternatives") or [])
+        primary = None
+        if focus.get("tool") and focus.get("action"):
+            primary = {
+                "call": {
+                    "tool": focus.get("tool"),
+                    "action": focus.get("action"),
+                    "addr": focus.get("addr") or addr,
+                    "pattern": focus.get("pattern"),
+                },
+                "why": focus.get("reason") or "best next step",
+            }
+        fallbacks = []
+        for a in alts[:2]:
+            if not (a.get("tool") and a.get("action")):
+                continue
+            fallbacks.append(
+                {
+                    "call": {
+                        "tool": a.get("tool"),
+                        "action": a.get("action"),
+                        "addr": a.get("addr") or addr,
+                        "pattern": a.get("pattern"),
+                    },
+                    "why": a.get("reason") or "fallback",
+                }
+            )
+        return {
+            "primary": primary,
+            "fallbacks": fallbacks,
+            "stop_condition": "stop when new related_findings or hit_details appear",
+        }
+
+    def _build_llm_uncertainty(self, pack: Dict[str, Any]) -> Dict[str, Any]:
+        """Expose explicit uncertainty so LLM can avoid over-claiming."""
+        risk = "low"
+        checks: List[str] = []
+        rf = pack.get("related_findings") or []
+        if len(rf) == 0:
+            checks.append("no_related_findings")
+        sem_thr = float(((pack.get("retrieval_stats") or {}).get("semantic_threshold") or 0.5))
+        sem_open = bool(((pack.get("intelligence_health") or {}).get("semantic_circuit_open")))
+        if sem_open:
+            checks.append("semantic_circuit_open")
+        if sem_thr >= 0.65:
+            checks.append("strict_semantic_threshold")
+        if checks:
+            risk = "medium"
+        if "semantic_circuit_open" in checks and len(rf) == 0:
+            risk = "high"
+        return {
+            "risk": risk,
+            "checks": checks,
+            "instruction": "state uncertainty and run primary action before concluding behavior",
+        }
+
+    def _build_llm_evidence_snippets(self, pack: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Small provenance-tied facts for LLM responses."""
+        out: List[Dict[str, Any]] = []
+        for api in (pack.get("api_calls") or [])[:5]:
+            out.append({"fact": f"API observed: {api}", "source": "decompile/api_extract"})
+        st = pack.get("structural") or {}
+        if st.get("entropy") is not None:
+            out.append({"fact": f"Entropy: {st.get('entropy')}", "source": "schemaboot"})
+        if st.get("xor_count"):
+            out.append({"fact": f"XOR count: {st.get('xor_count')}", "source": "schemaboot"})
+        for f in (pack.get("related_findings") or [])[:3]:
+            ttl = str(f.get("title") or "finding")
+            out.append({"fact": ttl, "source": f"blackboard/{f.get('retrieval_source') or 'unknown'}"})
+        return out[:8]
+
     def _focus_explainability(self, cands: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Explain why top focus won vs alternatives."""
         if not cands:
@@ -2505,6 +2582,14 @@ class ContextAssembler:
             explain = self._focus_explainability(alts)
             if explain:
                 pack["analysis_focus_explain"] = explain
+
+        # LLM-first payloads: action card, uncertainty, and provenance snippets.
+        if addr:
+            pack["llm_action_card"] = self._build_llm_action_card(pack, addr)
+        pack["llm_uncertainty"] = self._build_llm_uncertainty(pack)
+        evid = self._build_llm_evidence_snippets(pack)
+        if evid:
+            pack["llm_evidence"] = evid
 
 
 
