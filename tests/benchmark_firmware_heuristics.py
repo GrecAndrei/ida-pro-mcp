@@ -11,11 +11,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro
 
 from firmware_heuristics import (
     ascii_run_stats,
+    build_campaign_execution_plan,
     build_carve_plan,
     cluster_pointer_hits,
     rank_region_plans,
     region_priority_score,
     shannon_entropy,
+    summarize_campaign_regions,
 )
 
 
@@ -96,6 +98,31 @@ def bench_region_ranking(rounds=12000):
     _summ("rank_region_plans", samples)
 
 
+def bench_campaign_summary_and_plan(rounds=12000):
+    rows = []
+    for i in range(64):
+        rows.append(
+            {
+                "segment": f"seg{i}",
+                "start": hex(0x1000 + i * 0x100),
+                "end": hex(0x1000 + i * 0x100 + 0x80),
+                "priority_score": 1.5 - (i / 100.0),
+                "plan": {"risk": "high" if i % 7 == 0 else ("medium" if i % 3 == 0 else "low")},
+            }
+        )
+    s_samples = []
+    p_samples = []
+    for _ in range(rounds):
+        t0 = time.perf_counter()
+        summarize_campaign_regions(rows)
+        s_samples.append(time.perf_counter() - t0)
+        t1 = time.perf_counter()
+        build_campaign_execution_plan(rows, max_steps=20)
+        p_samples.append(time.perf_counter() - t1)
+    _summ("summarize_campaign", s_samples)
+    _summ("build_execution_plan", p_samples)
+
+
 if __name__ == "__main__":
     print("=" * 72)
     print("Firmware Heuristic Benchmarks")
@@ -105,3 +132,4 @@ if __name__ == "__main__":
     bench_clusters()
     bench_plan()
     bench_region_ranking()
+    bench_campaign_summary_and_plan()
