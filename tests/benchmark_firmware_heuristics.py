@@ -10,6 +10,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools"))
 
 from firmware_heuristics import (
+    aggregate_fingerprint_scores,
     ascii_run_stats,
     build_campaign_execution_plan,
     build_carve_plan,
@@ -151,6 +152,26 @@ def bench_region_fingerprint_dedup(rounds=12000):
     _summ("dedup_regions", d_samples)
 
 
+def bench_fingerprint_aggregate(rounds=12000):
+    rows = []
+    for i in range(600):
+        rows.append(
+            {
+                "fingerprint": f"fp_{i % 45}",
+                "priority_score": 0.3 + (i % 20) * 0.04,
+                "segment": f"seg{i % 10}",
+                "start": hex(0x1000 + i * 8),
+                "end": hex(0x1000 + i * 8 + 0x40),
+            }
+        )
+    samples = []
+    for _ in range(rounds):
+        t0 = time.perf_counter()
+        aggregate_fingerprint_scores(rows, limit=24)
+        samples.append(time.perf_counter() - t0)
+    _summ("aggregate_fingerprint", samples)
+
+
 if __name__ == "__main__":
     print("=" * 72)
     print("Firmware Heuristic Benchmarks")
@@ -162,3 +183,4 @@ if __name__ == "__main__":
     bench_region_ranking()
     bench_campaign_summary_and_plan()
     bench_region_fingerprint_dedup()
+    bench_fingerprint_aggregate()
