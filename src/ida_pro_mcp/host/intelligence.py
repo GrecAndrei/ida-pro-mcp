@@ -1867,6 +1867,93 @@ class ContextAssembler:
             return {"mode": "firmware_mode", "mandatory_sequence": ["firmware_view.region_profile", "firmware_view.pointer_clusters", "firmware_view.carve_plan"]}
         return {"mode": "analysis_mode", "mandatory_sequence": ["code.decompile", "code.callers"]}
 
+    # --- 10 LLM-first feature payloads ---
+    def _llm_query_intent(self, pack: Dict[str, Any]) -> Dict[str, Any]:
+        apis = set(pack.get("api_calls") or [])
+        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
+            return {"intent": "malware_behavior", "confidence": 0.82}
+        if float((pack.get("structural") or {}).get("entropy") or 0.0) >= 6.0:
+            return {"intent": "obfuscation_or_packer", "confidence": 0.74}
+        return {"intent": "function_understanding", "confidence": 0.62}
+
+    def _llm_required_evidence_sources(self, pack: Dict[str, Any]) -> Dict[str, Any]:
+        src = set()
+        if pack.get("api_calls"):
+            src.add("api_extract")
+        if pack.get("structural"):
+            src.add("schemaboot")
+        if pack.get("related_findings"):
+            src.add("blackboard")
+        return {"required_min": 2, "observed": sorted(src), "met": len(src) >= 2}
+
+    def _llm_claim_templates(self) -> Dict[str, str]:
+        return {
+            "safe_claim": "Observed: {facts}. Likely: {inference}. Verify with: {next_call}.",
+            "uncertain_claim": "Signals are incomplete ({checks}). Run: {next_call} before concluding.",
+        }
+
+    def _llm_call_sequence(self, pack: Dict[str, Any], addr: str) -> List[Dict[str, Any]]:
+        seq = []
+        prim = ((pack.get("llm_action_card") or {}).get("primary") or {}).get("call") or {}
+        if prim.get("tool") and prim.get("action"):
+            seq.append({"step": 1, **prim})
+        for i, fb in enumerate((pack.get("llm_failover_route") or [])[:2], start=2):
+            c = fb.get("call") or {}
+            if c.get("tool") and c.get("action"):
+                seq.append({"step": i, **c})
+        if not seq:
+            seq.append({"step": 1, "tool": "code", "action": "callers", "addr": addr})
+        return seq
+
+    def _llm_refusal_policy(self, pack: Dict[str, Any]) -> Dict[str, Any]:
+        blocked = bool((pack.get("evidence_budget") or {}).get("claim_blocked"))
+        return {
+            "must_refuse_definitive_claim": blocked,
+            "reason": "insufficient_evidence" if blocked else "none",
+        }
+
+    def _llm_tool_cooldowns(self, session_id: str) -> Dict[str, Any]:
+        with self._activity_lock:
+            recent = list(self._activity.get(session_id, []))[-10:]
+        counts: Dict[str, int] = {}
+        for r in recent:
+            k = f"{r.get('tool')}:{r.get('action')}"
+            counts[k] = counts.get(k, 0) + 1
+        cooled = [k for k, c in counts.items() if c >= 4]
+        return {"avoid_repeating": cooled, "window": 10}
+
+    def _llm_context_capsule(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
+        return {
+            "addr": addr,
+            "apis": (pack.get("api_calls") or [])[:5],
+            "top_findings": [str(x.get("title") or "") for x in (pack.get("related_findings") or [])[:3]],
+            "focus": ((pack.get("analysis_focus") or {}).get("action") or "unknown"),
+        }
+
+    def _llm_verification_checklist(self, pack: Dict[str, Any], addr: str) -> List[str]:
+        checks = [
+            f"run code.callers at {addr}",
+            f"run xref_analysis.call_chain at {addr}",
+        ]
+        if not pack.get("related_findings"):
+            checks.append("write one blackboard note for newly verified behavior")
+        return checks
+
+    def _llm_next_best_question(self, pack: Dict[str, Any]) -> str:
+        if not pack.get("related_findings"):
+            return "Which caller path reaches this behavior first?"
+        if not pack.get("structural"):
+            return "What structural signals (entropy/xor/loops) support this hypothesis?"
+        return "What is the minimum evidence to confirm or refute this behavior?"
+
+    def _llm_auto_notes(self, pack: Dict[str, Any]) -> List[str]:
+        notes = []
+        for f in (pack.get("related_findings") or [])[:2]:
+            notes.append(f"note: {f.get('title')}")
+        for a in (pack.get("api_calls") or [])[:2]:
+            notes.append(f"api: {a}")
+        return notes
+
     def _focus_explainability(self, cands: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Explain why top focus won vs alternatives."""
         if not cands:
@@ -2769,6 +2856,17 @@ class ContextAssembler:
         if evid:
             pack["llm_evidence"] = evid
         pack["llm_response_style_guard"] = self._build_llm_response_style_guard(pack)
+        if addr:
+            pack["llm_query_intent"] = self._llm_query_intent(pack)
+            pack["llm_required_evidence_sources"] = self._llm_required_evidence_sources(pack)
+            pack["llm_claim_templates"] = self._llm_claim_templates()
+            pack["llm_call_sequence"] = self._llm_call_sequence(pack, addr)
+            pack["llm_refusal_policy"] = self._llm_refusal_policy(pack)
+            pack["llm_tool_cooldowns"] = self._llm_tool_cooldowns(session_id)
+            pack["llm_context_capsule"] = self._llm_context_capsule(pack, addr)
+            pack["llm_verification_checklist"] = self._llm_verification_checklist(pack, addr)
+            pack["llm_next_best_question"] = self._llm_next_best_question(pack)
+            pack["llm_auto_notes"] = self._llm_auto_notes(pack)
 
 
 

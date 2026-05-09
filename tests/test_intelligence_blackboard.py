@@ -297,6 +297,29 @@ def test_record_call_outcome_updates_mcp_value_score():
     assert s2 >= s1
 
 
+def test_ten_llm_feature_payload_builders_shapes():
+    asm = ContextAssembler()
+    pack = {
+        "api_calls": ["VirtualAllocEx", "WriteProcessMemory"],
+        "related_findings": [{"title": "Process injection"}],
+        "structural": {"entropy": 6.6},
+        "llm_action_card": {"primary": {"call": {"tool": "code", "action": "callers", "addr": "0x401000"}}},
+        "llm_failover_route": [{"call": {"tool": "search", "action": "api", "pattern": "VirtualAllocEx"}}],
+        "evidence_budget": {"claim_blocked": True},
+    }
+    addr = "0x401000"
+    assert asm._llm_query_intent(pack)["intent"]
+    assert "required_min" in asm._llm_required_evidence_sources(pack)
+    assert "safe_claim" in asm._llm_claim_templates()
+    assert asm._llm_call_sequence(pack, addr)
+    assert "must_refuse_definitive_claim" in asm._llm_refusal_policy(pack)
+    assert "avoid_repeating" in asm._llm_tool_cooldowns("sess-any")
+    assert asm._llm_context_capsule(pack, addr)["addr"] == addr
+    assert asm._llm_verification_checklist(pack, addr)
+    assert isinstance(asm._llm_next_best_question(pack), str)
+    assert asm._llm_auto_notes(pack)
+
+
 def test_focus_feedback_closed_loop_updates_stats():
     asm = ContextAssembler()
     sess = "sess-loop"
