@@ -23,6 +23,7 @@ except ImportError:
 import json
 import os
 import time
+import uuid
 
 try:
     from .firmware_heuristics import (
@@ -30,6 +31,7 @@ try:
         build_campaign_execution_plan,
         build_carve_plan,
         cluster_pointer_hits,
+        dedup_regions_by_fingerprint,
         rank_region_plans,
         region_priority_score,
         summarize_campaign_regions,
@@ -41,6 +43,7 @@ except ImportError:
         build_campaign_execution_plan,
         build_carve_plan,
         cluster_pointer_hits,
+        dedup_regions_by_fingerprint,
         rank_region_plans,
         region_priority_score,
         summarize_campaign_regions,
@@ -66,10 +69,11 @@ def _load_fw_state() -> dict:
             if isinstance(data, dict):
                 data.setdefault("history", [])
                 data.setdefault("contradictions", [])
+                data.setdefault("campaigns", {})
                 return data
     except Exception:
         pass
-    return {"history": [], "contradictions": []}
+    return {"history": [], "contradictions": [], "campaigns": {}}
 
 
 def _save_fw_state(state: dict) -> None:
@@ -138,6 +142,25 @@ def _read_bytes_safe(start: int, end: int, cap: int = 1 << 20) -> bytes:
         return b""
 
 
+def _record_contradiction(state: dict, ea: int, old: str, new: str, reason: str, confidence: float = 0.7) -> None:
+    sev = "low"
+    if old == "code" and new in ("ptr", "make_ptr", "data", "make_data", "make_string"):
+        sev = "high"
+    elif old == "data" and new in ("code", "make_code"):
+        sev = "medium"
+    state.setdefault("contradictions", []).append(
+        {
+            "ts": int(time.time()),
+            "ea": hex(ea),
+            "old": old,
+            "new": new,
+            "reason": reason,
+            "severity": sev,
+            "confidence": round(max(0.0, min(1.0, confidence)), 3),
+        }
+    )
+
+
 def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
     """Collect lightweight region profile primitives."""
     raw = _read_bytes_safe(s_ea, e_ea)
@@ -191,7 +214,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -393,7 +416,7 @@ def firmware_view(
                     prev_kind = _item_kind(pea)
                     if p["kind"] == "ptr":
                         if prev_kind == "code" and not force:
-                            state["contradictions"].append({"ts": int(time.time()), "ea": hex(pea), "old": prev_kind, "new": "ptr", "reason": "code_to_ptr_guard"})
+                            _record_contradiction(state, pea, prev_kind, "ptr", "code_to_ptr_guard", confidence=0.82)
                             continue
                         if ida_bytes.create_data(pea, ida_bytes.qword_flag() if ptr_size == 8 else ida_bytes.dword_flag(), ptr_size, idaapi.BADADDR):
                             try:
@@ -404,7 +427,7 @@ def firmware_view(
                             state["history"].append({"ts": int(time.time()), "action": "auto_retype", "ea": hex(pea), "new_kind": "ptr", "prev_kind": prev_kind, "size": ptr_size})
                     elif p["kind"] == "code":
                         if prev_kind == "data" and not force:
-                            state["contradictions"].append({"ts": int(time.time()), "ea": hex(pea), "old": prev_kind, "new": "code", "reason": "data_to_code_guard"})
+                            _record_contradiction(state, pea, prev_kind, "code", "data_to_code_guard", confidence=0.74)
                             continue
                         if idc.create_insn(pea) > 0:
                             applied += 1
@@ -699,7 +722,9 @@ def firmware_view(
                         "priority_score": pri,
                     }
                 )
-            ranked = rank_region_plans(regions, limit=limit)
+            ranked = rank_region_plans(regions, limit=max(1, min(limit * 2, 48)))
+            ranked = dedup_regions_by_fingerprint(ranked)
+            ranked = ranked[: max(1, limit)]
             result = {
                 "ok": True,
                 "action": action,
@@ -755,7 +780,9 @@ def firmware_view(
                     }
                 )
 
-            ranked = rank_region_plans(regions, limit=max(1, min(limit, 24)))
+            ranked = rank_region_plans(regions, limit=max(1, min(limit * 2, 48)))
+            ranked = dedup_regions_by_fingerprint(ranked)
+            ranked = ranked[: max(1, min(limit, 24))]
             campaign_summary = summarize_campaign_regions(ranked)
             exec_plan = build_campaign_execution_plan(ranked, max_steps=min(32, max(6, limit * 2)))
 
@@ -776,6 +803,99 @@ def firmware_view(
                 ],
             }
             return _log_ml(result, action, f"regions={campaign_summary.get('count',0)}; high={campaign_summary.get('risk_counts',{}).get('high',0)}")
+
+        if action == "campaign_checkpoint":
+            # Snapshot current multi-region campaign plan for resumable execution.
+            segs = []
+            seg = idaapi.get_first_seg()
+            while seg:
+                if seg.end_ea > seg.start_ea:
+                    try:
+                        sname = idaapi.get_segm_name(seg) or ""
+                    except Exception:
+                        sname = ""
+                    segs.append((int(seg.start_ea), int(seg.end_ea), sname))
+                seg = idaapi.get_next_seg(seg.start_ea)
+            regions = []
+            for ss, ee, name in segs[: max(1, min(limit * 4, 128))]:
+                if ee - ss < 64:
+                    continue
+                prof = _profile_range(ss, ee, ptr_size)
+                plan = build_carve_plan(
+                    {"unknown_ratio": prof["unknown_ratio"], "entropy": prof["entropy"], "ascii_runs": prof["ascii_runs"]},
+                    ptr_count=prof.get("ptr_hits_sampled", 0),
+                    table_count=0,
+                )
+                pri = region_priority_score(prof, plan, cluster_count=0)
+                regions.append(
+                    {
+                        "segment": name,
+                        "start": hex(ss),
+                        "end": hex(ee),
+                        "profile": {
+                            "entropy": prof["entropy"],
+                            "unknown_ratio": prof["unknown_ratio"],
+                            "pointer_density": prof["pointer_density"],
+                            "ascii_runs": prof["ascii_runs"],
+                        },
+                        "plan": plan,
+                        "priority_score": pri,
+                    }
+                )
+            ranked = dedup_regions_by_fingerprint(rank_region_plans(regions, limit=max(1, min(limit * 2, 48))))
+            ranked = ranked[: max(1, min(limit, 24))]
+            exec_plan = build_campaign_execution_plan(ranked, max_steps=min(48, max(8, limit * 3)))
+            cid = str(uuid.uuid4())[:12]
+            state.setdefault("campaigns", {})[cid] = {
+                "created_at": int(time.time()),
+                "cursor": 0,
+                "regions": ranked,
+                "execution_plan": exec_plan,
+                "done": [],
+            }
+            _save_fw_state(state)
+            return {
+                "ok": True,
+                "action": action,
+                "campaign_id": cid,
+                "regions": len(ranked),
+                "plan_steps": len(exec_plan),
+                "next_actions": [
+                    f"firmware_view(action='campaign_resume', addr='{cid}')",
+                    "firmware_view(action='review_contradictions')",
+                ],
+            }
+
+        if action == "campaign_resume":
+            cid = (addr or "").strip()
+            if not cid:
+                return make_error(MCPError.INVALID_ARGS, "campaign_resume requires addr=<campaign_id>")
+            campaigns = state.setdefault("campaigns", {})
+            camp = campaigns.get(cid)
+            if not camp:
+                return make_error(MCPError.NOT_FOUND, f"Unknown campaign_id: {cid}")
+            plan = list(camp.get("execution_plan") or [])
+            cursor = int(camp.get("cursor") or 0)
+            chunk_n = max(1, min(limit, 10))
+            chunk = plan[cursor : cursor + chunk_n]
+            camp["cursor"] = min(len(plan), cursor + len(chunk))
+            for st in chunk:
+                camp.setdefault("done", []).append(st.get("step"))
+            _save_fw_state(state)
+            finished = camp["cursor"] >= len(plan)
+            return {
+                "ok": True,
+                "action": action,
+                "campaign_id": cid,
+                "finished": finished,
+                "cursor": camp["cursor"],
+                "total_steps": len(plan),
+                "next_chunk": chunk,
+                "next_actions": [
+                    (f"firmware_view(action='campaign_resume', addr='{cid}')" if not finished else "campaign complete"),
+                    "Execute chunk actions manually with apply=false first.",
+                ],
+            }
 
         if action == "smart_carve":
             if apply and snapshot_before_apply:
@@ -838,7 +958,7 @@ def firmware_view(
                     k = op["kind"]
                     prev_kind = _item_kind(oa)
                     if prev_kind == "code" and k in ("make_ptr", "make_data", "make_string") and not force:
-                        state["contradictions"].append({"ts": int(time.time()), "ea": hex(oa), "old": prev_kind, "new": k, "reason": "code_preservation_guard"})
+                        _record_contradiction(state, oa, prev_kind, k, "code_preservation_guard", confidence=0.86)
                         continue
                     if k == "make_ptr":
                         ok = ida_bytes.create_data(oa, ida_bytes.qword_flag() if ptr_size == 8 else ida_bytes.dword_flag(), ptr_size, idaapi.BADADDR)
@@ -925,11 +1045,18 @@ def firmware_view(
 
         if action == "review_contradictions":
             items = state.get("contradictions", [])
+            weighted = []
+            sev_w = {"high": 1.0, "medium": 0.65, "low": 0.35}
+            for it in items:
+                w = sev_w.get(str(it.get("severity") or "low"), 0.35)
+                c = float(it.get("confidence") or 0.5)
+                weighted.append((w * c, it))
+            weighted.sort(key=lambda x: x[0], reverse=True)
             return {
                 "ok": True,
                 "action": action,
                 "count": len(items),
-                "items": items[-limit:],
+                "items": [it for _, it in weighted[:limit]],
                 "next_actions": [
                     "Re-run with force=true only on verified addresses.",
                     "Use blackboard(action='list', category='firmware_view') to correlate prior decisions.",
