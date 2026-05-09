@@ -944,6 +944,31 @@ class ContextAssembler:
         # Activity tracking for stuck detection (in-memory, per session)
         self._activity: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         self._activity_lock = threading.Lock()
+        self._related_addr_graph: Dict[str, Dict[str, set]] = defaultdict(lambda: defaultdict(set))
+        self._related_addr_lock = threading.Lock()
+        self._retrieval_metrics: Dict[str, Dict[str, int]] = defaultdict(dict)
+        self._retrieval_metrics_lock = threading.Lock()
+        self._session_semantic_threshold: Dict[str, float] = {}
+        self._semantic_threshold_lock = threading.Lock()
+        self._focus_feedback: Dict[str, Dict[str, int]] = defaultdict(dict)
+        self._focus_feedback_lock = threading.Lock()
+        self._pending_focus: Dict[str, Dict[str, Any]] = {}
+        self._pending_focus_lock = threading.Lock()
+        self._session_store_binding: Dict[str, str] = {}
+        self._store_binding_lock = threading.Lock()
+        # Cache blackboard entry embeddings by stable key to avoid repeated
+        # re-embedding the same rows on every decompile call.
+        self._bb_entry_vec_cache: Dict[str, Tuple[List[float], float]] = {}
+        self._bb_entry_vec_cache_lock = threading.Lock()
+        self._bb_entry_cache_ttl_sec = 900.0
+        self._bb_entry_cache_max = 4000
+        self._bb_cache_hits = 0
+        self._bb_cache_misses = 0
+        self._bb_cache_stats_lock = threading.Lock()
+        self._last_housekeeping_ts = 0.0
+        self._housekeeping_lock = threading.Lock()
+        self._pending_focus_ttl_sec = 420.0
+        self._related_graph_max_edges = 1200
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
@@ -963,6 +988,769 @@ class ContextAssembler:
             return entries or []
         except Exception:
             return []
+
+    def _merge_related_findings(
+        self,
+        pack: Dict[str, Any],
+        entries: List[Dict[str, Any]],
+        source: str,
+        session_id: str = "",
+    ) -> None:
+        """
+        Merge findings into pack['related_findings'] with deterministic ranking.
+
+        Ranking priority:
+          1) evidence source: address_linked > relation_linked > api_linked > semantic_linked
+          2) confidence
+          3) updated_at recency
+        """
+        if not entries:
+            return
+        policy = self._session_source_policy(session_id) if session_id else {}
+        p_src = policy.get(source, {}) if isinstance(policy, dict) else {}
+        min_conf = float(p_src.get("min_confidence", 0.0) or 0.0)
+        max_take = int(p_src.get("max_take", 8) or 8)
+        weight = float(p_src.get("weight", 1.0) or 1.0)
+        filtered_entries = [
+            e for e in entries
+            if float(e.get("confidence") or 0.0) >= min_conf
+        ]
+        if max_take > 0:
+            filtered_entries = sorted(
+                filtered_entries,
+                key=lambda e: (
+                    float(e.get("confidence") or 0.0),
+                    float(e.get("updated_at") or 0.0),
+                ),
+                reverse=True,
+            )[:max_take]
+        if not filtered_entries:
+            return
+        src_rank = {
+            "address_linked": 4,
+            "relation_linked": 3,
+            "api_linked": 2,
+            "semantic_linked": 1,
+        }
+        merged: Dict[str, Dict[str, Any]] = {}
+        for existing in pack.get("related_findings", []):
+            e = dict(existing)
+            e.setdefault("retrieval_source", "address_linked")
+            merged[str(e.get("id") or hashlib.md5(json.dumps(e, sort_keys=True).encode()).hexdigest())] = e
+        for entry in filtered_entries:
+            e = dict(entry)
+            e["retrieval_source"] = source
+            e["retrieval_weight"] = round(weight, 3)
+            key = str(e.get("id") or hashlib.md5(json.dumps(e, sort_keys=True).encode()).hexdigest())
+            prev = merged.get(key)
+            if prev is None:
+                merged[key] = e
+                continue
+            prev_rank = src_rank.get(str(prev.get("retrieval_source") or "semantic_linked"), 0)
+            new_rank = src_rank.get(source, 0)
+            if new_rank > prev_rank:
+                merged[key] = e
+                continue
+            if new_rank == prev_rank:
+                if float(e.get("confidence") or 0.0) > float(prev.get("confidence") or 0.0):
+                    merged[key] = e
+
+        ranked = sorted(
+            merged.values(),
+            key=lambda x: (
+                src_rank.get(str(x.get("retrieval_source") or "semantic_linked"), 0),
+                float(x.get("retrieval_weight") or 1.0),
+                float(x.get("confidence") or 0.0),
+                float(x.get("updated_at") or 0.0),
+            ),
+            reverse=True,
+        )
+        pack["related_findings"] = ranked[:8]
+        if session_id:
+            try:
+                with self._retrieval_metrics_lock:
+                    metrics = self._retrieval_metrics[session_id]
+                    key_total = f"{source}.total"
+                    key_accepted = f"{source}.accepted"
+                    key_kept = f"{source}.kept"
+                    metrics[key_total] = int(metrics.get(key_total, 0)) + len(entries)
+                    metrics[key_accepted] = int(metrics.get(key_accepted, 0)) + len(filtered_entries)
+                    kept = sum(1 for e in filtered_entries if any(
+                        (r.get("id") and r.get("id") == e.get("id"))
+                        for r in pack.get("related_findings", [])
+                    ))
+                    metrics[key_kept] = int(metrics.get(key_kept, 0)) + kept
+                self._save_session_policy(session_id)
+            except Exception:
+                pass
+
+    def _session_retrieval_stats(self, session_id: str) -> Dict[str, Any]:
+        if not session_id:
+            return {}
+        try:
+            with self._retrieval_metrics_lock:
+                metrics = dict(self._retrieval_metrics.get(session_id, {}))
+            if not metrics:
+                return {}
+            out: Dict[str, Any] = {}
+            sources = ["address_linked", "relation_linked", "api_linked", "semantic_linked"]
+            for src in sources:
+                total = int(metrics.get(f"{src}.total", 0))
+                accepted = int(metrics.get(f"{src}.accepted", 0))
+                kept = int(metrics.get(f"{src}.kept", 0))
+                if total <= 0:
+                    continue
+                out[src] = {
+                    "total": total,
+                    "accepted": accepted,
+                    "kept": kept,
+                    "accept_rate": round(accepted / max(1, total), 3),
+                    "hit_rate": round(kept / max(1, total), 3),
+                }
+            out["semantic_threshold"] = self._get_semantic_threshold(session_id)
+            out["source_policy"] = self._session_source_policy(session_id)
+            out["focus_feedback"] = self._focus_feedback_stats(session_id)
+            return out
+        except Exception:
+            return {}
+
+    def _focus_feedback_stats(self, session_id: str) -> Dict[str, Any]:
+        if not session_id:
+            return {}
+        try:
+            with self._focus_feedback_lock:
+                m = dict(self._focus_feedback.get(session_id, {}))
+            suggested = int(m.get("suggested", 0))
+            followed = int(m.get("followed", 0))
+            successful = int(m.get("successful", 0))
+            failed = int(m.get("failed", 0))
+            out: Dict[str, Any] = {
+                "suggested": suggested,
+                "followed": followed,
+                "successful": successful,
+                "failed": failed,
+                "follow_rate": round(followed / max(1, suggested), 3),
+                "success_rate": round(successful / max(1, followed), 3),
+            }
+            action_stats: Dict[str, Dict[str, float]] = {}
+            for k, v in m.items():
+                if not k.startswith("action."):
+                    continue
+                # action.<tool:action>.<ok|fail>
+                parts = k.split(".")
+                if len(parts) != 3:
+                    continue
+                ta = parts[1]
+                bucket = action_stats.setdefault(ta, {"ok": 0.0, "fail": 0.0})
+                bucket[parts[2]] = float(v)
+            if action_stats:
+                per_action = {}
+                for ta, vals in action_stats.items():
+                    ok = vals.get("ok", 0.0)
+                    fail = vals.get("fail", 0.0)
+                    total = ok + fail
+                    if total <= 0:
+                        continue
+                    per_action[ta] = {
+                        "success_rate": round(ok / total, 3),
+                        "samples": int(total),
+                    }
+                if per_action:
+                    out["per_action"] = per_action
+            return out
+        except Exception:
+            return {}
+
+    def _run_housekeeping(self, session_id: str) -> None:
+        """Periodic cleanup for pending focus and relation graph bounds."""
+        now = time.time()
+        if now - self._last_housekeeping_ts < 30.0:
+            return
+        if not self._housekeeping_lock.acquire(blocking=False):
+            return
+        try:
+            self._last_housekeeping_ts = now
+            # Expire stale pending focus suggestions.
+            with self._pending_focus_lock:
+                stale = [
+                    sid for sid, rec in self._pending_focus.items()
+                    if now - float(rec.get("ts") or 0.0) > self._pending_focus_ttl_sec
+                ]
+                for sid in stale:
+                    self._pending_focus.pop(sid, None)
+
+            # Bound relation graph size per session.
+            if session_id:
+                with self._related_addr_lock:
+                    graph = self._related_addr_graph.get(session_id)
+                    if graph:
+                        total_edges = sum(len(v) for v in graph.values())
+                        if total_edges > self._related_graph_max_edges:
+                            # Drop smallest-degree nodes first.
+                            nodes = sorted(graph.items(), key=lambda kv: len(kv[1]))
+                            drop_budget = total_edges - self._related_graph_max_edges
+                            for node, nbrs in nodes:
+                                if drop_budget <= 0:
+                                    break
+                                drop_budget -= len(nbrs)
+                                graph.pop(node, None)
+        except Exception:
+            pass
+        finally:
+            self._housekeeping_lock.release()
+
+    def _collect_intelligence_health(self, session_id: str) -> Dict[str, Any]:
+        """Compact health telemetry for adaptive intelligence quality."""
+        out: Dict[str, Any] = {}
+        try:
+            with self._bb_cache_stats_lock:
+                hits = int(self._bb_cache_hits)
+                misses = int(self._bb_cache_misses)
+            total = hits + misses
+            out["bb_cache"] = {
+                "entries": len(self._bb_entry_vec_cache),
+                "hit_rate": round(hits / max(1, total), 3),
+                "ops": total,
+            }
+            with self._pending_focus_lock:
+                pending = self._pending_focus.get(session_id, {}) if session_id else {}
+            if pending:
+                age = time.time() - float(pending.get("ts") or time.time())
+                out["pending_focus"] = {
+                    "tool": pending.get("tool"),
+                    "action": pending.get("action"),
+                    "age_sec": round(age, 2),
+                }
+            with self._related_addr_lock:
+                rel_nodes = len(self._related_addr_graph.get(session_id, {})) if session_id else 0
+            out["relation_graph"] = {"nodes": rel_nodes}
+            if session_id:
+                out["semantic_threshold"] = self._get_semantic_threshold(session_id)
+        except Exception:
+            return {}
+        return out
+
+    def _policy_store_path(self, idb_path: str) -> str:
+        if idb_path:
+            return idb_path + ".focus_policy.json"
+        return os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "focus_policy.json")
+
+    def _compact_policy_blob(self, sess_blob: Dict[str, Any]) -> Dict[str, Any]:
+        """Bound policy size by pruning low-value/high-cardinality history."""
+        out = dict(sess_blob or {})
+        rm = dict(out.get("retrieval_metrics") or {})
+        ff = dict(out.get("focus_feedback") or {})
+
+        # Keep only known retrieval metric keys.
+        keep_rm: Dict[str, int] = {}
+        for src in ("address_linked", "relation_linked", "api_linked", "semantic_linked"):
+            for key in ("total", "accepted", "kept"):
+                k = f"{src}.{key}"
+                if k in rm:
+                    try:
+                        keep_rm[k] = int(rm[k])
+                    except Exception:
+                        pass
+        out["retrieval_metrics"] = keep_rm
+
+        # Keep scalar focus counters + top-N action stats by volume.
+        keep_ff: Dict[str, int] = {}
+        for k in ("suggested", "followed", "successful", "failed"):
+            if k in ff:
+                try:
+                    keep_ff[k] = int(ff[k])
+                except Exception:
+                    pass
+        action_totals: Dict[str, int] = {}
+        for k, v in ff.items():
+            if not str(k).startswith("action."):
+                continue
+            parts = str(k).split(".")
+            if len(parts) != 3:
+                continue
+            ta = parts[1]
+            try:
+                action_totals[ta] = action_totals.get(ta, 0) + int(v)
+            except Exception:
+                pass
+        top_actions = sorted(action_totals.items(), key=lambda kv: kv[1], reverse=True)[:24]
+        top_set = {ta for ta, _ in top_actions}
+        for k, v in ff.items():
+            if not str(k).startswith("action."):
+                continue
+            parts = str(k).split(".")
+            if len(parts) != 3:
+                continue
+            ta = parts[1]
+            if ta in top_set:
+                try:
+                    keep_ff[k] = int(v)
+                except Exception:
+                    pass
+        out["focus_feedback"] = keep_ff
+
+        # Clamp threshold range.
+        try:
+            thr = float(out.get("semantic_threshold") or 0.5)
+        except Exception:
+            thr = 0.5
+        out["semantic_threshold"] = max(0.35, min(0.75, thr))
+        out["schema_version"] = 2
+        return out
+
+    def _prune_policy_store(self, data: Dict[str, Any], max_sessions: int = 24) -> Dict[str, Any]:
+        """Prune policy store to bounded session count and compact blobs."""
+        if not isinstance(data, dict):
+            return {"schema_version": 2, "sessions": {}}
+        sessions = data.get("sessions")
+        if not isinstance(sessions, dict):
+            sessions = {}
+        # Compact each session blob first.
+        compacted: Dict[str, Dict[str, Any]] = {}
+        for sid, blob in sessions.items():
+            if not isinstance(blob, dict):
+                continue
+            compacted[str(sid)] = self._compact_policy_blob(blob)
+        # Keep most recently saved sessions.
+        ordered = sorted(
+            compacted.items(),
+            key=lambda kv: float((kv[1] or {}).get("saved_at") or 0.0),
+            reverse=True,
+        )[:max(1, max_sessions)]
+        return {
+            "schema_version": 2,
+            "updated_at": time.time(),
+            "sessions": {sid: blob for sid, blob in ordered},
+        }
+
+    def _bind_session_store(self, session_id: str, idb_path: str) -> None:
+        if not session_id or not idb_path:
+            return
+        with self._store_binding_lock:
+            self._session_store_binding[session_id] = self._policy_store_path(idb_path)
+
+    def _load_session_policy(self, session_id: str, idb_path: str) -> None:
+        if not session_id:
+            return
+        self._bind_session_store(session_id, idb_path)
+        try:
+            path = self._policy_store_path(idb_path)
+            if not os.path.exists(path):
+                return
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and int(data.get("schema_version") or 1) < 2:
+                data = self._prune_policy_store(data)
+            sess = data.get("sessions", {}).get(session_id)
+            if not isinstance(sess, dict):
+                return
+            with self._retrieval_metrics_lock:
+                if session_id not in self._retrieval_metrics or not self._retrieval_metrics[session_id]:
+                    self._retrieval_metrics[session_id] = dict(sess.get("retrieval_metrics") or {})
+            with self._focus_feedback_lock:
+                if session_id not in self._focus_feedback or not self._focus_feedback[session_id]:
+                    self._focus_feedback[session_id] = dict(sess.get("focus_feedback") or {})
+            with self._semantic_threshold_lock:
+                if session_id not in self._session_semantic_threshold:
+                    thr = float(sess.get("semantic_threshold") or 0.5)
+                    self._session_semantic_threshold[session_id] = max(0.35, min(0.75, thr))
+        except Exception:
+            return
+
+    def _save_session_policy(self, session_id: str) -> None:
+        if not session_id:
+            return
+        try:
+            with self._store_binding_lock:
+                path = self._session_store_binding.get(session_id)
+            if not path:
+                return
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data: Dict[str, Any] = {"sessions": {}}
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        data = {"sessions": {}}
+                except Exception:
+                    data = {"sessions": {}}
+            sessions = data.setdefault("sessions", {})
+            with self._retrieval_metrics_lock:
+                rm = dict(self._retrieval_metrics.get(session_id, {}))
+            with self._focus_feedback_lock:
+                ff = dict(self._focus_feedback.get(session_id, {}))
+            with self._semantic_threshold_lock:
+                thr = float(self._session_semantic_threshold.get(session_id, 0.5))
+            sessions[session_id] = {
+                "retrieval_metrics": rm,
+                "focus_feedback": ff,
+                "semantic_threshold": thr,
+                "saved_at": time.time(),
+            }
+            data = self._prune_policy_store(data)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, sort_keys=True)
+        except Exception:
+            return
+
+    def _record_focus_suggestion(self, session_id: str, focus: Dict[str, Any]) -> None:
+        if not session_id or not focus:
+            return
+        try:
+            with self._focus_feedback_lock:
+                m = self._focus_feedback[session_id]
+                m["suggested"] = int(m.get("suggested", 0)) + 1
+            with self._pending_focus_lock:
+                self._pending_focus[session_id] = {
+                    "tool": focus.get("tool"),
+                    "action": focus.get("action"),
+                    "ts": time.time(),
+                }
+            self._save_session_policy(session_id)
+        except Exception:
+            return
+
+    def _consume_focus_follow(self, session_id: str, tool: str, action: str) -> bool:
+        if not session_id:
+            return False
+        try:
+            with self._pending_focus_lock:
+                pending = self._pending_focus.pop(session_id, None)
+            if not pending:
+                return False
+            followed = (pending.get("tool") == tool and pending.get("action") == action)
+            if followed:
+                with self._focus_feedback_lock:
+                    m = self._focus_feedback[session_id]
+                    m["followed"] = int(m.get("followed", 0)) + 1
+            return followed
+        except Exception:
+            return False
+
+    def _record_focus_outcome(self, session_id: str, tool: str, action: str, success: bool) -> None:
+        if not session_id:
+            return
+        try:
+            ta = f"{tool}:{action}"
+            with self._focus_feedback_lock:
+                m = self._focus_feedback[session_id]
+                if success:
+                    m["successful"] = int(m.get("successful", 0)) + 1
+                    m[f"action.{ta}.ok"] = int(m.get(f"action.{ta}.ok", 0)) + 1
+                else:
+                    m["failed"] = int(m.get("failed", 0)) + 1
+                    m[f"action.{ta}.fail"] = int(m.get(f"action.{ta}.fail", 0)) + 1
+            self._save_session_policy(session_id)
+        except Exception:
+            return
+
+    def _focus_action_bias(self, session_id: str, tool: str, action: str) -> float:
+        if not session_id:
+            return 1.0
+        try:
+            ta = f"{tool}:{action}"
+            with self._focus_feedback_lock:
+                m = dict(self._focus_feedback.get(session_id, {}))
+            ok = int(m.get(f"action.{ta}.ok", 0))
+            fail = int(m.get(f"action.{ta}.fail", 0))
+            total = ok + fail
+            if total < 3:
+                return 1.0
+            rate = ok / max(1, total)
+            # Map 0..1 success rate to 0.8..1.25 bias
+            return round(0.8 + rate * 0.45, 3)
+        except Exception:
+            return 1.0
+
+    def _session_source_policy(self, session_id: str) -> Dict[str, Dict[str, Any]]:
+        """Adaptive source policy tuned from per-session retrieval outcomes."""
+        base = {
+            "address_linked": {"weight": 1.4, "min_confidence": 0.0, "max_take": 8},
+            "relation_linked": {"weight": 1.2, "min_confidence": 0.25, "max_take": 6},
+            "api_linked": {"weight": 1.0, "min_confidence": 0.35, "max_take": 5},
+            "semantic_linked": {"weight": 0.9, "min_confidence": 0.45, "max_take": 4},
+        }
+        if not session_id:
+            return base
+        try:
+            with self._retrieval_metrics_lock:
+                metrics = dict(self._retrieval_metrics.get(session_id, {}))
+            for src, cfg in base.items():
+                total = int(metrics.get(f"{src}.total", 0))
+                kept = int(metrics.get(f"{src}.kept", 0))
+                if total < 6:
+                    continue
+                hit_rate = kept / max(1, total)
+                if hit_rate < 0.25:
+                    cfg["weight"] = round(max(0.5, float(cfg["weight"]) - 0.2), 3)
+                    cfg["min_confidence"] = round(min(0.9, float(cfg["min_confidence"]) + 0.08), 3)
+                    cfg["max_take"] = max(2, int(cfg["max_take"]) - 1)
+                elif hit_rate > 0.7:
+                    cfg["weight"] = round(min(1.8, float(cfg["weight"]) + 0.15), 3)
+                    cfg["min_confidence"] = round(max(0.0, float(cfg["min_confidence"]) - 0.05), 3)
+                    cfg["max_take"] = min(8, int(cfg["max_take"]) + 1)
+            return base
+        except Exception:
+            return base
+
+    def _derive_analysis_focus(
+        self,
+        pack: Dict[str, Any],
+        addr: str,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Derive a single best next focus action for the current step using:
+        - adaptive source policy
+        - observed retrieval richness
+        - structural risk signals
+        """
+        if not addr:
+            return None
+        try:
+            cands = self._derive_focus_candidates(pack, addr, session_id)
+            if cands:
+                return cands[0]
+            return None
+        except Exception:
+            return None
+
+    def _derive_focus_candidates(
+        self,
+        pack: Dict[str, Any],
+        addr: str,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Return ranked focus candidates (best first)."""
+        if not addr:
+            return []
+        try:
+            policy = self._session_source_policy(session_id)
+            stats = self._session_retrieval_stats(session_id)
+            structural = pack.get("structural") or {}
+            related = pack.get("related_findings") or []
+            apis = pack.get("api_calls") or []
+            candidates: List[Dict[str, Any]] = []
+
+            sem_weight = float((policy.get("semantic_linked") or {}).get("weight", 0.9))
+            rel_weight = float((policy.get("relation_linked") or {}).get("weight", 1.2))
+            api_weight = float((policy.get("api_linked") or {}).get("weight", 1.0))
+            sem_hit = float(((stats.get("semantic_linked") or {}) if isinstance(stats, dict) else {}).get("hit_rate", 0.0))
+            rel_hit = float(((stats.get("relation_linked") or {}) if isinstance(stats, dict) else {}).get("hit_rate", 0.0))
+            api_hit = float(((stats.get("api_linked") or {}) if isinstance(stats, dict) else {}).get("hit_rate", 0.0))
+
+            if related and rel_weight >= 1.1 and rel_hit >= 0.35:
+                bias = self._focus_action_bias(session_id, "code", "callers")
+                candidates.append({
+                    "tool": "code",
+                    "action": "callers",
+                    "addr": addr,
+                    "reason": "High-yield relation-linked findings; expand call-chain context",
+                    "score": round((rel_weight + rel_hit) * bias, 3),
+                    "bias": bias,
+                })
+
+            entropy = float(structural.get("entropy") or 0.0)
+            xor_count = int(structural.get("xor_count") or 0)
+            cyclo = int(structural.get("cyclomatic_complexity") or 0)
+            if entropy >= 6.0 or xor_count >= 4 or cyclo >= 18:
+                bias = self._focus_action_bias(session_id, "code", "blocks")
+                candidates.append({
+                    "tool": "code",
+                    "action": "blocks",
+                    "addr": addr,
+                    "reason": "Structural complexity/obfuscation indicators are elevated",
+                    "score": round(max(1.0, entropy / 6.0 + xor_count * 0.2 + cyclo * 0.03) * bias, 3),
+                    "bias": bias,
+                })
+
+            if apis and api_weight >= 1.0 and api_hit >= 0.25:
+                bias = self._focus_action_bias(session_id, "search", "api")
+                candidates.append({
+                    "tool": "search",
+                    "action": "api",
+                    "pattern": apis[0],
+                    "reason": "API-linked retrieval is productive; pivot on top API behavior",
+                    "score": round((api_weight + api_hit) * bias, 3),
+                    "bias": bias,
+                })
+
+            if sem_weight >= 0.95 or sem_hit >= 0.4:
+                bias = self._focus_action_bias(session_id, "search", "semantic")
+                candidates.append({
+                    "tool": "search",
+                    "action": "semantic",
+                    "addr": addr,
+                    "reason": "Semantic retrieval quality is acceptable; broaden semantic neighborhood",
+                    "score": round((sem_weight + sem_hit) * bias, 3),
+                    "bias": bias,
+                })
+
+            bias = self._focus_action_bias(session_id, "code", "callees")
+            candidates.append({
+                "tool": "code",
+                "action": "callees",
+                "addr": addr,
+                "reason": "Default structural pivot to progress analysis graph",
+                "score": round(0.5 * bias, 3),
+                "bias": bias,
+            })
+            candidates = sorted(candidates, key=lambda x: float(x.get("score") or 0.0), reverse=True)
+            return candidates[:4]
+        except Exception:
+            return []
+
+    def _get_semantic_threshold(self, session_id: str) -> float:
+        if not session_id:
+            return 0.5
+        with self._semantic_threshold_lock:
+            return float(self._session_semantic_threshold.get(session_id, 0.5))
+
+    def _tune_semantic_threshold(self, session_id: str) -> None:
+        """
+        Tune semantic threshold from observed semantic hit-rate.
+        """
+        if not session_id:
+            return
+        try:
+            stats = self._session_retrieval_stats(session_id)
+            sem = stats.get("semantic_linked") if isinstance(stats, dict) else None
+            if not sem:
+                return
+            total = int(sem.get("total") or 0)
+            hit_rate = float(sem.get("hit_rate") or 0.0)
+            if total < 6:
+                return
+            with self._semantic_threshold_lock:
+                cur = float(self._session_semantic_threshold.get(session_id, 0.5))
+                nxt = cur
+                if hit_rate < 0.35:
+                    nxt = min(0.75, cur + 0.03)
+                elif hit_rate > 0.75:
+                    nxt = max(0.35, cur - 0.03)
+                if abs(nxt - cur) >= 0.005:
+                    self._session_semantic_threshold[session_id] = round(nxt, 3)
+                    self._save_session_policy(session_id)
+        except Exception:
+            return
+
+    def _get_bb_by_api_signals(
+        self,
+        bb_store,
+        api_calls: List[str],
+        addr: str,
+        top_k: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve blackboard findings related to the same behavior signal (APIs/tags),
+        not just exact address matches.
+        """
+        if bb_store is None or not api_calls:
+            return []
+        try:
+            ranked: List[Tuple[int, float, Dict[str, Any]]] = []
+            seen_ids: set = set()
+            # Query per API tag; blackboard tags are stored as JSON arrays and
+            # list(tag=...) already supports LIKE matching.
+            for api in api_calls[:8]:
+                for entry in bb_store.list(tag=api, limit=6):
+                    eid = entry.get("id")
+                    if not eid or eid in seen_ids:
+                        continue
+                    seen_ids.add(eid)
+                    eaddr = str(entry.get("addr") or "")
+                    same_addr_penalty = 0 if (addr and eaddr and eaddr != addr) else 1
+                    conf = float(entry.get("confidence") or 0.0)
+                    ranked.append((same_addr_penalty, -int(conf * 1000), entry))
+            ranked.sort(key=lambda x: (x[0], x[1]))
+            return [e for _, _, e in ranked[:top_k]]
+        except Exception:
+            return []
+
+    def _record_related_addresses(self, session_id: str, anchor_addr: str, related_addrs: List[str]) -> None:
+        """Record caller/callee/xref relations observed in tool outputs."""
+        if not session_id or not anchor_addr or not related_addrs:
+            return
+        try:
+            with self._related_addr_lock:
+                graph = self._related_addr_graph[session_id]
+                for other in related_addrs:
+                    if not other or other == anchor_addr:
+                        continue
+                    graph[anchor_addr].add(other)
+                    graph[other].add(anchor_addr)
+        except Exception:
+            pass
+
+    def _get_bb_by_related_addresses(
+        self,
+        session_id: str,
+        addr: str,
+        bb_store,
+        top_k: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve blackboard findings from addresses related through recent
+        caller/callee/xref exploration in this session.
+        """
+        if bb_store is None or not session_id or not addr:
+            return []
+        try:
+            with self._related_addr_lock:
+                neighbors = list(self._related_addr_graph.get(session_id, {}).get(addr, set()))
+            if not neighbors:
+                return []
+            out: List[Dict[str, Any]] = []
+            seen: set = set()
+            for naddr in neighbors[:8]:
+                for entry in bb_store.list(addr=naddr, limit=3):
+                    eid = entry.get("id")
+                    if not eid or eid in seen:
+                        continue
+                    seen.add(eid)
+                    out.append(entry)
+                    if len(out) >= top_k:
+                        return out
+            return out
+        except Exception:
+            return []
+
+    def _cached_bb_entry_vec(self, entry: Dict[str, Any]) -> Optional[List[float]]:
+        """Get or compute cached embedding vector for a blackboard entry."""
+        text = f"{entry.get('title', '')} {entry.get('content', '')}".strip()
+        if not text:
+            return None
+        entry_id = str(entry.get("id") or "")
+        updated = str(entry.get("updated_at") or "")
+        cache_key = f"{entry_id}:{updated}:{hashlib.md5(text[:800].encode()).hexdigest()}"
+        now = time.time()
+        with self._bb_entry_vec_cache_lock:
+            cached = self._bb_entry_vec_cache.get(cache_key)
+            if cached is not None:
+                vec, ts = cached
+                if now - ts <= self._bb_entry_cache_ttl_sec:
+                    with self._bb_cache_stats_lock:
+                        self._bb_cache_hits += 1
+                    return vec
+                self._bb_entry_vec_cache.pop(cache_key, None)
+        with self._bb_cache_stats_lock:
+            self._bb_cache_misses += 1
+        vec = self._embedder.embed(text[:400])
+        with self._bb_entry_vec_cache_lock:
+            # Keep cache bounded and evict oldest/expired entries.
+            if len(self._bb_entry_vec_cache) >= self._bb_entry_cache_max:
+                stale_keys = [k for k, (_, ts) in self._bb_entry_vec_cache.items()
+                              if now - ts > self._bb_entry_cache_ttl_sec]
+                for k in stale_keys:
+                    self._bb_entry_vec_cache.pop(k, None)
+                if len(self._bb_entry_vec_cache) >= self._bb_entry_cache_max:
+                    oldest = sorted(self._bb_entry_vec_cache.items(), key=lambda kv: kv[1][1])
+                    drop_n = max(1, self._bb_entry_cache_max // 4)
+                    for k, _ in oldest[:drop_n]:
+                        self._bb_entry_vec_cache.pop(k, None)
+            self._bb_entry_vec_cache[cache_key] = (vec, now)
+        return vec
 
     def _get_bb_semantic_vec(
         self,
@@ -987,7 +1775,9 @@ class ContextAssembler:
                 text = f"{entry.get('title', '')} {entry.get('content', '')}".strip()
                 if not text:
                     continue
-                emb = self._embedder.embed(text[:400])
+                emb = self._cached_bb_entry_vec(entry)
+                if emb is None:
+                    continue
                 sim = BgeCodeEmbedder.cosine(query_vec, emb)
                 if sim >= threshold:
                     scored.append((sim, entry))
@@ -1110,13 +1900,17 @@ class ContextAssembler:
         """
         pack: Dict[str, Any] = {}
 
+        self._load_session_policy(session_id, idb_path)
+        self._run_housekeeping(session_id)
+        followed_focus = self._consume_focus_follow(session_id, tool, action)
+
         # Record for stuck detection
         self.record_call(session_id, tool, action, addr)
 
         # ── 1. Address-matched blackboard findings
         bb_addr = self._get_bb_entries(addr, bb_store)
         if bb_addr:
-            pack["related_findings"] = bb_addr
+            self._merge_related_findings(pack, bb_addr, "address_linked", session_id=session_id)
 
         # ── 2. Decompile-specific enrichment
         is_decompile = (tool == "code" and
@@ -1134,7 +1928,7 @@ class ContextAssembler:
 
         if pseudocode and len(pseudocode.strip()) > 80:
             try:
-                self._enrich_decompile(pack, payload, pseudocode, addr, idb_path, bb_store)
+                self._enrich_decompile(pack, payload, pseudocode, addr, idb_path, bb_store, session_id)
             except Exception:
                 pass
 
@@ -1165,6 +1959,8 @@ class ContextAssembler:
                                         hit_addrs.append(str(v))
                                         break
                 if hit_addrs:
+                    if addr:
+                        self._record_related_addresses(session_id, addr, hit_addrs)
                     enriched = self._enrich_address_list(hit_addrs, idb_path)
                     if enriched:
                         pack["hit_details"] = enriched
@@ -1190,6 +1986,20 @@ class ContextAssembler:
         stuck = self.check_stuck(session_id, addr, tool, action)
         if stuck:
             pack["stuck"] = stuck
+
+        if followed_focus:
+            success = bool(
+                pack.get("related_findings")
+                or pack.get("hit_details")
+                or pack.get("similar_functions")
+                or pack.get("api_calls")
+                or pack.get("analysis_focus")
+            )
+            self._record_focus_outcome(session_id, tool, action, success)
+
+        health = self._collect_intelligence_health(session_id)
+        if health:
+            pack["intelligence_health"] = health
 
         return pack
 
@@ -1249,6 +2059,7 @@ class ContextAssembler:
         addr: str,
         idb_path: str,
         bb_store,
+        session_id: str,
     ) -> None:
         """
         Decompile-specific enrichment.  Deterministic first, embeddings second.
@@ -1433,17 +2244,45 @@ class ContextAssembler:
             except Exception:
                 pass
 
-        # ── Step 6: Semantic blackboard retrieval (if bb_store populated) ─
-        if query_vec is not None and bb_store is not None:
+        # ── Step 6: Cross-address blackboard retrieval (callgraph-linked) ─
+        if bb_store is not None and addr and session_id:
             try:
-                sem_bb = self._get_bb_semantic_vec(query_vec, bb_store, top_k=3)
-                if sem_bb:
-                    existing = {e.get("id") for e in pack.get("related_findings", [])}
-                    new_bb = [e for e in sem_bb if e.get("id") not in existing]
-                    if new_bb:
-                        pack.setdefault("related_findings", []).extend(new_bb)
+                rel_bb = self._get_bb_by_related_addresses(session_id, addr, bb_store, top_k=4)
+                if rel_bb:
+                    self._merge_related_findings(pack, rel_bb, "relation_linked", session_id=session_id)
             except Exception:
                 pass
+
+        # ── Step 7: Cross-address blackboard retrieval (API/tag linked) ───
+        if bb_store is not None and api_calls:
+            try:
+                api_bb = self._get_bb_by_api_signals(bb_store, api_calls, addr, top_k=4)
+                if api_bb:
+                    self._merge_related_findings(pack, api_bb, "api_linked", session_id=session_id)
+            except Exception:
+                pass
+
+        # ── Step 8: Semantic blackboard retrieval (if bb_store populated) ─
+        if query_vec is not None and bb_store is not None:
+            try:
+                sem_thr = self._get_semantic_threshold(session_id)
+                sem_bb = self._get_bb_semantic_vec(query_vec, bb_store, top_k=3, threshold=sem_thr)
+                if sem_bb:
+                    self._merge_related_findings(pack, sem_bb, "semantic_linked", session_id=session_id)
+            except Exception:
+                pass
+
+        self._tune_semantic_threshold(session_id)
+        stats = self._session_retrieval_stats(session_id)
+        if stats:
+            pack["retrieval_stats"] = stats
+        focus = self._derive_analysis_focus(pack, addr, session_id)
+        if focus:
+            pack["analysis_focus"] = focus
+            self._record_focus_suggestion(session_id, focus)
+            alts = self._derive_focus_candidates(pack, addr, session_id)
+            if alts and len(alts) > 1:
+                pack["analysis_focus_alternatives"] = alts[1:3]
 
 
 
