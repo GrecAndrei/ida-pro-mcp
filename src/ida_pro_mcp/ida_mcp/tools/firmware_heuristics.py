@@ -265,7 +265,7 @@ def aggregate_fingerprint_scores(rows: List[Dict], limit: int = 24) -> List[Dict
         fp = str(r.get("fingerprint") or "")
         if not fp:
             continue
-        a = agg.setdefault(fp, {"fingerprint": fp, "count": 0, "priority_sum": 0.0, "max_priority": 0.0, "examples": []})
+        a = agg.setdefault(fp, {"fingerprint": fp, "count": 0, "priority_sum": 0.0, "max_priority": 0.0, "success": 0, "failure": 0, "examples": []})
         pri = float(r.get("priority_score") or 0.0)
         a["count"] += 1
         a["priority_sum"] += pri
@@ -278,10 +278,25 @@ def aggregate_fingerprint_scores(rows: List[Dict], limit: int = 24) -> List[Dict
                 "end": r.get("end"),
                 "priority_score": pri,
             })
+        outcome = str(r.get("outcome") or "")
+        if outcome == "success":
+            a["success"] += 1
+        elif outcome == "failure":
+            a["failure"] += 1
     out = []
     for v in agg.values():
         v["avg_priority"] = round(v["priority_sum"] / max(1, v["count"]), 4)
-        v["score"] = round(v["avg_priority"] * 0.7 + float(v["max_priority"]) * 0.2 + min(1.0, v["count"] / 10.0) * 0.1, 4)
+        succ = int(v.get("success") or 0)
+        fail = int(v.get("failure") or 0)
+        sr = succ / max(1, succ + fail) if (succ + fail) > 0 else 0.5
+        v["success_rate"] = round(sr, 4)
+        v["score"] = round(
+            v["avg_priority"] * 0.62
+            + float(v["max_priority"]) * 0.18
+            + min(1.0, v["count"] / 10.0) * 0.08
+            + sr * 0.12,
+            4,
+        )
         out.append(v)
     out.sort(key=lambda x: (x["score"], x["count"]), reverse=True)
     return out[: max(1, int(limit))]
