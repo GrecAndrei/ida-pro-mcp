@@ -221,7 +221,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "fingerprint_index_sync", "fingerprint_index_query"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|fingerprint_index_sync|fingerprint_index_query"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -894,6 +894,14 @@ def firmware_view(
             chunk_n = max(1, min(limit, 10))
             chunk = plan[cursor : cursor + chunk_n]
             camp["cursor"] = min(len(plan), cursor + len(chunk))
+            regions_by_range = {
+                (str(r.get("start")), str(r.get("end"))): str(r.get("fingerprint") or "")
+                for r in (camp.get("regions") or [])
+            }
+            for st in chunk:
+                fp = regions_by_range.get((str(st.get("start")), str(st.get("end"))), "")
+                if fp:
+                    st["fingerprint"] = fp
             for st in chunk:
                 camp.setdefault("done", []).append(st.get("step"))
             _save_fw_state(state)
@@ -910,6 +918,40 @@ def firmware_view(
                     (f"firmware_view(action='campaign_resume', addr='{cid}')" if not finished else "campaign complete"),
                     "Execute chunk actions manually with apply=false first.",
                 ],
+            }
+
+        if action == "campaign_feedback":
+            fp = str(kwargs.get("fingerprint") or "").strip()
+            outcome = str(kwargs.get("outcome") or "").strip().lower()
+            if not fp:
+                return make_error(MCPError.INVALID_ARGS, "campaign_feedback requires fingerprint=<id>")
+            if outcome not in ("success", "failure"):
+                return make_error(MCPError.INVALID_ARGS, "campaign_feedback requires outcome=success|failure")
+            corpus = state.setdefault("fingerprint_corpus", [])
+            corpus.append(
+                {
+                    "ts": int(time.time()),
+                    "fingerprint": fp,
+                    "priority_score": float(kwargs.get("priority_score") or 0.5),
+                    "outcome": outcome,
+                    "segment": kwargs.get("segment") or "",
+                    "start": kwargs.get("start") or "",
+                    "end": kwargs.get("end") or "",
+                }
+            )
+            if len(corpus) > 2000:
+                del corpus[:-2000]
+            _save_fw_state(state)
+            agg = aggregate_fingerprint_scores(corpus, limit=24)
+            top = next((x for x in agg if str(x.get("fingerprint")) == fp), None)
+            return {
+                "ok": True,
+                "action": action,
+                "fingerprint": fp,
+                "outcome": outcome,
+                "corpus_size": len(corpus),
+                "updated_score": (top or {}).get("score"),
+                "updated_success_rate": (top or {}).get("success_rate"),
             }
 
         if action == "fingerprint_index_sync":

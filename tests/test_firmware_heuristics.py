@@ -123,14 +123,15 @@ def test_region_fingerprint_and_dedup_keep_highest_priority():
 
 def test_aggregate_fingerprint_scores_ranks_by_score():
     rows = [
-        {"fingerprint": "a", "priority_score": 1.2, "segment": "S1", "start": "0x10", "end": "0x20"},
-        {"fingerprint": "a", "priority_score": 0.8, "segment": "S1", "start": "0x10", "end": "0x20"},
-        {"fingerprint": "b", "priority_score": 0.5, "segment": "S2", "start": "0x30", "end": "0x40"},
+        {"fingerprint": "a", "priority_score": 1.2, "segment": "S1", "start": "0x10", "end": "0x20", "outcome": "success"},
+        {"fingerprint": "a", "priority_score": 0.8, "segment": "S1", "start": "0x10", "end": "0x20", "outcome": "success"},
+        {"fingerprint": "b", "priority_score": 0.5, "segment": "S2", "start": "0x30", "end": "0x40", "outcome": "failure"},
     ]
     out = aggregate_fingerprint_scores(rows, limit=5)
     assert out
     assert out[0]["fingerprint"] == "a"
     assert out[0]["count"] == 2
+    assert out[0]["success_rate"] >= 0.5
 
 
 def test_apply_fingerprint_boost_increases_known_regions():
