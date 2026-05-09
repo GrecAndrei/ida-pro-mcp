@@ -7,6 +7,8 @@ from firmware_heuristics import (
     ascii_run_stats,
     build_carve_plan,
     cluster_pointer_hits,
+    rank_region_plans,
+    region_priority_score,
     shannon_entropy,
 )
 
@@ -46,3 +48,28 @@ def test_build_carve_plan_reflects_signal_and_risk():
     assert plan["risk"] == "high"
     assert plan["phases"]
     assert any(p["phase"] == "pointer-first" for p in plan["phases"])
+
+
+def test_region_priority_score_increases_with_risk_and_signal():
+    low = region_priority_score(
+        {"unknown_ratio": 0.1, "entropy": 4.2, "pointer_density": 0.05, "ascii_runs": 0},
+        {"risk": "low"},
+        cluster_count=0,
+    )
+    high = region_priority_score(
+        {"unknown_ratio": 0.6, "entropy": 7.6, "pointer_density": 0.45, "ascii_runs": 3},
+        {"risk": "high"},
+        cluster_count=8,
+    )
+    assert high > low
+
+
+def test_rank_region_plans_orders_by_priority_score():
+    items = [
+        {"priority_score": 0.4, "plan": {"entropy": 6.0}, "profile": {"unknown_ratio": 0.4}},
+        {"priority_score": 1.1, "plan": {"entropy": 5.0}, "profile": {"unknown_ratio": 0.2}},
+        {"priority_score": 0.8, "plan": {"entropy": 7.0}, "profile": {"unknown_ratio": 0.6}},
+    ]
+    out = rank_region_plans(items, limit=2)
+    assert len(out) == 2
+    assert out[0]["priority_score"] >= out[1]["priority_score"]
