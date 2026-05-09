@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools"))
 
 from firmware_heuristics import (
+    aggregate_fingerprint_scores,
     ascii_run_stats,
     build_campaign_execution_plan,
     build_carve_plan,
@@ -117,3 +118,15 @@ def test_region_fingerprint_and_dedup_keep_highest_priority():
     out = dedup_regions_by_fingerprint([r1, r2])
     assert len(out) == 1
     assert out[0]["priority_score"] == 1.3
+
+
+def test_aggregate_fingerprint_scores_ranks_by_score():
+    rows = [
+        {"fingerprint": "a", "priority_score": 1.2, "segment": "S1", "start": "0x10", "end": "0x20"},
+        {"fingerprint": "a", "priority_score": 0.8, "segment": "S1", "start": "0x10", "end": "0x20"},
+        {"fingerprint": "b", "priority_score": 0.5, "segment": "S2", "start": "0x30", "end": "0x40"},
+    ]
+    out = aggregate_fingerprint_scores(rows, limit=5)
+    assert out
+    assert out[0]["fingerprint"] == "a"
+    assert out[0]["count"] == 2

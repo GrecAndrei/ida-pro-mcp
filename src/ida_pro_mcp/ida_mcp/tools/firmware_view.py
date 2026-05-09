@@ -32,7 +32,9 @@ try:
         build_carve_plan,
         cluster_pointer_hits,
         dedup_regions_by_fingerprint,
+        aggregate_fingerprint_scores,
         rank_region_plans,
+        region_fingerprint,
         region_priority_score,
         summarize_campaign_regions,
         shannon_entropy,
@@ -44,7 +46,9 @@ except ImportError:
         build_carve_plan,
         cluster_pointer_hits,
         dedup_regions_by_fingerprint,
+        aggregate_fingerprint_scores,
         rank_region_plans,
+        region_fingerprint,
         region_priority_score,
         summarize_campaign_regions,
         shannon_entropy,
@@ -70,10 +74,11 @@ def _load_fw_state() -> dict:
                 data.setdefault("history", [])
                 data.setdefault("contradictions", [])
                 data.setdefault("campaigns", {})
+                data.setdefault("fingerprint_corpus", [])
                 return data
     except Exception:
         pass
-    return {"history": [], "contradictions": [], "campaigns": {}}
+    return {"history": [], "contradictions": [], "campaigns": {}, "fingerprint_corpus": []}
 
 
 def _save_fw_state(state: dict) -> None:
@@ -214,7 +219,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "fingerprint_index_sync", "fingerprint_index_query"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|fingerprint_index_sync|fingerprint_index_query"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -894,6 +899,87 @@ def firmware_view(
                 "next_actions": [
                     (f"firmware_view(action='campaign_resume', addr='{cid}')" if not finished else "campaign complete"),
                     "Execute chunk actions manually with apply=false first.",
+                ],
+            }
+
+        if action == "fingerprint_index_sync":
+            # Ingest current ranked regions into cross-image fingerprint corpus.
+            segs = []
+            seg = idaapi.get_first_seg()
+            while seg:
+                if seg.end_ea > seg.start_ea:
+                    try:
+                        sname = idaapi.get_segm_name(seg) or ""
+                    except Exception:
+                        sname = ""
+                    segs.append((int(seg.start_ea), int(seg.end_ea), sname))
+                seg = idaapi.get_next_seg(seg.start_ea)
+            rows = []
+            for ss, ee, name in segs[: max(1, min(limit * 4, 128))]:
+                if ee - ss < 64:
+                    continue
+                prof = _profile_range(ss, ee, ptr_size)
+                plan = build_carve_plan(
+                    {"unknown_ratio": prof["unknown_ratio"], "entropy": prof["entropy"], "ascii_runs": prof["ascii_runs"]},
+                    ptr_count=prof.get("ptr_hits_sampled", 0),
+                    table_count=0,
+                )
+                pri = region_priority_score(prof, plan, cluster_count=0)
+                r = {
+                    "segment": name,
+                    "start": hex(ss),
+                    "end": hex(ee),
+                    "profile": {
+                        "entropy": prof["entropy"],
+                        "unknown_ratio": prof["unknown_ratio"],
+                        "pointer_density": prof["pointer_density"],
+                        "ascii_runs": prof["ascii_runs"],
+                    },
+                    "plan": {"risk": plan.get("risk"), "phases": plan.get("phases", [])[:2]},
+                    "priority_score": pri,
+                }
+                r["fingerprint"] = region_fingerprint(r)
+                rows.append(r)
+            rows = dedup_regions_by_fingerprint(rows)
+            corpus = state.setdefault("fingerprint_corpus", [])
+            now = int(time.time())
+            for r in rows[: max(1, min(limit * 2, 64))]:
+                corpus.append(
+                    {
+                        "ts": now,
+                        "fingerprint": r.get("fingerprint"),
+                        "segment": r.get("segment"),
+                        "start": r.get("start"),
+                        "end": r.get("end"),
+                        "priority_score": r.get("priority_score"),
+                    }
+                )
+            # bounded corpus size
+            if len(corpus) > 2000:
+                del corpus[:-2000]
+            _save_fw_state(state)
+            return {
+                "ok": True,
+                "action": action,
+                "ingested": len(rows),
+                "corpus_size": len(corpus),
+                "next_actions": [
+                    "firmware_view(action='fingerprint_index_query')",
+                    "firmware_view(action='multi_region_campaign')",
+                ],
+            }
+
+        if action == "fingerprint_index_query":
+            corpus = state.setdefault("fingerprint_corpus", [])
+            agg = aggregate_fingerprint_scores(corpus, limit=max(1, min(limit, 48)))
+            return {
+                "ok": True,
+                "action": action,
+                "count": len(agg),
+                "items": agg,
+                "next_actions": [
+                    "Use top fingerprints to prioritize campaign regions with similar profiles.",
+                    "firmware_view(action='multi_region_campaign')",
                 ],
             }
 

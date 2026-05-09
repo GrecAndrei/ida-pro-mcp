@@ -256,3 +256,32 @@ def dedup_regions_by_fingerprint(regions: List[Dict]) -> List[Dict]:
     out = list(best.values())
     out.sort(key=lambda x: float(x.get("priority_score") or 0.0), reverse=True)
     return out
+
+
+def aggregate_fingerprint_scores(rows: List[Dict], limit: int = 24) -> List[Dict]:
+    """Aggregate fingerprint evidence across images/sessions for reuse ranking."""
+    agg: Dict[str, Dict] = {}
+    for r in rows:
+        fp = str(r.get("fingerprint") or "")
+        if not fp:
+            continue
+        a = agg.setdefault(fp, {"fingerprint": fp, "count": 0, "priority_sum": 0.0, "max_priority": 0.0, "examples": []})
+        pri = float(r.get("priority_score") or 0.0)
+        a["count"] += 1
+        a["priority_sum"] += pri
+        if pri > a["max_priority"]:
+            a["max_priority"] = pri
+        if len(a["examples"]) < 3:
+            a["examples"].append({
+                "segment": r.get("segment"),
+                "start": r.get("start"),
+                "end": r.get("end"),
+                "priority_score": pri,
+            })
+    out = []
+    for v in agg.values():
+        v["avg_priority"] = round(v["priority_sum"] / max(1, v["count"]), 4)
+        v["score"] = round(v["avg_priority"] * 0.7 + float(v["max_priority"]) * 0.2 + min(1.0, v["count"] / 10.0) * 0.1, 4)
+        out.append(v)
+    out.sort(key=lambda x: (x["score"], x["count"]), reverse=True)
+    return out[: max(1, int(limit))]
