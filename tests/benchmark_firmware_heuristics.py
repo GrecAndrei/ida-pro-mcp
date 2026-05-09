@@ -13,6 +13,8 @@ from firmware_heuristics import (
     ascii_run_stats,
     build_carve_plan,
     cluster_pointer_hits,
+    rank_region_plans,
+    region_priority_score,
     shannon_entropy,
 )
 
@@ -71,6 +73,29 @@ def bench_plan(rounds=20000):
     _summ("build_carve_plan", samples)
 
 
+def bench_region_ranking(rounds=12000):
+    items = []
+    for i in range(256):
+        profile = {
+            "unknown_ratio": (i % 100) / 100.0,
+            "entropy": 4.0 + ((i % 40) / 10.0),
+            "pointer_density": (i % 25) / 50.0,
+            "ascii_runs": i % 14,
+        }
+        plan = {"risk": "high" if i % 9 == 0 else ("medium" if i % 4 == 0 else "low")}
+        items.append({
+            "profile": profile,
+            "plan": plan,
+            "priority_score": region_priority_score(profile, plan, cluster_count=i % 12),
+        })
+    samples = []
+    for _ in range(rounds):
+        t0 = time.perf_counter()
+        rank_region_plans(items, limit=24)
+        samples.append(time.perf_counter() - t0)
+    _summ("rank_region_plans", samples)
+
+
 if __name__ == "__main__":
     print("=" * 72)
     print("Firmware Heuristic Benchmarks")
@@ -79,3 +104,4 @@ if __name__ == "__main__":
     bench_ascii()
     bench_clusters()
     bench_plan()
+    bench_region_ranking()

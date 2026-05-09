@@ -29,6 +29,8 @@ try:
         ascii_run_stats,
         build_carve_plan,
         cluster_pointer_hits,
+        rank_region_plans,
+        region_priority_score,
         shannon_entropy,
     )
 except ImportError:
@@ -36,6 +38,8 @@ except ImportError:
         ascii_run_stats,
         build_carve_plan,
         cluster_pointer_hits,
+        rank_region_plans,
+        region_priority_score,
         shannon_entropy,
     )
 
@@ -130,10 +134,60 @@ def _read_bytes_safe(start: int, end: int, cap: int = 1 << 20) -> bytes:
         return b""
 
 
+def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
+    """Collect lightweight region profile primitives."""
+    raw = _read_bytes_safe(s_ea, e_ea)
+    hist = [0] * 256
+    for b in raw:
+        hist[b] += 1
+    total = len(raw)
+    ent = shannon_entropy(hist, total)
+    ascii_stats = ascii_run_stats(raw, min_len=6)
+    ptr_hits = 0
+    ea = s_ea
+    scanned = 0
+    while ea + ptr_size <= e_ea and scanned < 4096:
+        v = _read_u64(ea, ptr_size)
+        if v is not None and _addr_in_mapped(int(v)):
+            ptr_hits += 1
+        scanned += 1
+        ea += ptr_size
+    ptr_density = (ptr_hits / max(1, scanned)) if scanned else 0.0
+    # classify content mix (item-kind based)
+    unknown = code = data = strings = 0
+    ea = s_ea
+    while ea < e_ea:
+        k = _item_kind(ea)
+        if k == "unknown":
+            unknown += 1
+        elif k == "code":
+            code += 1
+        elif k == "string":
+            strings += 1
+        else:
+            data += 1
+        ea += 1
+    total_items = max(1, unknown + code + data + strings)
+    return {
+        "sampled_bytes": total,
+        "entropy": round(ent, 4),
+        "ascii_runs": ascii_stats["runs"],
+        "longest_ascii_run": ascii_stats["longest"],
+        "pointer_density": round(ptr_density, 4),
+        "likely_packed": bool(ent >= 7.2 and ascii_stats["runs"] == 0),
+        "unknown_ratio": round(unknown / total_items, 4),
+        "unknown": unknown,
+        "code": code,
+        "data": data,
+        "strings": strings,
+        "ptr_hits_sampled": ptr_hits,
+    }
+
+
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -251,43 +305,18 @@ def firmware_view(
             return _log_ml(result, action, f"unknown_ratio={unknown_ratio:.3f}; strategy={strategy}")
 
         if action == "region_profile":
-            raw = _read_bytes_safe(s_ea, e_ea)
-            hist = [0] * 256
-            for b in raw:
-                hist[b] += 1
-            total = len(raw)
-            ent = shannon_entropy(hist, total)
-            ascii_stats = ascii_run_stats(raw, min_len=6)
-            # quick pointer density sample
-            ptr_hits = 0
-            step = max(1, ptr_size)
-            ea = s_ea
-            scanned = 0
-            while ea + ptr_size <= e_ea and scanned < 4096:
-                v = _read_u64(ea, ptr_size)
-                if v is not None and _addr_in_mapped(int(v)):
-                    ptr_hits += 1
-                scanned += 1
-                ea += step
-            ptr_density = (ptr_hits / max(1, scanned)) if scanned else 0.0
+            prof = _profile_range(s_ea, e_ea, ptr_size)
             result = {
                 "ok": True,
                 "action": action,
                 "range": {"start": hex(s_ea), "end": hex(e_ea)},
-                "profile": {
-                    "sampled_bytes": total,
-                    "entropy": round(ent, 4),
-                    "ascii_runs": ascii_stats["runs"],
-                    "longest_ascii_run": ascii_stats["longest"],
-                    "pointer_density": round(ptr_density, 4),
-                    "likely_packed": bool(ent >= 7.2 and ascii_stats["runs"] == 0),
-                },
+                "profile": prof,
                 "next_actions": [
                     f"firmware_view(action='pointer_clusters', start='{hex(s_ea)}', end='{hex(e_ea)}', stride={ptr_size})",
                     f"firmware_view(action='carve_plan', start='{hex(s_ea)}', end='{hex(e_ea)}')",
                 ],
             }
-            return _log_ml(result, action, f"entropy={ent:.3f}; ptr_density={ptr_density:.3f}")
+            return _log_ml(result, action, f"entropy={prof['entropy']:.3f}; ptr_density={prof['pointer_density']:.3f}")
 
         if action == "pointer_sweep":
             candidates = []
@@ -502,27 +531,7 @@ def firmware_view(
             return _log_ml(result, action, f"clusters={len(clusters)}; hits={len(hits)}")
 
         if action == "carve_plan":
-            # Build a richer triage plan by combining region and pointer/table signals.
-            unknown = code = data = strings = 0
-            ea = s_ea
-            while ea < e_ea:
-                k = _item_kind(ea)
-                if k == "unknown":
-                    unknown += 1
-                elif k == "code":
-                    code += 1
-                elif k == "string":
-                    strings += 1
-                else:
-                    data += 1
-                ea += 1
-            total_items = max(1, unknown + code + data + strings)
-            raw = _read_bytes_safe(s_ea, e_ea)
-            hist = [0] * 256
-            for b in raw:
-                hist[b] += 1
-            ent = shannon_entropy(hist, len(raw))
-            ar = ascii_run_stats(raw, min_len=6)
+            prof = _profile_range(s_ea, e_ea, ptr_size)
 
             # light pointer/table evidence
             ptr_hits = 0
@@ -552,9 +561,9 @@ def firmware_view(
 
             plan = build_carve_plan(
                 {
-                    "unknown_ratio": unknown / total_items,
-                    "entropy": ent,
-                    "ascii_runs": ar["runs"],
+                    "unknown_ratio": prof["unknown_ratio"],
+                    "entropy": prof["entropy"],
+                    "ascii_runs": prof["ascii_runs"],
                 },
                 ptr_count=ptr_hits,
                 table_count=table_ev,
@@ -571,6 +580,133 @@ def firmware_view(
                 ],
             }
             return _log_ml(result, action, f"risk={plan.get('risk')}; ptr={ptr_hits}; table={table_ev}")
+
+        if action == "campaign":
+            prof = _profile_range(s_ea, e_ea, ptr_size)
+            # derive pointer clusters quickly
+            hits = []
+            ea = s_ea
+            while ea + ptr_size <= e_ea and len(hits) < limit * 12:
+                v = _read_u64(ea, ptr_size)
+                if v is not None and _addr_in_mapped(int(v)):
+                    score = 0.55
+                    if idaapi.get_func(int(v)):
+                        score += 0.25
+                    if ida_bytes.is_loaded(int(v)):
+                        score += 0.1
+                    hits.append({"ea": ea, "value": int(v), "score": round(min(score, 0.99), 3)})
+                ea += ptr_size
+            clusters = cluster_pointer_hits(hits, ptr_size, max_gap_entries=2)
+
+            plan = build_carve_plan(
+                {
+                    "unknown_ratio": prof["unknown_ratio"],
+                    "entropy": prof["entropy"],
+                    "ascii_runs": prof["ascii_runs"],
+                },
+                ptr_count=prof.get("ptr_hits_sampled", 0),
+                table_count=len(clusters),
+            )
+            pri = region_priority_score(prof, plan, cluster_count=len(clusters))
+            recs = [
+                {
+                    "tool": "firmware_view",
+                    "action": "smart_carve",
+                    "start": hex(s_ea),
+                    "end": hex(e_ea),
+                    "apply": False,
+                    "reason": "Dry-run carve using staged plan before mutations.",
+                },
+                {
+                    "tool": "firmware_view",
+                    "action": "table_candidates",
+                    "start": hex(s_ea),
+                    "end": hex(e_ea),
+                    "reason": "Validate clustered pointers as potential jump/data tables.",
+                },
+            ]
+            if plan.get("risk") == "high":
+                recs.insert(0, {
+                    "tool": "search",
+                    "action": "semantic",
+                    "pattern": "decrypt unpack decode stage init",
+                    "limit": 80,
+                    "reason": "High-risk packed/decoder profile; map behavior before carving.",
+                })
+            result = {
+                "ok": True,
+                "action": action,
+                "range": {"start": hex(s_ea), "end": hex(e_ea)},
+                "profile": prof,
+                "clusters": [
+                    {
+                        "start": hex(c["start"]),
+                        "end": hex(c["end"]),
+                        "entries": c["entries"],
+                        "score": c["score"],
+                    }
+                    for c in clusters[: min(limit, 12)]
+                ],
+                "plan": plan,
+                "priority_score": pri,
+                "recommendations": recs,
+            }
+            return _log_ml(result, action, f"priority={pri:.3f}; risk={plan.get('risk')}; clusters={len(clusters)}")
+
+        if action == "segment_sweep":
+            segs = []
+            seg = idaapi.get_first_seg()
+            while seg:
+                if seg.end_ea > seg.start_ea:
+                    try:
+                        sname = idaapi.get_segm_name(seg) or ""
+                    except Exception:
+                        sname = ""
+                    segs.append((int(seg.start_ea), int(seg.end_ea), sname))
+                seg = idaapi.get_next_seg(seg.start_ea)
+            regions = []
+            for ss, ee, name in segs[: max(1, min(limit * 4, 128))]:
+                # skip tiny segments
+                if ee - ss < 64:
+                    continue
+                prof = _profile_range(ss, ee, ptr_size)
+                plan = build_carve_plan(
+                    {
+                        "unknown_ratio": prof["unknown_ratio"],
+                        "entropy": prof["entropy"],
+                        "ascii_runs": prof["ascii_runs"],
+                    },
+                    ptr_count=prof.get("ptr_hits_sampled", 0),
+                    table_count=0,
+                )
+                pri = region_priority_score(prof, plan, cluster_count=0)
+                regions.append(
+                    {
+                        "segment": name,
+                        "start": hex(ss),
+                        "end": hex(ee),
+                        "profile": {
+                            "entropy": prof["entropy"],
+                            "unknown_ratio": prof["unknown_ratio"],
+                            "pointer_density": prof["pointer_density"],
+                            "ascii_runs": prof["ascii_runs"],
+                        },
+                        "plan": {"risk": plan["risk"], "phases": plan.get("phases", [])[:2]},
+                        "priority_score": pri,
+                    }
+                )
+            ranked = rank_region_plans(regions, limit=limit)
+            result = {
+                "ok": True,
+                "action": action,
+                "count": len(ranked),
+                "regions": ranked,
+                "next_actions": [
+                    "firmware_view(action='campaign', start='<top_region.start>', end='<top_region.end>')",
+                    "firmware_view(action='smart_carve', start='<top_region.start>', end='<top_region.end>', apply=false)",
+                ],
+            }
+            return _log_ml(result, action, f"segments={len(segs)}; ranked={len(ranked)}")
 
         if action == "smart_carve":
             if apply and snapshot_before_apply:
