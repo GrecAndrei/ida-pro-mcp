@@ -87,6 +87,7 @@ EMBED_CTX = int(os.environ.get("IDA_MCP_EMBED_CTX", "2048"))
 EMBED_THREADS = int(os.environ.get("IDA_MCP_EMBED_THREADS",
                                     str(max(2, (os.cpu_count() or 4) // 2))))
 EMBED_DISABLED = os.environ.get("IDA_MCP_EMBED_DISABLED", "") in ("1", "true", "yes")
+INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "yes")
 
 
 _NOISE_IDENTS = frozenset({
@@ -973,6 +974,13 @@ class ContextAssembler:
         self._related_graph_max_edges = 1200
         self._semantic_circuit_breaker_until: Dict[str, int] = {}
         self._circuit_breaker_lock = threading.Lock()
+        self._session_stats_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._stats_cache_lock = threading.Lock()
+        self._stats_cache_ttl_sec = 1.5
+        self._source_policy_cache: Dict[str, Tuple[Tuple[int, int, int, int], Dict[str, Dict[str, Any]]]] = {}
+        self._policy_cache_lock = threading.Lock()
+        self._perf_buckets: Dict[str, Dict[str, float]] = defaultdict(dict)
+        self._perf_lock = threading.Lock()
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
@@ -1084,14 +1092,41 @@ class ContextAssembler:
                         for r in pack.get("related_findings", [])
                     ))
                     metrics[key_kept] = int(metrics.get(key_kept, 0)) + kept
+                self._invalidate_session_caches(session_id)
                 self._save_session_policy(session_id)
             except Exception:
                 pass
+
+    def _invalidate_session_caches(self, session_id: str) -> None:
+        if not session_id:
+            return
+        with self._stats_cache_lock:
+            self._session_stats_cache.pop(session_id, None)
+        with self._policy_cache_lock:
+            self._source_policy_cache.pop(session_id, None)
+
+    def _perf_start(self) -> float:
+        return time.perf_counter()
+
+    def _perf_end(self, session_id: str, bucket: str, t0: float) -> None:
+        if not INTEL_PROFILE or not session_id:
+            return
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        with self._perf_lock:
+            b = self._perf_buckets[session_id]
+            b[f"{bucket}.count"] = float(b.get(f"{bucket}.count", 0.0) + 1.0)
+            b[f"{bucket}.sum_ms"] = float(b.get(f"{bucket}.sum_ms", 0.0) + dt_ms)
+            b[f"{bucket}.max_ms"] = max(float(b.get(f"{bucket}.max_ms", 0.0)), dt_ms)
 
     def _session_retrieval_stats(self, session_id: str) -> Dict[str, Any]:
         if not session_id:
             return {}
         try:
+            now = time.time()
+            with self._stats_cache_lock:
+                cached = self._session_stats_cache.get(session_id)
+                if cached and (now - cached[0] <= self._stats_cache_ttl_sec):
+                    return dict(cached[1])
             with self._retrieval_metrics_lock:
                 metrics = dict(self._retrieval_metrics.get(session_id, {}))
             if not metrics:
@@ -1114,6 +1149,8 @@ class ContextAssembler:
             out["semantic_threshold"] = self._get_semantic_threshold(session_id)
             out["source_policy"] = self._session_source_policy(session_id)
             out["focus_feedback"] = self._focus_feedback_stats(session_id)
+            with self._stats_cache_lock:
+                self._session_stats_cache[session_id] = (now, dict(out))
             return out
         except Exception:
             return {}
@@ -1231,6 +1268,18 @@ class ContextAssembler:
             if session_id:
                 out["semantic_threshold"] = self._get_semantic_threshold(session_id)
                 out["semantic_circuit_open"] = self._semantic_circuit_open(session_id)
+                if INTEL_PROFILE:
+                    with self._perf_lock:
+                        b = dict(self._perf_buckets.get(session_id, {}))
+                    perf = {}
+                    for k in ("assemble", "decompile_enrich", "search_enrich"):
+                        c = float(b.get(f"{k}.count", 0.0))
+                        s = float(b.get(f"{k}.sum_ms", 0.0))
+                        m = float(b.get(f"{k}.max_ms", 0.0))
+                        if c > 0:
+                            perf[k] = {"avg_ms": round(s / c, 3), "max_ms": round(m, 3), "count": int(c)}
+                    if perf:
+                        out["perf"] = perf
         except Exception:
             return {}
         return out
@@ -1277,6 +1326,7 @@ class ContextAssembler:
                 if session_id not in self._session_semantic_threshold:
                     thr = float(sess.get("semantic_threshold") or 0.5)
                     self._session_semantic_threshold[session_id] = max(0.35, min(0.75, thr))
+            self._invalidate_session_caches(session_id)
         except Exception:
             return
 
@@ -1314,6 +1364,7 @@ class ContextAssembler:
             data = self._prune_policy_store(data)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, sort_keys=True)
+            self._invalidate_session_caches(session_id)
         except Exception:
             return
 
@@ -1324,6 +1375,7 @@ class ContextAssembler:
             with self._focus_feedback_lock:
                 m = self._focus_feedback[session_id]
                 m["suggested"] = int(m.get("suggested", 0)) + 1
+            self._invalidate_session_caches(session_id)
             with self._pending_focus_lock:
                 self._pending_focus[session_id] = {
                     "tool": focus.get("tool"),
@@ -1347,6 +1399,7 @@ class ContextAssembler:
                 with self._focus_feedback_lock:
                     m = self._focus_feedback[session_id]
                     m["followed"] = int(m.get("followed", 0)) + 1
+                self._invalidate_session_caches(session_id)
             return followed
         except Exception:
             return False
@@ -1364,6 +1417,7 @@ class ContextAssembler:
                 else:
                     m["failed"] = int(m.get("failed", 0)) + 1
                     m[f"action.{ta}.fail"] = int(m.get(f"action.{ta}.fail", 0)) + 1
+            self._invalidate_session_caches(session_id)
             self._save_session_policy(session_id)
         except Exception:
             return
@@ -1399,6 +1453,16 @@ class ContextAssembler:
         try:
             with self._retrieval_metrics_lock:
                 metrics = dict(self._retrieval_metrics.get(session_id, {}))
+            fp = (
+                int(metrics.get("address_linked.total", 0)),
+                int(metrics.get("relation_linked.total", 0)),
+                int(metrics.get("api_linked.total", 0)),
+                int(metrics.get("semantic_linked.total", 0)),
+            )
+            with self._policy_cache_lock:
+                cached = self._source_policy_cache.get(session_id)
+                if cached and cached[0] == fp:
+                    return dict(cached[1])
             for src, cfg in base.items():
                 total = int(metrics.get(f"{src}.total", 0))
                 kept = int(metrics.get(f"{src}.kept", 0))
@@ -1413,6 +1477,8 @@ class ContextAssembler:
                     cfg["weight"] = round(min(1.8, float(cfg["weight"]) + 0.15), 3)
                     cfg["min_confidence"] = round(max(0.0, float(cfg["min_confidence"]) - 0.05), 3)
                     cfg["max_take"] = min(8, int(cfg["max_take"]) + 1)
+            with self._policy_cache_lock:
+                self._source_policy_cache[session_id] = (fp, dict(base))
             return base
         except Exception:
             return base
@@ -1527,6 +1593,7 @@ class ContextAssembler:
                     nxt = max(0.35, cur - 0.03)
                 if abs(nxt - cur) >= 0.005:
                     self._session_semantic_threshold[session_id] = round(nxt, 3)
+                    self._invalidate_session_caches(session_id)
                     self._save_session_policy(session_id)
         except Exception:
             return
@@ -1794,6 +1861,7 @@ class ContextAssembler:
         Non-blocking: slow operations (embedding new function) are async.
         Returns empty dict if nothing meaningful to inject.
         """
+        t_all = self._perf_start()
         pack: Dict[str, Any] = {}
 
         self._load_session_policy(session_id, idb_path)
@@ -1823,10 +1891,12 @@ class ContextAssembler:
                         break
 
         if pseudocode and len(pseudocode.strip()) > 80:
+            t_dec = self._perf_start()
             try:
                 self._enrich_decompile(pack, payload, pseudocode, addr, idb_path, bb_store, session_id)
             except Exception:
                 pass
+            self._perf_end(session_id, "decompile_enrich", t_dec)
 
         # ── 2b. Search/xref result enrichment ─────────────────────────────
         # When a search returns a list of addresses, enrich each with
@@ -1838,6 +1908,7 @@ class ContextAssembler:
             "call_chain", "common_callers", "hub_functions",
         )
         if is_search and idb_path:
+            t_search = self._perf_start()
             try:
                 # Collect addresses from the result payload
                 hit_addrs: List[str] = []
@@ -1862,6 +1933,7 @@ class ContextAssembler:
                         pack["hit_details"] = enriched
             except Exception:
                 pass
+            self._perf_end(session_id, "search_enrich", t_search)
 
         # ── 2c. Suggest next unanalyzed targets (after any tool call) ─────
         # Use schemaboot to recommend high-interest functions not yet seen.
@@ -1896,6 +1968,8 @@ class ContextAssembler:
         health = self._collect_intelligence_health(session_id)
         if health:
             pack["intelligence_health"] = health
+
+        self._perf_end(session_id, "assemble", t_all)
 
         return pack
 
