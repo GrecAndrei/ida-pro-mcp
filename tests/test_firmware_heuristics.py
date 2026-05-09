@@ -5,11 +5,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro
 
 from firmware_heuristics import (
     ascii_run_stats,
+    build_campaign_execution_plan,
     build_carve_plan,
     cluster_pointer_hits,
     rank_region_plans,
     region_priority_score,
     shannon_entropy,
+    summarize_campaign_regions,
 )
 
 
@@ -73,3 +75,26 @@ def test_rank_region_plans_orders_by_priority_score():
     out = rank_region_plans(items, limit=2)
     assert len(out) == 2
     assert out[0]["priority_score"] >= out[1]["priority_score"]
+
+
+def test_summarize_campaign_regions_counts_risk_and_priority():
+    rows = [
+        {"priority_score": 1.2, "plan": {"risk": "high"}},
+        {"priority_score": 0.6, "plan": {"risk": "medium"}},
+        {"priority_score": 0.2, "plan": {"risk": "low"}},
+    ]
+    s = summarize_campaign_regions(rows)
+    assert s["count"] == 3
+    assert s["risk_counts"]["high"] == 1
+    assert s["avg_priority"] > 0
+
+
+def test_build_campaign_execution_plan_generates_staged_steps():
+    rows = [
+        {"segment": "TEXT", "start": "0x1000", "end": "0x1800", "priority_score": 1.1},
+        {"segment": "DATA", "start": "0x2000", "end": "0x2800", "priority_score": 0.8},
+    ]
+    steps = build_campaign_execution_plan(rows, max_steps=5)
+    assert steps
+    assert steps[0]["action"] == "campaign"
+    assert any(s.get("action") == "smart_carve" for s in steps)
