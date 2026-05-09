@@ -305,6 +305,35 @@ class BgeCodeEmbedder:
         except Exception:
             return None
 
+    def _llama_embed_batch(self, texts: List[str]) -> Optional[List[List[float]]]:
+        if not texts:
+            return []
+        if not self._ready and not self._start_server():
+            return None
+        try:
+            body = json.dumps({"input": texts, "encoding_format": "float"}).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self._port}/embeddings",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read())
+            rows = data.get("data") or []
+            if not isinstance(rows, list) or len(rows) != len(texts):
+                return None
+            out: List[List[float]] = []
+            for row in rows:
+                vec = row.get("embedding") if isinstance(row, dict) else None
+                if not vec:
+                    return None
+                norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+                out.append([x / norm for x in vec])
+            return out
+        except Exception:
+            return None
+
     def embed(self, text: str) -> List[float]:
         """Return L2-normalized 1536-dim embedding for text."""
         if self._use_llama:
@@ -315,7 +344,13 @@ class BgeCodeEmbedder:
         return self._fallback.embed(text)
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        return [self.embed(t) for t in texts]
+        if not texts:
+            return []
+        if self._use_llama:
+            vecs = self._llama_embed_batch(texts)
+            if vecs is not None:
+                return vecs
+        return [self._fallback.embed(t) for t in texts]
 
     @property
     def dim(self) -> int:
@@ -985,6 +1020,9 @@ class ContextAssembler:
         self._policy_save_inflight: set = set()
         self._policy_save_lock = threading.Lock()
         self._policy_save_debounce_sec = 0.35
+        self._semantic_result_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+        self._semantic_result_cache_lock = threading.Lock()
+        self._semantic_result_cache_ttl_sec = 3.0
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
@@ -1108,6 +1146,11 @@ class ContextAssembler:
             self._session_stats_cache.pop(session_id, None)
         with self._policy_cache_lock:
             self._source_policy_cache.pop(session_id, None)
+        with self._semantic_result_cache_lock:
+            if session_id:
+                stale = [k for k in self._semantic_result_cache.keys() if k.startswith(f"{session_id}:")]
+                for k in stale[:128]:
+                    self._semantic_result_cache.pop(k, None)
 
     def _perf_start(self) -> float:
         return time.perf_counter()
@@ -1269,6 +1312,9 @@ class ContextAssembler:
             with self._related_addr_lock:
                 rel_nodes = len(self._related_addr_graph.get(session_id, {})) if session_id else 0
             out["relation_graph"] = {"nodes": rel_nodes}
+            out["semantic_cache"] = {"entries": len(self._semantic_result_cache)}
+            with self._policy_save_lock:
+                out["policy_save_queue"] = len(self._policy_save_due_at)
             if session_id:
                 out["semantic_threshold"] = self._get_semantic_threshold(session_id)
                 out["semantic_circuit_open"] = self._semantic_circuit_open(session_id)
@@ -1770,6 +1816,67 @@ class ContextAssembler:
             self._bb_entry_vec_cache[cache_key] = (vec, now)
         return vec
 
+    def _cached_bb_entry_vecs(self, entries: List[Dict[str, Any]]) -> Dict[str, List[float]]:
+        """
+        Vectorize many blackboard entries with cache-first micro-batching.
+        Returns mapping of entry_id -> vector.
+        """
+        out: Dict[str, List[float]] = {}
+        misses: List[Tuple[str, str, str]] = []  # (cache_key, text, entry_id)
+        now = time.time()
+        with self._bb_entry_vec_cache_lock:
+            for entry in entries:
+                text = f"{entry.get('title', '')} {entry.get('content', '')}".strip()
+                if not text:
+                    continue
+                entry_id = str(entry.get("id") or "")
+                updated = str(entry.get("updated_at") or "")
+                cache_key = f"{entry_id}:{updated}:{hashlib.md5(text[:800].encode()).hexdigest()}"
+                cached = self._bb_entry_vec_cache.get(cache_key)
+                if cached is not None and (now - cached[1] <= self._bb_entry_cache_ttl_sec):
+                    out[entry_id or cache_key] = cached[0]
+                    with self._bb_cache_stats_lock:
+                        self._bb_cache_hits += 1
+                else:
+                    misses.append((cache_key, text[:400], entry_id or cache_key))
+                    with self._bb_cache_stats_lock:
+                        self._bb_cache_misses += 1
+        if misses:
+            texts = [m[1] for m in misses]
+            vecs = self._embedder.embed_batch(texts)
+            with self._bb_entry_vec_cache_lock:
+                for (cache_key, _text, entry_id), vec in zip(misses, vecs):
+                    if len(self._bb_entry_vec_cache) >= self._bb_entry_cache_max:
+                        oldest = sorted(self._bb_entry_vec_cache.items(), key=lambda kv: kv[1][1])
+                        for k, _ in oldest[: max(1, self._bb_entry_cache_max // 5)]:
+                            self._bb_entry_vec_cache.pop(k, None)
+                    self._bb_entry_vec_cache[cache_key] = (vec, now)
+                    out[entry_id] = vec
+        return out
+
+    def _semantic_candidates(
+        self,
+        all_entries: List[Dict[str, Any]],
+        api_calls: Optional[List[str]],
+        max_entries: int,
+    ) -> List[Dict[str, Any]]:
+        """Adaptive candidate prefilter before semantic scoring."""
+        if not all_entries:
+            return []
+        api_set = set(api_calls or [])
+        scored: List[Tuple[float, Dict[str, Any]]] = []
+        now = time.time()
+        for e in all_entries:
+            conf = float(e.get("confidence") or 0.0)
+            upd = float(e.get("updated_at") or 0.0)
+            recency = 1.0 / (1.0 + max(0.0, now - upd) / 86400.0)
+            tags = set(e.get("tags") or [])
+            api_overlap = 1.0 if (api_set and tags.intersection(api_set)) else 0.0
+            score = conf * 0.55 + recency * 0.25 + api_overlap * 0.2
+            scored.append((score, e))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [e for _, e in scored[:max_entries]]
+
     def _get_bb_semantic_vec(
         self,
         query_vec: List[float],
@@ -1777,6 +1884,8 @@ class ContextAssembler:
         top_k: int = 3,
         threshold: float = 0.5,
         max_entries: int = 20,
+        api_calls: Optional[List[str]] = None,
+        session_id: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Semantic blackboard retrieval using a pre-computed query vector.
@@ -1785,22 +1894,38 @@ class ContextAssembler:
         if bb_store is None:
             return []
         try:
-            all_entries = bb_store.list(limit=max_entries)
+            cache_key = ""
+            if session_id:
+                qh = hashlib.md5(json.dumps(query_vec[:32]).encode()).hexdigest()[:12]
+                ah = hashlib.md5("|".join(sorted(api_calls or [])).encode()).hexdigest()[:8]
+                cache_key = f"{session_id}:{qh}:{ah}:{threshold:.3f}:{max_entries}:{top_k}"
+                with self._semantic_result_cache_lock:
+                    cached = self._semantic_result_cache.get(cache_key)
+                    if cached and (time.time() - cached[0] <= self._semantic_result_cache_ttl_sec):
+                        return list(cached[1])
+
+            all_entries = bb_store.list(limit=max(max_entries * 3, 30))
             if not all_entries:
                 return []
+            candidates = self._semantic_candidates(all_entries, api_calls, max_entries=max_entries)
             scored = []
-            for entry in all_entries:
-                text = f"{entry.get('title', '')} {entry.get('content', '')}".strip()
-                if not text:
-                    continue
-                emb = self._cached_bb_entry_vec(entry)
+            vecs = self._cached_bb_entry_vecs(candidates)
+            for entry in candidates:
+                entry_id = str(entry.get("id") or "")
+                emb = vecs.get(entry_id)
                 if emb is None:
                     continue
                 sim = BgeCodeEmbedder.cosine(query_vec, emb)
                 if sim >= threshold:
                     scored.append((sim, entry))
             scored.sort(reverse=True)
-            return [e for _, e in scored[:top_k]]
+            out = [e for _, e in scored[:top_k]]
+            if cache_key:
+                with self._semantic_result_cache_lock:
+                    if len(self._semantic_result_cache) > 300:
+                        self._semantic_result_cache.clear()
+                    self._semantic_result_cache[cache_key] = (time.time(), out)
+            return out
         except Exception:
             return []
 
@@ -2291,7 +2416,15 @@ class ContextAssembler:
         if query_vec is not None and bb_store is not None and not self._semantic_circuit_open(session_id):
             try:
                 sem_thr = self._get_semantic_threshold(session_id)
-                sem_bb = self._get_bb_semantic_vec(query_vec, bb_store, top_k=3, threshold=sem_thr)
+                sem_bb = self._get_bb_semantic_vec(
+                    query_vec,
+                    bb_store,
+                    top_k=3,
+                    threshold=sem_thr,
+                    max_entries=24,
+                    api_calls=api_calls,
+                    session_id=session_id,
+                )
                 if sem_bb:
                     self._merge_related_findings(pack, sem_bb, "semantic_linked", session_id=session_id)
             except Exception:

@@ -25,6 +25,9 @@ class _FakeEmbedder:
         s = self._score(text)
         return [s, 1.0 - s]
 
+    def embed_batch(self, texts):
+        return [self.embed(t) for t in texts]
+
     @staticmethod
     def cosine(a, b):
         na = (a[0] ** 2 + a[1] ** 2) ** 0.5 or 1.0
@@ -429,3 +432,37 @@ def test_debounced_policy_save_and_flush_persists_file():
         time.sleep(0.08)
         p = idb_path + ".focus_policy.json"
         assert os.path.exists(p)
+
+
+def test_semantic_candidates_prioritize_api_overlap_and_confidence():
+    asm = ContextAssembler()
+    entries = [
+        {"id": "e1", "confidence": 0.4, "updated_at": 10, "tags": ["foo"]},
+        {"id": "e2", "confidence": 0.3, "updated_at": 10, "tags": ["VirtualAllocEx"]},
+        {"id": "e3", "confidence": 0.9, "updated_at": 1, "tags": []},
+    ]
+    out = asm._semantic_candidates(entries, ["VirtualAllocEx"], max_entries=2)
+    ids = [e.get("id") for e in out]
+    assert "e2" in ids
+    assert "e3" in ids
+
+
+def test_semantic_result_cache_avoids_repeated_scoring_pass():
+    asm = ContextAssembler()
+    asm._embedder = _FakeEmbedder()
+    bb = _FakeBlackboardStore()
+    q = [1.0, 0.0]
+    sess = "sess-sem-cache"
+
+    _ = asm._get_bb_semantic_vec(q, bb, top_k=2, threshold=0.1, max_entries=6, api_calls=["VirtualAllocEx"], session_id=sess)
+    with asm._bb_cache_stats_lock:
+        miss1 = asm._bb_cache_misses
+        hit1 = asm._bb_cache_hits
+    _ = asm._get_bb_semantic_vec(q, bb, top_k=2, threshold=0.1, max_entries=6, api_calls=["VirtualAllocEx"], session_id=sess)
+    with asm._bb_cache_stats_lock:
+        miss2 = asm._bb_cache_misses
+        hit2 = asm._bb_cache_hits
+
+    # second request should be served from semantic result cache path
+    assert miss2 == miss1
+    assert hit2 == hit1
