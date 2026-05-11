@@ -96,9 +96,6 @@ def _seg_bounds(start: str | None, end: str | None):
         return validate_range(start, end)
     min_ea = _inf_min_ea()
     max_ea = _inf_max_ea()
-    if min_ea == 0 or max_ea == idaapi.BADADDR:
-        min_ea = idaapi.BADADDR
-        max_ea = idaapi.BADADDR
     if min_ea in (None, idaapi.BADADDR) or max_ea in (None, idaapi.BADADDR):
         return None, None, make_error(
             MCPError.IDA_ERROR,
@@ -147,6 +144,17 @@ def _read_bytes_safe(start: int, end: int, cap: int = 1 << 20) -> bytes:
         return ida_bytes.get_bytes(start, size) or b""
     except Exception:
         return b""
+
+
+def _create_ascii_string(ea: int, length: int) -> bool:
+    """Create an ASCII string using the discovered run length when available."""
+    target_len = length if length not in (None, idaapi.BADADDR) else idc.BADADDR
+    try:
+        return bool(idc.create_strlit(ea, target_len, getattr(idc, "STRTYPE_C", 0)))
+    except TypeError:
+        return bool(idc.create_strlit(ea, target_len))
+    except Exception:
+        return False
 
 
 def _record_contradiction(state: dict, ea: int, old: str, new: str, reason: str, confidence: float = 0.7) -> None:
@@ -348,7 +356,7 @@ def firmware_view(
                 "next_actions": [
                     f"firmware_view(action='pointer_sweep', start='{hex(s_ea)}', end='{hex(e_ea)}', stride={ptr_size})",
                     f"firmware_view(action='auto_retype', start='{hex(s_ea)}', end='{hex(e_ea)}', apply=false)",
-                    f"search(action='semantic', query='init parser dispatch checksum', limit=60)",
+                    f"search(action='semantic', pattern='init parser dispatch checksum', limit=60)",
                 ],
             }
             return _log_ml(result, action, f"unknown_ratio={unknown_ratio:.3f}; strategy={strategy}")
@@ -475,7 +483,7 @@ def firmware_view(
                 "applied": applied,
                 "next_actions": [
                     "firmware_view(action='scan_region', start='<same_start>', end='<same_end>')",
-                    "search(action='semantic', query='dispatcher parser init table', limit=50)",
+                    "search(action='semantic', pattern='dispatcher parser init table', limit=50)",
                     "llm_helpers(action='next_best_action_recommender', query='raw firmware triage around converted range')",
                 ],
             }
@@ -535,7 +543,7 @@ def firmware_view(
                 "next_actions": [
                     "data_ops(action='make_array', addr='<item.start>', size=<ptr_size>, count=<item.entries>)",
                     "data_ops(action='set_repr', addr='<item.start>', repr='offset')",
-                    "search(action='semantic', query='switch dispatch jump table parser', limit=40)",
+                    "search(action='semantic', pattern='switch dispatch jump table parser', limit=40)",
                 ],
             }
             return _log_ml(result, action, f"table_candidates={len(candidates)}")
@@ -1159,7 +1167,7 @@ def firmware_view(
                             applied += 1
                             state["history"].append({"ts": int(time.time()), "action": "smart_carve", "ea": hex(oa), "new_kind": "ptr", "prev_kind": prev_kind, "size": ptr_size})
                     elif k == "make_string":
-                        if idc.create_strlit(oa, idc.BADADDR):
+                        if _create_ascii_string(oa, int(op.get("length") or idaapi.BADADDR)):
                             applied += 1
                             state["history"].append({"ts": int(time.time()), "action": "smart_carve", "ea": hex(oa), "new_kind": "string", "prev_kind": prev_kind, "size": op.get("length", 1)})
                     elif k == "make_data":
