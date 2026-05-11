@@ -32,7 +32,7 @@ def quickref() -> list[dict]:
 
 @prompt
 def workflow(
-    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|compare|debug|crypto|protocol|exploit|deobfuscate"] = "triage"
+    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|compare|debug|crypto|protocol|exploit|deobfuscate|firmware"] = "triage"
 ) -> list[dict]:
     """Get a step-by-step workflow guide for a specific analysis task."""
     workflows = {
@@ -45,6 +45,7 @@ def workflow(
         "protocol": WORKFLOW_PROTOCOL,
         "exploit": WORKFLOW_EXPLOIT,
         "deobfuscate": WORKFLOW_DEOBFUSCATE,
+        "firmware": WORKFLOW_FIRMWARE,
     }
     text = workflows.get(task, f"Unknown task '{task}'. Available: {', '.join(workflows.keys())}")
     return [
@@ -100,11 +101,22 @@ QUICKREF_TEXT = """\
 - `types(action="infer", addr="0x401000")` - Infer structure layout
 - `entropy(action="packed_detect")` - Detect packed/encrypted sections
 
+## Raw Binary / Firmware
+- `binary_info(action="headers")` - Identify format, processor, entrypoints, and image bounds
+- `binary_info(action="sections")` - Inspect segments, permissions, and entropy
+- `binary_info(action="compiler")` - Detect compiler/runtime hints before retyping
+- `firmware_view(action="scan_region")` - Profile unknown raw regions
+- `firmware_view(action="region_profile")` - Measure pointer, string, and unknown-byte density
+- `firmware_view(action="pointer_sweep")` - Find pointer-like cells and candidate tables
+- `firmware_view(action="smart_carve", apply=false)` - Dry-run safe retyping suggestions
+- `data_ops(action="cycle_data", addr="0x401000")` - Recast a concrete anchor once one is identified
+- `blackboard(action="list", category="firmware_view")` - Review prior conversion decisions
+
 ## Security Analysis
 - `search(action="vulnerable")` - Scan for dangerous patterns and APIs
 - `search(action="regex", pattern="strcpy|gets|sprintf|strcat")` - Buffer overflow hotspots
-- `search(action="regex", pattern="printf\(|fprintf\(|sprintf\(")` - Format string hotspots
-- `search(action="regex", pattern="system\(|popen\(|_popen\(|exec\(")` - Command injection hotspots
+- `search(action="regex", pattern="printf\\(|fprintf\\(|sprintf\\(")` - Format string hotspots
+- `search(action="regex", pattern="system\\(|popen\\(|_popen\\(|exec\\(")` - Command injection hotspots
 - `gadgets(action="mitigations")` - Check ASLR/DEP/canary/CFI
 - `gadgets(action="rop")` - Find ROP gadgets
 - `c2_detect(action="indicators")` - Detect C2/malware behavior
@@ -149,8 +161,8 @@ WORKFLOW_VULN = """\
 
 1. **Pattern Scan**: `search(action="vulnerable")` → dangerous APIs and patterns
 2. **Buffer Overflows**: `search(action="regex", pattern="strcpy|gets|sprintf|strcat")`
-3. **Format Strings**: `search(action="regex", pattern="printf\(|fprintf\(|sprintf\(")`
-4. **Command Injection**: `search(action="regex", pattern="system\(|popen\(|_popen\(|exec\(")`
+3. **Format Strings**: `search(action="regex", pattern="printf\\(|fprintf\\(|sprintf\\(")`
+4. **Command Injection**: `search(action="regex", pattern="system\\(|popen\\(|_popen\\(|exec\\(")`
 5. **Hardcoded Creds**: `string_ops(action="find_api_keys")` → tokens, keys, secrets
 6. **Check Mitigations**: `gadgets(action="mitigations")` → ASLR, DEP, stack cookies, CFI
 7. **Trace Data Flow**: Use `code(action="xrefs_to", addr="<sink>")` to trace user input flow
@@ -255,4 +267,19 @@ WORKFLOW_DEOBFUSCATE = """\
 7. **Dead Code**: `deobfuscate(action="dead_code")` → unreachable blocks
 8. **Anti-Disasm**: `deobfuscate(action="anti_disasm")` → jump-into-instruction tricks
 9. **Decode Data**: `deobfuscate(action="decode_attempt", addr="0x...", key="0xAB")` → manual decode
+"""
+
+WORKFLOW_FIRMWARE = """\
+# Raw Binary / Firmware Workflow
+
+1. **Identify Format**: `binary_info(action="headers")` → format, processor, entrypoints, bounds
+2. **Inspect Sections**: `binary_info(action="sections")` → permissions, entropy, segment layout
+3. **Check Compiler Hints**: `binary_info(action="compiler")` → compiler/runtime clues before retyping
+4. **Profile Raw Regions**: `firmware_view(action="scan_region")` → estimate code/data/unknown mix
+5. **Summarize Region**: `firmware_view(action="region_profile")` → pointer/string/unknown density
+6. **Sweep Pointers**: `firmware_view(action="pointer_sweep")` → table and vtable candidates
+7. **Dry-Run Carving**: `firmware_view(action="smart_carve", apply=false)` → safe retyping plan
+8. **Review Prior Decisions**: `blackboard(action="list", category="firmware_view")` → reuse local analysis
+9. **Anchor Conversions**: `data_ops(action="cycle_data", addr="<known_addr>")` → only after a concrete address is identified
+10. **Continue Search**: `search(action="semantic", pattern="entry init parser")` → map the now-sharpened binary
 """

@@ -358,9 +358,9 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         return make_error(MCPError.INVALID_ARGS, "constraints or pattern required")
 
     try:
-        from ..classify import _CATEGORY_APIS, _classify_func
+        from ..classify import _CATEGORY_APIS, _classify_func, _induce_function_schema
     except ImportError:
-        from classify import _CATEGORY_APIS, _classify_func  # type: ignore[import-not-found]
+        from classify import _CATEGORY_APIS, _classify_func, _induce_function_schema  # type: ignore[import-not-found]
     try:
         from ..annotation import _DANGEROUS_APIS, _TAG_CATEGORIES
     except ImportError:
@@ -373,7 +373,14 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         if cached is not None:
             return cached
 
-        schema = {"behavior_tags": set(), "dangerous_apis": set(), "string_refs": set(), "vuln_class": set()}
+        schema = {
+            "behavior_tags": set(),
+            "dangerous_apis": set(),
+            "string_refs": set(),
+            "vuln_class": set(),
+            "compiler_hints": set(),
+            "structural_features": set(),
+        }
         fn = ida_funcs.get_func(func_ea)
         if not fn:
             _cache_set(cache_key, schema)
@@ -393,6 +400,18 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
                 if api in _DANGEROUS_APIS:
                     schema["dangerous_apis"].add(api)
                     schema["vuln_class"].add("dangerous_api")
+
+        # Reuse the classifier-side schema induction so the structured search
+        # and direct classify() path stay aligned.
+        try:
+            richer = _induce_function_schema(func_ea)
+            if isinstance(richer, dict):
+                for key in ("behavior_tags", "dangerous_apis", "string_refs", "vuln_class", "compiler_hints", "structural_features"):
+                    values = richer.get(key, [])
+                    if isinstance(values, (list, tuple, set)):
+                        schema[key].update(values)
+        except Exception:
+            pass
 
         try:
             timer.check()
@@ -444,18 +463,29 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
                 vals = val if isinstance(val, (list, set, tuple)) else [val]
                 if not any(v in schema["dangerous_apis"] for v in vals):
                     return False
+            elif key == "compiler_hints":
+                vals = val if isinstance(val, (list, set, tuple)) else [val]
+                if not any(v in schema["compiler_hints"] for v in vals):
+                    return False
             elif key == "vuln_class":
                 vals = val if isinstance(val, (list, set, tuple)) else [val]
                 if not any(v in schema["vuln_class"] for v in vals):
+                    return False
+            elif key == "structural_features":
+                vals = val if isinstance(val, (list, set, tuple)) else [val]
+                if not any(v in schema["structural_features"] for v in vals):
                     return False
             elif key == "string_refs":
                 matcher = compile_smart_pattern(str(val), case_sensitive=False)
                 if not any(matcher(s) for s in schema["string_refs"]):
                     return False
             else:
-                all_vals = set()
+                all_vals = []
                 for v in schema.values():
-                    all_vals.update(v)
+                    if isinstance(v, (list, tuple, set)):
+                        all_vals.extend(str(item) for item in v)
+                    elif v is not None:
+                        all_vals.append(str(v))
                 if str(val).lower() not in " ".join(all_vals).lower():
                     return False
         return True
@@ -519,6 +549,8 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
             "behavior_tags": sorted(schema["behavior_tags"]),
             "dangerous_apis": sorted(schema["dangerous_apis"]),
             "string_refs": sorted(schema["string_refs"])[:5],
+            "compiler_hints": sorted(schema["compiler_hints"]),
+            "structural_features": sorted(schema["structural_features"]),
         }
         if len(results) >= limit:
             break

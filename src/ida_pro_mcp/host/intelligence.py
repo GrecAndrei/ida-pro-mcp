@@ -703,14 +703,43 @@ class BehaviorClassifier:
             if cls._shared is None:
                 cls._shared = cls(embedder)
                 cls._shared._preload_anchors_async()
+            elif cls._shared._embedder is not embedder:
+                # Rebind the shared classifier when the embedding backend changes.
+                # This keeps anchor similarity scores aligned with the active embedder.
+                cls._shared._embedder = embedder
+                cls._shared.clear_cache()
+                cls._shared._preload_anchors_async()
         return cls._shared
 
     def __init__(self, embedder: BgeCodeEmbedder):
         self._embedder = embedder
         self._anchor_embs: Dict[str, List[float]] = {}
         self._anchor_lock = threading.Lock()
+        self._anchor_generation = 0
 
-    def _get_anchor(self, behavior: str) -> Optional[List[float]]:
+    def clear_cache(self) -> None:
+        """Drop all cached anchor embeddings.
+
+        Useful when the embedder backend changes or when tests need to force
+        a cold-start path without recreating the singleton.
+        """
+        with self._anchor_lock:
+            self._anchor_generation += 1
+            self._anchor_embs.clear()
+
+    def refresh_anchors(self, behaviors: Optional[List[str]] = None) -> None:
+        """Pre-warm the anchor cache.
+
+        If `behaviors` is omitted, all anchors are refreshed. Otherwise only the
+        named behaviors are re-embedded.
+        """
+        targets = behaviors or list(self.ANCHORS.keys())
+        with self._anchor_lock:
+            generation = self._anchor_generation
+        for behavior in targets:
+            self._get_anchor(behavior, generation=generation)
+
+    def _get_anchor(self, behavior: str, generation: Optional[int] = None) -> Optional[List[float]]:
         """
         Return cached anchor embedding or compute it.
         NEVER holds the lock during embed — that was causing full serialization.
@@ -718,23 +747,30 @@ class BehaviorClassifier:
         with self._anchor_lock:
             if behavior in self._anchor_embs:
                 return self._anchor_embs[behavior]
+            current_generation = self._anchor_generation
+        if generation is None:
+            generation = current_generation
         # Compute outside the lock so other calls aren't blocked
         try:
             vec = self._embedder.embed(self.ANCHORS[behavior])
         except Exception:
             return None
         with self._anchor_lock:
+            if generation != self._anchor_generation:
+                return self._anchor_embs.get(behavior)
             self._anchor_embs.setdefault(behavior, vec)
         return self._anchor_embs.get(behavior)
 
     def _preload_anchors_async(self) -> None:
         """Load all anchors in background, one at a time, no lock contention."""
         def _load():
+            with self._anchor_lock:
+                generation = self._anchor_generation
             for b in self.ANCHORS:
                 with self._anchor_lock:
                     if b in self._anchor_embs:
                         continue
-                self._get_anchor(b)   # embeds outside lock
+                self._get_anchor(b, generation=generation)   # embeds outside lock
         threading.Thread(target=_load, daemon=True, name="anchor-preload").start()
 
     def classify_vec(
@@ -779,33 +815,29 @@ class BehaviorClassifier:
         threshold: float = 0.35,
         max_tokens: int = 3000,
         top_k: int = 4,
+        block: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Zero-shot behavior classification of decompiled pseudocode.
         Embeds text and delegates to classify_vec.
         """
-        if not text or len(text.strip()) < 50:
+        if not text or not text.strip():
             return []
-        q = self._embedder.embed(text[:max_tokens])
-        return self.classify_vec(q, threshold=threshold, top_k=top_k)
+        # Collapse verbose pseudocode into a compact signature so anchors and
+        # queries live in the same code-signature space.
+        query = _extract_signature(text[:max_tokens]) or text[:max_tokens]
+        q = self._embedder.embed(query)
+        return self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
 
-    def _classify_impl(self, q: List[float]) -> List[Dict[str, Any]]:
-        """Internal — kept for compat."""
-        sims: Dict[str, float] = {}
-        for behavior in self.ANCHORS:
-            anchor = self._get_anchor(behavior)
-            sims[behavior] = BgeCodeEmbedder.cosine(q, anchor)
-
-        positive = [s for s in sims.values() if s > 0]
-        mean_sim = (sum(positive) / len(positive)) if positive else 0.0
-        cutoff = mean_sim * relative_threshold if mean_sim > 0 else 0.02
-
-        results = []
-        for behavior, sim in sims.items():
-            if sim >= cutoff and sim > 0:
-                results.append({"behavior": behavior, "confidence": round(sim, 4)})
-        results.sort(key=lambda x: x["confidence"], reverse=True)
-        return results[:top_k]
+    def _classify_impl(
+        self,
+        q: List[float],
+        threshold: float = 0.35,
+        top_k: int = 4,
+        block: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Internal compatibility wrapper for older call sites."""
+        return self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1080,6 +1112,23 @@ class ContextAssembler:
         self._semantic_result_cache_ttl_sec = 3.0
         self._semantic_budget_cache: Dict[str, Tuple[float, int]] = {}
         self._semantic_budget_lock = threading.Lock()
+
+    def _behavior_classifier(self) -> BehaviorClassifier:
+        """Return the shared classifier, re-binding it if the embedder changed.
+
+        Test doubles can inject a classifier without an `_embedder` attribute;
+        those are left untouched so unit tests can isolate the enrichment path.
+        """
+        classifier = getattr(self, "_classifier", None)
+        if classifier is None:
+            classifier = BehaviorClassifier.instance(self._embedder)
+            self._classifier = classifier
+            return classifier
+        classifier_embedder = getattr(classifier, "_embedder", None)
+        if classifier_embedder is not None and classifier_embedder is not self._embedder:
+            classifier = BehaviorClassifier.instance(self._embedder)
+            self._classifier = classifier
+        return classifier
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
@@ -2723,6 +2772,24 @@ class ContextAssembler:
                 structural["bb_count"] = sb_attrs["bb_count"]
             if structural:
                 pack["structural"] = structural
+
+        # ── Step 3b: Behavior classification via the shared zero-shot classifier
+        # This is intentionally separate from API/structural extraction so the
+        # response can expose both deterministic and semantic signals.
+        behavior_hits: List[Dict[str, Any]] = []
+        if pseudocode.strip():
+            try:
+                behavior_hits = self._behavior_classifier().classify(
+                    pseudocode,
+                    threshold=0.35,
+                    top_k=4,
+                    block=True,
+                )
+            except Exception:
+                behavior_hits = []
+        if behavior_hits:
+            pack["behavior_classifications"] = behavior_hits
+            pack["behavior_tags"] = [hit.get("behavior") for hit in behavior_hits if hit.get("behavior")]
 
         # ── Step 4: Rule-based actions from API patterns + structural attrs
         actions: List[Dict[str, Any]] = []
