@@ -52,6 +52,43 @@ def _collect_callees(func_start_ea: int, max_items=50000) -> list[int]:
     return sorted(callees)
 
 
+def _try_map_raw_runtime_addr(ea: int) -> tuple[Optional[int], Optional[str]]:
+    """Map runtime-like VA to raw IDB offset when safe."""
+    try:
+        if idaapi.is_mapped(ea):
+            return ea, None
+    except Exception:
+        return None, None
+
+    segs = []
+    seg = idaapi.get_first_seg()
+    while seg:
+        segs.append(seg)
+        seg = idaapi.get_next_seg(seg.start_ea)
+    if len(segs) != 1:
+        return None, None
+
+    only = segs[0]
+    start = int(only.start_ea)
+    end = int(only.end_ea)
+    size = end - start
+    if size <= 0 or start != 0:
+        return None, None
+
+    # Common image-base alignments seen in runtime VAs.
+    for align in (0x100000, 0x10000, 0x1000):
+        base = ea & ~(align - 1)
+        off = ea - base
+        if 0 <= off < size:
+            mapped = start + off
+            try:
+                if idaapi.is_mapped(mapped):
+                    return mapped, f"runtime_va={hex(ea)} base={hex(base)} offset={hex(off)}"
+            except Exception:
+                pass
+    return None, None
+
+
 def _resolve_func_addr(addr: Any) -> tuple[Optional[int], Optional[dict]]:
     """Resolve function address from hex/int/name and normalize to function start when available."""
     if addr is None:
@@ -124,7 +161,16 @@ def _funcs_impl(
 
         if action == "create":
             ea, err = validate_addr(addr)
-            if err: return err
+            remap_note = None
+            if err:
+                raw_ea, parse_err = parse_address_safe(addr)
+                if parse_err:
+                    return err
+                mapped, reason = _try_map_raw_runtime_addr(int(raw_ea))
+                if mapped is None:
+                    return err
+                ea = mapped
+                remap_note = reason
             end_ea = None
             if end:
                 end_ea, err = validate_addr(end)
@@ -237,6 +283,8 @@ def _funcs_impl(
                     "end": hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None),
                     "name": ida_funcs.get_func_name(ea) if fn else name,
                 }
+                if remap_note:
+                    result["addr_remap"] = remap_note
                 if removed_overlaps:
                     result["removed_overlaps"] = removed_overlaps
                 return result
@@ -263,6 +311,8 @@ def _funcs_impl(
                         "name": ida_funcs.get_func_name(ea) if fn else name,
                         "note": "Function created after auto-analysis retry",
                     }
+                    if remap_note:
+                        result["addr_remap"] = remap_note
                     if removed_overlaps:
                         result["removed_overlaps"] = removed_overlaps
                     return result
