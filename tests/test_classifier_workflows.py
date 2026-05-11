@@ -1,0 +1,383 @@
+import os
+import sys
+import types
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(__file__))
+SRC = os.path.join(ROOT, "src")
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
+TOOLS = os.path.join(SRC, "ida_pro_mcp", "ida_mcp", "tools")
+if TOOLS not in sys.path:
+    sys.path.insert(0, TOOLS)
+
+import ida_pro_mcp.host.intelligence as intel_mod
+from ida_pro_mcp.host.intelligence import BehaviorClassifier, ContextAssembler
+
+
+class _FakeEmbedder:
+    def embed(self, text):
+        low = (text or "").lower()
+        if any(k in low for k in ("sub_bytes", "aes", "round_keys", "mix_columns")):
+            return [1.0, 0.0]
+        if any(k in low for k in ("socket", "http", "send", "recv", "connect")):
+            return [0.0, 1.0]
+        return [0.0, 0.0]
+
+
+class TestBehaviorClassifierManagement(unittest.TestCase):
+    def setUp(self):
+        self._old_shared = BehaviorClassifier._shared
+        BehaviorClassifier._shared = None
+
+    def tearDown(self):
+        BehaviorClassifier._shared = self._old_shared
+
+    def test_classify_handles_short_text_and_blocking(self):
+        clf = BehaviorClassifier(_FakeEmbedder())
+        clf.clear_cache()
+        results = clf.classify("aes", block=True)
+        self.assertTrue(results)
+        self.assertEqual(results[0]["behavior"], "crypto_symmetric")
+
+    def test_classify_impl_delegates_without_crashing(self):
+        clf = BehaviorClassifier(_FakeEmbedder())
+        results = clf._classify_impl([1.0, 0.0], block=True)
+        self.assertTrue(results)
+        self.assertEqual(results[0]["behavior"], "crypto_symmetric")
+
+    def test_instance_rebinds_embedder(self):
+        e1 = _FakeEmbedder()
+        e2 = _FakeEmbedder()
+        inst1 = BehaviorClassifier.instance(e1)
+        inst2 = BehaviorClassifier.instance(e2)
+        self.assertIs(inst1, inst2)
+        self.assertIs(inst2._embedder, e2)
+
+    def test_stale_anchor_generation_does_not_backfill_cache(self):
+        clf = BehaviorClassifier(_FakeEmbedder())
+        clf.clear_cache()
+        stale_generation = clf._anchor_generation - 1
+        anchor = clf._get_anchor("crypto_symmetric", generation=stale_generation)
+        self.assertIsNone(anchor)
+        self.assertNotIn("crypto_symmetric", clf._anchor_embs)
+
+
+class TestClassifySchemaHelpers(unittest.TestCase):
+    def setUp(self):
+        self._orig_modules = {}
+        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling"):
+            self._orig_modules[name] = sys.modules.get(name)
+        sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
+        for name in ("idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines"):
+            mod = types.ModuleType(name)
+            if name == "idaapi":
+                mod.BADADDR = -1
+                mod.get_kernel_version = lambda: "9.0"
+            sys.modules[name] = mod
+        rpc_mod = types.ModuleType("rpc")
+        rpc_mod.tool = lambda f: f
+        rpc_mod.unsafe = lambda f: f
+        sys.modules["rpc"] = rpc_mod
+        sync_mod = types.ModuleType("sync")
+        sync_mod.idaread = lambda f: f
+        sync_mod.idawrite = lambda f: f
+        sync_mod.IDAError = Exception
+        sys.modules["sync"] = sync_mod
+        utils_mod = types.ModuleType("utils")
+        for name in ("parse_address", "normalize_list_input", "normalize_dict_list", "get_function", "get_prototype", "get_image_size", "looks_like_address", "get_stack_frame_variables_internal", "get_type_by_name", "hex_ea", "hex_size", "smart_match", "compile_smart_pattern", "resolve_symbol"):
+            setattr(utils_mod, name, lambda *args, **kwargs: None)
+        sys.modules["utils"] = utils_mod
+        eh_mod = types.ModuleType("error_handling")
+        class _FakeMCPError:
+            INVALID_ARGS = "INVALID_ARGS"
+        eh_mod.MCPError = _FakeMCPError
+        eh_mod.make_error = lambda *args, **kwargs: {"ok": False}
+        eh_mod.handle_error = lambda e: {"ok": False, "error": str(e)}
+        eh_mod.ERROR_HINTS = {}
+        for name in ("validate_addr", "validate_range", "check_debugger", "validate_path_safe", "require_arg", "require_one_of", "validate_action", "validate_count"):
+            setattr(eh_mod, name, lambda *args, **kwargs: None)
+        sys.modules["error_handling"] = eh_mod
+        import importlib
+        self.classify_mod = importlib.import_module("classify")
+
+        class FakeFn:
+            start_ea = 0x1000
+            end_ea = 0x1010
+            flags = 0x2
+
+        class FakeIdaFuncs:
+            FUNC_LIB = 0x1
+            FUNC_THUNK = 0x2
+
+            @staticmethod
+            def get_func(ea):
+                return FakeFn() if ea == 0x1000 else None
+
+        class FakeIdautils:
+            @staticmethod
+            def Heads(start, end):
+                return []
+
+            @staticmethod
+            def CodeRefsFrom(head, zero):
+                return []
+
+            @staticmethod
+            def DataRefsFrom(head):
+                return []
+
+            @staticmethod
+            def XrefsTo(ea, zero):
+                return []
+
+        class FakeIdc:
+            @staticmethod
+            def get_func_name(ea):
+                return "j_thunk" if ea == 0x1000 else ""
+
+            @staticmethod
+            def get_str_type(ea):
+                return None
+
+            @staticmethod
+            def get_strlit_contents(*args, **kwargs):
+                return None
+
+        class FakeSegment:
+            @staticmethod
+            def getseg(ea):
+                return None
+
+            @staticmethod
+            def get_segm_name(seg):
+                return ""
+
+        class FakeFlowChart:
+            def __init__(self, fn):
+                self._blocks = []
+
+            def __iter__(self):
+                return iter(self._blocks)
+
+        class FakeIdaApi:
+            FlowChart = FakeFlowChart
+
+        self.classify_mod.ida_funcs = FakeIdaFuncs
+        self.classify_mod.idautils = FakeIdautils
+        self.classify_mod.idc = FakeIdc
+        self.classify_mod.ida_segment = FakeSegment
+        self.classify_mod.idaapi = FakeIdaApi
+
+    def tearDown(self):
+        for name, value in self._orig_modules.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+
+    def test_induce_function_schema_includes_compiler_hints(self):
+        schema = self.classify_mod._induce_function_schema(0x1000)
+        self.assertIn("compiler_generated", schema["compiler_hints"])
+        self.assertIn("thunk", schema["structural_features"])
+        self.assertIn("very_small", schema["structural_features"])
+
+
+class TestRawBinaryPlanning(unittest.TestCase):
+    def setUp(self):
+        self._orig_modules = {}
+        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling"):
+            self._orig_modules[name] = sys.modules.get(name)
+        sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
+        for name in ("idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines"):
+            mod = types.ModuleType(name)
+            if name == "idaapi":
+                mod.BADADDR = -1
+                mod.get_kernel_version = lambda: "9.0"
+            sys.modules[name] = mod
+        rpc_mod = types.ModuleType("rpc")
+        rpc_mod.tool = lambda f: f
+        rpc_mod.unsafe = lambda f: f
+        sys.modules["rpc"] = rpc_mod
+        sync_mod = types.ModuleType("sync")
+        sync_mod.idaread = lambda f: f
+        sync_mod.idawrite = lambda f: f
+        sync_mod.IDAError = Exception
+        sys.modules["sync"] = sync_mod
+        utils_mod = types.ModuleType("utils")
+        for name in ("parse_address", "normalize_list_input", "normalize_dict_list", "get_function", "get_prototype", "get_image_size", "looks_like_address", "get_stack_frame_variables_internal", "get_type_by_name", "hex_ea", "hex_size", "smart_match", "compile_smart_pattern", "resolve_symbol"):
+            setattr(utils_mod, name, lambda *args, **kwargs: None)
+        sys.modules["utils"] = utils_mod
+        eh_mod = types.ModuleType("error_handling")
+        class _FakeMCPError:
+            INVALID_ARGS = "INVALID_ARGS"
+        eh_mod.MCPError = _FakeMCPError
+        eh_mod.make_error = lambda *args, **kwargs: {"ok": False}
+        eh_mod.handle_error = lambda e: {"ok": False, "error": str(e)}
+        eh_mod.ERROR_HINTS = {}
+        for name in ("validate_addr", "validate_range", "check_debugger", "validate_path_safe", "require_arg", "require_one_of", "validate_action", "validate_count"):
+            setattr(eh_mod, name, lambda *args, **kwargs: None)
+        sys.modules["error_handling"] = eh_mod
+        import importlib
+        self.llm_helpers_mod = importlib.import_module("llm_helpers")
+
+    def tearDown(self):
+        for name, value in self._orig_modules.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+
+    def test_raw_firmware_queries_prioritize_binary_recon(self):
+        self.assertEqual(self.llm_helpers_mod._infer_question_type("raw binary firmware blob"), "raw_firmware_retyping")
+        plan = self.llm_helpers_mod._build_tool_plan("raw binary firmware blob", addr=None)
+        self.assertGreaterEqual(len(plan), 4)
+        self.assertEqual(plan[0]["tool"], "binary_info")
+        self.assertEqual(plan[1]["action"], "sections")
+        self.assertEqual(plan[3]["tool"], "firmware_view")
+        self.assertFalse(any(step["tool"] == "data_ops" for step in plan))
+
+    def test_raw_firmware_plan_keeps_code_validation_for_anchored_addr(self):
+        plan = self.llm_helpers_mod._build_tool_plan("raw firmware image", addr="0x401000")
+        self.assertTrue(any(step["tool"] == "data_ops" and step["addr"] == "0x401000" for step in plan))
+        self.assertEqual(plan[-3]["tool"], "code")
+        self.assertEqual(plan[-2]["tool"], "code")
+
+
+class TestFirmwareViewBounds(unittest.TestCase):
+    def setUp(self):
+        self._orig_modules = {}
+        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling", "memrl", "blackboard"):
+            self._orig_modules[name] = sys.modules.get(name)
+        sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
+        for name in ("idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines"):
+            mod = types.ModuleType(name)
+            if name == "idaapi":
+                mod.BADADDR = -1
+                mod.get_kernel_version = lambda: "9.0"
+            sys.modules[name] = mod
+        rpc_mod = types.ModuleType("rpc")
+        rpc_mod.tool = lambda f: f
+        rpc_mod.unsafe = lambda f: f
+        sys.modules["rpc"] = rpc_mod
+        sync_mod = types.ModuleType("sync")
+        sync_mod.idaread = lambda f: f
+        sync_mod.idawrite = lambda f: f
+        sync_mod.IDAError = Exception
+        sys.modules["sync"] = sync_mod
+        utils_mod = types.ModuleType("utils")
+        for name in ("parse_address", "normalize_list_input", "normalize_dict_list", "get_function", "get_prototype", "get_image_size", "looks_like_address", "get_stack_frame_variables_internal", "get_type_by_name", "hex_ea", "hex_size", "smart_match", "compile_smart_pattern", "resolve_symbol"):
+            setattr(utils_mod, name, lambda *args, **kwargs: None)
+        sys.modules["utils"] = utils_mod
+        eh_mod = types.ModuleType("error_handling")
+        class _FakeMCPError:
+            INVALID_ARGS = "INVALID_ARGS"
+            IDA_ERROR = "IDA_ERROR"
+        eh_mod.MCPError = _FakeMCPError
+        eh_mod.make_error = lambda *args, **kwargs: {"ok": False, "error": args[1] if len(args) > 1 else ""}
+        eh_mod.handle_error = lambda e: {"ok": False, "error": str(e)}
+        eh_mod.ERROR_HINTS = {}
+        for name in ("validate_addr", "validate_range", "check_debugger", "validate_path_safe", "require_arg", "require_one_of", "validate_action", "validate_count"):
+            setattr(eh_mod, name, lambda *args, **kwargs: None)
+        sys.modules["error_handling"] = eh_mod
+        memrl_mod = types.ModuleType("memrl")
+        memrl_mod.emit_memrl_suggestion = lambda *args, **kwargs: ""
+        sys.modules["memrl"] = memrl_mod
+        bb_mod = types.ModuleType("blackboard")
+        bb_mod.BlackboardStore = None
+        sys.modules["blackboard"] = bb_mod
+        import importlib
+        self.firmware_view_mod = importlib.import_module("firmware_view")
+
+    def tearDown(self):
+        for name, value in self._orig_modules.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+
+    def test_seg_bounds_accepts_zero_based_images(self):
+        self.firmware_view_mod._inf_min_ea = lambda: 0
+        self.firmware_view_mod._inf_max_ea = lambda: 0x2000
+
+        start, end, err = self.firmware_view_mod._seg_bounds(None, None)
+
+        self.assertIsNone(err)
+        self.assertEqual(start, 0)
+        self.assertEqual(end, 0x2000)
+
+    def test_create_ascii_string_uses_discovered_length(self):
+        calls = []
+
+        def _fake_create_strlit(ea, length, stype=None):
+            calls.append((ea, length, stype))
+            return True
+
+        self.firmware_view_mod.idc.create_strlit = _fake_create_strlit
+
+        ok = self.firmware_view_mod._create_ascii_string(0x3000, 8)
+
+        self.assertTrue(ok)
+        self.assertEqual(calls[0][1], 8)
+
+
+class TestContextAssemblerClassifierIntegration(unittest.TestCase):
+    def setUp(self):
+        self._orig_embedder = intel_mod.BgeCodeEmbedder
+        self._orig_classifier_instance = BehaviorClassifier.__dict__["instance"]
+
+        class _FakeBehaviorClassifier:
+            def classify(self, text, threshold=0.35, top_k=4, block=True):
+                return [{"behavior": "crypto_symmetric", "confidence": 0.99}]
+
+        class _FakeEmbedder:
+            def embed(self, text):
+                return [0.0, 0.0]
+
+            def embed_batch(self, texts):
+                return [[0.0, 0.0] for _ in texts]
+
+        intel_mod.BgeCodeEmbedder = _FakeEmbedder
+        BehaviorClassifier.instance = classmethod(lambda cls, embedder: _FakeBehaviorClassifier())
+
+    def tearDown(self):
+        intel_mod.BgeCodeEmbedder = self._orig_embedder
+        BehaviorClassifier.instance = self._orig_classifier_instance
+
+    def test_decompile_enrichment_surfaces_behavior_classifications(self):
+        asm = ContextAssembler()
+        pack = {}
+        pseudocode = """
+        void aes_like(void) {
+            sub_bytes();
+            mix_columns();
+            round_keys[0] = 0;
+        }
+        """
+        asm._enrich_decompile(pack, {"name": "aes_like"}, pseudocode, "0x401000", "", None, "sess-behavior")
+        self.assertIn("behavior_classifications", pack)
+        self.assertEqual(pack["behavior_classifications"][0]["behavior"], "crypto_symmetric")
+        self.assertIn("behavior_tags", pack)
+        self.assertIn("crypto_symmetric", pack["behavior_tags"])
+
+    def test_behavior_classifier_rebinds_when_embedder_changes(self):
+        asm = ContextAssembler()
+
+        class _OldClassifier:
+            _embedder = object()
+
+            def classify(self, text, threshold=0.35, top_k=4, block=True):
+                return []
+
+        old_classifier = _OldClassifier()
+        asm._classifier = old_classifier
+        asm._embedder = object()
+        rebound = asm._behavior_classifier()
+
+        self.assertIsNot(rebound, old_classifier)
+        self.assertIs(rebound, asm._classifier)
+        self.assertFalse(hasattr(asm._classifier, "_embedder"))
+
+
+if __name__ == "__main__":
+    unittest.main()

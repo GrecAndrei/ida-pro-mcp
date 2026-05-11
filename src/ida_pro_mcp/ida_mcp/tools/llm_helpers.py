@@ -184,7 +184,11 @@ def _save_llm_feature_state(state: dict) -> None:
 
 def _infer_question_type(query: str) -> str:
     q = (query or "").lower()
-    if any(k in q for k in ("firmware", "raw binary", "blob", "rom", "flat binary", "binwalk", "uimage", "bootloader")):
+    if any(k in q for k in (
+        "firmware", "raw binary", "raw blob", "blob", "rom", "flash", "flash image",
+        "flat binary", "binwalk", "uimage", "bootloader", "memory dump", "disk image",
+        "spi flash", "nand", "nor", "hex dump", "unknown binary", "carved image",
+    )):
         return "raw_firmware_retyping"
     if any(k in q for k in ("vuln", "overflow", "exploit", "dangerous", "sink")):
         return "vulnerability_triage"
@@ -206,24 +210,41 @@ def _build_tool_plan(query: str, addr: Optional[str]) -> list[dict]:
         {"tool": "data", "action": "imports", "limit": 120},
         {"tool": "search", "action": "find", "pattern": query or "main", "limit": 80},
     ]
+    if qtype == "raw_firmware_retyping":
+        base = [
+            {"tool": "binary_info", "action": "headers"},
+            {"tool": "binary_info", "action": "sections"},
+            {"tool": "binary_info", "action": "compiler"},
+            {"tool": "firmware_view", "action": "scan_region"},
+            {"tool": "firmware_view", "action": "region_profile"},
+            {"tool": "firmware_view", "action": "pointer_sweep"},
+            {"tool": "firmware_view", "action": "table_candidates", "limit": 50},
+            {"tool": "firmware_view", "action": "smart_carve", "apply": False, "limit": 80},
+            {"tool": "firmware_view", "action": "carve_plan"},
+            {"tool": "blackboard", "action": "list", "category": "firmware_view", "limit": 30},
+        ]
+        if addr:
+            # Representation-shaping only makes sense once the analyst has a concrete anchor.
+            base.extend(
+                [
+                    {"tool": "data_ops", "action": "cycle_data", "addr": addr},
+                    {"tool": "data_ops", "action": "set_repr", "addr": addr, "repr": "offset"},
+                    {"tool": "data_ops", "action": "make_ptr", "addr": addr},
+                ]
+            )
+            base.extend(
+                [
+                    {"tool": "code", "action": "disasm", "addr": addr},
+                    {"tool": "code", "action": "decompile", "addr": addr},
+                ]
+            )
+        base.append({"tool": "search", "action": "semantic", "pattern": query or "entry init parser", "limit": 80})
+        return base
     if addr:
         base.extend(
             [
                 {"tool": "code", "action": "decompile", "addr": addr},
                 {"tool": "code", "action": "disasm", "addr": addr},
-            ]
-        )
-    if qtype == "raw_firmware_retyping":
-        base.extend(
-            [
-                {"tool": "firmware_view", "action": "scan_region"},
-                {"tool": "firmware_view", "action": "smart_carve", "apply": False, "limit": 80},
-                {"tool": "firmware_view", "action": "table_candidates", "limit": 50},
-                {"tool": "data_ops", "action": "cycle_data", "addr": addr or "0x0"},
-                {"tool": "data_ops", "action": "set_repr", "addr": addr or "0x0", "repr": "offset"},
-                {"tool": "data_ops", "action": "make_ptr", "addr": addr or "0x0"},
-                {"tool": "search", "action": "semantic", "pattern": query or "entry init parser", "limit": 80},
-                {"tool": "blackboard", "action": "list", "category": "firmware_view", "limit": 30},
             ]
         )
     if qtype == "vulnerability_triage":
@@ -331,7 +352,18 @@ def _handle_feature_expansion_action(
     if action == "adaptive_query_planner":
         plan = _build_tool_plan(q, addr)
         if qtype == "raw_firmware_retyping":
-            order = ["idb.summary", "firmware_view.scan_region", "firmware_view.smart_carve", "firmware_view.table_candidates", "data_ops.set_repr", "search.semantic", "blackboard.list"]
+            order = [
+                "binary_info.headers",
+                "binary_info.sections",
+                "firmware_view.scan_region",
+                "firmware_view.region_profile",
+                "firmware_view.pointer_sweep",
+                "firmware_view.smart_carve",
+                "firmware_view.table_candidates",
+                "data_ops.set_repr",
+                "blackboard.list",
+                "search.semantic",
+            ]
         elif qtype == "vulnerability_triage":
             order = ["search.vulnerable", "vuln_scan.dangerous_flow", "code.decompile", "code.decomp_dataflow"]
         elif qtype == "threat_hunting":
@@ -520,8 +552,8 @@ def _handle_feature_expansion_action(
                 return {
                     "ok": True,
                     "feature": feature,
-                    "next_best_actions": plan[: max(1, min(limit, 6))],
-                    "why": "Raw firmware usually needs iterative data/code reinterpretation and representation shaping before deeper semantic analysis.",
+                    "next_best_actions": plan[: max(1, min(limit, 7))],
+                    "why": "Raw firmware usually needs binary-format reconnaissance, region profiling, and representation shaping before deeper semantic analysis.",
                 }
             return {"ok": True, "feature": feature, "next_best_actions": plan[: max(1, min(limit, 5))]}
         if action == "analysis_dead_end_detector":
@@ -530,6 +562,7 @@ def _handle_feature_expansion_action(
             pivots = ["Switch from broad search to caller/callee graph.", "Run capability matrix and focus on top category."]
             if qtype == "raw_firmware_retyping":
                 pivots = [
+                    "Run binary_info(action='headers') and binary_info(action='sections') before more search.",
                     "Cycle current address type (data_ops.cycle_data) before repeating broad search.",
                     "Switch operand view to offset/hex (data_ops.set_repr) and retry semantic search.",
                     "Persist local conversion decisions into blackboard category 'firmware_view'.",
@@ -983,6 +1016,10 @@ def llm_helpers(
                 lines.append(f"Import modules: {', '.join(modules[:10])}")
             if top_strings:
                 lines.append(f"Notable strings: {'; '.join(top_strings[:10])}")
+            if file_type_name == "unknown":
+                lines.append(
+                    "Raw/unknown format: start with firmware_view(action='scan_region') and firmware_view(action='pointer_sweep') after confirming the load architecture."
+                )
 
             digest = "\n".join(lines)
             return {"ok": True, "digest": digest, "estimated_tokens": _estimate_tokens(digest)}
@@ -1293,9 +1330,11 @@ def llm_helpers(
                 ])
             else:
                 steps.extend([
-                    "4. Check imports: imports_deep(action='summary')",
-                    "5. Find interesting strings: string_ops(action='suspicious')",
-                    "6. Focus on interesting areas: llm_helpers(action='focus_area')",
+                    "4. Inspect unknown/raw format: binary_info(action='compiler')",
+                    "5. Profile raw regions: firmware_view(action='scan_region')",
+                    "6. Sweep pointers/tables: firmware_view(action='pointer_sweep')",
+                    "7. Try dry-run retyping: firmware_view(action='smart_carve', apply=false)",
+                    "8. Focus on interesting areas: llm_helpers(action='focus_area')",
                 ])
 
             return {"ok": True, "guided_steps": "\n".join(steps)}

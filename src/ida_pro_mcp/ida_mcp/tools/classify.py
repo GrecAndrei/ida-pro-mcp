@@ -38,12 +38,7 @@ def _classify_func(func_ea):
     matched_apis = {}
     for callee in callees:
         # Strip common suffixes (A/W for Windows APIs, @plt for ELF)
-        base = callee
-        for suffix in ("A", "W", "@plt", "@PLT"):
-            if base.endswith(suffix):
-                base = base[:-len(suffix)]
-                break
-        cat = _API_TO_CATEGORY.get(base.lower())
+        cat = _API_TO_CATEGORY.get(_normalize_api_name(callee).lower())
         if cat:
             category_hits[cat] = category_hits.get(cat, 0) + 1
             matched_apis.setdefault(cat, []).append(callee)
@@ -77,6 +72,80 @@ def _get_xrefs_to_count(ea, max_xrefs=5000):
     return count
 
 
+def _normalize_api_name(name: str) -> str:
+    """Normalize API names for category matching."""
+    base = name or ""
+    for suffix in ("A", "W", "@plt", "@PLT"):
+        if base.endswith(suffix):
+            return base[:-len(suffix)]
+    return base
+
+
+def _collect_schema_hints(fn, fname: str, callees: list[str], insn_count: int, xref_count: int) -> tuple[set[str], set[str]]:
+    """Collect compiler and structural hints for schema induction."""
+    compiler_hints: set[str] = set()
+    structural_features: set[str] = set()
+
+    flags = getattr(fn, "flags", 0) if fn else 0
+    fn_name = (fname or "").lower()
+    callee_bases = {_normalize_api_name(c).lower() for c in callees if c}
+
+    try:
+        seg = ida_segment.getseg(fn.start_ea) if fn else None
+        seg_name = (ida_segment.get_segm_name(seg) if seg else "") or ""
+    except Exception:
+        seg_name = ""
+    seg_low = seg_name.lower()
+
+    if flags & (ida_funcs.FUNC_LIB | ida_funcs.FUNC_THUNK):
+        compiler_hints.update({"library_or_thunk", "compiler_generated"})
+        structural_features.add("thunk")
+
+    if fn_name.startswith(("j_", "nullsub_")) or fn_name.startswith("__"):
+        compiler_hints.add("compiler_generated")
+        structural_features.add("compiler_stub")
+
+    if "stack_chk" in fn_name or "security_check_cookie" in fn_name or "chkstk" in fn_name:
+        compiler_hints.add("stack_protector")
+
+    if any(token in callee_bases for token in {
+        "__stack_chk_fail", "__security_check_cookie", "__chkstk",
+        "__cxa_finalize", "__libc_start_main", "__gmon_start__",
+    }):
+        compiler_hints.add("runtime_support")
+
+    if any(token in seg_low for token in (".plt", ".plt.sec", ".got", ".idata", ".crt")):
+        compiler_hints.add("import_thunk")
+        structural_features.add("import_stub")
+
+    if any(token in seg_low for token in (".init", ".fini", ".ctors", ".dtors", ".init_array", ".fini_array")):
+        compiler_hints.add("runtime_initializer")
+        structural_features.add("initializer")
+
+    if insn_count <= 4:
+        structural_features.add("very_small")
+    elif insn_count <= 10:
+        structural_features.add("small")
+
+    if len(callees) == 0:
+        structural_features.add("leaf")
+    elif len(callees) == 1 and insn_count <= 12:
+        structural_features.add("wrapper")
+
+    if xref_count == 0:
+        structural_features.add("orphan")
+    elif xref_count > 20:
+        structural_features.add("highly_referenced")
+
+    if fn_name and not fn_name.startswith(("sub_", "loc_", "unk_")):
+        structural_features.add("named_entry")
+
+    if "main" in fn_name or "start" in fn_name or "entry" in fn_name:
+        structural_features.add("entry_like")
+
+    return compiler_hints, structural_features
+
+
 # ============================================================================
 # VOERA: Schema Induction for Structured Semantic Retrieval
 # ============================================================================
@@ -106,27 +175,31 @@ def _induce_function_schema(func_ea: int) -> dict:
     category_hits = {}
     matched_apis = {}
     for callee in callees:
-        base = callee
-        for suffix in ("A", "W", "@plt", "@PLT"):
-            if base.endswith(suffix):
-                base = base[:-len(suffix)]
-                break
+        base = _normalize_api_name(callee)
         cat = _API_TO_CATEGORY.get(base.lower())
         if cat:
             category_hits[cat] = category_hits.get(cat, 0) + 1
             matched_apis.setdefault(cat, []).append(callee)
             schema["behavior_tags"].add(cat)
+
+    # Broader semantic tags used by structured search should be available here
+    # too so classify() and search(action="structured") stay aligned.
+    try:
+        for tag, apis in TAG_CATEGORIES.items():
+            for api in apis:
+                api_base = _normalize_api_name(api).lower()
+                if any(_normalize_api_name(callee).lower() == api_base for callee in callees):
+                    schema["behavior_tags"].add(tag)
+                    break
+    except Exception:
+        pass
     
     # Dangerous API detection
     for callee in callees:
         if callee in DANGEROUS_APIS:
             schema["dangerous_apis"].add(callee)
             schema["vuln_class"].add("dangerous_api")
-        base = callee
-        for suffix in ("A", "W", "@plt", "@PLT"):
-            if base.endswith(suffix):
-                base = base[:-len(suffix)]
-                break
+        base = _normalize_api_name(callee)
         if base in DANGEROUS_APIS:
             schema["dangerous_apis"].add(callee)
             schema["vuln_class"].add("dangerous_api")
@@ -150,19 +223,25 @@ def _induce_function_schema(func_ea: int) -> dict:
                     if any(cmd in s for cmd in ("cmd.exe", "/bin/sh", "powershell", "bash")):
                         schema["behavior_tags"].add("process")
                         schema["vuln_class"].add("command_injection")
-    
-    # Structural features
+
+    # Compiler / structural hints
     insn_count = _count_func_instructions(func_ea)
+    xref_count = _get_xrefs_to_count(func_ea)
+    compiler_hints, structural_features = _collect_schema_hints(
+        fn,
+        idc.get_func_name(func_ea) or "",
+        callees,
+        insn_count,
+        xref_count,
+    )
+    schema["compiler_hints"].update(compiler_hints)
+    schema["structural_features"].update(structural_features)
+
+    # Structural features
     if insn_count < 5:
         schema["structural_features"].add("very_small")
     elif insn_count > 500:
         schema["structural_features"].add("very_large")
-    
-    xref_count = _get_xrefs_to_count(func_ea)
-    if xref_count == 0:
-        schema["structural_features"].add("orphan")
-    elif xref_count > 20:
-        schema["structural_features"].add("highly_referenced")
     
     # Loop detection
     try:
