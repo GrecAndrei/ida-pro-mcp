@@ -53,7 +53,7 @@ from . import prompts
 # from . import api_signatures # signatures tool (FLIRT, TIL, Lumina)
 
 # Resources (read-only browsable state)
-# from . import api_resources
+from . import api_resources
 
 # Re-export key components for external use
 from .sync import idaread, idawrite, IDAError, IDASyncError
