@@ -1,97 +1,37 @@
-# SEARCH Tool Manual
+# search
 
-## What It Does
-Pattern and reference search. Actions: bytes, string, immediate, name, insns, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled. Supports case_sensitive, include_context. Pattern auto-detects regex (e.g. mov.*eax$, \bfoo\b), glob, or plain substring.
+Search the binary for bytes, strings, patterns, names, instructions, xrefs, and semantic/structural queries.
 
 ## Actions
-- `bytes`
-- `string`
-- `immediate`
-- `name`
-- `insns`
-- `text`
-- `operand`
-- `comment`
-- `data_ref`
-- `code_ref`
-- `regex`
-- `func_by_sig`
-- `find`
-- `callers`
-- `callees`
-- `api`
-- `vulnerable`
-- `constants`
-- `decompiled`
+- `bytes` — search for byte pattern; param `pattern` (hex string, e.g. `"4889e5"`).
+- `string` — search for string literal; param `pattern`.
+- `immediate` — search for immediate value; param `value`.
+- `name` — search symbols/names matching `pattern`.
+- `insns` / `mnemonic` / `instruction` — search for instruction mnemonic; param `mnemonic`.
+- `text` — full-text search across disassembly; param `pattern`.
+- `comment` — search comments; param `pattern`.
+- `api` — search for API/import references; param `pattern`.
+- `callers` — find callers of address; param `address`.
+- `callees` — find callees of address; param `address`.
+- `xrefs_to` — xrefs to `address`.
+- `xrefs_from` — xrefs from `address`.
+- `data_ref` — data references to/from `address`.
+- `code_ref` — code references to/from `address`.
+- `find` — generic multi-type search; param `pattern`, optional `type`.
+- `semantic` — embedding-based similarity search using FunctionEmbeddingIndex; param `query`.
+- `structured` — SQL pre-filter + BM25 reranking via schemaboot; param `constraints` (dict).
+- `query_lang` — structured query language expression; param `expr`.
+- `vulnerable` — find dangerous API call patterns (e.g. strcpy, sprintf); optional `pattern` filter.
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `25`
-- `addr`: `string`
-- `case_sensitive`: `boolean`
-- `cursor`: `string`
-- `end`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `include_breakdown`: `boolean`
-- `include_context`: `boolean`
-- `include_items`: `boolean`
-- `limit`: `integer`
-- `max_functions`: `integer`
-- `next_token`: `string`
-- `offset`: `integer`
-- `on`: `string`
-- `pattern`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `query`: `string`
-- `sample`: `boolean`
-- `sample_max_funcs`: `integer`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `start`: `string`
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `timeout_ms`: `integer`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "search",
-  "arguments": {
-    "action": "bytes"
-  }
-}
+{"name": "search", "arguments": {"action": "string", "pattern": "password"}}
+```
+```json
+{"name": "search", "arguments": {"action": "semantic", "query": "function that decrypts network traffic"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-- High-noise action aliases are normalized (examples: `regexp` -> `regex`, `signature` -> `func_by_sig`, `lookup` -> `find`, `vuln` -> `vulnerable`).
-- High-noise argument aliases are normalized (examples: `needle` -> `pattern`, `case` -> `case_sensitive`, `max` -> `limit`, `timeout` -> `timeout_ms`).
-- Noisy wrapper payloads such as bracketed keys/values are tolerated where unambiguous.
-- All responses include `llm_pointer_note` in ALL CAPS to reinforce calc/memory usage for address math.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `semantic` requires functions to have been decompiled (indexed) first.
+- `structured` combines schema-induced attributes with BM25 text ranking for precise filtering.
+- `vulnerable` is a quick triage action for identifying unsafe API usage patterns.

@@ -1,90 +1,94 @@
 # Wiki Index
 
-## core
-- core/addresses.md - # Address Parsing in IDA MCP
-## root
-- QuickStart.md - # IDA MCP Quick Start
-## skills
-- skills/CppReconstruction.md - # SKILL: C++ Class Reconstruction
-- skills/MalwareForensics.md - # SKILL: Malware Forensics
-- skills/PatchingWorkflow.md - # SKILL: Safe Patching Workflow
-- skills/TriageNewBinary.md - # SKILL: Triage New Binary
-- skills/VulnerabilityHunting.md - # SKILL: Vulnerability Hunting
-## tools
-- tools/abi.md - # ABI Tool Manual
-- tools/agent.md - # AGENT Tool Manual
-- tools/analysis.md - # ANALYSIS Tool Manual
-- tools/annotation.md - # ANNOTATION Tool Manual
-- tools/arch_utils.md - # ARCH_UTILS Tool Manual
-- tools/batch.md - # BATCH Tool Manual
-- tools/binary_info.md - # BINARY_INFO Tool Manual
-- tools/bookmarks.md - # BOOKMARKS Tool Manual
-- tools/bulk.md - # BULK Tool Manual
-- tools/c2_detect.md - # C2_DETECT Tool Manual
-- tools/calc.md - # CALC Tool Manual
-- tools/cfg_analysis.md - # CFG_ANALYSIS Tool Manual
-- tools/classify.md - # CLASSIFY Tool Manual
-- tools/code.md - # CODE Tool Manual
-- tools/colorize.md - # COLORIZE Tool Manual
-- tools/comments_ai.md - # COMMENTS_AI Tool Manual
-- tools/compare.md - # COMPARE Tool Manual
-- tools/coverage.md - # COVERAGE Tool Manual
-- tools/crypto_id.md - # CRYPTO_ID Tool Manual
-- tools/ctree.md - # CTREE Tool Manual
-- tools/data.md - # DATA Tool Manual
-- tools/data_ops.md - # DATA_OPS Tool Manual
-- tools/debug.md - # DEBUG Tool Manual
-- tools/deobfuscate.md - # DEOBFUSCATE Tool Manual
-- tools/diff.md - # DIFF Tool Manual
-- tools/edit.md - # EDIT Tool Manual
-- tools/emulate.md - # EMULATE Tool Manual
-- tools/entropy.md - # ENTROPY Tool Manual
-- tools/export.md - # EXPORT Tool Manual
-- tools/fixups.md - # FIXUPS Tool Manual
-- tools/funcs.md - # FUNCS Tool Manual
-- tools/gadgets.md - # GADGETS Tool Manual
-- tools/graph.md - # GRAPH Tool Manual
-- tools/history.md - # HISTORY Tool Manual
-- tools/hooks.md - # HOOKS Tool Manual
-- tools/idb.md - # IDB Tool Manual
-- tools/imports_deep.md - # IMPORTS_DEEP Tool Manual
-- tools/llm_helpers.md - # LLM_HELPERS Tool Manual
-- tools/lumina.md - # LUMINA Tool Manual
-- tools/memory.md - # MEMORY Tool Manual
-- tools/microcode.md - # MICROCODE Tool Manual
-- tools/misc.md - # MISC Tool Manual
-- tools/modify.md - # MODIFY Tool Manual
-- tools/nav.md - # NAV Tool Manual
-- tools/patterns.md - # PATTERNS Tool Manual
-- tools/plugins.md - # PLUGINS Tool Manual
-- tools/project.md - # PROJECT Tool Manual
-- tools/protocol.md - # PROTOCOL Tool Manual
-- tools/query.md - # QUERY Tool Manual
-- tools/search.md - # SEARCH Tool Manual
-- tools/segments.md - # SEGMENTS Tool Manual
-- tools/session.md - # SESSION Tool Manual
-- tools/stack_analysis.md - # STACK_ANALYSIS Tool Manual
-- tools/string_ops.md - # STRING_OPS Tool Manual
-- tools/strings_xref.md - # STRINGS_XREF Tool Manual
-- tools/structs.md - # STRUCTS Tool Manual
-- tools/summarize.md - # SUMMARIZE Tool Manual
-- tools/symbols.md - # SYMBOLS Tool Manual
-- tools/taint.md - # TAINT Tool Manual
-- tools/threat_hunt.md - # THREAT_HUNT Tool Manual
-- tools/trace.md - # TRACE Tool Manual
-- tools/trace_analysis.md - # TRACE_ANALYSIS Tool Manual
-- tools/truncation.md - # TRUNCATION Tool Manual
-- tools/types.md - # TYPES Tool Manual
-- tools/vuln_scan.md - # VULN_SCAN Tool Manual
-- tools/wiki.md - # WIKI Tool Manual
-- tools/xfer_analysis.md - # XFER_ANALYSIS Tool Manual
-- tools/xref_analysis.md - # XREF_ANALYSIS Tool Manual
-- tools/yara_hunt.md - # YARA_HUNT Tool Manual
-## workflows
-- workflows/ForensicProtocol.md - # THE FORENSIC RE PROTOCOL: THE MASTER OPERATIONAL FRAMEWORK (EXHAUSTIVE EDITION)
-- workflows/Strategy.md - # The Master RE Strategy Guide
-- workflows/VulnerabilityTriage.md - # Vulnerability Triage Workflow
+## Core Concepts
+- [Address Parsing](wiki(action="read",topic="core/addresses"))
+- [Blackboard](wiki(action="read",topic="core/blackboard"))
+- [Intelligence Layer](wiki(action="read",topic="core/intelligence"))
+
+## Workflows
+- [Workflow: Malware Analysis](wiki(action="read",topic="workflows/MalwareAnalysis"))
+- [Workflow: Triage an Unknown Binary](wiki(action="read",topic="workflows/TiageBinary"))
+- [Workflow: Vulnerability Hunting](wiki(action="read",topic="workflows/VulnerabilityHunting"))
+
+## Skills
+- [Skill: Malware Forensics](wiki(action="read",topic="skills/MalwareForensics"))
+- [Skill: Rename Workflow](wiki(action="read",topic="skills/RenameWorkflow"))
+- [Skill: Triage New Binary](wiki(action="read",topic="skills/TriageNewBinary"))
+- [Skill: Vulnerability Hunting](wiki(action="read",topic="skills/VulnerabilityHunting"))
+
+## Tool Reference
+- [abi](wiki(action="read",topic="tools/abi"))
+- [agent](wiki(action="read",topic="tools/agent"))
+- [analysis](wiki(action="read",topic="tools/analysis"))
+- [annotation](wiki(action="read",topic="tools/annotation"))
+- [batch](wiki(action="read",topic="tools/batch"))
+- [binary_info](wiki(action="read",topic="tools/binary_info"))
+- [blackboard](wiki(action="read",topic="tools/blackboard"))
+- [bookmarks](wiki(action="read",topic="tools/bookmarks"))
+- [bridgerag](wiki(action="read",topic="tools/bridgerag"))
+- [bulk](wiki(action="read",topic="tools/bulk"))
+- [calc](wiki(action="read",topic="tools/calc"))
+- [cfg_analysis](wiki(action="read",topic="tools/cfg_analysis"))
+- [classify](wiki(action="read",topic="tools/classify"))
+- [code](wiki(action="read",topic="tools/code"))
+- [colorize](wiki(action="read",topic="tools/colorize"))
+- [comment_mgr](wiki(action="read",topic="tools/comment_mgr"))
+- [compare](wiki(action="read",topic="tools/compare"))
+- [coverage](wiki(action="read",topic="tools/coverage"))
+- [crypto_id](wiki(action="read",topic="tools/crypto_id"))
+- [ctree](wiki(action="read",topic="tools/ctree"))
+- [data](wiki(action="read",topic="tools/data"))
+- [data_ops](wiki(action="read",topic="tools/data_ops"))
+- [debug](wiki(action="read",topic="tools/debug"))
+- [deobfuscate](wiki(action="read",topic="tools/deobfuscate"))
+- [entropy](wiki(action="read",topic="tools/entropy"))
+- [export](wiki(action="read",topic="tools/export"))
+- [filter](wiki(action="read",topic="tools/filter"))
+- [firmware_view](wiki(action="read",topic="tools/firmware_view"))
+- [fixups](wiki(action="read",topic="tools/fixups"))
+- [funcs](wiki(action="read",topic="tools/funcs"))
+- [gadgets](wiki(action="read",topic="tools/gadgets"))
+- [governance](wiki(action="read",topic="tools/governance"))
+- [graph](wiki(action="read",topic="tools/graph"))
+- [history](wiki(action="read",topic="tools/history"))
+- [hooks](wiki(action="read",topic="tools/hooks"))
+- [idb](wiki(action="read",topic="tools/idb"))
+- [imports_deep](wiki(action="read",topic="tools/imports_deep"))
+- [llm_helpers](wiki(action="read",topic="tools/llm_helpers"))
+- [lumina](wiki(action="read",topic="tools/lumina"))
+- [mbagcn](wiki(action="read",topic="tools/mbagcn"))
+- [memory](wiki(action="read",topic="tools/memory"))
+- [memrl](wiki(action="read",topic="tools/memrl"))
+- [microcode](wiki(action="read",topic="tools/microcode"))
+- [misc](wiki(action="read",topic="tools/misc"))
+- [modify](wiki(action="read",topic="tools/modify"))
+- [nav](wiki(action="read",topic="tools/nav"))
+- [patterns](wiki(action="read",topic="tools/patterns"))
+- [predictor](wiki(action="read",topic="tools/predictor"))
+- [project](wiki(action="read",topic="tools/project"))
+- [protocol](wiki(action="read",topic="tools/protocol"))
+- [query](wiki(action="read",topic="tools/query"))
+- [schemaboot](wiki(action="read",topic="tools/schemaboot"))
+- [search](wiki(action="read",topic="tools/search"))
+- [segments](wiki(action="read",topic="tools/segments"))
+- [session](wiki(action="read",topic="tools/session"))
+- [stack_analysis](wiki(action="read",topic="tools/stack_analysis"))
+- [static_trace](wiki(action="read",topic="tools/static_trace"))
+- [string_ops](wiki(action="read",topic="tools/string_ops"))
+- [summarize](wiki(action="read",topic="tools/summarize"))
+- [symbols](wiki(action="read",topic="tools/symbols"))
+- [taint](wiki(action="read",topic="tools/taint"))
+- [threat_hunt](wiki(action="read",topic="tools/threat_hunt"))
+- [trace](wiki(action="read",topic="tools/trace"))
+- [trace_analysis](wiki(action="read",topic="tools/trace_analysis"))
+- [truncation](wiki(action="read",topic="tools/truncation"))
+- [turboquant](wiki(action="read",topic="tools/turboquant"))
+- [types](wiki(action="read",topic="tools/types"))
+- [vuln_scan](wiki(action="read",topic="tools/vuln_scan"))
+- [wiki](wiki(action="read",topic="tools/wiki"))
+- [workflow](wiki(action="read",topic="tools/workflow"))
+- [xref_analysis](wiki(action="read",topic="tools/xref_analysis"))
+- [yara_hunt](wiki(action="read",topic="tools/yara_hunt"))
 
 ---
-Doc status: Auto-generated from docs/wiki tree.
-Last reviewed: 2026-03-27
+Last updated: 2026-05-13

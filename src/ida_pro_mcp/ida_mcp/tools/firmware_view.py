@@ -62,7 +62,13 @@ def _is_64bit() -> bool:
 
 
 def _fw_state_path() -> str:
-    root = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp")
+    # Use the same XDG-aware runtime directory as the rest of the project
+    xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    root = (
+        os.environ.get("IDA_MCP_CACHE_DIR")
+        or os.environ.get("IDA_MCP_DATA_DIR")
+        or os.path.join(xdg, "ida-pro-mcp")
+    )
     os.makedirs(root, exist_ok=True)
     return os.path.join(root, "firmware_view_state.json")
 
@@ -248,6 +254,7 @@ def firmware_view(
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
+    campaign_id: Annotated[Optional[str], "Campaign ID for campaign_resume/campaign_checkpoint"] = None,
     stride: Annotated[int, "Pointer scan stride"] = 4,
     limit: Annotated[int, "Maximum suggested/applied items"] = 128,
     apply: Annotated[bool, "Apply suggested conversions (auto_retype)"] = False,
@@ -905,9 +912,9 @@ def firmware_view(
             }
 
         if action == "campaign_resume":
-            cid = (addr or "").strip()
+            cid = (campaign_id or addr or "").strip()
             if not cid:
-                return make_error(MCPError.INVALID_ARGS, "campaign_resume requires addr=<campaign_id>")
+                return make_error(MCPError.INVALID_ARGS, "campaign_resume requires campaign_id=<id>")
             campaigns = state.setdefault("campaigns", {})
             camp = campaigns.get(cid)
             if not camp:

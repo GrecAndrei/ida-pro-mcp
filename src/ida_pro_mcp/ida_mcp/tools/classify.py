@@ -337,7 +337,6 @@ def classify(
             cat, matched, callees = _classify_func(ea)
             insn_count = _count_func_instructions(ea)
             xref_count = _get_xrefs_to_count(ea)
-            # Gather string refs for extra context
             fn = ida_funcs.get_func(ea)
             str_refs = []
             if fn:
@@ -352,6 +351,32 @@ def classify(
                                     str_refs.append(s)
             total_matched = sum(len(v) for v in matched.values())
             confidence = "high" if total_matched >= 3 else ("medium" if total_matched >= 1 else "low")
+
+            # Augment with BehaviorClassifier (embedding-based, zero-shot)
+            behavior_tags = []
+            try:
+                pseudo = None
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    if cfunc:
+                        pseudo = str(cfunc)
+                except Exception:
+                    pass
+                if pseudo:
+                    try:
+                        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                    except ImportError:
+                        from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+                    embedder = BgeCodeEmbedder()
+                    classifier = BehaviorClassifier.instance(embedder)
+                    behavior_tags = classifier.classify(pseudo, threshold=0.35, top_k=4)
+                    # If classifier gives a high-confidence result, prefer it over heuristic
+                    if behavior_tags and behavior_tags[0]["confidence"] >= 0.55:
+                        cat = behavior_tags[0]["behavior"]
+                        confidence = "high"
+            except Exception:
+                pass
+
             return {
                 "ok": True,
                 "address": hex(ea),
@@ -363,6 +388,7 @@ def classify(
                 "string_refs": str_refs[:20],
                 "instruction_count": insn_count,
                 "incoming_xrefs": xref_count,
+                "behavior_tags": behavior_tags,
             }
 
         # ----------------------------------------------------------------

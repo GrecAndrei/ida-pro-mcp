@@ -272,7 +272,7 @@ def _decompile_preview(ea, max_lines=20):
 def summarize(
     action: Annotated[Literal["binary", "function", "segment", "imports_by_category",
                                "strings_by_category", "complexity", "call_hierarchy",
-                               "data_flow", "security_posture", "statistics"],
+                               "data_flow", "security_posture", "statistics", "report"],
                       "Summarization action"],
     addr: Annotated[Optional[str], "Address for function/segment actions"] = None,
     depth: Annotated[int, "Depth for hierarchy actions"] = 3,
@@ -292,6 +292,7 @@ def summarize(
     - data_flow: Summarize data flow through a function (inputs → transformations → outputs)
     - security_posture: Assess overall security posture (dangerous APIs, mitigations)
     - statistics: Binary statistics (function count, avg size, code/data ratio, named %, etc.)
+    - report: Assemble a full structured report from blackboard + binary analysis (no LLM round-trips)
     """
     try:
         # ----------------------------------------------------------------
@@ -389,6 +390,20 @@ def summarize(
                         ("file_io", "network", "registry", "gui")]
             mem_calls = [c for c in calls if _categorize_import(c, _IMPORT_CATEGORIES) == "memory"]
 
+            # Behavior classification via BehaviorClassifier (embedding-based)
+            behavior_tags = []
+            if preview:
+                try:
+                    try:
+                        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                    except ImportError:
+                        from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+                    embedder = BgeCodeEmbedder()
+                    classifier = BehaviorClassifier.instance(embedder)
+                    behavior_tags = classifier.classify(preview, threshold=0.35, top_k=4)
+                except Exception:
+                    pass
+
             return {
                 "ok": True,
                 "name": name,
@@ -402,6 +417,7 @@ def summarize(
                 "io_side_effects": io_calls,
                 "memory_operations": mem_calls,
                 "decompiled_preview": preview,
+                "behavior_tags": behavior_tags,
             }
 
         # ----------------------------------------------------------------
@@ -883,6 +899,40 @@ def summarize(
                 "imports": {
                     "count": len(all_imports),
                 },
+            }
+
+        # ----------------------------------------------------------------
+        # report
+        # ----------------------------------------------------------------
+        elif action == "report":
+            sections = {}
+            try:
+                sections["binary"] = summarize(action="binary", addr=addr, max_items=max_items)
+            except Exception:
+                pass
+            try:
+                sections["security"] = summarize(action="security_posture", addr=addr, max_items=max_items)
+            except Exception:
+                pass
+            try:
+                from .blackboard import BlackboardStore
+                store = BlackboardStore()
+                findings = {}
+                for cat in ("vuln", "hypothesis", "cluster", "obfuscation", "protocol", "rename_suggestion", "pointer_chain"):
+                    entries = store.list(category=cat, limit=10)
+                    if entries:
+                        findings[cat] = entries
+                sections["blackboard_findings"] = findings
+            except Exception:
+                pass
+            try:
+                sections["statistics"] = summarize(action="statistics", addr=addr, max_items=max_items)
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "report": sections,
+                "note": "Full analysis report assembled from blackboard + binary analysis. Use this as the executive summary."
             }
 
         else:

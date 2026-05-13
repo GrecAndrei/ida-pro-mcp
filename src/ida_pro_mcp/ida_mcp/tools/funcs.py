@@ -112,8 +112,8 @@ def _resolve_func_addr(addr: Any) -> tuple[Optional[int], Optional[dict]]:
 
 
 def _funcs_impl(
-    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar"],
-                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar"],
+    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar", "suggest_names"],
+                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar|suggest_names"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name"] = None,
@@ -612,6 +612,85 @@ def _funcs_impl(
             limit = kwargs.get("limit") or 20
             return {"ok": True, "target": hex(target_fn.start_ea), "similar_functions": results[:limit], "count": len(results)}
 
+        elif action == "suggest_names":
+            # Cross-session embedding similarity rename suggestions.
+            # For every unnamed function (sub_XXXX), find the nearest named function
+            # in the FunctionEmbeddingIndex and suggest that name with confidence.
+            # No LLM needed — pure cosine similarity.
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+            except ImportError:
+                from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature  # type: ignore
+
+            embedder = BgeCodeEmbedder()
+            idb_path = ""
+            try:
+                idb_path = idc.get_idb_path() or ""
+            except Exception:
+                pass
+            if not idb_path:
+                return make_error(MCPError.INVALID_ARGS, "No IDB path available")
+
+            db_path = idb_path + ".embeddings.db"
+            idx = FunctionEmbeddingIndex(db_path, embedder)
+
+            # If addr given, suggest for that function only; else batch all unnamed
+            target_eas = []
+            if addr:
+                ea, err = validate_addr(addr, require_func=True)
+                if err:
+                    return err
+                target_eas = [ea]
+            else:
+                limit_n = int(kwargs.get("limit") or 100)
+                for func_ea in idautils.Functions():
+                    fname = idc.get_func_name(func_ea) or ""
+                    if fname.startswith("sub_") or fname.startswith("nullsub_"):
+                        target_eas.append(func_ea)
+                    if len(target_eas) >= limit_n:
+                        break
+
+            suggestions = []
+            threshold = float(kwargs.get("threshold") or 0.65)
+
+            for func_ea in target_eas:
+                fname = idc.get_func_name(func_ea) or hex(func_ea)
+                pseudo = None
+                try:
+                    cfunc = ida_hexrays.decompile(func_ea)
+                    if cfunc:
+                        pseudo = _extract_signature(str(cfunc), max_idents=40)
+                except Exception:
+                    pass
+                if not pseudo:
+                    continue
+
+                # Find nearest named function in the index
+                similar = idx.similar(pseudo, top_k=3, exclude_ea=hex(func_ea), threshold=threshold)
+                # Filter to only named functions (not sub_XXXX)
+                named = [s for s in similar if not s["name"].startswith("sub_") and not s["name"].startswith("0x")]
+                if not named:
+                    continue
+
+                best = named[0]
+                suggestions.append({
+                    "addr": hex(func_ea),
+                    "current_name": fname,
+                    "suggested_name": best["name"],
+                    "confidence": best["similarity"],
+                    "source_addr": best["ea"],
+                    "alternatives": [{"name": s["name"], "confidence": s["similarity"]} for s in named[1:3]],
+                })
+
+            suggestions.sort(key=lambda x: -x["confidence"])
+            return {
+                "ok": True,
+                "suggestions": suggestions,
+                "count": len(suggestions),
+                "backend": embedder.backend,
+                "note": "Apply with funcs(action='set_name', addr=..., name=...). High confidence (>0.8) suggestions are reliable.",
+            }
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
@@ -630,8 +709,8 @@ def _funcs_write_dispatch(**kwargs):
 
 @tool
 def funcs(
-    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar"],
-                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar"],
+    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar", "suggest_names"],
+                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar|suggest_names"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name"] = None,

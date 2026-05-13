@@ -109,7 +109,9 @@ def colorize(
             bgr = parse_color(color)
             
             pt = ida_bytes.compiled_binpat_vec_t()
-            if ida_bytes.parse_binpat_str(pt, 0, pattern, 16):
+            # parse_binpat_str returns number of patterns parsed (>0 = success) in IDA 9
+            n_parsed = ida_bytes.parse_binpat_str(pt, 0, pattern, 16)
+            if not n_parsed:
                 return make_error(MCPError.INVALID_ARGS, "Invalid pattern")
             
             matches = []

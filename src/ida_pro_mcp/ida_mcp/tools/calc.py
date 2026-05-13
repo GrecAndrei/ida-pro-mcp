@@ -180,6 +180,9 @@ def calc(
         def _finalize(resp: dict):
             if interpreted_action:
                 resp["interpreted_action"] = interpreted_action
+            # Auto-capture interesting results to the blackboard
+            if resp.get("ok") and action in ("resolve", "deref", "chain"):
+                _calc_auto_capture(resp, action)
             return resp
 
         def resolve_int(val):
@@ -636,6 +639,21 @@ def calc(
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
-            
+
     except Exception as e:
         return handle_error(e)
+
+
+def _calc_auto_capture(result: dict, action: str) -> None:
+    """Fire-and-forget blackboard capture for interesting calc results."""
+    if not result.get("ok"):
+        return
+    try:
+        from .blackboard import auto_capture_calc
+    except ImportError:
+        try:
+            from blackboard import auto_capture_calc  # type: ignore
+        except ImportError:
+            return
+    result["_action"] = action
+    auto_capture_calc(result)

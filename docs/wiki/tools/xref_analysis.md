@@ -1,69 +1,28 @@
-# XREF_ANALYSIS Tool Manual
+# xref_analysis
 
-## What It Does
-Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.
+Analyze cross-reference graphs: call chains, hub/leaf detection, dominators, influence, and dead code.
 
 ## Actions
-- `call_chain`
-- `common_callers`
-- `common_callees`
-- `hub_functions`
-- `leaf_functions`
-- `recursive`
-- `dominator`
-- `influence`
-- `dependency_graph`
-- `dead_functions`
+- `call_chain` — find call chain between `source` and `target`; optional `depth`.
+- `common_callers` — find functions that call all addresses in `addrs`.
+- `common_callees` — find functions called by all addresses in `addrs`.
+- `hub_functions` — identify functions with highest in/out degree; optional `count`.
+- `leaf_functions` — identify functions with no outgoing calls; optional `count`.
+- `recursive` — find recursive functions (direct or mutual recursion).
+- `dominator` — compute dominator tree rooted at `address`.
+- `influence` — compute influence set (transitive callees) of `address`; optional `depth`.
+- `dead_functions` — find unreferenced/dead functions.
+- `build_global_graph` — build and cache the full call graph for the binary.
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "xref_analysis",
-  "arguments": {
-    "action": "call_chain"
-  }
-}
+{"name": "xref_analysis", "arguments": {"action": "hub_functions", "count": 10}}
+```
+```json
+{"name": "xref_analysis", "arguments": {"action": "call_chain", "source": "0x401000", "target": "0x405000", "depth": 5}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `build_global_graph` is expensive on large binaries; results are cached for subsequent queries.
+- `hub_functions` is useful for identifying dispatch/main-loop functions.
+- Alias: `plugins` → `misc`, `xfer_analysis` → `xref_analysis`.

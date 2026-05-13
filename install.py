@@ -519,6 +519,95 @@ def _pick_writable_uv_cache(install_path: Path) -> Path:
     raise RuntimeError("Unable to create a writable uv cache directory")
 
 
+def _find_embed_model(install_path: Path) -> str:
+    """
+    Locate a bge-code-v1 GGUF embedding model.
+    Search order:
+      1. IDA_MCP_EMBED_MODEL env var
+      2. Common GGUF filenames next to the install dir
+      3. ~/.cache/huggingface and ~/models
+      4. Interactive prompt (skipped in non-TTY environments)
+    """
+    env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "")
+    if env_val and os.path.isfile(env_val):
+        return env_val
+
+    # Common locations
+    candidates = [
+        install_path / "bge-code-v1-q8_0.gguf",
+        install_path / "bge-code-v1.gguf",
+        install_path.parent / "bge-code-v1-q8_0.gguf",
+        Path.home() / ".cache" / "huggingface" / "hub" / "models--BAAI--bge-code-v1" / "snapshots",
+        Path.home() / "models" / "bge-code-v1-q8_0.gguf",
+        Path.home() / "Downloads" / "bge-code-v1-q8_0.gguf",
+    ]
+    for c in candidates:
+        p = Path(c)
+        if p.is_file():
+            return str(p)
+        # Handle HuggingFace snapshot dirs
+        if p.is_dir():
+            for snap in sorted(p.iterdir(), reverse=True):
+                for f in snap.glob("*.gguf"):
+                    return str(f)
+
+    # Glob search in common dirs
+    for search_root in (Path.home() / ".cache", Path.home() / "models", Path.home() / "Downloads"):
+        if search_root.is_dir():
+            for f in search_root.rglob("bge-code-v1*.gguf"):
+                return str(f)
+
+    # Interactive prompt (only when running in a real terminal)
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            ans = input(
+                "\n  [embedding] Enter path to bge-code-v1 GGUF model (or press Enter to skip): "
+            ).strip()
+            if ans and os.path.isfile(ans):
+                return ans
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    return ""
+
+
+def _find_llama_server_bin(install_path: Path) -> str:
+    """
+    Locate the llama-server binary.
+    Search order:
+      1. IDA_MCP_EMBED_SERVER_BIN env var
+      2. Next to install dir
+      3. PATH
+      4. Common build locations
+    """
+    env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
+    if env_val and os.path.isfile(env_val) and os.access(env_val, os.X_OK):
+        return env_val
+
+    # Common locations
+    names = ["llama-server", "llama-server.exe"]
+    candidates = [
+        install_path / "llama-server",
+        install_path.parent / "llama-server",
+        Path("/usr/local/bin/llama-server"),
+        Path("/usr/bin/llama-server"),
+        Path.home() / ".local" / "bin" / "llama-server",
+        Path.home() / "llama.cpp" / "build" / "bin" / "llama-server",
+    ]
+    for c in candidates:
+        if c.is_file() and os.access(str(c), os.X_OK):
+            return str(c)
+
+    # PATH lookup
+    import shutil as _shutil
+    for name in names:
+        found = _shutil.which(name)
+        if found:
+            return found
+
+    return ""
+
+
 def get_mcp_server_config(
     install_path: Path, client_name: str = "", global_vertex_compat: bool = False
 ):
@@ -557,6 +646,22 @@ def get_mcp_server_config(
 
     if global_vertex_compat or client_name in ("Gemini CLI", "OpenCode", "opencode"):
         env["IDA_MCP_VERTEX_COMPAT"] = "1"
+
+    # ── Embedding model detection ──────────────────────────────────────────
+    # Detect bge-code-v1 GGUF and llama-server so the intelligence layer
+    # can use real embeddings instead of TF-IDF fallback.
+    _embed_model = _find_embed_model(install_path)
+    _embed_server = _find_llama_server_bin(install_path)
+    if _embed_model:
+        env["IDA_MCP_EMBED_MODEL"] = _embed_model
+        print(f"       {C.GREEN}>>{C.RESET} Embedding model: {_embed_model}")
+    else:
+        print(f"       {C.YELLOW}>>{C.RESET} No embedding model found. Set IDA_MCP_EMBED_MODEL to a bge-code-v1 GGUF path for semantic features.")
+    if _embed_server:
+        env["IDA_MCP_EMBED_SERVER_BIN"] = _embed_server
+        print(f"       {C.GREEN}>>{C.RESET} llama-server: {_embed_server}")
+    elif _embed_model:
+        print(f"       {C.YELLOW}>>{C.RESET} llama-server not found. Set IDA_MCP_EMBED_SERVER_BIN for GPU-accelerated embeddings.")
 
     return {
         "command": str(python_exe),

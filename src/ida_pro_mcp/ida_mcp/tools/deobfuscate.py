@@ -1,43 +1,93 @@
-
 try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+except ImportError:
+    try:
+        from host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+    except ImportError:
+        BehaviorClassifier = None
 
 # ============================================================================
 # DEOBFUSCATE - LLM-Optimized Deobfuscation Analysis
 # ============================================================================
 
-# Common API hashing targets
 _HASH_RESOLVE_FUNCS = [
     "GetProcAddress", "GetProcAddressA",
     "LdrGetProcedureAddress", "LdrGetProcedureAddressEx",
 ]
 
-# Known API hash algorithms and sample hashes for detection
 _KNOWN_HASH_CONSTANTS = {
-    "ror13_additive": 0x0D,   # ROR-13 additive hash (common in shellcode)
-    "djb2":          0x1505,  # DJB2 hash initial value
-    "sdbm":          0x1003F, # SDBM hash multiplier
-    "fnv1a_32":      0x811C9DC5,  # FNV-1a 32-bit offset basis
+    "ror13_additive": 0x0D,
+    "djb2":          0x1505,
+    "sdbm":          0x1003F,
+    "fnv1a_32":      0x811C9DC5,
 }
 
-# Stack-string mov mnemonics (multi-arch, see arch_utils.MOV_MNEMONICS)
 _MOV_MNEMONICS = MOV_MNEMONICS
-
-# Conditional jump mnemonics (multi-arch)
 _COND_JUMPS = CONDITIONAL_BRANCH_MNEMONICS
-
-# Unconditional terminators (multi-arch)
 _TERMINATORS = TERMINATOR_MNEMONICS
-
-# Call mnemonics (multi-arch)
 _CALL_MNEMONICS = CALL_MNEMONICS
+
+# Custom anchors for deobfuscation classification
+_DEOBFUSCATE_ANCHORS = {
+    "obfuscation_xor": "xor_loop rolling_key encrypted_buffer decode_stub xor_decode cleartext",
+    "stack_strings": "mov byte ptr stack_var push_char build_string char_by_char stack_buffer",
+    "api_hashing": "hash_api GetProcAddress LdrGetProcedureAddress ror13 djb2 fnv1a resolve_api",
+}
+
+
+def _get_behavior_classifier():
+    """Get a BehaviorClassifier instance with deobfuscation anchors injected."""
+    if BehaviorClassifier is None:
+        return None
+    try:
+        embedder = BgeCodeEmbedder()
+        clf = BehaviorClassifier.instance(embedder)
+        for k, v in _DEOBFUSCATE_ANCHORS.items():
+            if k not in clf.ANCHORS:
+                clf.ANCHORS[k] = v
+        return clf
+    except Exception:
+        return None
+
+
+def _classify_function(func_ea, clf):
+    """Decompile function and classify behavior. Returns list of behavior dicts or None."""
+    try:
+        cfunc = ida_hexrays.decompile(func_ea)
+        if not cfunc:
+            return None
+        pseudocode = str(cfunc)
+        if not pseudocode.strip():
+            return None
+        return clf.classify(pseudocode, threshold=0.30, top_k=6, block=False)
+    except Exception:
+        return None
+
+
+def _write_to_blackboard(addr_str, tags, findings_text):
+    """Auto-write high-confidence findings to blackboard."""
+    try:
+        from .blackboard import BlackboardStore
+        store = BlackboardStore()
+        store.write(
+            title=f"Obfuscation detected at {addr_str}",
+            content=findings_text,
+            category="obfuscation",
+            addr=addr_str,
+            tags=tags,
+            confidence=0.8,
+            source="deobfuscate",
+        )
+    except Exception:
+        pass
 
 
 def _get_func_name_safe(ea):
-    """Get function name for an address, or 'unknown'."""
     func = idaapi.get_func(ea)
     if func:
         return ida_funcs.get_func_name(func.start_ea)
@@ -45,7 +95,6 @@ def _get_func_name_safe(ea):
 
 
 def _iter_target_functions(addr):
-    """Yield function start EAs to scan. If addr given, just that one."""
     if addr is not None:
         ea, err = validate_addr(addr, require_func=True)
         if err:
@@ -57,7 +106,6 @@ def _iter_target_functions(addr):
 
 
 def _is_printable_ascii(data):
-    """Check if bytes are printable ASCII (with allowance for null terminator)."""
     for b in data:
         if b == 0:
             break
@@ -67,12 +115,10 @@ def _is_printable_ascii(data):
 
 
 def _xor_decode(data, key_byte):
-    """XOR decode data with a single-byte key."""
     return bytes(b ^ key_byte for b in data)
 
 
 def _detect_encoding_in_func(func_ea, limit):
-    """Detect string encoding/encryption patterns within a function."""
     findings = []
     func = idaapi.get_func(func_ea)
     if not func:
@@ -80,7 +126,6 @@ def _detect_encoding_in_func(func_ea, limit):
 
     xor_count = 0
     b64_refs = 0
-    loop_xor = False
 
     for ea in idautils.FuncItems(func_ea):
         mnem = idc.print_insn_mnem(ea)
@@ -88,14 +133,12 @@ def _detect_encoding_in_func(func_ea, limit):
             continue
         mnem_l = mnem.lower()
 
-        # Count XOR instructions (excluding xor reg, reg for zeroing)
         if mnem_l in XOR_MNEMONICS:
             op0 = idc.print_operand(ea, 0)
             op1 = idc.print_operand(ea, 1)
             if op0 != op1:
                 xor_count += 1
 
-        # Look for base64 charset references
         if mnem_l in MOV_MNEMONICS or mnem_l in ("lea", "adr", "adrp"):
             for xref in idautils.XrefsFrom(ea, 0):
                 contents = idc.get_strlit_contents(xref.to)
@@ -104,12 +147,8 @@ def _detect_encoding_in_func(func_ea, limit):
                     if "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" in s:
                         b64_refs += 1
 
-    # Heuristic detection of loop-based XOR
-    if xor_count >= 3:
-        loop_xor = True
-
     methods = []
-    if loop_xor:
+    if xor_count >= 3:
         methods.append(f"xor_loop(high,{xor_count}xor)")
     elif xor_count > 0:
         methods.append(f"xor_single(medium,{xor_count}xor)")
@@ -123,28 +162,22 @@ def _detect_encoding_in_func(func_ea, limit):
 
 
 def _find_stack_strings(func_ea, limit):
-    """Find strings built character-by-character on the stack."""
     findings = []
     func = idaapi.get_func(func_ea)
     if not func:
         return findings
 
-    # Collect mov byte [stack], imm8 sequences
     char_stores = []
     for ea in idautils.FuncItems(func_ea):
         mnem = idc.print_insn_mnem(ea)
         if not mnem:
             continue
-        mnem_l = mnem.lower()
-        if mnem_l not in _MOV_MNEMONICS:
+        if mnem.lower() not in _MOV_MNEMONICS:
             continue
 
-        # Check: op0 is memory (stack-relative), op1 is immediate byte value
         op0_type = idc.get_operand_type(ea, 0)
         op1_type = idc.get_operand_type(ea, 1)
 
-        # o_displ (4) = memory displacement (e.g., [rbp-0x10])
-        # o_phrase (3) = memory phrase (e.g., [esp])
         if op0_type not in (idc.o_displ, idc.o_phrase):
             continue
         if op1_type != idc.o_imm:
@@ -154,7 +187,6 @@ def _find_stack_strings(func_ea, limit):
         if 0x20 <= imm_val <= 0x7E:
             char_stores.append((ea, chr(imm_val)))
 
-    # Group consecutive char stores into strings
     if len(char_stores) < 3:
         return findings
 
@@ -162,7 +194,6 @@ def _find_stack_strings(func_ea, limit):
     for i in range(1, len(char_stores)):
         prev_ea = char_stores[i - 1][0]
         curr_ea = char_stores[i][0]
-        # Consider consecutive if within a small instruction gap
         gap = curr_ea - prev_ea
         if 0 < gap <= 16:
             current_str.append(char_stores[i])
@@ -174,7 +205,6 @@ def _find_stack_strings(func_ea, limit):
                     return findings
             current_str = [char_stores[i]]
 
-    # Final group
     if len(current_str) >= 3:
         built = "".join(c for _, c in current_str)
         findings.append(f"{hex_ea(current_str[0][0])}  {_get_func_name_safe(func_ea)}  len={len(built)}  {built}")
@@ -183,13 +213,11 @@ def _find_stack_strings(func_ea, limit):
 
 
 def _find_dead_code(func_ea, limit):
-    """Find dead/unreachable code blocks within a function."""
     findings = []
     func = idaapi.get_func(func_ea)
     if not func:
         return findings
 
-    # Collect all addresses that are targets of jumps/calls/fallthrough
     reachable = set()
     reachable.add(func.start_ea)
 
@@ -203,17 +231,13 @@ def _find_dead_code(func_ea, limit):
                 _matched = True
                 break
         if not _matched:
-            # Also consider sequential flow from previous instruction
             prev = idc.prev_head(ea)
             if prev != idaapi.BADADDR and prev >= func.start_ea:
                 prev_mnem = idc.print_insn_mnem(prev)
                 if prev_mnem:
-                    pm_l = prev_mnem.lower()
-                    # Previous instruction doesn't break flow
-                    if pm_l not in _TERMINATORS:
+                    if prev_mnem.lower() not in _TERMINATORS:
                         reachable.add(ea)
 
-    # Find unreachable basic block starts
     prev_was_terminator = False
     for ea in idautils.FuncItems(func_ea):
         if ea == func.start_ea:
@@ -222,14 +246,12 @@ def _find_dead_code(func_ea, limit):
 
         mnem = idc.print_insn_mnem(ea)
         if prev_was_terminator and ea not in reachable:
-            # Check if this address has any code xrefs to it
             has_xref = False
             for xref in idautils.XrefsTo(ea, 0):
                 if xref.iscode:
                     has_xref = True
                     break
             if not has_xref:
-                # Count consecutive unreachable instructions
                 dead_count = 0
                 cur = ea
                 while cur < func.end_ea and dead_count < 20:
@@ -237,7 +259,6 @@ def _find_dead_code(func_ea, limit):
                     cur = idc.next_head(cur)
                     if cur == idaapi.BADADDR:
                         break
-                    # Stop if we reach a referenced address
                     has_ref = False
                     for xref in idautils.XrefsTo(cur, 0):
                         if xref.iscode:
@@ -260,13 +281,11 @@ def _find_dead_code(func_ea, limit):
 
 
 def _detect_api_hashing(func_ea, limit):
-    """Detect API hashing patterns (hash computation + GetProcAddress)."""
     findings = []
     func = idaapi.get_func(func_ea)
     if not func:
         return findings
 
-    # Check if function calls GetProcAddress or similar
     calls_resolve = False
     resolve_ea = None
     for ea in idautils.FuncItems(func_ea):
@@ -285,7 +304,6 @@ def _detect_api_hashing(func_ea, limit):
     if not calls_resolve:
         return findings
 
-    # Look for hash computation patterns before the resolve call
     has_ror = False
     has_hash_const = False
     hash_insns = []
@@ -296,14 +314,12 @@ def _detect_api_hashing(func_ea, limit):
             continue
         mnem_l = mnem.lower()
 
-        # ROR/ROL instructions (common in hash functions)
         if mnem_l in ("ror", "rol"):
             has_ror = True
             imm = idc.get_operand_value(ea, 1)
             if imm == _KNOWN_HASH_CONSTANTS.get("ror13_additive"):
                 hash_insns.append(("ror13", hex_ea(ea)))
 
-        # Check for known hash constants
         if mnem_l in ("mov", "add", "xor", "cmp"):
             op1_type = idc.get_operand_type(ea, 1)
             if op1_type == idc.o_imm:
@@ -322,7 +338,6 @@ def _detect_api_hashing(func_ea, limit):
 
 
 def _find_dynamic_dispatch(func_ea, limit):
-    """Find dynamically resolved function calls (indirect calls via register/memory)."""
     findings = []
     func = idaapi.get_func(func_ea)
     if not func:
@@ -332,18 +347,14 @@ def _find_dynamic_dispatch(func_ea, limit):
         mnem = idc.print_insn_mnem(ea)
         if not mnem:
             continue
-        mnem_l = mnem.lower()
-        if mnem_l not in _CALL_MNEMONICS:
+        if mnem.lower() not in _CALL_MNEMONICS:
             continue
 
         op_type = idc.get_operand_type(ea, 0)
-        # o_reg (1) = register, o_displ (4) = memory displacement,
-        # o_phrase (3) = memory phrase
         if op_type not in (idc.o_reg, idc.o_displ, idc.o_phrase):
             continue
 
         operand = idc.print_operand(ea, 0)
-        # Try to trace what's being called
         call_type = "register" if op_type == idc.o_reg else "memory_indirect"
         prev = idc.prev_head(ea)
         prev_info = ""
@@ -357,7 +368,6 @@ def _find_dynamic_dispatch(func_ea, limit):
 
 
 def _detect_anti_disasm(func_ea, limit):
-    """Detect anti-disassembly tricks."""
     findings = []
     func = idaapi.get_func(func_ea)
     if not func:
@@ -369,22 +379,18 @@ def _detect_anti_disasm(func_ea, limit):
             continue
         mnem_l = mnem.lower()
 
-        # Pattern 1: Jump into the middle of an instruction
         if mnem_l in _COND_JUMPS or mnem_l in ("jmp", "b"):
             target = idc.get_operand_value(ea, 0)
             if target == idaapi.BADADDR:
                 continue
-            # Check if target is inside another instruction
             prev_of_target = idc.prev_head(target)
             if prev_of_target != idaapi.BADADDR:
                 next_after_prev = idc.next_head(prev_of_target)
                 if next_after_prev != idaapi.BADADDR and next_after_prev > target:
-                    # Target falls within the bytes of prev instruction
                     findings.append(f"{hex_ea(ea)}  {_get_func_name_safe(func_ea)}  jump_into_instruction  target={hex_ea(target)}  overlap={hex_ea(prev_of_target)}")
                     if len(findings) >= limit:
                         return findings
 
-        # Pattern 2: call $+5 (push return address trick)
         if mnem_l in _CALL_MNEMONICS:
             target = idc.get_operand_value(ea, 0)
             insn_size = idc.next_head(ea) - ea
@@ -393,9 +399,7 @@ def _detect_anti_disasm(func_ea, limit):
                 if len(findings) >= limit:
                     return findings
 
-        # Pattern 3: Impossible instructions (int3 / hlt / ud2 in middle of code)
         if mnem_l in ("int3", "hlt", "ud2", "int"):
-            # Check if this is genuinely mid-function, not at end
             next_ea = idc.next_head(ea)
             if next_ea != idaapi.BADADDR and next_ea < func.end_ea:
                 next_mnem = idc.print_insn_mnem(next_ea)
@@ -408,7 +412,6 @@ def _detect_anti_disasm(func_ea, limit):
 
 
 def _decode_attempt_at(ea, key_hex, limit):
-    """Attempt to decode an encoded value at a specific address."""
     raw = ida_bytes.get_bytes(ea, 256)
     if not raw:
         return {"ok": False, "error": f"Cannot read bytes at {hex_ea(ea)}"}
@@ -416,7 +419,6 @@ def _decode_attempt_at(ea, key_hex, limit):
     results = []
 
     if key_hex:
-        # Decode with provided key
         try:
             key_bytes = bytes.fromhex(key_hex.replace("0x", "").replace(" ", ""))
         except ValueError:
@@ -425,19 +427,12 @@ def _decode_attempt_at(ea, key_hex, limit):
         if len(key_bytes) == 1:
             decoded = _xor_decode(raw, key_bytes[0])
         else:
-            # Multi-byte XOR key
-            decoded = bytes(raw[i] ^ key_bytes[i % len(key_bytes)]
-                            for i in range(len(raw)))
+            decoded = bytes(raw[i] ^ key_bytes[i % len(key_bytes)] for i in range(len(raw)))
 
         null_pos = decoded.find(b'\x00')
-        if null_pos > 0:
-            segment = decoded[:null_pos]
-        else:
-            segment = decoded
-
+        segment = decoded[:null_pos] if null_pos > 0 else decoded
         results.append(f"xor  key={key_hex}  len={len(segment)}  printable={_is_printable_ascii(segment)}  \"{segment[:64].decode('ascii', errors='replace')}\"")
     else:
-        # Auto-detect: try single-byte XOR keys
         for key in range(1, 256):
             decoded = _xor_decode(raw, key)
             null_pos = decoded.find(b'\x00')
@@ -449,7 +444,6 @@ def _decode_attempt_at(ea, key_hex, limit):
                 if len(results) >= limit:
                     break
 
-        # Try base64 detection
         import base64
         try:
             b64_chars = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
@@ -478,10 +472,71 @@ def _decode_attempt_at(ea, key_hex, limit):
     }
 
 
+def _detect_heuristic(addr, limit):
+    """Fallback heuristic detection when BehaviorClassifier is unavailable."""
+    findings = []
+    for func_ea in _iter_target_functions(addr):
+        if len(findings) >= limit:
+            break
+        remaining = limit - len(findings)
+        hits = _detect_encoding_in_func(func_ea, remaining)
+        hits += _find_stack_strings(func_ea, remaining - len(hits))
+        hits += _detect_api_hashing(func_ea, remaining - len(hits))
+        hits += _detect_anti_disasm(func_ea, remaining - len(hits))
+        findings.extend(hits)
+    return findings[:limit]
+
+
+def _detect_with_classifier(addr, limit):
+    """Use BehaviorClassifier for semantic obfuscation detection."""
+    clf = _get_behavior_classifier()
+    if clf is None:
+        return None  # signal caller to use fallback
+
+    findings = []
+    behavior_tags = []
+
+    for func_ea in _iter_target_functions(addr):
+        if len(findings) >= limit:
+            break
+
+        tags = _classify_function(func_ea, clf)
+        if not tags:
+            continue
+
+        # Filter to obfuscation-relevant behaviors
+        relevant = [t for t in tags if t["behavior"] in (
+            "obfuscation_xor", "stack_strings", "api_hashing",
+            "anti_debug", "anti_vm", "evasion", "string_decrypt",
+        )]
+        if not relevant:
+            continue
+
+        func_name = _get_func_name_safe(func_ea)
+        tag_strs = [f"{t['behavior']}({t['confidence']:.2f})" for t in relevant]
+        findings.append(f"{hex_ea(func_ea)}  {func_name}  {' '.join(tag_strs)}")
+        behavior_tags.extend([{
+            "addr": hex_ea(func_ea),
+            "func": func_name,
+            **t,
+        } for t in relevant])
+
+        # Auto-write high-confidence findings to blackboard
+        high_conf = [t for t in relevant if t["confidence"] >= 0.5]
+        if high_conf:
+            _write_to_blackboard(
+                hex_ea(func_ea),
+                [t["behavior"] for t in high_conf],
+                f"{func_name}: {' '.join(tag_strs)}",
+            )
+
+    return findings[:limit], behavior_tags
+
+
 @tool
 @idaread
 def deobfuscate(
-    action: Annotated[Literal["detect_encoding", "stack_strings",
+    action: Annotated[Literal["detect", "detect_encoding", "stack_strings",
                                "dead_code", "api_hashing", "dynamic_dispatch",
                                "anti_disasm", "decode_attempt"],
                       "Deobfuscation analysis action"],
@@ -496,33 +551,53 @@ def deobfuscate(
     Deobfuscation analysis for binary reverse engineering.
 
     Actions:
+    - detect: Semantic obfuscation detection via BehaviorClassifier (falls back to heuristics).
     - detect_encoding: Detect string encoding/encryption methods (XOR, Base64, RC4, custom).
-    - stack_strings: Find strings built character-by-character on the stack (mov byte sequences).
-    - dead_code: Find dead/unreachable code blocks (no incoming xrefs, follows unconditional terminator).
+    - stack_strings: Find strings built character-by-character on the stack.
+    - dead_code: Find dead/unreachable code blocks.
     - api_hashing: Detect API hashing (ROR/hash constants near GetProcAddress calls).
-    - dynamic_dispatch: Find dynamically resolved function calls (indirect call via register/memory).
-    - anti_disasm: Detect anti-disassembly tricks (jump-into-instruction, call $+5, mid-function traps).
-    - decode_attempt: Attempt to decode an encoded value at addr. Provide key for specific XOR key, or omit for auto-detect.
-
-    Each finding includes addr, function, and action-specific details.
+    - dynamic_dispatch: Find dynamically resolved function calls.
+    - anti_disasm: Detect anti-disassembly tricks.
+    - decode_attempt: Attempt to decode an encoded value at addr.
     """
     try:
         if action == "decode_attempt":
             if not addr:
-                return make_error(MCPError.INVALID_ARGS,
-                                  "addr required for decode_attempt")
+                return make_error(MCPError.INVALID_ARGS, "addr required for decode_attempt")
             ea, err = validate_addr(addr)
             if err:
                 return err
             return _decode_attempt_at(ea, key, limit)
 
+        if action == "detect":
+            result = _detect_with_classifier(addr, limit)
+            if result is None:
+                # Fallback to heuristics
+                all_findings = _detect_heuristic(addr, limit)
+                return {
+                    "ok": True,
+                    "action": action,
+                    "classifier": "heuristic_fallback",
+                    "findings": "\n".join(all_findings),
+                    "count": len(all_findings),
+                    "truncated": len(all_findings) >= limit,
+                }
+            findings, behavior_tags = result
+            return {
+                "ok": True,
+                "action": action,
+                "classifier": "BehaviorClassifier",
+                "findings": "\n".join(findings),
+                "behavior_tags": behavior_tags,
+                "count": len(findings),
+                "truncated": len(findings) >= limit,
+            }
+
         # All other actions iterate over functions
         all_findings = []
-
         for func_ea in _iter_target_functions(addr):
             if len(all_findings) >= limit:
                 break
-
             remaining = limit - len(all_findings)
 
             if action == "detect_encoding":
@@ -538,8 +613,7 @@ def deobfuscate(
             elif action == "anti_disasm":
                 hits = _detect_anti_disasm(func_ea, remaining)
             else:
-                return make_error(MCPError.INVALID_ARGS,
-                                  f"Unknown action: {action}")
+                return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
             all_findings.extend(hits)
 

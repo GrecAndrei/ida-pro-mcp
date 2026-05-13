@@ -78,6 +78,13 @@ RESOURCE_TEMPLATES = [
     "ida://skills",
     "ida://facts",
     "ida://archive",
+    # Blackboard (6)
+    "ida://blackboard",
+    "ida://blackboard/next_target",
+    "ida://blackboard/iocs",
+    "ida://blackboard/hypotheses",
+    "ida://blackboard/regions",
+    "ida://blackboard/{category}",
 ]
 
 
@@ -99,6 +106,11 @@ def list_resources() -> List[Dict]:
         {"uri": "ida://skills", "name": "L3 Task Skills", "mimeType": "application/json"},
         {"uri": "ida://facts", "name": "L2 Global Facts", "mimeType": "application/json"},
         {"uri": "ida://archive", "name": "L4 Session Archive", "mimeType": "application/json"},
+        {"uri": "ida://blackboard", "name": "Blackboard — all findings", "mimeType": "application/json"},
+        {"uri": "ida://blackboard/next_target", "name": "Blackboard — next analysis target", "mimeType": "application/json"},
+        {"uri": "ida://blackboard/iocs", "name": "Blackboard — IOCs", "mimeType": "application/json"},
+        {"uri": "ida://blackboard/hypotheses", "name": "Blackboard — hypotheses", "mimeType": "application/json"},
+        {"uri": "ida://blackboard/regions", "name": "Blackboard — memory regions", "mimeType": "application/json"},
     ]
 
 
@@ -161,6 +173,8 @@ class ResourceResolver:
             return self._read_facts()
         elif domain == "archive":
             return self._read_archive()
+        elif domain == "blackboard":
+            return self._read_blackboard_resource(parts)
         return None
 
     def _exec(self, tool_name: str, **kwargs) -> Any:
@@ -388,3 +402,64 @@ class ResourceResolver:
             "stats": result.get("stats", {}),
             "note": "L4 archive includes session stats and activity logs.",
         })
+
+    def _read_blackboard_resource(self, parts: List[str]) -> Dict:
+        """
+        ida://blackboard                 — all unresolved, non-contradicted entries
+        ida://blackboard/next_target     — priority-ranked next analysis targets
+        ida://blackboard/iocs            — IOC entries (ip, port, key, magic)
+        ida://blackboard/hypotheses      — hypothesis entries
+        ida://blackboard/regions         — annotated memory regions
+        ida://blackboard/{category}      — entries by category
+        """
+        try:
+            import importlib.util, os as _os
+            bb_path = _os.path.join(
+                _os.path.dirname(_os.path.abspath(__file__)),
+                "..", "ida_mcp", "tools", "blackboard.py"
+            )
+            bb_path = _os.path.abspath(bb_path)
+            spec = importlib.util.spec_from_file_location("_res_bb", bb_path)
+            mod = importlib.util.module_from_spec(spec)
+            mod.__dict__["tool"] = lambda f: f
+            mod.__dict__["idaread"] = lambda f: f
+            mod.__dict__["idawrite"] = lambda f: f
+            mod.__dict__["IDAError"] = Exception
+            spec.loader.exec_module(mod)
+            store = mod.BlackboardStore()
+        except Exception as e:
+            return _make_json_content({"error": f"Blackboard unavailable: {e}"})
+
+        sub = parts[1] if len(parts) > 1 else ""
+
+        if not sub:
+            entries = store.list(limit=100, include_resolved=False, include_contradicted=False)
+            stats = store.stats()
+            return _make_json_content({
+                "stats": stats,
+                "entries": entries,
+                "note": "Use ida://blackboard/next_target for prioritized analysis targets.",
+            })
+
+        if sub == "next_target":
+            targets = store.next_target(limit=10)
+            return _make_json_content({
+                "targets": targets,
+                "note": "Highest-priority unexplored addresses. Decompile the top target next.",
+            })
+
+        if sub == "iocs":
+            iocs = store.list(category="ioc", limit=200, include_resolved=True)
+            return _make_json_content({"iocs": iocs, "count": len(iocs)})
+
+        if sub == "hypotheses":
+            hyps = store.list(category="hypothesis", limit=100, include_resolved=False)
+            return _make_json_content({"hypotheses": hyps, "count": len(hyps)})
+
+        if sub == "regions":
+            regions = store.list(category="region", limit=100, include_resolved=True)
+            return _make_json_content({"regions": regions, "count": len(regions)})
+
+        # Generic category
+        entries = store.list(category=sub, limit=100, include_resolved=False)
+        return _make_json_content({"category": sub, "entries": entries, "count": len(entries)})

@@ -1,73 +1,25 @@
-# ENTROPY Tool Manual
+# entropy
 
-## What It Does
-Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.
+Computes entropy metrics to detect packed, encrypted, or compressed regions in the binary.
 
 ## Actions
-- `section`
-- `region`
-- `packed_detect`
-- `crypto_detect`
-- `compare`
-- `window`
-- `summary`
+- `section` — Compute entropy per section/segment; params: none
+- `region` — Compute entropy for a specific address range; params: `address`, `size`
+- `packed_detect` — Heuristic detection of packed/compressed sections; params: `threshold`
+- `crypto_detect` — Identify high-entropy regions likely containing crypto material; params: `threshold`
+- `compare` — Compare entropy profiles between two regions or binaries; params: `address_a`, `address_b`, `size`
+- `window` — Sliding-window entropy computation; params: `address`, `size`, `window_size`
+- `summary` — Overall binary entropy summary with anomaly flags
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `section, region, packed_detect, crypto_detect, compare, window, summary, grep, pick, head, tail, next, stats`
-- `addr`: `string`
-- `cursor`: `string`
-- `end_addr`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `limit`: `integer`
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `size`: `integer`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `step`: `integer`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `threshold`: `number`
-- `token`: `string`
-- `window`: `integer`
-
-## Example
+## Examples
 ```json
-{
-  "name": "entropy",
-  "arguments": {
-    "action": "section"
-  }
-}
+{"name": "entropy", "arguments": {"action": "section"}}
+```
+```json
+{"name": "entropy", "arguments": {"action": "packed_detect", "threshold": 7.0}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- Entropy values range 0.0–8.0; values above ~7.0 suggest encryption or compression.
+- Use `packed_detect` early in triage to identify UPX/custom packers.
+- Combine with `crypto_id` for confirmation of cryptographic regions.

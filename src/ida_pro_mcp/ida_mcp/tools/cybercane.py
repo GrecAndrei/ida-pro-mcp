@@ -155,16 +155,17 @@ class REOntology:
         results = []
         for class_name, (universal, existential) in self.ontology_classes.items():
             m_forall = sum(1 for ax in universal if ax in properties)
+            # All universal axioms must be satisfied (strict requirement)
+            if universal and m_forall < len(universal):
+                continue
             m_exists = 1 if existential and any(ax in properties for ax in existential) else 0
-            denominator = len(universal) + (1 if existential else 0)
-
-            if denominator == 0:
-                c = 1.0 if not properties else 0.0
-            else:
-                c = (m_forall + m_exists) / denominator
-
             existential_satisfied = (not existential) or (m_exists == 1)
-            if c >= threshold and existential_satisfied:
+            if not existential_satisfied:
+                continue
+            # Score based on how many properties matched (for ranking)
+            total = len(universal) + (1 if existential else 0)
+            c = (m_forall + m_exists) / total if total > 0 else 1.0
+            if c >= threshold:
                 results.append((class_name, c))
 
         results.sort(key=lambda x: x[1], reverse=True)
@@ -571,25 +572,25 @@ class CyberCaneGovernance:
         """Infer ontology properties from operation metadata and value."""
         properties = set()
 
-        # Base property from operation type
+        # Base property from operation type — must match ontology axiom names
         base_map = {
-            OperationType.PATCH: "patch",
-            OperationType.COMMENT: "comment",
-            OperationType.RENAME: "rename",
-            OperationType.TYPE_CHANGE: "type_change",
-            OperationType.EXECUTION: "execution",
-            OperationType.ANNOTATION: "comment",
+            OperationType.PATCH: "is_patch",
+            OperationType.COMMENT: "is_comment",
+            OperationType.RENAME: "is_rename",
+            OperationType.TYPE_CHANGE: "is_type_change",
+            OperationType.EXECUTION: "is_execution",
+            OperationType.ANNOTATION: "is_comment",
         }
         base = base_map.get(op_type)
         if base:
             properties.add(base)
 
-        # Metadata -> properties
+        # Metadata -> properties — must match ontology axiom names
         meta_map = {
-            "is_import_addr": "import_table",
-            "section_type": lambda v: "import_table" if v in (".idata", ".edata", ".iat", ".plt")
-                                     else ("executable_section" if v in (".text", ".code") else None),
-            "targets_stack": lambda v: "stack_frame" if v else None,
+            "is_import_addr": "targets_import_section",
+            "section_type": lambda v: "targets_import_section" if v in (".idata", ".edata", ".iat", ".plt")
+                                     else ("targets_executable_section" if v in (".text", ".code") else None),
+            "targets_stack": lambda v: "targets_stack_frame" if v else None,
             "changes_frame_size": lambda v: "changes_frame" if v else None,
             "invalidates_locals": lambda v: "invalidates_locals" if v else None,
             "breaks_calling_convention": lambda v: "breaks_cc" if v else None,

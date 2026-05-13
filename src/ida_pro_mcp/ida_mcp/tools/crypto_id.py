@@ -226,85 +226,86 @@ def crypto_id(
     - aes_ni: Detect AES-NI instruction usage (aesenc, aeskeygenassist, etc.).
     """
     try:
+        # Shared scope resolution used by both identify and constants
+        search_scope = None
+        if addr:
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            search_scope = ea
+
+        def _in_scope(hit_ea: int) -> bool:
+            if search_scope is None:
+                return True
+            func = ida_funcs.get_func(search_scope)
+            if func:
+                return func.start_ea <= hit_ea < func.end_ea
+            seg = idaapi.getseg(search_scope)
+            hit_seg = idaapi.getseg(hit_ea)
+            return bool(seg and hit_seg and seg.start_ea == hit_seg.start_ea)
+
+        def _scan_constants(lim: int):
+            findings, algos_found = [], set()
+            for cname, algo, pattern, mode in _CRYPTO_CONSTANTS:
+                if mode == "qword":
+                    hits = _search_qwords_in_segments(pattern, lim)
+                elif mode:
+                    hits = _search_dwords_in_segments(pattern, lim)
+                else:
+                    hits = _search_bytes_in_segments(pattern, lim)
+                for h in hits:
+                    try:
+                        hit_ea = int(h.split()[0], 16)
+                    except (ValueError, IndexError):
+                        continue
+                    if not _in_scope(hit_ea):
+                        continue
+                    findings.append(f"{h}  const={cname}  algo={algo}")
+                    algos_found.add(algo)
+                    if len(findings) >= lim:
+                        break
+                if len(findings) >= lim:
+                    break
+            return findings, algos_found
+
         if action == "identify":
-            findings = []
-            algos_found = set()
-            search_scope = None
-            if addr:
-                ea, err = validate_addr(addr)
-                if err:
-                    return err
-                search_scope = ea
-            for name, algo, pattern, mode in _CRYPTO_CONSTANTS:
-                if mode == "qword":
-                    hits = _search_qwords_in_segments(pattern, limit)
-                elif mode:
-                    hits = _search_dwords_in_segments(pattern, limit)
-                else:
-                    hits = _search_bytes_in_segments(pattern, limit)
-                for h in hits:
-                    hit_addr_str = h.split()[0] if h else "0x0"
-                    hit_ea = int(hit_addr_str, 16)
-                    if search_scope is not None:
-                        func = ida_funcs.get_func(search_scope)
-                        if func and not (func.start_ea <= hit_ea < func.end_ea):
-                            continue
-                        elif not func:
-                            seg = idaapi.getseg(search_scope)
-                            hit_seg = idaapi.getseg(hit_ea)
-                            if seg and hit_seg and seg.start_ea != hit_seg.start_ea:
-                                continue
-                    findings.append(f"{h}  const={name}  algo={algo}")
-                    algos_found.add(algo)
-                    if len(findings) >= limit:
-                        break
-                if len(findings) >= limit:
-                    break
-            return {"ok": True, "findings": "\n".join(findings), "algorithms_found": sorted(algos_found), "count": len(findings)}
+            findings, algos_found = _scan_constants(limit)
+
+            # Augment with BehaviorClassifier if addr points to a function
+            behavior_tags = []
+            if search_scope is not None:
+                func = ida_funcs.get_func(search_scope)
+                if func:
+                    try:
+                        pseudo = None
+                        try:
+                            cfunc = ida_hexrays.decompile(func.start_ea)
+                            if cfunc:
+                                pseudo = str(cfunc)
+                        except Exception:
+                            pass
+                        if pseudo:
+                            try:
+                                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                            except ImportError:
+                                from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+                            embedder = BgeCodeEmbedder()
+                            classifier = BehaviorClassifier.instance(embedder)
+                            behavior_tags = classifier.classify(pseudo, threshold=0.35, top_k=4)
+                    except Exception:
+                        pass
+
+            return {
+                "ok": True,
+                "findings": "\n".join(findings),
+                "algorithms_found": sorted(algos_found),
+                "behavior_tags": behavior_tags,
+                "count": len(findings),
+            }
 
         elif action == "constants":
-            findings = []
-            for name, algo, pattern, mode in _CRYPTO_CONSTANTS:
-                if mode == "qword":
-                    hits = _search_qwords_in_segments(pattern, limit)
-                elif mode:
-                    hits = _search_dwords_in_segments(pattern, limit)
-                else:
-                    hits = _search_bytes_in_segments(pattern, limit)
-                for h in hits:
-                    hit_addr_str = h.split()[0] if h else "0x0"
-                    hit_ea = int(hit_addr_str, 16)
-                    if search_scope is not None:
-                        func = ida_funcs.get_func(search_scope)
-                        if func and not (func.start_ea <= hit_ea < func.end_ea):
-                            continue
-                        elif not func:
-                            seg = idaapi.getseg(search_scope)
-                            hit_seg = idaapi.getseg(hit_ea)
-                            if seg and hit_seg and seg.start_ea != hit_seg.start_ea:
-                                continue
-                    findings.append(f"{h}  const={name}  algo={algo}")
-                    algos_found.add(algo)
-                    if len(findings) >= limit:
-                        break
-                if len(findings) >= limit:
-                    break
+            findings, algos_found = _scan_constants(limit)
             return {"ok": True, "findings": "\n".join(findings), "algorithms_found": sorted(algos_found), "count": len(findings)}
-
-        elif action == "constants":
-            findings = []
-            for name, algo, pattern, mode in _CRYPTO_CONSTANTS:
-                if mode == "qword":
-                    hits = _search_qwords_in_segments(pattern, limit - len(findings))
-                elif mode:
-                    hits = _search_dwords_in_segments(pattern, limit - len(findings))
-                else:
-                    hits = _search_bytes_in_segments(pattern, limit - len(findings))
-                for h in hits:
-                    findings.append(f"{h}  const={name}  algo={algo}")
-                if len(findings) >= limit:
-                    break
-            return {"ok": True, "findings": "\n".join(str(f) for f in findings), "count": len(findings)}
 
         elif action == "encoding":
             results = []

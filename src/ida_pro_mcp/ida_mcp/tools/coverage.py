@@ -332,7 +332,7 @@ def coverage(
                     "range_starts": addrs_sorted,
                     "source": "text",
                     "parse_errors": parse_errors,
-                }
+                }, None
 
             parsed, err = _parse_drcov(path_value)
             if err:

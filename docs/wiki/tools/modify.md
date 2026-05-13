@@ -1,63 +1,24 @@
-# MODIFY Tool Manual
+# modify
 
-## What It Does
-Rename, comment, set types, and patch assembly. Actions: rename, comment (regular/repeatable/anterior/posterior), set_type, patch_asm (assembles instruction(s) and patches bytes, supports multi-line separated by semicolons).
+Rename, comment, retype, and patch functions/addresses in the IDB with guardrail-protected writes.
 
 ## Actions
-- `rename`
-- `comment`
-- `set_type`
-- `patch_asm`
+- `rename` — rename a function or address; params: `address`, `name`
+- `comment` — set a comment; params: `address`, `comment`, `repeatable`
+- `set_type` — set or change a type declaration; params: `address`, `type`
+- `patch_asm` — patch assembly bytes; params: `address`, `asm` or `bytes`
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `rename, comment, set_type, patch_asm, grep, pick, head, tail, next, stats`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
+## Examples
 
-## Example
 ```json
-{
-  "name": "modify",
-  "arguments": {
-    "action": "rename"
-  }
-}
+{"name": "modify", "arguments": {"action": "rename", "address": "0x401000", "name": "decrypt_payload"}}
+```
+
+```json
+{"name": "modify", "arguments": {"action": "comment", "address": "0x401000", "comment": "XOR key = 0x5A"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `rename` triggers background propagation: re-embeds the function, finds unnamed callees with high cosine similarity, and writes `rename_suggestion` entries to the blackboard.
+- All write actions are subject to guardrails. In strict write mode (`IDA_MCP_GUARDRAIL_STRICT_WRITES`), calls are blocked unless `_guardrail_ack=true` is set.
+- Use `governance(action="check")` for pre-flight validation before patches or renames to catch contradictions and dangerous changes.

@@ -1,68 +1,29 @@
-# BULK Tool Manual
+# bulk
 
-## What It Does
-Bulk rename/comment/type operations. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations. Supports continue_on_error.
+Applies batch edits: renames, comments, types, and stack variable names across multiple addresses.
 
 ## Actions
-- `rename`
-- `comment`
-- `apply_type`
-- `rename_stack`
-- `import_annotations`
-- `export_annotations`
+- `rename` — rename multiple symbols. Params: `items` (array of `{address, name}`)
+- `comment` — set comments on multiple addresses. Params: `items` (array of `{address, comment}`)
+- `apply_type` — apply types to multiple addresses. Params: `items` (array of `{address, type}`)
+- `rename_stack` — rename stack variables. Params: `address` (function), `items` (array of `{old_name, new_name}`)
+- `import_annotations` — import annotations from JSON. Params: `data` or `path`
+- `export_annotations` — export all annotations as JSON. Optional `path`
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `rename, comment, apply_type, rename_stack, import_annotations, export_annotations, grep, pick, head, tail, next, stats`
-- `continue_on_error`: `boolean`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `items`: `array`
-- `next_token`: `string`
-- `on`: `string`
-- `path`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "bulk",
-  "arguments": {
-    "action": "rename"
-  }
-}
+{"name": "bulk", "arguments": {"action": "rename", "items": [
+  {"address": "0x401000", "name": "decrypt_config"},
+  {"address": "0x401200", "name": "send_beacon"}
+]}}
+```
+```json
+{"name": "bulk", "arguments": {"action": "rename_stack", "address": "0x401000", "items": [
+  {"old_name": "var_8", "new_name": "buffer_size"}
+]}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- Bulk operations are atomic per-item; failures on one item don't block others.
+- Guardrail strict mode applies; use `_guardrail_ack=true` to acknowledge writes.
+- Use `export_annotations` to checkpoint before large bulk edits.

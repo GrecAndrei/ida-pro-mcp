@@ -10,7 +10,8 @@ from ida_mcp.tools.code import code as code_tool
 from ida_mcp.tools.ctree import ctree as ctree_tool
 from ida_mcp.tools.graph import graph as graph_tool
 
-_FUNC_SUMMARY_CACHE = {}
+_FUNC_SUMMARY_CACHE: dict = {}
+_FUNC_SUMMARY_CACHE_MAX = 512  # prevent unbounded growth
 
 # ============================================================================
 # 17. AGENT - High-level analysis helpers
@@ -19,8 +20,8 @@ _FUNC_SUMMARY_CACHE = {}
 @tool
 @idaread
 def agent(
-    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect"],
-                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect"],
+    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint"],
+                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint"],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Search query or comma-separated addresses"] = None,
     depth: Annotated[int, "Exploration depth"] = 1,
@@ -109,27 +110,11 @@ def agent(
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
-            
-            def debug_log_agent(msg):
-                try:
-                    import tempfile
-                    with open(os.path.join(tempfile.gettempdir(), "ida_mcp_emergency.log"), "a") as f:
-                        f.write(f"[{time.ctime()}] AGENT: {msg}\n")
-                except Exception:
-                    return False
-                return True
 
             # Aggregate multi-modal analysis
-            debug_log_agent(f"Starting code analysis for {addr}...")
             code_res = code_tool(action="analyze", addrs=addr)
-            
-            debug_log_agent(f"Starting logic flow analysis for {addr}...")
             logic_res = ctree_tool(action="get_logic_flow", addr=addr)
-            
-            debug_log_agent(f"Starting graph analysis for {addr}...")
             graph_res = graph_tool(action="cfg", addr=addr, format="mermaid")
-            
-            debug_log_agent(f"Analysis complete for {addr}")
             return {
                 "ok": True,
                 "addr": hex(ea),
@@ -269,6 +254,9 @@ def agent(
                     pass
 
                 if cache_key:
+                    if len(_FUNC_SUMMARY_CACHE) >= _FUNC_SUMMARY_CACHE_MAX:
+                        # Evict oldest entry (first key in insertion-order dict)
+                        _FUNC_SUMMARY_CACHE.pop(next(iter(_FUNC_SUMMARY_CACHE)), None)
                     _FUNC_SUMMARY_CACHE[cache_key] = summary
 
             # Callers
@@ -439,7 +427,7 @@ def agent(
                 if _fi_count > 2000:
                     break
                 for xref in idautils.XrefsFrom(item, 0):
-                    if xref.type in [17, 18, 19, 20, 21]:
+                    if xref.type in (idaapi.fl_CF, idaapi.fl_CN, idaapi.fl_JF, idaapi.fl_JN, idaapi.fl_F):
                         callee_name = idc.get_name(xref.to)
                         if callee_name and not callee_name.startswith("sub_"):
                             context["apis_called"].append(callee_name)
@@ -467,7 +455,7 @@ def agent(
                 if _fi_count > 2000:
                     break
                 for xref in idautils.XrefsFrom(item, 0):
-                    if xref.type in [17, 18, 19, 20, 21]:
+                    if xref.type in (idaapi.fl_CF, idaapi.fl_CN, idaapi.fl_JF, idaapi.fl_JN, idaapi.fl_F):
                         callee = idaapi.get_func(xref.to)
                         if callee and callee.start_ea not in seen:
                             seen.add(callee.start_ea)
@@ -524,153 +512,132 @@ def agent(
             return {"ok": True, "items": results, "count": len(results)}
         
         elif action == "similar":
-            # Find functions with similar characteristics to a target function
+            # Find functions with similar characteristics using embedding-based search
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            
+
             ea, err = validate_addr(addr)
             if err:
                 return err
-            
+
             func = idaapi.get_func(ea)
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
-            
-            # Collect characteristics of target function
+
             target_name = ida_funcs.get_func_name(func.start_ea)
-            target_size = func.end_ea - func.start_ea
-            
-            # Get APIs called by target
-            target_apis = set()
-            _fi_count = 0
+
+            # Try embedding-based similarity first (fast, O(n) cosine scan)
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+            except ImportError:
+                try:
+                    from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex  # type: ignore
+                except ImportError:
+                    FunctionEmbeddingIndex = None
+
+            if FunctionEmbeddingIndex is not None:
+                try:
+                    pseudo = None
+                    try:
+                        cfunc = ida_hexrays.decompile(func.start_ea)
+                        if cfunc:
+                            pseudo = str(cfunc)
+                    except Exception:
+                        pass
+                    if pseudo:
+                        embedder = BgeCodeEmbedder()
+                        idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB) or ""
+                        db_path = idb_path + ".embeddings.db"
+                        idx = FunctionEmbeddingIndex(db_path, embedder)
+                        # Index the query function if not already indexed
+                        idx.index_async(hex(func.start_ea), target_name or hex(func.start_ea), pseudo)
+                        results = idx.similar(pseudo, top_k=max_items, exclude_ea=hex(func.start_ea), threshold=0.5)
+                        return {
+                            "ok": True,
+                            "target": target_name,
+                            "target_addr": hex(func.start_ea),
+                            "similar_functions": results,
+                            "count": len(results),
+                            "method": embedder.backend,
+                        }
+                except Exception:
+                    pass  # fall through to heuristic
+
+            # Heuristic fallback: API + string overlap (bounded scan)
+            target_apis: set = set()
+            target_strings: set = set()
             for item in idautils.FuncItems(func.start_ea):
-                _fi_count += 1
-                if _fi_count > 5000:
-                    break
                 for xref in idautils.XrefsFrom(item, 0):
-                    if xref.type in [17, 18, 19, 20, 21]:  # Call types
-                        callee_name = idc.get_name(xref.to)
-                        if callee_name and not callee_name.startswith("sub_"):
-                            target_apis.add(callee_name)
-            
-            # Get strings used by target
-            target_strings = set()
-            _fi_count = 0
-            for item in idautils.FuncItems(func.start_ea):
-                _fi_count += 1
-                if _fi_count > 5000:
-                    break
-                for xref in idautils.XrefsFrom(item, 0):
-                    if not xref.iscode:
+                    if xref.type in (idaapi.fl_CF, idaapi.fl_CN, idaapi.fl_JF, idaapi.fl_JN, idaapi.fl_F):
+                        name = idc.get_name(xref.to)
+                        if name and not name.startswith("sub_"):
+                            target_apis.add(name)
+                    elif not xref.iscode:
                         s = idc.get_strlit_contents(xref.to)
                         if s:
                             target_strings.add((s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s))[:50])
-            
-            # Get instruction count of target
-            target_insn_count = 0
-            for _ in idautils.FuncItems(func.start_ea):
-                target_insn_count += 1
-                if target_insn_count > 10000:
-                    break
-            
-            # Score all other functions
+
+            target_size = func.end_ea - func.start_ea
             similar_funcs = []
-            _max_candidates = max_items * 10
-            for other_ea in idautils.Functions():
-                if len(similar_funcs) >= _max_candidates * 2:
+            _cap = max_items * 20  # scan at most this many functions
+
+            for i, other_ea in enumerate(idautils.Functions()):
+                if i >= _cap or len(similar_funcs) >= max_items * 3:
                     break
                 if other_ea == func.start_ea:
                     continue
-                
                 other_func = idaapi.get_func(other_ea)
                 if not other_func:
                     continue
-                
-                score = 0
-                reasons = []
-                
-                # Size similarity (within 50%)
                 other_size = other_func.end_ea - other_func.start_ea
-                size_ratio = min(target_size, other_size) / max(target_size, other_size) if max(target_size, other_size) > 0 else 0
-                if size_ratio > 0.5:
-                    score += int(size_ratio * 30)
-                    if size_ratio > 0.8:
-                        reasons.append("similar_size")
-                
-                # API overlap
-                other_apis = set()
-                _fi_count = 0
+                size_ratio = min(target_size, other_size) / max(target_size, other_size, 1)
+                if size_ratio < 0.4:
+                    continue
+
+                other_apis: set = set()
+                other_strings: set = set()
                 for item in idautils.FuncItems(other_ea):
-                    _fi_count += 1
-                    if _fi_count > 2000:
-                        break
                     for xref in idautils.XrefsFrom(item, 0):
-                        if xref.type in [17, 18, 19, 20, 21]:
-                            callee_name = idc.get_name(xref.to)
-                            if callee_name and not callee_name.startswith("sub_"):
-                                other_apis.add(callee_name)
-                
-                if target_apis and other_apis:
-                    api_overlap = len(target_apis & other_apis) / len(target_apis | other_apis)
-                    if api_overlap > 0.3:
-                        score += int(api_overlap * 50)
-                        if api_overlap > 0.5:
-                            reasons.append(f"api_overlap:{int(api_overlap*100)}%")
-                
-                # String overlap
-                other_strings = set()
-                _fi_count = 0
-                for item in idautils.FuncItems(other_ea):
-                    _fi_count += 1
-                    if _fi_count > 2000:
-                        break
-                    for xref in idautils.XrefsFrom(item, 0):
-                        if not xref.iscode:
+                        if xref.type in (idaapi.fl_CF, idaapi.fl_CN, idaapi.fl_JF, idaapi.fl_JN, idaapi.fl_F):
+                            n = idc.get_name(xref.to)
+                            if n and not n.startswith("sub_"):
+                                other_apis.add(n)
+                        elif not xref.iscode:
                             s = idc.get_strlit_contents(xref.to)
                             if s:
                                 other_strings.add((s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s))[:50])
-                
+
+                score = int(size_ratio * 30)
+                reasons = []
+                if target_apis and other_apis:
+                    api_j = len(target_apis & other_apis) / len(target_apis | other_apis)
+                    if api_j > 0.3:
+                        score += int(api_j * 50)
+                        reasons.append(f"api_overlap:{int(api_j*100)}%")
                 if target_strings and other_strings:
-                    string_overlap = len(target_strings & other_strings) / len(target_strings | other_strings)
-                    if string_overlap > 0.2:
-                        score += int(string_overlap * 20)
-                        if string_overlap > 0.4:
-                            reasons.append(f"string_overlap:{int(string_overlap*100)}%")
-                
-                # Instruction count similarity
-                other_insn_count = 0
-                for _ in idautils.FuncItems(other_ea):
-                    other_insn_count += 1
-                    if other_insn_count > 10000:
-                        break
-                insn_ratio = min(target_insn_count, other_insn_count) / max(target_insn_count, other_insn_count) if max(target_insn_count, other_insn_count) > 0 else 0
-                if insn_ratio > 0.7:
-                    score += int(insn_ratio * 10)
-                
-                if score >= 20 and reasons:  # Minimum score threshold
+                    str_j = len(target_strings & other_strings) / len(target_strings | other_strings)
+                    if str_j > 0.2:
+                        score += int(str_j * 20)
+                        reasons.append(f"string_overlap:{int(str_j*100)}%")
+
+                if score >= 20 and reasons:
                     similar_funcs.append({
                         "addr": hex(other_ea),
                         "name": ida_funcs.get_func_name(other_ea),
                         "score": score,
                         "reasons": reasons,
-                        "size": other_size,
-                        "shared_apis": list(target_apis & other_apis)[:5] if target_apis else []
+                        "shared_apis": list(target_apis & other_apis)[:5],
                     })
-            
-            # Sort by score descending
+
             similar_funcs.sort(key=lambda x: x["score"], reverse=True)
-            similar_funcs = similar_funcs[:max_items]
-            
             return {
                 "ok": True,
                 "target": target_name,
                 "target_addr": hex(func.start_ea),
-                "target_apis": list(target_apis)[:10],
-                "target_strings": list(target_strings)[:5],
-                "similar_functions": similar_funcs,
-                "count": len(similar_funcs)
+                "similar_functions": similar_funcs[:max_items],
+                "count": len(similar_funcs[:max_items]),
+                "method": "heuristic",
             }
-
         elif action == "bridge_query":
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required for bridge_query")
@@ -862,10 +829,197 @@ def agent(
                 "note": "Store distilled_strategy as a crystallized skill using session(action='crystallize_skill') for future reuse.",
             }
 
+        elif action == "cluster":
+            # Batch embed all functions and cluster by behavioral similarity.
+            # Uses bge-code-v1 embeddings (or TF-IDF fallback) + pure-numpy k-means.
+            # Returns labeled clusters with representative functions and behavior tags.
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex, _extract_signature
+            except ImportError:
+                from host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex, _extract_signature  # type: ignore
+
+            k = int(kwargs.get("k") or max_items or 12)
+            func_limit = int(kwargs.get("func_limit") or 2000)
+            embedder = BgeCodeEmbedder()
+            classifier = BehaviorClassifier.instance(embedder)
+
+            # Collect functions: prefer decompiled pseudocode, fall back to API names
+            funcs_data = []  # [(ea, name, text_to_embed)]
+            for func_ea in idautils.Functions():
+                if len(funcs_data) >= func_limit:
+                    break
+                fname = idc.get_func_name(func_ea) or hex(func_ea)
+                text = None
+                try:
+                    cfunc = ida_hexrays.decompile(func_ea)
+                    if cfunc:
+                        text = _extract_signature(str(cfunc), max_idents=40)
+                except Exception:
+                    pass
+                if not text:
+                    # Fallback: collect API calls as text
+                    apis = []
+                    for item in idautils.FuncItems(func_ea):
+                        for xref in idautils.XrefsFrom(item, 0):
+                            if xref.type in (idaapi.fl_CF, idaapi.fl_CN):
+                                n = idc.get_name(xref.to)
+                                if n and not n.startswith("sub_"):
+                                    apis.append(n)
+                    text = " ".join(apis[:30]) or fname
+                funcs_data.append((func_ea, fname, text))
+
+            if len(funcs_data) < 2:
+                return make_error(MCPError.INVALID_ARGS, "Not enough functions to cluster")
+
+            # Batch embed
+            texts = [t for _, _, t in funcs_data]
+            vecs = embedder.embed_batch(texts)
+
+            # K-means cluster
+            k = min(k, len(funcs_data))
+            labels, centroids = _kmeans_numpy(vecs, k)
+
+            # Build clusters
+            clusters: dict = {}
+            for i, (func_ea, fname, _) in enumerate(funcs_data):
+                lbl = labels[i]
+                clusters.setdefault(lbl, []).append({"addr": hex(func_ea), "name": fname})
+
+            # Label each cluster using BehaviorClassifier on the centroid
+            result_clusters = []
+            for lbl, members in sorted(clusters.items(), key=lambda x: -len(x[1])):
+                centroid = centroids[lbl].tolist()
+                behavior = classifier.classify_vec(centroid, threshold=0.3, top_k=2, block=False)
+                label = behavior[0]["behavior"] if behavior else f"cluster_{lbl}"
+                confidence = behavior[0]["confidence"] if behavior else 0.0
+                result_clusters.append({
+                    "cluster_id": lbl,
+                    "label": label,
+                    "confidence": round(confidence, 3),
+                    "size": len(members),
+                    "behavior_tags": [b["behavior"] for b in behavior],
+                    "representative_functions": members[:8],
+                })
+
+            # Auto-write cluster summary to blackboard
+            try:
+                from .blackboard import BlackboardStore
+                store = BlackboardStore()
+                for c in result_clusters:
+                    store.write(
+                        title=f"Cluster: {c['label']} ({c['size']} functions)",
+                        content=str([m["name"] for m in c["representative_functions"]]),
+                        category="cluster",
+                        tags=["auto", "cluster"] + c["behavior_tags"],
+                        confidence=c["confidence"],
+                        source="agent.cluster",
+                    )
+            except Exception:
+                pass
+
+            return {
+                "ok": True,
+                "total_functions": len(funcs_data),
+                "k": k,
+                "clusters": result_clusters,
+                "backend": embedder.backend,
+                "note": "Clusters are behavioral groups. Use classify(action='function') on representative_functions for deeper analysis.",
+            }
+
+        elif action == "fingerprint":
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+            except ImportError:
+                from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature  # type: ignore
+
+            idb_path = ""
+            try:
+                idb_path = idc.get_idb_path() or ""
+            except Exception:
+                pass
+            if not idb_path:
+                return make_error(MCPError.INVALID_ARGS, "No IDB path")
+
+            embedder = BgeCodeEmbedder()
+            current_idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
+
+            if current_idx.size == 0:
+                return {"ok": True, "note": "No functions indexed. Run code(action='decompile') first.", "matches": []}
+
+            import os
+            fingerprint_eas = list(current_idx._cache.keys())[:20]
+            fingerprint_vecs = [current_idx._cache[ea] for ea in fingerprint_eas]
+
+            db_dir = os.path.dirname(idb_path)
+            matches = []
+            for fname in os.listdir(db_dir):
+                if not fname.endswith(".embeddings.db"):
+                    continue
+                other_path = os.path.join(db_dir, fname)
+                if other_path == idb_path + ".embeddings.db":
+                    continue
+                try:
+                    other_idx = FunctionEmbeddingIndex(other_path, embedder)
+                    if other_idx.size == 0:
+                        continue
+                    sims = []
+                    for vec in fingerprint_vecs:
+                        best = other_idx.similar_vec(vec, top_k=1, threshold=0.0)
+                        if best:
+                            sims.append(best[0]["similarity"])
+                    if sims:
+                        avg_sim = sum(sims) / len(sims)
+                        matches.append({"binary": fname.replace(".embeddings.db", ""), "similarity": round(avg_sim, 3), "matched_functions": len(sims)})
+                except Exception:
+                    continue
+
+            matches.sort(key=lambda x: -x["similarity"])
+            return {
+                "ok": True,
+                "current_binary": os.path.basename(idb_path),
+                "fingerprint_size": len(fingerprint_eas),
+                "matches": matches[:10],
+                "backend": embedder.backend,
+            }
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
+
+
+def _kmeans_numpy(vecs, k: int, max_iter: int = 30):
+    """
+    Pure-numpy k-means. Returns (labels, centroids).
+    vecs: list of float lists, all same length.
+    """
+    import numpy as np
+    X = np.array(vecs, dtype=np.float32)
+    n = len(X)
+    if n <= k:
+        return list(range(n)), X
+    # Kmeans++ init
+    rng = np.random.default_rng(42)
+    centers = [X[rng.integers(n)]]
+    for _ in range(k - 1):
+        dists = np.array([min(np.dot(x - c, x - c) for c in centers) for x in X])
+        probs = dists / dists.sum()
+        centers.append(X[rng.choice(n, p=probs)])
+    centers = np.array(centers)
+    labels = np.zeros(n, dtype=int)
+    for _ in range(max_iter):
+        # Assign
+        dists = np.array([[np.dot(x - c, x - c) for c in centers] for x in X])
+        new_labels = np.argmin(dists, axis=1)
+        if np.all(new_labels == labels):
+            break
+        labels = new_labels
+        # Update centroids
+        for j in range(k):
+            members = X[labels == j]
+            if len(members):
+                centers[j] = members.mean(axis=0)
+    return labels.tolist(), centers
 
 
 # ============================================================================

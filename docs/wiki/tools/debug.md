@@ -1,77 +1,37 @@
-# DEBUG Tool Manual
+# debug
 
-## What It Does
-Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem.
+Controls the IDA debugger: breakpoints, stepping, registers, threads, and memory maps.
 
 ## Actions
-- `start`
-- `stop`
-- `continue`
-- `step_into`
-- `step_over`
-- `run_to`
-- `run_until`
-- `breakpoints`
-- `add_bp`
-- `del_bp`
-- `enable_bp`
-- `regs`
-- `set_reg`
-- `threads`
-- `modules`
-- `callstack`
-- `read_mem`
-- `write_mem`
+- `start` — start debugging; params: `args` (optional command-line args)
+- `stop` — terminate debuggee
+- `continue` — resume execution
+- `step_into` — single step into calls
+- `step_over` — step over calls
+- `run_to` — run to address; params: `address`
+- `run_until` — run until condition; params: `condition`
+- `breakpoints` — list all breakpoints
+- `add_bp` — add breakpoint; params: `address`, `condition` (optional)
+- `del_bp` — delete breakpoint; params: `address`
+- `regs` — dump registers
+- `set_reg` — set register value; params: `reg`, `value`
+- `snapshot_regs` — save register snapshot
+- `reg_diff` — diff current regs against last snapshot
+- `threads` — list threads
+- `modules` — list loaded modules
+- `mem_map` — show memory map
+- `callstack` — get current call stack
+- `bp_context` — queries blackboard for current PC + containing function context
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `24`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "debug",
-  "arguments": {
-    "action": "start"
-  }
-}
+{"name": "debug", "arguments": {"action": "start"}}
+```
+```json
+{"name": "debug", "arguments": {"action": "add_bp", "address": "0x401000", "condition": "eax==0"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `bp_context` is injected automatically on suspend/step events.
+- `reg_diff` compares against the last `snapshot_regs` call.
+- Debugger must be active (`start`) before stepping or reading state.

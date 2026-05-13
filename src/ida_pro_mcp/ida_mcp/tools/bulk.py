@@ -190,30 +190,19 @@ def bulk(
                             break
                         continue
                     
-                    # Find and rename the variable using idc (IDA 9 compatible)
+                    # Iterate frame members by index using get_member_by_id
                     renamed = False
-                    # Use ida_frame for member iteration
-                    member_offset = 0
-                    try:
-                        member_count = frame.memqty
-                    except AttributeError:
-                        member_count = 0
-                    while member_offset < member_count:
+                    for idx in range(frame.memqty):
                         try:
-                            member = ida_frame.get_member(frame, member_offset)
-                            if member:
-                                mname = ida_frame.get_member_name(member.id) if hasattr(ida_frame, 'get_member_name') else idc.get_member_name(frame.id, member.soff)
-                                if mname == old_name:
-                                    # Try ida_frame first, fall back to idc
-                                    if hasattr(ida_frame, 'set_member_name'):
-                                        result = ida_frame.set_member_name(frame, member.soff, new_name)
-                                    else:
-                                        result = idc.set_member_name(frame.id, member.soff, new_name)
-                                    if result:
-                                        renamed = True
-                                        success += 1
-                                        break
-                            member_offset += 1
+                            member = ida_struct.get_member(frame, idx)
+                            if not member:
+                                continue
+                            mname = ida_struct.get_member_name(member.id) or ""
+                            if mname == old_name:
+                                if ida_struct.set_member_name(frame, member.soff, new_name):
+                                    renamed = True
+                                    success += 1
+                                break
                         except Exception:
                             break
                     

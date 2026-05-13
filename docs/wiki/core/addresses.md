@@ -1,19 +1,23 @@
-# Address Parsing in IDA MCP
+# Address Parsing
 
-The MCP uses a robust parser for all address inputs. You never need to worry about the base or format.
+All tools accept addresses in any of these formats:
 
-## Supported Formats
-*   **Hex strings**: `0x401000`, `401000h`, `0X401000`
-*   **Decimal**: `4198400`
-*   **Symbolic**: `main`, `_printf`, `std::string::clear`
-*   **Expressions**: `main + 0x20`, `0x401000 + 512`
+- Hex: `0x401000`, `401000h`
+- Decimal: `4198400`
+- Symbol: `main`, `_printf`, `std::string::clear`
+- Expression: `main+0x20`, `0x401000+512`
 
-## Offsets vs VAs
-When using the `calc` tool, you can convert between File Offsets and Virtual Addresses (VAs). 
-Most tools expect **Virtual Addresses**.
+Most tools expect **Virtual Addresses**. Use `calc(action="resolve")` to convert file offsets to VAs.
 
-## Error Handling
-If an address is invalid (not mapped in the IDB), the tool will return an `ADDRESS_INVALID` error code.
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+If an address is not mapped in the IDB, the tool returns `ADDRESS_INVALID`.
+
+## Address arithmetic
+
+Never compute addresses mentally. Use:
+```json
+{"name":"calc","arguments":{"action":"offset","addr":"0x401000","target":"0x401050"}}
+{"name":"calc","arguments":{"action":"deref","addr":"0x401000"}}
+{"name":"calc","arguments":{"action":"chain","addr":"0x401000","offsets":[0,8,0x10]}}
+```
+
+`calc` and `memory` results are auto-captured to the blackboard.

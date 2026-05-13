@@ -1,69 +1,28 @@
-# STRING_OPS Tool Manual
+# string_ops
 
-## What It Does
-Advanced string analysis. Query supports regex. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious.
+Extracts, decodes, and classifies strings for IOC discovery and C2 scoring.
 
 ## Actions
-- `decode_all`
-- `find_urls`
-- `find_paths`
-- `find_registry`
-- `find_ips`
-- `find_emails`
-- `find_commands`
-- `encoding_stats`
-- `multilingual`
-- `suspicious`
+- `decode_all` — Attempt decoding of obfuscated/encoded strings (XOR, base64, stack strings); params: `address`
+- `find_urls` — Extract URL-like strings; params: `pattern`
+- `find_paths` — Extract file system paths; params: `pattern`
+- `find_registry` — Extract Windows registry key references; params: `pattern`
+- `find_ips` — Extract IP addresses (IPv4/IPv6); params: `pattern`
+- `find_emails` — Extract email addresses; params: `pattern`
+- `find_commands` — Extract shell/command-line strings; params: `pattern`
+- `encoding_stats` — Report encoding distribution across all strings (ASCII, UTF-8, wide, etc.)
+- `score_c2` — Score strings for C2/beaconing indicators; params: `threshold`
+- `api_triads` — Find suspicious API call triads (e.g., VirtualAlloc+WriteProcessMemory+CreateRemoteThread)
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "string_ops",
-  "arguments": {
-    "action": "decode_all"
-  }
-}
+{"name": "string_ops", "arguments": {"action": "find_urls"}}
+```
+```json
+{"name": "string_ops", "arguments": {"action": "score_c2", "threshold": 0.7}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `score_c2` and `api_triads` are useful for quick malware triage before running full `threat_hunt`.
+- All `find_*` actions support optional `pattern` for regex filtering.
+- Pair with `crypto_id(action="encoding")` for deeper obfuscation analysis.

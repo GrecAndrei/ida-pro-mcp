@@ -1,75 +1,32 @@
-# AGENT Tool Manual
+# agent
 
-## What It Does
-High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.
+AI-assisted analysis combining semantic embeddings, multi-hop search, and batch context gathering for reverse engineering workflows.
 
 ## Actions
-- `analyze_function`
-- `explore_address`
-- `find_references`
-- `search_all`
-- `search_structs`
-- `context_pack`
-- `quick`
-- `rename_suggestions`
-- `batch_context`
-- `similar`
+- `analyze_function` — deep analysis of a single function; params: `address`
+- `explore_address` — contextual exploration around an address; params: `address`
+- `find_references` — find all references to/from a target; params: `address`
+- `search_all` — broad search across functions, strings, imports; params: `query`
+- `quick` — lightweight one-shot analysis; params: `address`
+- `rename_suggestions` — suggest meaningful names for unnamed functions; params: `address`
+- `batch_context` — gather context for multiple addresses in one call; params: `addresses`
+- `similar` — find semantically similar functions via cosine similarity on bge-code-v1 embeddings; params: `address`, `limit`
+- `bridge_query` — multi-hop entity expansion across xrefs and data flow; params: `query`, `hops`
+- `reflect` — introspect current analysis state and suggest next steps
+- `cluster` — batch-embed all functions, k-means cluster, label with BehaviorClassifier; params: `max_items` (k), `func_limit`
+- `fingerprint` — compare current binary's embedding index against other `.embeddings.db` files in the same directory
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
-- `addr`: `string`
-- `cursor`: `string`
-- `depth`: `integer`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `include_pseudocode`: `boolean`
-- `max_items`: `integer`
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `query`: `string`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-- `use_cache`: `boolean`
+## Examples
 
-## Example
 ```json
-{
-  "name": "agent",
-  "arguments": {
-    "action": "analyze_function"
-  }
-}
+{"name": "agent", "arguments": {"action": "similar", "address": "0x401000", "limit": 5}}
+```
+
+```json
+{"name": "agent", "arguments": {"action": "cluster", "max_items": 8, "func_limit": 200}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `similar` uses FunctionEmbeddingIndex cosine search on bge-code-v1 vectors, not keyword/string matching.
+- `bridge_query` expands entities across multiple hops — useful for tracing indirect relationships (e.g., callback registration chains).
+- `cluster` and `fingerprint` require the embedding index to be built; they operate on the full binary scope.

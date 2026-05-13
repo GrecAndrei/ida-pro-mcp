@@ -243,6 +243,9 @@ def modify(
                 # Apply explicit feedback if provided
                 if feedback and memrl_suggestion_id:
                     _apply_memrl_feedback(memrl_suggestion_id, feedback)
+                # Decompiler feedback loop: re-embed this function and propagate
+                # semantic understanding to callees in the background.
+                _trigger_rename_propagation(ea, value)
                 return result
             return make_error(MCPError.IDA_ERROR, "Failed to rename", "Check if name is valid C identifier and not duplicate")
 
@@ -367,6 +370,119 @@ def modify(
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
+
+
+def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
+    """
+    Decompiler feedback loop: after a rename, re-embed the function and
+    propagate semantic understanding to its callees.
+
+    Algorithm:
+      1. Re-decompile and re-embed the renamed function (now has a meaningful name)
+      2. Find all callees (functions this one calls)
+      3. For each unnamed callee, check if the new embedding suggests a name
+         (cosine similarity against the updated index)
+      4. Write propagation suggestions to the blackboard for the LLM to review
+
+    Runs in a background thread — never blocks the rename response.
+    """
+    import threading
+
+    def _propagate():
+        try:
+            from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+        except ImportError:
+            try:
+                from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature  # type: ignore
+            except ImportError:
+                return
+        try:
+            import idc as _idc
+            import idautils as _idautils
+            import idaapi as _idaapi
+            import ida_hexrays as _ida_hexrays
+            import ida_funcs as _ida_funcs
+
+            idb_path = _idc.get_idb_path() or ""
+            if not idb_path:
+                return
+
+            embedder = BgeCodeEmbedder()
+            idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
+
+            # Step 1: Re-embed the renamed function
+            pseudo = None
+            try:
+                cfunc = _ida_hexrays.decompile(func_ea)
+                if cfunc:
+                    pseudo = str(cfunc)
+            except Exception:
+                pass
+            if pseudo:
+                idx.index(hex(func_ea), new_name, pseudo)
+
+            # Step 2: Find callees
+            callees = []
+            for item in _idautils.FuncItems(func_ea):
+                for xref in _idautils.XrefsFrom(item, 0):
+                    if xref.type in (17, 18):  # fl_CF, fl_CN
+                        callee_fn = _ida_funcs.get_func(xref.to)
+                        if callee_fn and callee_fn.start_ea != func_ea:
+                            callees.append(callee_fn.start_ea)
+
+            if not callees or not pseudo:
+                return
+
+            # Step 3: For each unnamed callee, check embedding similarity
+            suggestions = []
+            for callee_ea in set(callees[:20]):
+                callee_name = _idc.get_func_name(callee_ea) or ""
+                if not callee_name.startswith("sub_"):
+                    continue  # already named
+                callee_pseudo = None
+                try:
+                    cfunc = _ida_hexrays.decompile(callee_ea)
+                    if cfunc:
+                        callee_pseudo = str(cfunc)
+                except Exception:
+                    pass
+                if not callee_pseudo:
+                    continue
+                similar = idx.similar(callee_pseudo, top_k=3, exclude_ea=hex(callee_ea), threshold=0.65)
+                named = [s for s in similar if not s["name"].startswith("sub_") and not s["name"].startswith("0x")]
+                if named:
+                    suggestions.append({
+                        "callee_addr": hex(callee_ea),
+                        "callee_current": callee_name,
+                        "suggested_name": named[0]["name"],
+                        "confidence": named[0]["similarity"],
+                        "reason": f"callee of {new_name}, similar to {named[0]['name']}",
+                    })
+
+            # Step 4: Write propagation suggestions to blackboard
+            if suggestions:
+                try:
+                    from ida_pro_mcp.ida_mcp.tools.blackboard import BlackboardStore
+                except ImportError:
+                    try:
+                        from blackboard import BlackboardStore  # type: ignore
+                    except ImportError:
+                        return
+                store = BlackboardStore()
+                for s in suggestions:
+                    store.write(
+                        title=f"Rename suggestion: {s['callee_addr']} → {s['suggested_name']}",
+                        content=f"Callee of {new_name}. Confidence: {s['confidence']:.2f}. {s['reason']}",
+                        category="rename_suggestion",
+                        addr=s["callee_addr"],
+                        tags=["auto", "propagation", "rename"],
+                        confidence=s["confidence"],
+                        source="rename_propagation",
+                    )
+        except Exception:
+            pass
+
+    threading.Thread(target=_propagate, daemon=True, name="rename-propagation").start()
 
 
 # ============================================================================

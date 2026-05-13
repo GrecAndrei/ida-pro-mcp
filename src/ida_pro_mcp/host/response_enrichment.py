@@ -14,6 +14,7 @@ All operations are deterministic regex/parsing based. No LLM dependencies.
 
 from __future__ import annotations
 
+import json
 import re
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple, Callable
@@ -405,6 +406,82 @@ def build_session_resume(
 
 
 # ============================================================================
+# Auto-Hypothesis Engine
+# ============================================================================
+
+_HYPOTHESIS_TEMPLATES = {
+    "c2_communication": {
+        "statement": "This function is likely a C2 beacon: calls Sleep in a loop with send/recv",
+        "confidence": 0.75,
+        "suggested_actions": ["trace network calls", "extract C2 URLs", "check sleep intervals"],
+    },
+    "crypto_symmetric": {
+        "statement": "This function implements symmetric encryption (AES/ChaCha20 pattern detected)",
+        "confidence": 0.7,
+        "suggested_actions": ["identify key schedule", "extract constants", "check key length"],
+    },
+    "process_injection": {
+        "statement": "This function performs process injection via VirtualAllocEx/WriteProcessMemory/CreateRemoteThread",
+        "confidence": 0.85,
+        "suggested_actions": ["identify target process", "extract injected payload", "trace memory allocations"],
+    },
+    "persistence": {
+        "statement": "This function establishes persistence via registry Run key or service installation",
+        "confidence": 0.7,
+        "suggested_actions": ["extract registry paths", "identify service name", "check startup conditions"],
+    },
+    "anti_debug": {
+        "statement": "This function contains anti-debugging checks",
+        "confidence": 0.8,
+        "suggested_actions": ["identify check type", "find bypass points", "check for timing checks"],
+    },
+}
+
+
+def generate_hypotheses(
+    tool: str,
+    action: str,
+    result: dict,
+    addr: Optional[str] = None,
+    behavior_tags: Optional[List[str]] = None,
+) -> List[dict]:
+    """
+    Generate structured hypothesis statements from behavior_tags and API calls in result.
+
+    Returns list of dicts: {statement, confidence, evidence, suggested_actions}
+    """
+    if not behavior_tags:
+        return []
+
+    hypotheses = []
+    apis = []
+    if isinstance(result, dict):
+        apis = result.get("api_calls", [])
+        if not apis:
+            pseudocode = result.get("pseudocode", "")
+            if pseudocode:
+                apis = [m.group(0) for m in _WIN32_API_PATTERN.finditer(pseudocode)]
+
+    for tag in behavior_tags:
+        template = _HYPOTHESIS_TEMPLATES.get(tag)
+        if not template:
+            continue
+        evidence = [f"behavior_tag={tag}", f"tool={tool}:{action}"]
+        if addr:
+            evidence.append(f"addr={addr}")
+        if apis:
+            evidence.append(f"apis={','.join(apis[:5])}")
+        hypotheses.append({
+            "statement": template["statement"],
+            "confidence": template["confidence"],
+            "evidence": evidence,
+            "suggested_actions": template["suggested_actions"],
+        })
+
+    return hypotheses
+
+
+# ============================================================================
 # Auto-Blackboard
 # ============================================================================
 
@@ -447,6 +524,27 @@ def auto_blackboard_write(
             "tags": list(set(digest.get("api_categories", []))),
             "priority": 5 if security else 4,
         })
+
+        # Auto-hypothesis generation from behavior tags
+        behavior_tags = digest.get("behavior_tags", [])
+        if behavior_tags:
+            hypotheses = generate_hypotheses(tool, action, result, addr, behavior_tags)
+            if hypotheses:
+                try:
+                    from ida_pro_mcp.ida_mcp.tools.blackboard import BlackboardStore
+                    store = BlackboardStore()
+                    for hyp in hypotheses:
+                        store.write(
+                            title=hyp['statement'][:120],
+                            content=json.dumps(hyp),
+                            category='hypothesis',
+                            addr=addr or '',
+                            tags=['auto', 'hypothesis'] + behavior_tags[:3],
+                            confidence=hyp['confidence'],
+                            source='auto_hypothesis',
+                        )
+                except Exception:
+                    pass
     
     # Found strings with suspicious patterns
     if tool == "data" and action == "strings":

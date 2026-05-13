@@ -906,19 +906,18 @@ def code(
             elif action == "strings_in_func":
                 func = idaapi.get_func(ea)
                 if not func:
-                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}"))
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
-                
+
                 str_lines = []
                 for item in idautils.FuncItems(func.start_ea):
                     for xref in idautils.XrefsFrom(item, 0):
                         if not xref.iscode:
-                            # Check if string
                             s = idc.get_strlit_contents(xref.to)
                             if s:
                                 if isinstance(s, bytes):
                                     s = s.decode("utf-8", errors="replace")
-                                str_lines.append(f"{hex(xref.to)}  {s}")
+                                str_lines.append(f"{hex_ea(xref.to)}  {s}")
                 results.append({"ok": True, "addr": addr, "strings": "\n".join(str_lines), "count": len(str_lines)})
 
             elif action == "diff_functions":

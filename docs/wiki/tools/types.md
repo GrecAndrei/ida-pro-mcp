@@ -1,69 +1,32 @@
-# TYPES Tool Manual
+# types
 
-## What It Does
-Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.
+Manages type information: structs, enums, typedefs, prototypes, and type propagation.
 
 ## Actions
-- `list`
-- `get`
-- `set_prototype`
-- `parse_decl`
-- `declare`
-- `apply`
-- `search_structs`
-- `infer`
-- `read_struct`
-- `import_header`
+- `list` — list all local types. Optional `offset`, `count`, `filter`
+- `get` — get type definition by `name` or `ordinal`
+- `set_prototype` — set function prototype. Params: `address`, `prototype`
+- `parse_decl` — parse a C declaration string. Params: `decl`
+- `declare` — declare a new type. Params: `decl`
+- `apply` — apply a type to an address. Params: `address`, `type_name`
+- `search_structs` — search structs by field name/type. Params: `query`
+- `infer` — infer type for an address. Params: `address`
+- `read_struct` — read struct layout. Params: `name`
+- `import_header` — import a C header file. Params: `path` or `content`
+- `diff` — diff two types. Params: `type_a`, `type_b`
+- `visualize` — text visualization of struct layout. Params: `name`
+- `propagate` — propagate type info from address. Params: `address`
+- `enum_values` — list enum members. Params: `name`
+- `type_graph` — show type dependency graph. Params: `name`, optional `depth`
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "types",
-  "arguments": {
-    "action": "list"
-  }
-}
+{"name": "types", "arguments": {"action": "set_prototype", "address": "0x401000", "prototype": "int __cdecl main(int argc, char **argv)"}}
+```
+```json
+{"name": "types", "arguments": {"action": "read_struct", "name": "SOCKET_INFO"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `import_header` accepts either a file `path` or inline `content`.
+- Use `propagate` after setting a type to push it through xrefs automatically.

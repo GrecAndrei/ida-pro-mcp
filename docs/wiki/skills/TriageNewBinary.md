@@ -1,49 +1,49 @@
-# SKILL: Triage New Binary
+# Skill: Triage New Binary
 
-**Role**: Forensic Analyst
-**Trigger**: When a new session starts or when the user says "what's this binary about?" or "start analysis".
+**Goal:** Understand what a binary does in <10 tool calls.
 
-## Context
-When first analyzing a binary, the goal is to build a mental map of its architecture, protections (packers), and primary entry points without wasting tokens on random code.
+## Key Sequence
 
-## Workflow
-
-### 1. Global Context
-Always start by checking the architecture and file hashes.
-```python
-idb(action="meta")
+```
+agent(action="cluster")
+  → threat_hunt(action="quick")
+  → summarize(action="report")
+  → blackboard(action="search", query="...")
 ```
 
-### 2. Packer Detection
-Check if the binary is packed or encrypted before diving into code.
-```python
-# Check for high-entropy segments
-entropy(action="section")
-# Run specific packer detection
-entropy(action="packed_detect")
+## When to Use
+
+- First encounter with an unknown binary
+- Need quick classification before deep analysis
+- Prioritizing which binaries to analyze in a batch
+
+## Smart Features Used
+
+| Feature | Role |
+|---------|------|
+| BehaviorClassifier | Groups functions by behavior (zero-shot, bge-code-v1) |
+| FunctionEmbeddingIndex | Powers similarity search for naming |
+| Blackboard | Auto-captures all findings, enables cross-session correlation |
+
+## Minimal Example
+
+```json
+{"name": "batch", "arguments": {"calls": [
+  "session:create binary_path=/path/to/bin",
+  "agent:cluster",
+  "threat_hunt:quick",
+  "summarize:report"
+]}}
 ```
 
-### 3. Crown Jewel Discovery
-Identify the most important functions (main, library calls, crypto).
-```python
-# Find "interesting" locations automatically
-nav(action="interesting")
-# Get entry points
-idb(action="entrypoints")
+Then search blackboard for related prior work:
+
+```json
+{"name": "blackboard", "arguments": {"action": "search", "query": "similar_indicator"}}
 ```
 
-### 4. Semantic Search
-Search for high-value strings (URLs, error messages, hardcoded keys).
-```python
-agent(action="search_all", query="http")
-agent(action="search_all", query="key")
-```
+## Exit Criteria
 
-### 5. Topology Map
-Look at the callgraph of the most complex function found in step 3.
-```python
-graph(action="callgraph", addr="main", depth=2, format="mermaid")
-```
----
-Doc status: Reviewed for multi-session parallel stdio, batch tool, analysis tool, context_pack, data.bulk_query, taint.slice, pagination.
-Last reviewed: 2026-01-09
+- Binary type and threat level known
+- Major behavioral clusters identified
+- Decision made: deep-dive or deprioritize

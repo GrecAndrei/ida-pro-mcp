@@ -1,4 +1,3 @@
-
 try:
     from ._common import *
 except ImportError:
@@ -10,27 +9,89 @@ import re
 # PROTOCOL - Network Protocol Structure Analysis for LLMs
 # ============================================================================
 
-# Known protocol signature strings
+# BehaviorClassifier-based protocol detection
+try:
+    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+except ImportError:
+    try:
+        from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+    except ImportError:
+        BgeCodeEmbedder = None  # type: ignore
+        BehaviorClassifier = None  # type: ignore
+
+# Blackboard for auto-writing findings
+try:
+    from .blackboard import BlackboardStore
+except ImportError:
+    try:
+        from blackboard import BlackboardStore  # type: ignore[import-not-found]
+    except ImportError:
+        BlackboardStore = None  # type: ignore
+
+# Protocol-specific anchors for BehaviorClassifier
+_PROTOCOL_ANCHORS = {
+    "http_protocol": "HTTP_GET HTTP_POST Content-Type User-Agent url_encode http_connect recv_response parse_headers",
+    "tls_ssl": "SSL_connect TLS_client_hello certificate_verify handshake_state cipher_suite x509",
+    "custom_binary": "magic_bytes packet_header length_field checksum_verify parse_packet serialize_packet",
+    "dns_protocol": "dns_query dns_response A_record AAAA_record resolve_hostname nslookup",
+    "smtp_ftp": "EHLO MAIL FROM RCPT TO DATA QUIT FTP_connect PASV PORT",
+}
+
+
+class _ProtocolClassifier(BehaviorClassifier if BehaviorClassifier else object):
+    """BehaviorClassifier subclass with protocol-specific anchors."""
+    ANCHORS = _PROTOCOL_ANCHORS
+    _shared = None
+    _shared_lock = __import__("threading").Lock()
+
+    @classmethod
+    def instance(cls, embedder):
+        with cls._shared_lock:
+            if cls._shared is None:
+                cls._shared = cls(embedder)
+                cls._shared._preload_anchors_async()
+        return cls._shared
+
+
+def _get_protocol_classifier():
+    """Return protocol classifier instance or None."""
+    if BehaviorClassifier is None or BgeCodeEmbedder is None:
+        return None
+    try:
+        embedder = BgeCodeEmbedder()
+        return _ProtocolClassifier.instance(embedder)
+    except Exception:
+        return None
+
+
+def _bb_write(title, content, addr=None, tags=None):
+    """Auto-write protocol finding to blackboard."""
+    if BlackboardStore is None:
+        return None
+    try:
+        store = BlackboardStore()
+        return store.write(
+            title=title, content=content, category="protocol",
+            addr=addr, tags=tags or ["protocol"], confidence=0.8,
+        )
+    except Exception:
+        return None
+
+
+# Fallback heuristic data
 _PROTOCOL_STRINGS = {
     "HTTP": ["HTTP/1.", "HTTP/2", "GET ", "POST ", "PUT ", "DELETE ", "HEAD ",
-             "Content-Type:", "Content-Length:", "Host:", "User-Agent:",
-             "Accept:", "Authorization:", "Cookie:", "Set-Cookie:"],
-    "DNS": ["dns", "DNS", "nameserver", "resolv", "AAAA", "CNAME", "MX ",
-            "NS ", "SOA ", "PTR ", "SRV ", "TXT "],
+             "Content-Type:", "Content-Length:", "Host:", "User-Agent:"],
+    "DNS": ["dns", "DNS", "nameserver", "resolv", "AAAA", "CNAME", "MX "],
     "TLS": ["TLS", "SSL", "TLSv1", "SSLv3", "certificate", "cipher",
-            "handshake", "ECDHE", "RSA", "AES_256_GCM", "SHA256",
-            "X509", "PEM", "-----BEGIN CERTIFICATE-----"],
-    "MQTT": ["MQTT", "CONNECT", "PUBLISH", "SUBSCRIBE", "UNSUBSCRIBE",
-             "PINGREQ", "PINGRESP", "CONNACK", "PUBACK", "SUBACK"],
-    "FTP": ["USER ", "PASS ", "RETR ", "STOR ", "LIST ", "QUIT",
-            "PORT ", "PASV", "TYPE ", "CWD ", "PWD", "MKD ", "RMD "],
-    "SMTP": ["EHLO ", "HELO ", "MAIL FROM:", "RCPT TO:", "DATA",
-             "QUIT", "RSET", "VRFY", "NOOP"],
+            "handshake", "X509", "PEM"],
+    "MQTT": ["MQTT", "CONNECT", "PUBLISH", "SUBSCRIBE", "CONNACK"],
+    "FTP": ["USER ", "PASS ", "RETR ", "STOR ", "LIST ", "QUIT", "PORT ", "PASV"],
+    "SMTP": ["EHLO ", "HELO ", "MAIL FROM:", "RCPT TO:", "DATA", "QUIT"],
     "WebSocket": ["Upgrade: websocket", "Sec-WebSocket", "ws://", "wss://"],
     "gRPC": ["grpc", "application/grpc", "proto", "protobuf"],
 }
 
-# Network API patterns for protocol detection
 _NETWORK_APIS = {
     "socket": ["socket", "WSASocket", "WSASocketA", "WSASocketW"],
     "connect": ["connect", "WSAConnect"],
@@ -40,68 +101,41 @@ _NETWORK_APIS = {
     "send": ["send", "sendto", "WSASend", "WSASendTo"],
     "recv": ["recv", "recvfrom", "WSARecv", "WSARecvFrom"],
     "close": ["closesocket", "close", "shutdown"],
-    "dns": ["getaddrinfo", "gethostbyname", "gethostbyaddr",
-            "getservbyname", "getservbyport", "getnameinfo"],
-    "http": ["InternetOpen", "InternetOpenA", "InternetOpenW",
-             "InternetConnect", "InternetConnectA", "InternetConnectW",
-             "HttpOpenRequest", "HttpOpenRequestA", "HttpOpenRequestW",
-             "HttpSendRequest", "HttpSendRequestA", "HttpSendRequestW",
-             "InternetReadFile", "URLDownloadToFile", "URLDownloadToFileA",
-             "WinHttpOpen", "WinHttpConnect", "WinHttpOpenRequest",
-             "WinHttpSendRequest", "WinHttpReceiveResponse",
-             "WinHttpReadData", "WinHttpWriteData",
-             "curl_easy_init", "curl_easy_perform", "curl_easy_setopt",
-             "curl_easy_cleanup"],
+    "dns": ["getaddrinfo", "gethostbyname", "gethostbyaddr"],
+    "http": ["InternetOpen", "InternetConnect", "HttpOpenRequest",
+             "HttpSendRequest", "WinHttpOpen", "WinHttpConnect",
+             "curl_easy_init", "curl_easy_perform"],
     "tls": ["SSL_new", "SSL_connect", "SSL_accept", "SSL_read", "SSL_write",
-            "SSL_free", "SSL_CTX_new", "SSL_CTX_free",
-            "SSL_CTX_set_cipher_list", "SSL_CTX_set_verify",
-            "SSL_CTX_load_verify_locations", "SSL_CTX_use_certificate_file",
-            "SSL_CTX_use_PrivateKey_file", "SSL_set_fd",
-            "SSL_get_peer_certificate", "SSL_get_verify_result",
-            "SSL_shutdown", "SSL_set_verify",
-            "mbedtls_ssl_handshake", "mbedtls_ssl_read", "mbedtls_ssl_write"],
+            "SSL_CTX_new", "SSL_CTX_set_cipher_list",
+            "mbedtls_ssl_handshake", "mbedtls_ssl_read"],
     "byte_order": ["ntohs", "ntohl", "htons", "htonl"],
     "init": ["WSAStartup", "WSACleanup"],
 }
 
-# Flat set of all network API names for fast lookup
 _ALL_NETWORK_APIS = set()
 for _apis in _NETWORK_APIS.values():
     _ALL_NETWORK_APIS.update(a.lower() for a in _apis)
 
-# TLS-specific APIs for tls_config action
 _TLS_CONFIG_APIS = [
     "SSL_CTX_set_cipher_list", "SSL_CTX_set_ciphersuites",
-    "SSL_CTX_set_verify", "SSL_set_verify",
-    "SSL_CTX_load_verify_locations", "SSL_CTX_set_default_verify_paths",
-    "SSL_CTX_use_certificate_file", "SSL_CTX_use_certificate_chain_file",
-    "SSL_CTX_use_PrivateKey_file", "SSL_CTX_set_options",
+    "SSL_CTX_set_verify", "SSL_CTX_load_verify_locations",
+    "SSL_CTX_use_certificate_file", "SSL_CTX_use_PrivateKey_file",
     "SSL_CTX_set_min_proto_version", "SSL_CTX_set_max_proto_version",
-    "SSL_CTX_set_mode", "SSL_CTX_set_session_cache_mode",
     "SSL_get_peer_certificate", "SSL_get_verify_result",
-    "X509_verify_cert", "X509_check_host",
     "mbedtls_ssl_conf_authmode", "mbedtls_ssl_conf_ca_chain",
-    "mbedtls_ssl_conf_own_cert", "mbedtls_ssl_conf_ciphersuites",
-    "mbedtls_x509_crt_parse", "mbedtls_pk_parse_key",
-    "SecureTransport", "SSLSetPeerDomainName",
-    "SChannel", "AcquireCredentialsHandle",
+    "mbedtls_x509_crt_parse",
 ]
 
-# Socket lifecycle phases for socket_flow
 _SOCKET_LIFECYCLE = {
     "create": ["socket", "WSASocket", "WSASocketA", "WSASocketW"],
-    "configure": ["setsockopt", "getsockopt", "ioctlsocket", "fcntl",
-                   "bind"],
+    "configure": ["setsockopt", "getsockopt", "ioctlsocket", "bind"],
     "connect": ["connect", "WSAConnect"],
     "listen": ["listen", "accept", "WSAAccept"],
-    "io": ["send", "sendto", "recv", "recvfrom",
-           "WSASend", "WSARecv", "WSASendTo", "WSARecvFrom",
-           "read", "write", "select", "poll", "epoll_ctl",
-           "SSL_read", "SSL_write"],
-    "close": ["closesocket", "close", "shutdown", "SSL_shutdown", "SSL_free"],
+    "io": ["send", "sendto", "recv", "recvfrom", "WSASend", "WSARecv",
+           "SSL_read", "SSL_write", "select", "poll"],
+    "close": ["closesocket", "close", "shutdown", "SSL_shutdown"],
 }
 
-# Common protocol magic numbers
 _KNOWN_MAGIC = {
     0x474554: ("HTTP GET", "ASCII 'GET'"),
     0x504F5354: ("HTTP POST", "ASCII 'POST'"),
@@ -112,17 +146,12 @@ _KNOWN_MAGIC = {
     0x16030303: ("TLS 1.2 ClientHello", "TLS record"),
     0x4D515454: ("MQTT", "ASCII 'MQTT'"),
     0x89504E47: ("PNG", "PNG header"),
-    0xCAFEBABE: ("Java class / Mach-O fat", "Magic number"),
     0x7F454C46: ("ELF", "ELF header"),
     0x504B0304: ("ZIP/APK", "PK header"),
-    0xFEEDFACE: ("Mach-O 32-bit", "Mach-O magic"),
-    0xFEEDFACF: ("Mach-O 64-bit", "Mach-O magic"),
-    0xD0CF11E0: ("OLE/MS Office", "OLE header"),
 }
 
 
 def _get_all_strings(max_strings=50000):
-    """Collect all defined strings from the IDB (bounded to max_strings)."""
     results = []
     sc = idautils.Strings()
     for idx, s in enumerate(sc):
@@ -135,11 +164,9 @@ def _get_all_strings(max_strings=50000):
 
 
 def _find_api_xrefs(api_name, max_xrefs=5000):
-    """Find all xrefs to a named API (bounded to max_xrefs). Returns list of (caller_ea, caller_name)."""
     results = []
     ea = ida_name.get_name_ea(idaapi.BADADDR, api_name)
     if ea == idaapi.BADADDR:
-        # Try with common suffixes
         for suffix in ("A", "W", "@plt", "@PLT"):
             ea = ida_name.get_name_ea(idaapi.BADADDR, api_name + suffix)
             if ea != idaapi.BADADDR:
@@ -157,7 +184,6 @@ def _find_api_xrefs(api_name, max_xrefs=5000):
 
 
 def _get_func_callees(func_ea, max_refs=2000):
-    """Return list of (callee_ea, callee_name) for the function (bounded to max_refs)."""
     fn = ida_funcs.get_func(func_ea)
     if not fn:
         return []
@@ -169,9 +195,7 @@ def _get_func_callees(func_ea, max_refs=2000):
         for xref in idautils.CodeRefsFrom(head, 0):
             if xref not in seen:
                 seen.add(xref)
-                name = idc.get_func_name(xref)
-                if not name:
-                    name = ida_name.get_name(xref)
+                name = idc.get_func_name(xref) or ida_name.get_name(xref)
                 if name:
                     callees.append((xref, name))
                     if len(callees) >= max_refs:
@@ -180,7 +204,6 @@ def _get_func_callees(func_ea, max_refs=2000):
 
 
 def _get_func_strings(func_ea, max_refs=500):
-    """Get all string references from a function (bounded to max_refs)."""
     fn = ida_funcs.get_func(func_ea)
     if not fn:
         return []
@@ -202,7 +225,6 @@ def _get_func_strings(func_ea, max_refs=500):
 
 
 def _count_switch_cases(func_ea):
-    """Count switch/case targets in a function (architecture-neutral)."""
     fn = ida_funcs.get_func(func_ea)
     if not fn:
         return 0
@@ -215,7 +237,6 @@ def _count_switch_cases(func_ea):
 
 
 def _strip_api_suffix(name):
-    """Strip common API suffixes for matching."""
     for suffix in ("A", "W", "@plt", "@PLT"):
         if name.endswith(suffix):
             return name[:-len(suffix)]
@@ -223,11 +244,9 @@ def _strip_api_suffix(name):
 
 
 def _match_query(text, matcher):
-    """Check if text matches query filter (regex/glob/substring/semantic auto-detected)."""
     if not matcher:
         return True
-    value = "" if text is None else str(text)
-    return bool(matcher(value))
+    return bool(matcher("" if text is None else str(text)))
 
 
 @tool
@@ -246,108 +265,98 @@ def protocol(
     Analyze network protocol structures, parsing code, and communication patterns.
 
     ACTIONS:
-
-    detect - Detect network protocol usage by scanning strings and API patterns.
-        Returns: {protocols_detected, api_usage, string_evidence}
-
+    detect - Detect network protocol usage via BehaviorClassifier + heuristic fallback.
     parsers - Find protocol parsing functions (buffer reads with offset arithmetic).
-        Params: addr (optional, scope to one function), limit, query
-        Returns: {parsers}
-
     serializers - Find protocol serialization functions (structured buffer writes).
-        Params: addr (optional), limit, query
-        Returns: {serializers}
-
     handlers - Find message/command handler dispatch tables (large switch statements).
-        Params: addr (optional), limit, query
-        Returns: {handlers}
-
     endpoints - Find network endpoint strings (URLs, IPs, hostnames, ports).
-        Params: limit, query
-        Returns: {endpoints}
-
     tls_config - Analyze TLS/SSL configuration (cipher suites, certificate handling).
-        Params: addr (optional), limit
-        Returns: {tls_apis, cipher_strings, cert_strings}
-
     socket_flow - Trace socket lifecycle (create -> bind/connect -> send/recv -> close).
-        Params: addr (optional), limit
-        Returns: {flows}
-
     packet_struct - Infer packet/message structure from parsing code.
-        Params: addr (required)
-        Returns: {fields, byte_order_calls, size_hints}
-
     magic_numbers - Find protocol magic numbers and version identifiers.
-        Params: limit, query
-        Returns: {magic_numbers}
-
     state_machine - Detect protocol state machine patterns.
-        Params: addr (optional), limit
-        Returns: {state_machines}
     """
     try:
         query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
-        # ----------------------------------------------------------------
-        # ACTION: detect
-        # ----------------------------------------------------------------
+
         if action == "detect":
             protocols_detected = {}
             api_usage = {}
             string_evidence = {}
+            classifier_results = []
 
-            # Scan strings for protocol signatures
-            all_strings = _get_all_strings()
-            for proto, patterns in _PROTOCOL_STRINGS.items():
-                matches = []
-                for s_ea, s_val, s_len in all_strings:
-                    for pat in patterns:
-                        if pat in s_val:
-                            entry = f"{hex(s_ea)}  \"{s_val[:80]}\""
-                            if entry not in matches:
-                                matches.append(entry)
-                            break
-                if matches:
-                    string_evidence[proto] = matches[:limit]
-                    protocols_detected[proto] = len(matches)
+            # --- BehaviorClassifier-based detection ---
+            classifier = _get_protocol_classifier()
+            if classifier is not None:
+                # Gather representative text from binary
+                all_strings = _get_all_strings(max_strings=5000)
+                corpus = " ".join(s_val for _, s_val, _ in all_strings[:2000])
+                # Also gather API names referenced
+                for api_cat, apis in _NETWORK_APIS.items():
+                    for api in apis:
+                        xrefs = _find_api_xrefs(api)
+                        if xrefs:
+                            corpus += " " + api
+                            callers = [f"{hex(ea)} {name}" for ea, name in xrefs[:limit]]
+                            api_usage[api] = callers
 
-            # Scan API usage
-            for api_cat, apis in _NETWORK_APIS.items():
-                for api in apis:
-                    xrefs = _find_api_xrefs(api)
-                    if xrefs:
-                        callers = []
-                        for caller_ea, caller_name in xrefs:
-                            entry = f"{hex(caller_ea)}  {caller_name}"
-                            if entry not in callers:
-                                callers.append(entry)
-                        api_usage[api] = callers[:limit]
+                try:
+                    classifier_results = classifier.classify(corpus, threshold=0.3, top_k=5)
+                    for r in classifier_results:
+                        protocols_detected[r["behavior"]] = r["confidence"]
+                except Exception:
+                    classifier_results = []
 
-            return {
+            # --- Fallback heuristics when classifier unavailable or no results ---
+            if not classifier_results:
+                all_strings = _get_all_strings()
+                for proto, patterns in _PROTOCOL_STRINGS.items():
+                    matches = []
+                    for s_ea, s_val, _ in all_strings:
+                        for pat in patterns:
+                            if pat in s_val:
+                                entry = f"{hex(s_ea)}  \"{s_val[:80]}\""
+                                if entry not in matches:
+                                    matches.append(entry)
+                                break
+                    if matches:
+                        string_evidence[proto] = matches[:limit]
+                        protocols_detected[proto] = len(matches)
+
+                if not api_usage:
+                    for api_cat, apis in _NETWORK_APIS.items():
+                        for api in apis:
+                            xrefs = _find_api_xrefs(api)
+                            if xrefs:
+                                callers = [f"{hex(ea)} {name}" for ea, name in xrefs[:limit]]
+                                api_usage[api] = callers
+
+            # Auto-write to blackboard
+            if protocols_detected:
+                _bb_write(
+                    title=f"protocol:detect {list(protocols_detected.keys())[:5]}",
+                    content=str(protocols_detected),
+                    tags=["protocol", "detect"] + list(protocols_detected.keys())[:3],
+                )
+
+            result = {
                 "ok": True,
                 "protocols_detected": protocols_detected,
                 "api_usage": api_usage,
                 "string_evidence": string_evidence,
             }
+            if classifier_results:
+                result["classifier_hits"] = classifier_results
+            return result
 
-        # ----------------------------------------------------------------
-        # ACTION: parsers
-        # ----------------------------------------------------------------
         elif action == "parsers":
             parsers = []
-
-            if addr:
-                ea, err = validate_addr(addr, require_func=True)
-                if err:
-                    return err
-                func_list = [ea]
-            else:
-                func_list = list(idautils.Functions())
+            func_list = [validate_addr(addr, require_func=True)[0]] if addr else list(idautils.Functions())
+            if addr and func_list[0] is None:
+                return validate_addr(addr, require_func=True)[1]
 
             byte_order_apis = {"ntohs", "ntohl", "htons", "htonl",
-                               "__builtin_bswap16", "__builtin_bswap32",
-                               "__builtin_bswap64", "_byteswap_ushort",
-                               "_byteswap_ulong", "_byteswap_uint64"}
+                               "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64"}
 
             for func_ea in func_list:
                 if len(parsers) >= limit:
@@ -357,55 +366,29 @@ def protocol(
                     continue
                 callees = _get_func_callees(func_ea)
                 callee_names = {_strip_api_suffix(c[1]).lower() for c in callees}
-
-                # Heuristic: calls byte-order conversion or memcpy-style reads
                 has_byte_order = bool(callee_names & {a.lower() for a in byte_order_apis})
-                has_memread = bool(callee_names & {"memcpy", "memmove", "bcopy",
-                                                   "recv", "recvfrom", "read",
-                                                   "wsarecv", "ssl_read",
-                                                   "internetreadfile"})
-
+                has_memread = bool(callee_names & {"memcpy", "memmove", "recv", "recvfrom",
+                                                   "read", "wsarecv", "ssl_read"})
                 if has_byte_order or has_memread:
                     indicators = []
                     if has_byte_order:
                         indicators.append("byte_order")
                     if has_memread:
                         indicators.append("buffer_read")
-                    fn_strs = _get_func_strings(func_ea)
-                    parsers.append({
-                        "address": hex(func_ea),
-                        "name": fname,
-                        "indicators": indicators,
-                        "relevant_callees": [c[1] for c in callees
-                                             if _strip_api_suffix(c[1]).lower() in
-                                             (byte_order_apis | {"memcpy", "memmove",
-                                              "recv", "recvfrom", "read"})],
-                        "strings": fn_strs[:10],
-                    })
+                    parsers.append({"address": hex(func_ea), "name": fname,
+                                    "indicators": indicators})
 
             return {"ok": True, "parsers": "\n".join(str(x) for x in parsers), "count": len(parsers)}
 
-        # ----------------------------------------------------------------
-        # ACTION: serializers
-        # ----------------------------------------------------------------
         elif action == "serializers":
             serializers = []
+            func_list = [validate_addr(addr, require_func=True)[0]] if addr else list(idautils.Functions())
+            if addr and func_list[0] is None:
+                return validate_addr(addr, require_func=True)[1]
 
-            if addr:
-                ea, err = validate_addr(addr, require_func=True)
-                if err:
-                    return err
-                func_list = [ea]
-            else:
-                func_list = list(idautils.Functions())
-
-            write_apis = {"memcpy", "memmove", "send", "sendto", "write",
-                          "wsasend", "wsasendto", "ssl_write", "fwrite",
-                          "httpsendrequesta", "httpsendrequestw",
-                          "winhttpsendrequest", "winhttpwritedata",
-                          "internetsendrequest"}
-            pack_apis = {"htons", "htonl", "sprintf", "snprintf",
-                         "sprint", "strcat", "strncat", "memset",
+            write_apis = {"memcpy", "send", "sendto", "write", "wsasend", "ssl_write",
+                          "winhttpsendrequest", "winhttpwritedata"}
+            pack_apis = {"htons", "htonl", "sprintf", "snprintf", "memset",
                          "__builtin_bswap16", "__builtin_bswap32"}
 
             for func_ea in func_list:
@@ -416,40 +399,17 @@ def protocol(
                     continue
                 callees = _get_func_callees(func_ea)
                 callee_names = {_strip_api_suffix(c[1]).lower() for c in callees}
-
-                has_write = bool(callee_names & write_apis)
-                has_pack = bool(callee_names & {a.lower() for a in pack_apis})
-
-                if has_write and has_pack:
-                    indicators = []
-                    if has_write:
-                        indicators.append("buffer_write")
-                    if has_pack:
-                        indicators.append("data_packing")
-                    serializers.append({
-                        "address": hex(func_ea),
-                        "name": fname,
-                        "indicators": indicators,
-                        "relevant_callees": [c[1] for c in callees
-                                             if _strip_api_suffix(c[1]).lower() in
-                                             (write_apis | {a.lower() for a in pack_apis})],
-                    })
+                if bool(callee_names & write_apis) and bool(callee_names & pack_apis):
+                    serializers.append({"address": hex(func_ea), "name": fname,
+                                        "indicators": ["buffer_write", "data_packing"]})
 
             return {"ok": True, "serializers": "\n".join(str(x) for x in serializers), "count": len(serializers)}
 
-        # ----------------------------------------------------------------
-        # ACTION: handlers
-        # ----------------------------------------------------------------
         elif action == "handlers":
             handlers = []
-
-            if addr:
-                ea, err = validate_addr(addr, require_func=True)
-                if err:
-                    return err
-                func_list = [ea]
-            else:
-                func_list = list(idautils.Functions())
+            func_list = [validate_addr(addr, require_func=True)[0]] if addr else list(idautils.Functions())
+            if addr and func_list[0] is None:
+                return validate_addr(addr, require_func=True)[1]
 
             for func_ea in func_list:
                 if len(handlers) >= limit:
@@ -457,170 +417,95 @@ def protocol(
                 fname = idc.get_func_name(func_ea)
                 if not _match_query(fname, query_matcher):
                     continue
-
                 case_count = _count_switch_cases(func_ea)
                 if case_count < 3:
                     continue
-
-                # Check if function is related to network/message handling
                 callees = _get_func_callees(func_ea)
                 callee_names = {_strip_api_suffix(c[1]).lower() for c in callees}
-                fn_strs = _get_func_strings(func_ea)
                 is_network = bool(callee_names & _ALL_NETWORK_APIS)
-                has_msg_strings = any(
-                    kw in s.lower() for s in fn_strs
-                    for kw in ("msg", "message", "command", "cmd", "opcode",
-                               "type", "handler", "dispatch", "packet", "request")
-                )
+                handlers.append({"address": hex(func_ea), "name": fname,
+                                 "case_count": case_count, "network_related": is_network})
 
-                handlers.append({
-                    "address": hex(func_ea),
-                    "name": fname,
-                    "case_count": case_count,
-                    "network_related": is_network,
-                    "has_message_strings": has_msg_strings,
-                    "strings": fn_strs[:10],
-                })
-
-            # Sort by case count descending
-            # handlers are strings, already sorted by append order
             return {"ok": True, "handlers": handlers[:limit], "count": len(handlers)}
 
-        # ----------------------------------------------------------------
-        # ACTION: endpoints
-        # ----------------------------------------------------------------
         elif action == "endpoints":
-            endpoints = {
-                "urls": [],
-                "ips": [],
-                "hostnames": [],
-                "ports": [],
-            }
-
+            endpoints = {"urls": [], "ips": [], "hostnames": [], "ports": []}
             url_re = re.compile(r'https?://[^\s"\'<>]+')
             ip_re = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
-            host_re = re.compile(r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|gov|edu|mil|int|info|biz|co|us|uk|de|fr|jp|cn|ru|br|in|au|dev|app|cloud)\b')
+            host_re = re.compile(r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|gov|edu|dev|app|cloud)\b')
             port_re = re.compile(r'\b(?:port|PORT)[:\s=]+(\d{1,5})\b')
 
-            all_strings = _get_all_strings()
-            for s_ea, s_val, s_len in all_strings:
+            for s_ea, s_val, _ in _get_all_strings():
                 if not _match_query(s_val, query_matcher):
                     continue
-
-                # URLs
                 for m in url_re.finditer(s_val):
-                    entry = f"{hex(s_ea)}  \"{m.group()[:120]}\""
-                    if entry not in endpoints["urls"] and len(endpoints["urls"]) < limit:
-                        endpoints["urls"].append(entry)
-
-                # IPs
+                    e = f"{hex(s_ea)}  \"{m.group()[:120]}\""
+                    if e not in endpoints["urls"] and len(endpoints["urls"]) < limit:
+                        endpoints["urls"].append(e)
                 for m in ip_re.finditer(s_val):
-                    ip = m.group()
-                    # Filter out version-like patterns
-                    parts = ip.split(".")
+                    parts = m.group().split(".")
                     if all(0 <= int(p) <= 255 for p in parts):
-                        entry = f"{hex(s_ea)}  {ip}"
-                        if entry not in endpoints["ips"] and len(endpoints["ips"]) < limit:
-                            endpoints["ips"].append(entry)
-
-                # Hostnames
+                        e = f"{hex(s_ea)}  {m.group()}"
+                        if e not in endpoints["ips"] and len(endpoints["ips"]) < limit:
+                            endpoints["ips"].append(e)
                 for m in host_re.finditer(s_val):
-                    entry = f"{hex(s_ea)}  {m.group()}"
-                    if entry not in endpoints["hostnames"] and len(endpoints["hostnames"]) < limit:
-                        endpoints["hostnames"].append(entry)
-
-                # Ports
+                    e = f"{hex(s_ea)}  {m.group()}"
+                    if e not in endpoints["hostnames"] and len(endpoints["hostnames"]) < limit:
+                        endpoints["hostnames"].append(e)
                 for m in port_re.finditer(s_val):
-                    entry = f"{hex(s_ea)}  port={m.group(1)}"
-                    if entry not in endpoints["ports"] and len(endpoints["ports"]) < limit:
-                        endpoints["ports"].append(entry)
-
-            # Also check for well-known port constants used with htons
-            htons_xrefs = _find_api_xrefs("htons")
-            for caller_ea, caller_name in htons_xrefs:
-                if len(endpoints["ports"]) >= limit:
-                    break
-                entry = f"{hex(caller_ea)}  {caller_name}  (htons caller)"
-                if entry not in endpoints["ports"]:
-                    endpoints["ports"].append(entry)
+                    e = f"{hex(s_ea)}  port={m.group(1)}"
+                    if e not in endpoints["ports"] and len(endpoints["ports"]) < limit:
+                        endpoints["ports"].append(e)
 
             total = sum(len(v) for v in endpoints.values())
             return {"ok": True, "endpoints": "\n".join(str(x) for x in endpoints), "total": total}
 
-        # ----------------------------------------------------------------
-        # ACTION: tls_config
-        # ----------------------------------------------------------------
         elif action == "tls_config":
             tls_apis = []
             cipher_strings = []
             cert_strings = []
 
-            # Find TLS API usage
             for api in _TLS_CONFIG_APIS:
-                xrefs = _find_api_xrefs(api)
-                for caller_ea, caller_name in xrefs:
+                for caller_ea, caller_name in _find_api_xrefs(api):
                     if len(tls_apis) >= limit:
                         break
-                    entry = {
-                        "api": api,
-                        "caller_address": hex(caller_ea),
-                        "caller_name": caller_name,
-                    }
-                    tls_apis.append(entry)
+                    tls_apis.append({"api": api, "caller_address": hex(caller_ea),
+                                     "caller_name": caller_name})
 
-            # Scope string search
+            search_pairs = []
             if addr:
                 ea, err = validate_addr(addr, require_func=True)
                 if err:
                     return err
-                search_strings = _get_func_strings(ea)
-                search_pairs = [(ea, s) for s in search_strings]
+                search_pairs = [(ea, s) for s in _get_func_strings(ea)]
             else:
-                all_strs = _get_all_strings()
-                search_pairs = [(s_ea, s_val) for s_ea, s_val, _ in all_strs]
+                search_pairs = [(s_ea, s_val) for s_ea, s_val, _ in _get_all_strings()]
 
-            cipher_keywords = ["ECDHE", "RSA", "AES", "GCM", "CBC", "SHA256",
-                               "SHA384", "SHA1", "DHE", "CHACHA20", "POLY1305",
-                               "TLS_", "SSL_", "cipher"]
-            cert_keywords = ["cert", "certificate", "CA", "X509", "PEM",
-                             "-----BEGIN", ".pem", ".crt", ".cer", ".key",
-                             "verify", "trust"]
+            cipher_kw = ["ecdhe", "rsa", "aes", "gcm", "cbc", "sha256", "chacha20", "tls_", "cipher"]
+            cert_kw = ["cert", "certificate", "x509", "pem", "-----begin", ".pem", ".crt", ".key"]
 
             for s_ea, s_val in search_pairs:
                 s_lower = s_val.lower() if isinstance(s_val, str) else s_val
-                for kw in cipher_keywords:
-                    if kw.lower() in s_lower:
-                        entry = f"{hex(s_ea)}  \"{s_val[:100]}\""
-                        if entry not in cipher_strings and len(cipher_strings) < limit:
-                            cipher_strings.append(entry)
-                        break
-                for kw in cert_keywords:
-                    if kw.lower() in s_lower:
-                        entry = f"{hex(s_ea)}  \"{s_val[:100]}\""
-                        if entry not in cert_strings and len(cert_strings) < limit:
-                            cert_strings.append(entry)
-                        break
+                if any(kw in s_lower for kw in cipher_kw):
+                    e = f"{hex(s_ea)}  \"{s_val[:100]}\""
+                    if e not in cipher_strings and len(cipher_strings) < limit:
+                        cipher_strings.append(e)
+                if any(kw in s_lower for kw in cert_kw):
+                    e = f"{hex(s_ea)}  \"{s_val[:100]}\""
+                    if e not in cert_strings and len(cert_strings) < limit:
+                        cert_strings.append(e)
 
-            return {
-                "ok": True,
-                "tls_apis": tls_apis,
-                "cipher_strings": cipher_strings,
-                "cert_strings": cert_strings,
-            }
+            return {"ok": True, "tls_apis": tls_apis, "cipher_strings": cipher_strings,
+                    "cert_strings": cert_strings}
 
-        # ----------------------------------------------------------------
-        # ACTION: socket_flow
-        # ----------------------------------------------------------------
         elif action == "socket_flow":
             flows = []
-
             if addr:
                 ea, err = validate_addr(addr, require_func=True)
                 if err:
                     return err
                 func_list = [ea]
             else:
-                # Start from functions that call socket creation APIs
                 func_set = set()
                 for api in _SOCKET_LIFECYCLE["create"]:
                     for caller_ea, _ in _find_api_xrefs(api):
@@ -632,35 +517,25 @@ def protocol(
                     break
                 fname = idc.get_func_name(func_ea)
                 callees = _get_func_callees(func_ea)
-                callee_names_lower = {_strip_api_suffix(c[1]).lower() for c in callees}
-
                 phases = {}
                 for phase, apis in _SOCKET_LIFECYCLE.items():
                     matched = [c[1] for c in callees
-                               if _strip_api_suffix(c[1]).lower() in
-                               {a.lower() for a in apis}]
+                               if _strip_api_suffix(c[1]).lower() in {a.lower() for a in apis}]
                     if matched:
                         phases[phase] = matched
-
                 if phases:
-                    phase_order = ["create", "configure", "connect", "listen",
-                                   "io", "close"]
-                    ordered = [p for p in phase_order if p in phases]
+                    phase_order = [p for p in ["create", "configure", "connect", "listen", "io", "close"] if p in phases]
                     complete = "create" in phases and "close" in phases
-                    flows.append(f"{hex(func_ea)}  {fname}  phases={','.join(ordered)}  complete={complete}")
+                    flows.append(f"{hex(func_ea)}  {fname}  phases={','.join(phase_order)}  complete={complete}")
 
-            return {"ok": True, "flows": "\n".join(str(x) for x in flows), "count": len(flows)}
+            return {"ok": True, "flows": "\n".join(flows), "count": len(flows)}
 
-        # ----------------------------------------------------------------
-        # ACTION: packet_struct
-        # ----------------------------------------------------------------
         elif action == "packet_struct":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required for 'packet_struct' action")
             ea, err = validate_addr(addr, require_func=True)
             if err:
                 return err
-
             fname = idc.get_func_name(ea)
             fn = ida_funcs.get_func(ea)
             if not fn:
@@ -670,33 +545,24 @@ def protocol(
             byte_order_calls = [c[1] for c in callees
                                 if _strip_api_suffix(c[1]).lower() in
                                 {"ntohs", "ntohl", "htons", "htonl",
-                                 "__builtin_bswap16", "__builtin_bswap32",
-                                 "__builtin_bswap64"}]
-            fn_strs = _get_func_strings(ea)
+                                 "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64"}]
 
-            # Analyze immediate values used as sizes/offsets
             size_hints = []
             seen_imms = set()
             for head in idautils.Heads(fn.start_ea, fn.end_ea):
-                flags = ida_bytes.get_flags(head)
-                if not ida_bytes.is_code(flags):
+                if not ida_bytes.is_code(ida_bytes.get_flags(head)):
                     continue
                 insn = idaapi.insn_t()
-                length = idaapi.decode_insn(insn, head)
-                if length <= 0:
+                if idaapi.decode_insn(insn, head) <= 0:
                     continue
                 for i in range(idaapi.UA_MAXOP):
                     op = insn.ops[i]
                     if op.type == idaapi.o_void:
                         break
-                    if op.type == idaapi.o_imm:
-                        val = op.value
-                        # Filter for plausible struct sizes/offsets
-                        if 1 <= val <= 65536 and val not in seen_imms:
-                            seen_imms.add(val)
-                            size_hints.append(f"{hex(head)}  value={val}  {hex(val)}")
+                    if op.type == idaapi.o_imm and 1 <= op.value <= 65536 and op.value not in seen_imms:
+                        seen_imms.add(op.value)
+                        size_hints.append(f"{hex(head)}  value={op.value}  {hex(op.value)}")
 
-            # Try to get decompiled output for richer analysis
             fields = []
             try:
                 cfunc = ida_hexrays.decompile(ea)
@@ -704,38 +570,24 @@ def protocol(
                     sv = cfunc.get_pseudocode()
                     for i in range(sv.size()):
                         line = ida_lines.tag_remove(sv[i].line)
-                        # Look for array/pointer offset patterns
-                        if any(p in line for p in ("[", "->", "offset", "buf +",
-                                                    "ptr +", ".field", "header")):
+                        if any(p in line for p in ("[", "->", "offset", "buf +", "header")):
                             fields.append(line.strip())
-            except Exception as _decomp_err:
-                # Hex-Rays may not be available or decompilation may fail — skip silently
+            except Exception:
                 pass
 
-            return {
-                "ok": True,
-                "address": hex(ea),
-                "name": fname,
-                "byte_order_calls": byte_order_calls,
-                "size_hints": size_hints[:limit],
-                "fields": fields[:limit],
-                "strings": fn_strs[:20],
-            }
+            return {"ok": True, "address": hex(ea), "name": fname,
+                    "byte_order_calls": byte_order_calls,
+                    "size_hints": size_hints[:limit], "fields": fields[:limit],
+                    "strings": _get_func_strings(ea)[:20]}
 
-        # ----------------------------------------------------------------
-        # ACTION: magic_numbers
-        # ----------------------------------------------------------------
         elif action == "magic_numbers":
             results = []
-
-            # Search for known magic numbers in data segments
             for seg_ea in idautils.Segments():
                 seg = ida_segment.getseg(seg_ea)
                 if not seg:
                     continue
-                seg_end = seg.end_ea
                 ea_cursor = seg.start_ea
-                while ea_cursor < seg_end and len(results) < limit:
+                while ea_cursor < seg.end_ea and len(results) < limit:
                     flags = ida_bytes.get_flags(ea_cursor)
                     if ida_bytes.is_dword(flags) or ida_bytes.has_value(flags):
                         val = ida_bytes.get_dword(ea_cursor)
@@ -743,14 +595,12 @@ def protocol(
                             proto, desc = _KNOWN_MAGIC[val]
                             if _match_query(proto, query_matcher):
                                 results.append(f"{hex(ea_cursor)}  {hex(val)}  {proto}  {desc}")
-                    ea_cursor = ida_bytes.next_head(ea_cursor, seg_end)
+                    ea_cursor = ida_bytes.next_head(ea_cursor, seg.end_ea)
                     if ea_cursor == idaapi.BADADDR:
                         break
 
-            # Also search strings for version identifiers
             version_re = re.compile(r'(?:v|version|ver)[:\s.=]*(\d+(?:\.\d+)+)', re.IGNORECASE)
-            all_strings = _get_all_strings()
-            for s_ea, s_val, _ in all_strings:
+            for s_ea, s_val, _ in _get_all_strings():
                 if len(results) >= limit:
                     break
                 for m in version_re.finditer(s_val):
@@ -760,75 +610,38 @@ def protocol(
 
             return {"ok": True, "magic_numbers": results, "count": len(results)}
 
-        # ----------------------------------------------------------------
-        # ACTION: state_machine
-        # ----------------------------------------------------------------
         elif action == "state_machine":
             state_machines = []
+            func_list = [validate_addr(addr, require_func=True)[0]] if addr else list(idautils.Functions())
+            if addr and func_list[0] is None:
+                return validate_addr(addr, require_func=True)[1]
 
-            if addr:
-                ea, err = validate_addr(addr, require_func=True)
-                if err:
-                    return err
-                func_list = [ea]
-            else:
-                func_list = list(idautils.Functions())
-
-            state_keywords = {"state", "status", "phase", "stage", "step",
-                              "mode", "fsm", "transition"}
+            state_keywords = {"state", "status", "phase", "stage", "step", "mode", "fsm", "transition"}
 
             for func_ea in func_list:
                 if len(state_machines) >= limit:
                     break
                 fname = idc.get_func_name(func_ea)
-
                 case_count = _count_switch_cases(func_ea)
                 fn_strs = _get_func_strings(func_ea)
-                name_lower = fname.lower()
+                has_state_name = any(kw in fname.lower() for kw in state_keywords)
+                has_state_strings = any(any(kw in s.lower() for kw in state_keywords) for s in fn_strs)
 
-                # Check for state-related naming
-                has_state_name = any(kw in name_lower for kw in state_keywords)
-                has_state_strings = any(
-                    any(kw in s.lower() for kw in state_keywords)
-                    for s in fn_strs
-                )
-
-                # A state machine typically has a switch on state + transitions
                 if case_count >= 3 and (has_state_name or has_state_strings):
-                    # Check if function calls itself or functions in a cycle
-                    callees = _get_func_callees(func_ea)
-                    callee_names = [c[1] for c in callees]
-                    is_recursive = fname in callee_names
-
-                    state_machines.append({
-                        "address": hex(func_ea),
-                        "name": fname,
-                        "case_count": case_count,
-                        "state_name_match": has_state_name,
-                        "state_string_match": has_state_strings,
-                        "recursive": is_recursive,
-                        "strings": fn_strs[:10],
-                    })
+                    state_machines.append({"address": hex(func_ea), "name": fname,
+                                           "case_count": case_count,
+                                           "state_name_match": has_state_name,
+                                           "state_string_match": has_state_strings,
+                                           "strings": fn_strs[:10]})
                 elif case_count >= 5:
-                    # Large switch without state keywords - still might be a state machine
                     callees = _get_func_callees(func_ea)
-                    callee_names_lower = {_strip_api_suffix(c[1]).lower() for c in callees}
-                    is_network = bool(callee_names_lower & _ALL_NETWORK_APIS)
-                    if is_network:
-                        state_machines.append({
-                            "address": hex(func_ea),
-                            "name": fname,
-                            "case_count": case_count,
-                            "state_name_match": False,
-                            "state_string_match": False,
-                            "network_related": True,
-                            "strings": fn_strs[:10],
-                        })
+                    callee_names = {_strip_api_suffix(c[1]).lower() for c in callees}
+                    if bool(callee_names & _ALL_NETWORK_APIS):
+                        state_machines.append({"address": hex(func_ea), "name": fname,
+                                               "case_count": case_count,
+                                               "network_related": True, "strings": fn_strs[:10]})
 
-            # Sort by case count descending
-            # state_machines are strings, already sorted by append order
-            return {"ok": True, "state_machines": state_machines[:limit],
-                    "count": len(state_machines)}
+            return {"ok": True, "state_machines": state_machines[:limit], "count": len(state_machines)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

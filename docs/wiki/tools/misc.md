@@ -1,76 +1,26 @@
-# MISC Tool Manual
+# misc
 
-## What It Does
-Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. plugin_* manages IDA plugins. health runs host diagnostics without requiring a session.
+Utility operations: script execution, file I/O, signature loading, plugin management, and cache stats.
 
 ## Actions
-- `python`
-- `idc`
-- `load_sig`
-- `cache_stats`
-- `read_file`
-- `write_file`
-- `plugin_list`
-- `plugin_run`
-- `health`
+- `python` — execute Python code in IDA context. Params: `code`
+- `idc` — execute IDC script. Params: `code`
+- `load_sig` — load a FLIRT signature file. Params: `path` or `name`
+- `cache_stats` — show internal cache statistics
+- `read_file` — read a file from disk. Params: `path`, optional `offset`, `size`
+- `write_file` — write content to a file. Params: `path`, `content`
+- `plugin_list` — list available IDA plugins
+- `plugin_run` — run an IDA plugin. Params: `name`, optional `args`
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health, grep, pick, head, tail, next, stats`
-- `arg`: `integer` — Plugin argument for plugin_run
-- `code`: `string` — Multi-line Python code to execute
-- `content`: `string` — Content to write for write_file
-- `cursor`: `string`
-- `encoding`: `string` — File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.
-- `expr`: `string` — Python expression or IDC script to evaluate
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `name`: `string` — Signature name for load_sig
-- `next_token`: `string`
-- `on`: `string`
-- `path`: `string` — File path for read_file/write_file
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-- `verbose`: `boolean` — Include per-runtime details for health action.
-
-## Example
+## Examples
 ```json
-{
-  "name": "misc",
-  "arguments": {
-    "action": "python"
-  }
-}
+{"name": "misc", "arguments": {"action": "python", "code": "print(idaapi.get_imagebase())"}}
+```
+```json
+{"name": "misc", "arguments": {"action": "plugin_list"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `python` and `idc` execute arbitrary code in the IDA process — use with care.
+- The legacy `plugins` tool name is an alias for `misc` (plugin_list/plugin_run actions).
+- `write_file` is a write operation subject to guardrail strict mode.
