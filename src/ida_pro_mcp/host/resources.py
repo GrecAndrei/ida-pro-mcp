@@ -65,6 +65,13 @@ RESOURCE_TEMPLATES = [
     # State (read this first — complete analysis picture)
     "ida://state",
     "ida://proposals",
+    "ida://knowledge",
+    "ida://knowledge/systems",
+    "ida://knowledge/structs",
+    "ida://knowledge/gaps",
+    "ida://knowledge/attack_surface",
+    "ida://knowledge/peripherals",
+    "ida://knowledge/state_machines",
     # Meta
     "ida://meta",
     # Segments (3)
@@ -112,8 +119,15 @@ RESOURCE_TEMPLATES = [
 def list_resources() -> List[Dict]:
     """Return static resource catalog."""
     return [
-        {"uri": "ida://state", "name": "Analysis State — complete picture (read first)", "mimeType": "application/json"},
+        {"uri": "ida://state", "name": "Analysis State — complete picture (read first)", "mimeType": "text/plain"},
         {"uri": "ida://proposals", "name": "Engine Proposals — pending rename/vuln/cross-session actions", "mimeType": "application/json"},
+        {"uri": "ida://knowledge", "name": "Knowledge Graph — systems/structs/gaps/attack surface", "mimeType": "application/json"},
+        {"uri": "ida://knowledge/systems", "name": "Identified systems (call-graph clusters)", "mimeType": "application/json"},
+        {"uri": "ida://knowledge/structs", "name": "Inferred data structures", "mimeType": "application/json"},
+        {"uri": "ida://knowledge/gaps", "name": "Open gaps — expected but not found", "mimeType": "application/json"},
+        {"uri": "ida://knowledge/attack_surface", "name": "Attack surface map", "mimeType": "application/json"},
+        {"uri": "ida://knowledge/peripherals", "name": "Peripheral map (MMIO)", "mimeType": "application/json"},
+        {"uri": "ida://knowledge/state_machines", "name": "Detected state machines", "mimeType": "application/json"},
         {"uri": "ida://meta", "name": "IDB Metadata", "mimeType": "application/json"},
         {"uri": "ida://segments", "name": "Segments", "mimeType": "application/json"},
         {"uri": "ida://functions", "name": "Functions", "mimeType": "application/json"},
@@ -177,6 +191,8 @@ class ResourceResolver:
             return self._read_state()
         elif domain == "proposals":
             return self._read_proposals()
+        elif domain == "knowledge":
+            return self._read_knowledge(parts)
         elif domain == "segments":
             return self._read_segments_resource(parts)
         elif domain == "functions":
@@ -334,6 +350,60 @@ class ResourceResolver:
         except Exception:
             state["session"] = {}
 
+        # 6. KnowledgeGraph summary + narrative
+        try:
+            import importlib.util as _ilu, os as _os
+            _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                     "knowledge_graph.py")
+            _spec = _ilu.spec_from_file_location("_state_kg", _kg_path)
+            _kgmod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_kgmod)
+            kg = _kgmod.KnowledgeGraph(self.bb_path) if self.bb_path else None
+            if kg:
+                state["knowledge_graph"] = kg.summary()
+                # Open gaps
+                gaps = kg.list_gaps(resolved=False)
+                if gaps:
+                    state["knowledge_graph"]["top_gaps"] = [
+                        {"expected": g["expected"],
+                         "candidates": g.get("candidates", [])[:2],
+                         "priority": g.get("priority")}
+                        for g in gaps[:5]
+                    ]
+                # Systems
+                systems = kg.list_systems()
+                if systems:
+                    state["knowledge_graph"]["systems"] = [
+                        {"name": s["name"],
+                         "members": len(s.get("members", [])),
+                         "coverage_pct": s.get("coverage_pct", 0)}
+                        for s in systems[:8]
+                    ]
+        except Exception:
+            pass
+
+        # 7. Narrative — if available, return as plain text instead of JSON
+        try:
+            bb = self._bb_store()
+            if bb:
+                narratives = bb.list(category="narrative", limit=1,
+                                     include_resolved=True)
+                if narratives:
+                    narrative_text = narratives[0].get("content", "")
+                    if narrative_text and len(narrative_text) > 50:
+                        # Prepend a compact JSON header so the LLM has machine-readable data too
+                        import json as _json
+                        header = _json.dumps({
+                            "binary": state.get("binary", {}),
+                            "coverage": state.get("coverage", {}),
+                            "engine": state.get("engine", {}),
+                            "knowledge_graph": state.get("knowledge_graph", {}),
+                        }, separators=(",", ":"))
+                        full_text = f"<!-- state:{header} -->\n\n{narrative_text}"
+                        return {"uri": "", "mimeType": "text/plain", "text": full_text}
+        except Exception:
+            pass
+
         state["_note"] = (
             "Read ida://proposals for pending engine actions. "
             "Read ida://blackboard/next_target for the highest-priority address to analyze next. "
@@ -345,7 +415,7 @@ class ResourceResolver:
     def _bb_store(self):
         """Load BlackboardStore without IDA deps."""
         try:
-            import importlib.util, os as _os
+            import importlib.util, os as _os, sys as _sys, types as _types
             path = _os.path.join(
                 _os.path.dirname(_os.path.abspath(__file__)),
                 "..", "ida_mcp", "tools", "blackboard.py"
@@ -354,7 +424,21 @@ class ResourceResolver:
             mod = importlib.util.module_from_spec(spec)
             mod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f,
                                   "idawrite": lambda f: f, "IDAError": Exception})
-            spec.loader.exec_module(mod)
+            _stubs = ["idaapi","idc","idautils","ida_funcs","ida_bytes","ida_segment",
+                      "ida_name","ida_typeinf","ida_nalt","ida_hexrays","ida_frame",
+                      "ida_struct","ida_lines"]
+            _saved = {m: _sys.modules.get(m) for m in _stubs}
+            for m in _stubs:
+                if m not in _sys.modules:
+                    _sys.modules[m] = _types.ModuleType(m)
+            if not hasattr(_sys.modules["idaapi"], "BADADDR"):
+                _sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
+            try:
+                spec.loader.exec_module(mod)
+            finally:
+                for m, orig in _saved.items():
+                    if orig is None: _sys.modules.pop(m, None)
+                    else: _sys.modules[m] = orig
             kwargs = {}
             if self.bb_path:
                 kwargs["db_path"] = self.bb_path
@@ -398,6 +482,59 @@ class ResourceResolver:
             })
         except Exception as e:
             return _make_json_content({"error": str(e), "proposals": []})
+
+    def _read_knowledge(self, parts: List[str]) -> Dict:
+        """
+        ida://knowledge              — full KG summary
+        ida://knowledge/systems      — all systems
+        ida://knowledge/structs      — all inferred structs
+        ida://knowledge/gaps         — open gaps
+        ida://knowledge/attack_surface — attack surface
+        ida://knowledge/peripherals  — peripheral map
+        ida://knowledge/state_machines — state machines
+        """
+        if not self.bb_path:
+            return _make_json_content({"error": "No blackboard path available"})
+        try:
+            import importlib.util as _ilu, os as _os
+            _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                     "knowledge_graph.py")
+            _spec = _ilu.spec_from_file_location("_res_kg", _kg_path)
+            _kgmod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_kgmod)
+            kg = _kgmod.KnowledgeGraph(self.bb_path)
+        except Exception as e:
+            return _make_json_content({"error": f"KnowledgeGraph unavailable: {e}"})
+
+        sub = parts[1] if len(parts) > 1 else ""
+
+        if not sub:
+            return _make_json_content({
+                "summary": kg.summary(),
+                "systems": kg.list_systems()[:5],
+                "gaps": kg.list_gaps(resolved=False)[:5],
+                "attack_surface": kg.list_attack_surface()[:5],
+                "note": "Use ida://knowledge/systems, /gaps, /structs, /attack_surface, /peripherals, /state_machines for full lists.",
+            })
+        if sub == "systems":
+            return _make_json_content({"systems": kg.list_systems()})
+        if sub == "structs":
+            return _make_json_content({"structs": kg.list_structs()})
+        if sub == "gaps":
+            open_gaps = kg.list_gaps(resolved=False)
+            filled = kg.list_gaps(resolved=True)
+            return _make_json_content({
+                "open": open_gaps,
+                "filled": filled,
+                "note": "Open gaps are expected capabilities not yet found. Fill them to increase coverage.",
+            })
+        if sub == "attack_surface":
+            return _make_json_content({"attack_surface": kg.list_attack_surface()})
+        if sub == "peripherals":
+            return _make_json_content({"peripherals": kg.list_peripherals()})
+        if sub == "state_machines":
+            return _make_json_content({"state_machines": kg.list_state_machines()})
+        return _make_json_content({"error": f"Unknown knowledge sub-resource: {sub}"})
 
     # ------------------------------------------------------------------
     # Segments
