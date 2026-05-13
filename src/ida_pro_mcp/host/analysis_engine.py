@@ -138,14 +138,62 @@ class ProposalStore:
         return {"id": row[0], "proposal_type": row[1], "title": row[2],
                 "accepted_items": accepted}
 
-    def reject(self, proposal_id: str) -> bool:
+    def reject(self, proposal_id: str, bb_path: str = "") -> bool:
+        """Reject a proposal and write a dead_end entry to the blackboard."""
         with self._conn() as conn:
-            n = conn.execute(
-                "UPDATE proposals SET status='rejected' WHERE id=? AND status='pending'",
+            row = conn.execute(
+                "SELECT id,proposal_type,title,items FROM proposals WHERE id=? AND status='pending'",
                 (proposal_id,)
-            ).rowcount
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute(
+                "UPDATE proposals SET status='rejected' WHERE id=?",
+                (proposal_id,)
+            )
             conn.commit()
-        return n > 0
+
+        # Rejection feedback: write dead_end entries so engine doesn't re-propose
+        if bb_path:
+            try:
+                items = json.loads(row[3] or "[]")
+                import sqlite3 as _sq3
+                with _sq3.connect(bb_path, timeout=5) as bconn:
+                    bconn.execute("PRAGMA journal_mode=WAL")
+                    for item in items[:10]:
+                        addr = item.get("addr", "")
+                        if not addr:
+                            continue
+                        # Check if dead_end already exists for this addr
+                        existing = bconn.execute(
+                            "SELECT id FROM blackboard WHERE addr=? AND category='dead_end'",
+                            (addr,)
+                        ).fetchone()
+                        if existing:
+                            continue
+                        bconn.execute(
+                            "INSERT OR IGNORE INTO blackboard "
+                            "(id, category, title, content, addr, confidence, "
+                            "created_at, updated_at, q_value, source, source_type, "
+                            "resolved, tags, evidence) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (
+                                uuid.uuid4().hex[:8], "dead_end",
+                                f"Rejected: {row[2][:60]}",
+                                f"Proposal '{row[1]}' was rejected by LLM",
+                                addr, 0.1,
+                                time.time(), time.time(), 0.1,
+                                "engine.rejected", "engine_rejected",
+                                1,  # resolved=1 so it's excluded from next_target
+                                json.dumps(["rejected", row[1]]),
+                                json.dumps([{"type": "rejection", "value": proposal_id,
+                                             "weight": 0.0, "ts": time.time()}]),
+                            )
+                        )
+                    bconn.commit()
+            except Exception:
+                pass
+        return True
 
     def count_pending(self) -> int:
         with self._conn() as conn:
@@ -228,28 +276,38 @@ class AnalysisEngine:
     # ── main loop ─────────────────────────────────────────────────────────────
 
     def _loop(self):
-        """Interleave all 4 stages. Each iteration does one unit of work."""
-        sweep_interval = 60   # seconds between full classifier sweeps
+        """Interleave all stages. Each iteration does one unit of work."""
+        sweep_interval = 60    # seconds between full classifier sweeps
+        entropy_interval = 120 # seconds between entropy scans
+        tag_interval = 300     # seconds between auto-tag propagation
         last_sweep = 0.0
+        last_entropy = 0.0
+        last_tag = 0.0
 
         while not self._stop.is_set():
             try:
                 now = time.time()
 
-                # Stage 2 & 4: reactive — run on every new blackboard entry
+                # Reactive stages — run on every new blackboard entry
                 self._stage_contradiction_monitor()
                 self._stage_cross_session_matcher()
-
-                # Stage 3: reactive — run on new IOC entries
                 self._stage_taint_tracer()
+                self._stage_crawler_feed()       # crawler → engine priority queue
 
-                # Stage 1: periodic — classifier sweep
+                # Periodic stages
                 if now - last_sweep >= sweep_interval:
                     self._stage_classifier_sweep()
                     last_sweep = time.time()
 
-            except Exception as e:
-                # Never crash the engine
+                if now - last_entropy >= entropy_interval:
+                    self._stage_entropy_scan()
+                    last_entropy = time.time()
+
+                if now - last_tag >= tag_interval:
+                    self._stage_auto_tag_propagate()
+                    last_tag = time.time()
+
+            except Exception:
                 pass
 
             self._stop.wait(timeout=15)
@@ -724,6 +782,172 @@ class AnalysisEngine:
             },
         })
 
+    # ── Stage 5: Crawler feed ─────────────────────────────────────────────────
+
+    def _stage_crawler_feed(self):
+        """
+        Pull pending crawler proposals into the engine's blackboard as
+        low-confidence entries so next_target can rank them.
+
+        The crawler proposes via _BackgroundCrawler._pending. We consume
+        high-confidence ones automatically (confidence > 0.75) and write
+        them as 'hypothesis' entries. Lower-confidence ones stay as proposals
+        for the LLM to review.
+        """
+        try:
+            import importlib.util, os as _os
+            path = _os.path.join(
+                _os.path.dirname(_os.path.abspath(__file__)),
+                "..", "ida_mcp", "tools", "blackboard.py"
+            )
+            spec = importlib.util.spec_from_file_location("_engine_bb_cf", _os.path.abspath(path))
+            mod = importlib.util.module_from_spec(spec)
+            mod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f,
+                                  "idawrite": lambda f: f, "IDAError": Exception})
+            spec.loader.exec_module(mod)
+            crawler = mod._BackgroundCrawler.instance()
+        except Exception:
+            return
+
+        pending = list(crawler._pending.values())
+        auto_accepted = []
+        for p in pending:
+            conf = p.get("confidence", 0.5)
+            if conf < 0.75:
+                continue  # leave for LLM review
+            pid = p.get("proposal_id", "")
+            addr = p.get("addr", "")
+            if not addr:
+                continue
+            # Check if already in blackboard
+            store = self._bb_store()
+            if store and store.list(addr=addr, category="hypothesis"):
+                crawler._pending.pop(pid, None)
+                continue
+            # Auto-accept high-confidence proposals
+            eid = crawler.accept(pid)
+            if eid and store:
+                store.update(eid, source_type="crawler",
+                             evidence=[{"type": "crawler", "value": p.get("title", ""),
+                                        "weight": conf, "ts": time.time()}])
+                auto_accepted.append(addr)
+
+        if auto_accepted:
+            self._push_resource_updated("ida://state")
+            self._push_resource_updated("ida://blackboard/next_target")
+
+    # ── Stage 6: Entropy scan ─────────────────────────────────────────────────
+
+    def _stage_entropy_scan(self):
+        """
+        Compute byte entropy for each segment. High-entropy regions (>6.5)
+        are likely crypto, packed, or compressed — write as region entries.
+        """
+        try:
+            segs_result = self._rpc("idb", {"action": "segments"})
+            segs = segs_result.get("segments", []) if isinstance(segs_result, dict) else []
+        except Exception:
+            return
+
+        store = self._bb_store()
+        if not store:
+            return
+
+        for seg in segs[:20]:  # cap to avoid slow scans
+            name = seg.get("name") or seg.get("segment_name", "")
+            start = seg.get("start_ea") or seg.get("start")
+            end = seg.get("end_ea") or seg.get("end")
+            if not (start and end):
+                continue
+            size = (end - start) if isinstance(end, int) and isinstance(start, int) else 0
+            if size <= 0 or size > 0x100000:  # skip > 1MB
+                continue
+
+            try:
+                mem_result = self._rpc("memory", {"action": "read",
+                                                   "addr": hex(start) if isinstance(start, int) else start,
+                                                   "size": min(size, 4096)})
+                raw = mem_result.get("bytes") or mem_result.get("data", "")
+                if not raw:
+                    continue
+                # Decode hex string if needed
+                if isinstance(raw, str):
+                    try:
+                        raw = bytes.fromhex(raw.replace(" ", ""))
+                    except Exception:
+                        continue
+                entropy = self._byte_entropy(raw)
+            except Exception:
+                continue
+
+            if entropy < 6.5:
+                continue
+
+            addr_hex = hex(start) if isinstance(start, int) else str(start)
+            addr_end_hex = hex(end) if isinstance(end, int) else str(end)
+
+            # Don't duplicate
+            existing = store.list(category="region", addr=addr_hex)
+            if existing:
+                # Update entropy value
+                store.update(existing[0]["id"], entropy=entropy)
+                continue
+
+            eid = store.write(
+                f"High-entropy region: {name} (entropy={entropy:.2f})",
+                category="region",
+                addr=addr_hex, addr_end=addr_end_hex,
+                tags=["entropy", "engine", "crypto_candidate"],
+                confidence=min(0.95, (entropy - 6.5) / 1.5 * 0.5 + 0.5),
+                source="engine", source_type="engine_entropy",
+                entropy=entropy,
+                evidence=[{"type": "entropy", "value": f"{entropy:.3f}",
+                           "weight": min(1.0, (entropy - 6.5) / 1.5),
+                           "ts": time.time()}],
+            )
+            self._push_resource_updated("ida://state")
+            self._notify({
+                "jsonrpc": "2.0",
+                "method": "notifications/message",
+                "params": {
+                    "level": "info",
+                    "data": {
+                        "type": "high_entropy_region",
+                        "message": f"High-entropy region found: {name} at {addr_hex} (entropy={entropy:.2f})",
+                        "addr": addr_hex,
+                        "entropy": entropy,
+                        "segment": name,
+                    },
+                },
+            })
+
+    def _byte_entropy(self, data: bytes) -> float:
+        """Shannon entropy of a byte sequence, 0–8."""
+        import math
+        if not data:
+            return 0.0
+        counts = [0] * 256
+        for b in data:
+            counts[b] += 1
+        n = len(data)
+        entropy = 0.0
+        for c in counts:
+            if c:
+                p = c / n
+                entropy -= p * math.log2(p)
+        return round(entropy, 4)
+
+    # ── Stage 7: Auto-tag propagation ─────────────────────────────────────────
+
+    def _stage_auto_tag_propagate(self):
+        """Propagate tags from high-confidence entries to same-address entries."""
+        store = self._bb_store()
+        if not store:
+            return
+        updated = store.auto_tag_propagate()
+        if updated > 0:
+            self._push_resource_updated("ida://state")
+
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _bb_store(self):
@@ -788,4 +1012,7 @@ class AnalysisEngine:
             "tainted_sources": len(self._tainted),
             "cross_checked": len(self._cross_checked),
             "pending_proposals": self._proposals.count_pending(),
+            "stages": ["classifier_sweep", "contradiction_monitor", "taint_tracer",
+                       "cross_session_matcher", "crawler_feed", "entropy_scan",
+                       "auto_tag_propagate"],
         }

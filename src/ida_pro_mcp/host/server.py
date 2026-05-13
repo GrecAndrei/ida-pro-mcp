@@ -8013,7 +8013,8 @@ class IDAMCPServer:
                 })
                 return {"ok": True, "proposal_id": pid, "accepted_items": len(result.get("accepted_items", [])), "applied": applied}
             else:
-                ok = engine.proposals.reject(pid)
+                bb_path = os.path.join(self.cache_dir, f"{sid}.blackboard.db")
+                ok = engine.proposals.reject(pid, bb_path=bb_path)
                 if not ok:
                     return make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found or already processed")
                 self._send_notification({
@@ -8025,7 +8026,7 @@ class IDAMCPServer:
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",
-            hint="Valid actions: write, read, list, search, update, delete, clear, stats, merge, prune, contradict, resolve, next_target, start_crawler, stop_crawler, crawler_status, accept, reject, accept_proposal, reject_proposal",
+            hint="Valid actions: write, read, list, search, update, delete, clear, stats, merge, prune, contradict, resolve, next_target, start_crawler, stop_crawler, crawler_status, accept, reject, accept_proposal, reject_proposal, add_evidence, calibrate, campaign_summary, auto_tag_propagate",
         )
 
     def _apply_proposal(self, proposal: dict, engine) -> dict:

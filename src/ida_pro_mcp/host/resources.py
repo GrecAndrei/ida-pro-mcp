@@ -48,7 +48,17 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Dict, List, Optional
+
+# TTL cache for ida://state coverage stats (expensive: calls data/functions)
+_STATE_CACHE: Dict[str, Any] = {}
+_STATE_CACHE_TTL = 30.0  # seconds
+
+
+def invalidate_state_cache() -> None:
+    """Call this when ida://state should be refreshed immediately."""
+    _STATE_CACHE.clear()
 
 
 RESOURCE_TEMPLATES = [
@@ -242,22 +252,29 @@ class ResourceResolver:
         except Exception:
             state["binary"] = {}
 
-        # 2. Coverage
-        try:
-            funcs = self._exec("data", action="functions", count=5000)
-            func_list = funcs.get("functions", []) if isinstance(funcs, dict) else []
-            total = len(func_list)
-            named = sum(1 for f in func_list
-                        if not (f.get("name", "").startswith("sub_")
-                                or f.get("name", "").startswith("j_")))
-            state["coverage"] = {
-                "total_functions": total,
-                "named_functions": named,
-                "unnamed_functions": total - named,
-                "pct_named": round(named / total * 100, 1) if total else 0,
-            }
-        except Exception:
-            state["coverage"] = {}
+        # 2. Coverage (cached with 30s TTL — expensive on large binaries)
+        cache_key = f"coverage_{id(self.tool_executor)}"
+        cached = _STATE_CACHE.get(cache_key)
+        if cached and time.time() - cached["_ts"] < _STATE_CACHE_TTL:
+            state["coverage"] = cached["coverage"]
+        else:
+            try:
+                funcs = self._exec("data", action="functions", count=5000)
+                func_list = funcs.get("functions", []) if isinstance(funcs, dict) else []
+                total = len(func_list)
+                named = sum(1 for f in func_list
+                            if not (f.get("name", "").startswith("sub_")
+                                    or f.get("name", "").startswith("j_")))
+                coverage = {
+                    "total_functions": total,
+                    "named_functions": named,
+                    "unnamed_functions": total - named,
+                    "pct_named": round(named / total * 100, 1) if total else 0,
+                }
+                state["coverage"] = coverage
+                _STATE_CACHE[cache_key] = {"coverage": coverage, "_ts": time.time()}
+            except Exception:
+                state["coverage"] = {}
 
         # 3. Blackboard summary
         try:

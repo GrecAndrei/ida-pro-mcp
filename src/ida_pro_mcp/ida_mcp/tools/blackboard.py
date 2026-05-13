@@ -138,7 +138,14 @@ class BlackboardStore:
                     depends_on   TEXT,
                     blocks_addr  TEXT,
                     register     TEXT,
-                    reg_type     TEXT
+                    reg_type     TEXT,
+                    -- v3 fields
+                    evidence     TEXT DEFAULT '[]',  -- JSON list of {type,value,weight}
+                    source_type  TEXT DEFAULT 'manual',  -- engine_classifier|engine_taint|engine_cross_session|human|crawler
+                    version      INTEGER DEFAULT 1,  -- incremented on every update
+                    entropy      REAL DEFAULT 0.0,   -- byte entropy of region (0-8)
+                    xref_count   INTEGER DEFAULT 0,  -- number of callers (for seeding)
+                    calibrated   INTEGER DEFAULT 0   -- 1 if confidence has been calibrated
                 )
             """)
             existing = {r[1] for r in conn.execute("PRAGMA table_info(blackboard)").fetchall()}
@@ -153,6 +160,13 @@ class BlackboardStore:
                 ("blocks_addr", "TEXT"),
                 ("register", "TEXT"),
                 ("reg_type", "TEXT"),
+                # v3
+                ("evidence", "TEXT DEFAULT '[]'"),
+                ("source_type", "TEXT DEFAULT 'manual'"),
+                ("version", "INTEGER DEFAULT 1"),
+                ("entropy", "REAL DEFAULT 0.0"),
+                ("xref_count", "INTEGER DEFAULT 0"),
+                ("calibrated", "INTEGER DEFAULT 0"),
                 # Legacy compat
                 ("bridges", "TEXT DEFAULT '{}'"),
                 ("schema", "TEXT DEFAULT '{}'"),
@@ -168,6 +182,8 @@ class BlackboardStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_tags ON blackboard(tags)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_resolved ON blackboard(resolved)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_ioc ON blackboard(ioc_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_source_type ON blackboard(source_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_xref ON blackboard(xref_count)")
             conn.commit()
 
     def _embed_text(self, text: str) -> Optional[bytes]:
@@ -196,6 +212,10 @@ class BlackboardStore:
         blocks_addr: str = "",
         register: str = "",
         reg_type: str = "",
+        evidence: Optional[List[Dict]] = None,
+        source_type: str = "",
+        entropy: float = 0.0,
+        xref_count: int = 0,
         **_legacy_kwargs,
     ) -> str:
         entry_id = str(uuid.uuid4())[:8]
@@ -203,18 +223,23 @@ class BlackboardStore:
         vector_blob = None
         if embed:
             vector_blob = self._embed_text(f"{title} {content}".strip())
+        # source_type defaults to source for backward compat
+        if not source_type:
+            source_type = source
         with self._conn() as conn:
             conn.execute("""
                 INSERT INTO blackboard
                     (id, category, title, content, addr, addr_end, tags, confidence,
                      created_at, updated_at, q_value, source, vector,
-                     ioc_type, ioc_value, depends_on, blocks_addr, register, reg_type)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     ioc_type, ioc_value, depends_on, blocks_addr, register, reg_type,
+                     evidence, source_type, entropy, xref_count, version)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 entry_id, category, title, content, addr, addr_end,
                 json.dumps(tags or []), confidence,
                 now, now, confidence, source, vector_blob,
                 ioc_type, ioc_value, depends_on, blocks_addr, register, reg_type,
+                json.dumps(evidence or []), source_type, entropy, xref_count, 1,
             ))
             conn.commit()
         return entry_id
@@ -347,81 +372,327 @@ class BlackboardStore:
             conn.commit()
             return cur.rowcount > 0
 
-    def next_target(self, limit: int = 5) -> List[Dict]:
+    def add_evidence(self, entry_id: str, evidence_type: str, value: str,
+                     weight: float = 1.0) -> bool:
+        """
+        Append a structured evidence record to an entry.
+
+        evidence_type: 'constant', 'string', 'import', 'xref', 'decompile',
+                       'classifier', 'taint', 'cross_session', 'human'
+        value: the evidence value (e.g. '0x63636363', 'AES_KEY_SCHEDULE', ...)
+        weight: 0.0–1.0, how strongly this evidence supports the conclusion
+        """
+        entry = self.read(entry_id)
+        if not entry:
+            return False
+        ev_list = entry.get("evidence") or []
+        ev_list.append({"type": evidence_type, "value": str(value),
+                        "weight": round(float(weight), 3),
+                        "ts": round(time.time(), 1)})
+        return self.update(entry_id, evidence=ev_list)
+
+    def calibrate_confidence(self, entry_id: str) -> Optional[float]:
+        """
+        Recalculate confidence from evidence weights.
+
+        confidence = weighted average of evidence weights, clamped to [0.1, 0.99].
+        Marks entry as calibrated=1.
+        """
+        entry = self.read(entry_id)
+        if not entry:
+            return None
+        ev_list = entry.get("evidence") or []
+        if not ev_list:
+            return entry.get("confidence")
+        weights = [e.get("weight", 0.5) for e in ev_list]
+        new_conf = round(max(0.1, min(0.99, sum(weights) / len(weights))), 3)
+        self.update(entry_id, confidence=new_conf, calibrated=1)
+        return new_conf
+
+    def campaign_summary(self) -> Dict:
+        """
+        High-level summary of the RE campaign state.
+
+        Returns: coverage, top findings by category, active hypotheses,
+        confirmed IOCs, open vulns, dead ends, and a recommended next action.
+        """
+        with self._conn() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM blackboard").fetchone()[0]
+            resolved = conn.execute("SELECT COUNT(*) FROM blackboard WHERE resolved=1").fetchone()[0]
+            contradicted = conn.execute("SELECT COUNT(*) FROM blackboard WHERE contradicted=1").fetchone()[0]
+            active = total - resolved - contradicted
+
+            by_cat = dict(conn.execute(
+                "SELECT category, COUNT(*) FROM blackboard GROUP BY category"
+            ).fetchall())
+
+            top_conf = conn.execute(
+                "SELECT title, addr, confidence, category, source_type "
+                "FROM blackboard WHERE resolved=0 AND contradicted=0 "
+                "ORDER BY confidence DESC LIMIT 5"
+            ).fetchall()
+
+            iocs = conn.execute(
+                "SELECT ioc_type, ioc_value, addr, confidence "
+                "FROM blackboard WHERE category='ioc' AND resolved=0 "
+                "ORDER BY confidence DESC LIMIT 10"
+            ).fetchall()
+
+            vulns = conn.execute(
+                "SELECT title, addr, confidence "
+                "FROM blackboard WHERE category='vuln' AND resolved=0 "
+                "ORDER BY confidence DESC LIMIT 5"
+            ).fetchall()
+
+            # Evidence quality
+            ev_rows = conn.execute(
+                "SELECT evidence FROM blackboard WHERE evidence != '[]' AND evidence IS NOT NULL"
+            ).fetchall()
+            total_evidence = sum(len(json.loads(r[0] or "[]")) for r in ev_rows)
+
+            # Source type breakdown
+            source_types = dict(conn.execute(
+                "SELECT source_type, COUNT(*) FROM blackboard GROUP BY source_type"
+            ).fetchall())
+
+        # Recommend next action
+        if by_cat.get("vuln", 0) > 0:
+            next_action = "Investigate open vulnerabilities — read ida://blackboard/next_target"
+        elif by_cat.get("hypothesis", 0) > 0:
+            next_action = "Confirm or contradict open hypotheses"
+        elif by_cat.get("ioc", 0) > 0:
+            next_action = "Trace IOC origins — use taint analysis"
+        else:
+            next_action = "Start analysis — read ida://state for orientation"
+
+        return {
+            "total_entries": total,
+            "active_entries": active,
+            "resolved": resolved,
+            "contradicted": contradicted,
+            "by_category": by_cat,
+            "source_types": source_types,
+            "total_evidence_records": total_evidence,
+            "top_findings": [
+                {"title": r[0], "addr": r[1], "confidence": r[2],
+                 "category": r[3], "source_type": r[4]}
+                for r in top_conf
+            ],
+            "iocs": [
+                {"type": r[0], "value": r[1], "addr": r[2], "confidence": r[3]}
+                for r in iocs
+            ],
+            "vulns": [
+                {"title": r[0], "addr": r[1], "confidence": r[2]}
+                for r in vulns
+            ],
+            "recommended_next_action": next_action,
+        }
+
+    def auto_tag_propagate(self) -> int:
+        """
+        Propagate tags from high-confidence entries to same-address entries.
+
+        If address 0x401000 has a 'crypto_symmetric' tag with confidence > 0.8,
+        all other entries at 0x401000 get that tag added.
+
+        Returns number of entries updated.
+        """
+        with self._conn() as conn:
+            # Get high-confidence entries with tags and addresses
+            rows = conn.execute(
+                "SELECT addr, tags FROM blackboard "
+                "WHERE confidence > 0.8 AND addr != '' AND addr IS NOT NULL "
+                "AND tags != '[]' AND tags IS NOT NULL"
+            ).fetchall()
+
+        # Build addr → tag set map
+        addr_tags: Dict[str, set] = {}
+        for addr, tags_json in rows:
+            try:
+                tags = json.loads(tags_json or "[]")
+                if addr not in addr_tags:
+                    addr_tags[addr] = set()
+                addr_tags[addr].update(t for t in tags if t not in ("manual", "engine", "crawler"))
+            except Exception:
+                pass
+
+        if not addr_tags:
+            return 0
+
+        updated = 0
+        with self._conn() as conn:
+            for addr, new_tags in addr_tags.items():
+                if not new_tags:
+                    continue
+                target_rows = conn.execute(
+                    "SELECT id, tags FROM blackboard WHERE addr=? AND confidence <= 0.8",
+                    (addr,)
+                ).fetchall()
+                for eid, tags_json in target_rows:
+                    try:
+                        existing = set(json.loads(tags_json or "[]"))
+                        merged = existing | new_tags
+                        if merged != existing:
+                            conn.execute(
+                                "UPDATE blackboard SET tags=?, updated_at=? WHERE id=?",
+                                (json.dumps(sorted(merged)), time.time(), eid)
+                            )
+                            updated += 1
+                    except Exception:
+                        pass
+            conn.commit()
+        return updated
+
+    def next_target(self, limit: int = 5, rpc_fn=None) -> List[Dict]:
         """
         Return highest-priority unexplored addresses.
 
-        Priority score = confidence * (1 - resolved) * (1 - contradicted)
-        Boosted by:
-          - dependency entries that are now unblocked (depends_on resolved)
-          - high xref count (more callers = more important)
-          - not yet in any cluster (unexplored territory)
+        Priority score = confidence * category_boost * dependency_factor * time_decay
+          * (1 + xref_boost)
 
-        Returns addresses sorted by priority descending.
+        Time decay: score *= exp(-age_days * 0.05)  — halves every ~14 days
+        Xref boost: +0.1 per 10 callers (capped at +0.5)
+        Dependency: blocked entries get 0.3x, satisfied deps get 1.5x
+
+        When the blackboard has < 5 entries with addresses, seeds from
+        xref-ranked unnamed functions via rpc_fn (if provided).
         """
+        import math
+
         with self._conn() as conn:
-            # Get all unresolved, non-contradicted entries with addresses
             rows = conn.execute("""
-                SELECT id, addr, category, title, confidence, depends_on
+                SELECT id, addr, category, title, confidence, depends_on,
+                       created_at, xref_count, entropy, source_type
                 FROM blackboard
                 WHERE resolved=0 AND contradicted=0 AND addr != '' AND addr IS NOT NULL
                 ORDER BY confidence DESC
-                LIMIT 200
+                LIMIT 500
             """).fetchall()
 
-            # Get resolved addresses to check dependency satisfaction
             resolved_addrs = {
                 r[0] for r in conn.execute(
                     "SELECT addr FROM blackboard WHERE resolved=1 AND addr != ''"
                 ).fetchall()
             }
 
+        now = time.time()
         scored = []
         seen_addrs: set = set()
+
         for row in rows:
-            eid, addr, cat, title, conf, depends_on = row
+            eid, addr, cat, title, conf, depends_on, created_at, xref_count, entropy, source_type = row
             if addr in seen_addrs:
                 continue
             seen_addrs.add(addr)
 
             score = float(conf or 0.5)
 
-            # Boost if dependency is satisfied
-            if depends_on and depends_on in resolved_addrs:
-                score *= 1.5
-            elif depends_on and depends_on not in resolved_addrs:
-                score *= 0.3  # blocked — deprioritize
+            # Time decay: exp(-age_days * 0.05)
+            age_days = (now - (created_at or now)) / 86400
+            score *= math.exp(-age_days * 0.05)
 
-            # Boost hypotheses and dependencies (actionable)
-            if cat in ("hypothesis", "dependency", "data_flow"):
+            # Dependency factor
+            if depends_on and depends_on in resolved_addrs:
+                score *= 1.5   # unblocked
+            elif depends_on and depends_on not in resolved_addrs:
+                score *= 0.3   # blocked
+
+            # Category boost
+            if cat in ("hypothesis", "dependency", "data_flow", "vuln"):
+                score *= 1.3
+            elif cat in ("cross_session",):
                 score *= 1.2
-            # Deprioritize auto-captured low-signal entries
-            if cat in ("pointer", "string") and conf < 0.7:
+            elif cat in ("pointer", "string") and (conf or 0) < 0.7:
                 score *= 0.5
+
+            # Xref boost: +0.1 per 10 callers, capped at +0.5
+            xref_boost = min(0.5, (xref_count or 0) / 10 * 0.1)
+            score *= (1 + xref_boost)
+
+            # Entropy boost for high-entropy regions (likely crypto/packed)
+            if (entropy or 0) > 6.5:
+                score *= 1.15
 
             scored.append({
                 "addr": addr,
                 "title": title,
                 "category": cat,
                 "confidence": conf,
-                "priority_score": round(score, 3),
+                "priority_score": round(score, 4),
                 "entry_id": eid,
                 "depends_on": depends_on or None,
+                "xref_count": xref_count or 0,
+                "entropy": entropy or 0.0,
+                "source_type": source_type or "manual",
+                "age_days": round(age_days, 1),
             })
 
         scored.sort(key=lambda x: x["priority_score"], reverse=True)
-        return scored[:limit]
+        result = scored[:limit]
+
+        # Seed with xref-ranked unnamed functions if blackboard is sparse
+        if len(result) < limit and rpc_fn:
+            try:
+                seeded = self._seed_from_xrefs(rpc_fn, seen_addrs, limit - len(result))
+                result.extend(seeded)
+            except Exception:
+                pass
+
+        return result
+
+    def _seed_from_xrefs(self, rpc_fn, seen_addrs: set, limit: int) -> List[Dict]:
+        """Seed next_target with xref-ranked unnamed functions when blackboard is sparse."""
+        try:
+            funcs_result = rpc_fn("data", {"action": "functions", "count": 200})
+            funcs = funcs_result.get("functions", []) if isinstance(funcs_result, dict) else []
+        except Exception:
+            return []
+
+        candidates = []
+        for fn in funcs:
+            name = fn.get("name", "")
+            if not (name.startswith("sub_") or name.startswith("j_")):
+                continue
+            addr = fn.get("start_ea") or fn.get("addr")
+            if not addr:
+                continue
+            addr_hex = hex(addr) if isinstance(addr, int) else str(addr)
+            if addr_hex in seen_addrs:
+                continue
+            # Use xref_count from function data if available
+            xref_count = fn.get("xref_count") or fn.get("callers_count") or 0
+            candidates.append({
+                "addr": addr_hex,
+                "title": f"Unnamed: {name}",
+                "category": "seed",
+                "confidence": 0.4,
+                "priority_score": round(0.4 + min(0.4, xref_count / 20 * 0.1), 4),
+                "entry_id": None,
+                "depends_on": None,
+                "xref_count": xref_count,
+                "entropy": 0.0,
+                "source_type": "seed",
+                "age_days": 0.0,
+            })
+
+        candidates.sort(key=lambda x: x["priority_score"], reverse=True)
+        return candidates[:limit]
 
     def update(self, entry_id: str, **kwargs) -> bool:
         allowed = {"title", "content", "category", "addr", "addr_end", "tags",
                    "confidence", "q_value", "resolved", "ioc_type", "ioc_value",
-                   "depends_on", "blocks_addr", "register", "reg_type"}
+                   "depends_on", "blocks_addr", "register", "reg_type",
+                   "evidence", "source_type", "entropy", "xref_count", "calibrated"}
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return False
         updates["updated_at"] = time.time()
+        updates["version"] = (self.read(entry_id) or {}).get("version", 1) + 1
         if "tags" in updates:
             updates["tags"] = json.dumps(updates["tags"])
+        if "evidence" in updates:
+            updates["evidence"] = json.dumps(updates["evidence"])
         if "title" in updates or "content" in updates:
             existing = self.read(entry_id)
             if existing:
@@ -474,6 +745,16 @@ class BlackboardStore:
             iocs = conn.execute(
                 "SELECT ioc_type, COUNT(*) FROM blackboard WHERE ioc_type != '' AND ioc_type IS NOT NULL GROUP BY ioc_type"
             ).fetchall()
+            source_types = dict(conn.execute(
+                "SELECT source_type, COUNT(*) FROM blackboard WHERE source_type IS NOT NULL GROUP BY source_type"
+            ).fetchall())
+            ev_rows = conn.execute(
+                "SELECT evidence FROM blackboard WHERE evidence != '[]' AND evidence IS NOT NULL"
+            ).fetchall()
+            total_evidence = sum(len(json.loads(r[0] or "[]")) for r in ev_rows)
+            calibrated = conn.execute(
+                "SELECT COUNT(*) FROM blackboard WHERE calibrated=1"
+            ).fetchone()[0]
         return {
             "total_entries": total or 0,
             "categories": cats or 0,
@@ -483,6 +764,9 @@ class BlackboardStore:
             "resolved": resolved or 0,
             "contradicted": contradicted or 0,
             "iocs": dict(iocs),
+            "source_types": source_types,
+            "total_evidence_records": total_evidence,
+            "calibrated_entries": calibrated or 0,
         }
 
     def prune(self, max_entries: int = 1000, min_q_value: float = 0.0, older_than_days: int = 0) -> Dict:
@@ -573,6 +857,7 @@ class BlackboardStore:
             if i < len(row):
                 d[col] = row[i]
         d["tags"] = json.loads(d.get("tags") or "[]")
+        d["evidence"] = json.loads(d.get("evidence") or "[]")
         for k in ("vector", "quantized", "q_signs"):
             d.pop(k, None)
         return d
@@ -893,6 +1178,14 @@ def blackboard(
     reg_type: str = "",
     include_resolved: bool = False,
     include_contradicted: bool = False,
+    # v3 fields
+    evidence: Optional[List[Dict]] = None,
+    source_type: str = "",
+    entropy: float = 0.0,
+    xref_count: int = 0,
+    evidence_type: str = "",
+    evidence_value: str = "",
+    evidence_weight: float = 1.0,
     **kwargs,
 ) -> dict:
     """
@@ -968,6 +1261,8 @@ def blackboard(
             source="manual", ioc_type=ioc_type, ioc_value=ioc_value,
             depends_on=depends_on, blocks_addr=blocks_addr,
             register=register, reg_type=reg_type,
+            evidence=evidence or [], source_type=source_type or "manual",
+            entropy=entropy, xref_count=xref_count,
         )
         return {"ok": True, "entry_id": eid}
 
@@ -1091,6 +1386,27 @@ def blackboard(
         crawler = _BackgroundCrawler.instance()
         ok = crawler.reject(proposal_id)
         return {"ok": ok} if ok else {"ok": False, "error": f"Proposal '{proposal_id}' not found"}
+
+    elif action == "add_evidence":
+        if not entry_id:
+            return {"ok": False, "error": "entry_id required"}
+        if not evidence_type or not evidence_value:
+            return {"ok": False, "error": "evidence_type and evidence_value required"}
+        ok = store.add_evidence(entry_id, evidence_type, evidence_value, evidence_weight)
+        return {"ok": ok}
+
+    elif action == "calibrate":
+        if not entry_id:
+            return {"ok": False, "error": "entry_id required"}
+        new_conf = store.calibrate_confidence(entry_id)
+        return {"ok": new_conf is not None, "confidence": new_conf}
+
+    elif action == "campaign_summary":
+        return {"ok": True, **store.campaign_summary()}
+
+    elif action == "auto_tag_propagate":
+        updated = store.auto_tag_propagate()
+        return {"ok": True, "updated": updated}
 
     else:
         return {"ok": False, "error": f"Unknown action: {action}"}
