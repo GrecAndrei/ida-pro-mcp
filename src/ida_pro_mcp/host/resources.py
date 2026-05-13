@@ -72,6 +72,8 @@ RESOURCE_TEMPLATES = [
     "ida://knowledge/attack_surface",
     "ida://knowledge/peripherals",
     "ida://knowledge/state_machines",
+    "ida://usage",
+    "ida://usage/session/{session_id}",
     # Meta
     "ida://meta",
     # Segments (3)
@@ -128,6 +130,7 @@ def list_resources() -> List[Dict]:
         {"uri": "ida://knowledge/attack_surface", "name": "Attack surface map", "mimeType": "application/json"},
         {"uri": "ida://knowledge/peripherals", "name": "Peripheral map (MMIO)", "mimeType": "application/json"},
         {"uri": "ida://knowledge/state_machines", "name": "Detected state machines", "mimeType": "application/json"},
+        {"uri": "ida://usage", "name": "Usage intelligence — sequence model, effectiveness, drift", "mimeType": "application/json"},
         {"uri": "ida://meta", "name": "IDB Metadata", "mimeType": "application/json"},
         {"uri": "ida://segments", "name": "Segments", "mimeType": "application/json"},
         {"uri": "ida://functions", "name": "Functions", "mimeType": "application/json"},
@@ -167,13 +170,15 @@ class ResourceResolver:
     """Resolves ida:// URIs by delegating to tool calls or memory tiers."""
 
     def __init__(self, tool_executor, insight_index=None, global_facts=None,
-                 session_mgr=None, engine=None, bb_path: str = ""):
+                 session_mgr=None, engine=None, bb_path: str = "",
+                 usage_intel=None):
         self.tool_executor = tool_executor
         self.insight_index = insight_index
         self.global_facts = global_facts
         self.session_mgr = session_mgr
-        self.engine = engine          # AnalysisEngine instance (optional)
-        self.bb_path = bb_path        # path to blackboard db (optional)
+        self.engine = engine
+        self.bb_path = bb_path
+        self.usage_intel = usage_intel  # UsageIntelligence instance
 
     def read(self, uri: str) -> Optional[Dict]:
         if not uri.startswith("ida://"):
@@ -193,6 +198,8 @@ class ResourceResolver:
             return self._read_proposals()
         elif domain == "knowledge":
             return self._read_knowledge(parts)
+        elif domain == "usage":
+            return self._read_usage(parts)
         elif domain == "segments":
             return self._read_segments_resource(parts)
         elif domain == "functions":
@@ -535,6 +542,33 @@ class ResourceResolver:
         if sub == "state_machines":
             return _make_json_content({"state_machines": kg.list_state_machines()})
         return _make_json_content({"error": f"Unknown knowledge sub-resource: {sub}"})
+
+    # ------------------------------------------------------------------
+    # Usage intelligence
+    # ------------------------------------------------------------------
+
+    def _read_usage(self, parts: List[str]) -> Dict:
+        """
+        ida://usage                    — global report (sequence model, effectiveness)
+        ida://usage/session/{sid}      — per-session drift report
+        """
+        if not self.usage_intel:
+            return _make_json_content({
+                "error": "Usage intelligence not available",
+                "note": "Start a session to activate the usage observer.",
+            })
+        sub = parts[1] if len(parts) > 1 else ""
+        if sub == "session" and len(parts) > 2:
+            sid = parts[2]
+            return _make_json_content(self.usage_intel.session_report(sid))
+        # Global report
+        report = self.usage_intel.global_report()
+        # Add current session drift if available
+        if self.session_mgr:
+            active = getattr(self.session_mgr, "active_session_id", None)
+            if active:
+                report["current_session"] = self.usage_intel.session_report(active)
+        return _make_json_content(report)
 
     # ------------------------------------------------------------------
     # Segments
