@@ -839,7 +839,7 @@ _ACTIONS = {
 def gadgets(
     action: Annotated[Literal["rop", "jop", "cop", "syscall", "write_what_where",
                                "stack_pivot", "shellcode_space", "mitigations",
-                               "seh_handlers", "pivot_chains"],
+                               "seh_handlers", "pivot_chains", "classify_chain"],
                       "Gadget/exploit primitive action"],
     addr: Annotated[Optional[str], "Segment or address to search in"] = None,
     limit: Annotated[int, "Max gadgets to return"] = 50,
@@ -904,11 +904,21 @@ def gadgets(
                 "arch": _get_arch(),
             }
 
+        if action == "classify_chain":
+            # Semantic exploit primitive classification using BehaviorClassifier.
+            # Takes a list of gadget strings (or addresses) and classifies the chain's
+            # exploit potential: stack_pivot, write_what_where, code_exec, rop_chain, etc.
+            return _classify_gadget_chain(addr, limit, max_insns, query)
+
         handler = _ACTIONS.get(action)
         if not handler:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
         results = handler(addr, limit, max_insns, query)
+
+        # Augment with BehaviorClassifier scoring when available
+        behavior_score = _score_gadgets_behavior(results, action)
+
         return {
             "ok": True,
             "action": action,
@@ -916,7 +926,153 @@ def gadgets(
             "count": len(results),
             "truncated": len(results) >= limit,
             "arch": _get_arch(),
+            **({"exploit_potential": behavior_score} if behavior_score else {}),
         }
 
     except Exception as e:
         return handle_error(e)
+
+
+def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
+    """
+    Use BehaviorClassifier to score the exploit potential of a gadget set.
+    Builds a pseudo-pseudocode description of what the gadgets collectively do,
+    then classifies it against exploit-relevant anchors.
+    """
+    if not gadgets:
+        return None
+    try:
+        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+    except ImportError:
+        try:
+            from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+        except ImportError:
+            return None
+    try:
+        # Build a compact description of the gadget set for embedding
+        insn_text = " ".join(
+            g.get("gadget") or g.get("insns") or ""
+            for g in gadgets[:20]
+        )
+        if not insn_text.strip():
+            return None
+
+        # Exploit-specific anchors not in the default BehaviorClassifier
+        _EXPLOIT_ANCHORS = {
+            "rop_chain": "pop rdi pop rsi pop rdx ret gadget_chain stack_pivot xchg rsp",
+            "write_what_where": "mov [reg] reg str reg [reg] arbitrary_write controlled_write",
+            "code_exec": "jmp reg call reg shellcode_exec mprotect mmap rwx VirtualProtect",
+            "stack_pivot": "xchg rsp mov rsp leave ret pivot_gadget",
+        }
+
+        embedder = BgeCodeEmbedder()
+        classifier = BehaviorClassifier.instance(embedder)
+
+        # Temporarily add exploit anchors to the classifier
+        orig_anchors = dict(classifier.ANCHORS)
+        classifier.ANCHORS.update(_EXPLOIT_ANCHORS)
+        classifier.clear_cache()
+
+        try:
+            hits = classifier.classify(insn_text, threshold=0.3, top_k=4, block=True)
+        finally:
+            # Restore original anchors
+            classifier.ANCHORS.clear()
+            classifier.ANCHORS.update(orig_anchors)
+            classifier.clear_cache()
+
+        if not hits:
+            return None
+
+        return {
+            "classifications": hits,
+            "top_primitive": hits[0]["behavior"] if hits else None,
+            "confidence": hits[0]["confidence"] if hits else 0.0,
+            "note": f"Semantic exploit primitive analysis of {len(gadgets)} gadgets",
+        }
+    except Exception:
+        return None
+
+
+def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
+    """
+    Full exploit chain classification: collect all gadget types, embed the
+    combined chain, and return a structured exploit primitive assessment.
+    """
+    try:
+        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+    except ImportError:
+        try:
+            from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+        except ImportError:
+            return make_error(MCPError.IDA_ERROR, "intelligence.py not available")
+
+    # Collect gadgets from all primitive types
+    all_gadgets = {}
+    for prim_action, handler in _ACTIONS.items():
+        try:
+            g = handler(addr, min(limit, 20), max_insns, query)
+            if g:
+                all_gadgets[prim_action] = g[:10]
+        except Exception:
+            pass
+
+    if not all_gadgets:
+        return {"ok": True, "primitives_found": {}, "exploit_assessment": "No gadgets found", "arch": _get_arch()}
+
+    # Build chain description
+    chain_text = ""
+    for prim, gadgets in all_gadgets.items():
+        chain_text += f"{prim}: " + " | ".join(
+            g.get("gadget") or g.get("insns") or "" for g in gadgets[:5]
+        ) + "\n"
+
+    embedder = BgeCodeEmbedder()
+    classifier = BehaviorClassifier.instance(embedder)
+
+    _EXPLOIT_ANCHORS = {
+        "rop_chain": "pop rdi pop rsi pop rdx ret gadget_chain stack_pivot xchg rsp",
+        "write_what_where": "mov [reg] reg str reg [reg] arbitrary_write controlled_write",
+        "code_exec": "jmp reg call reg shellcode_exec mprotect mmap rwx VirtualProtect",
+        "stack_pivot": "xchg rsp mov rsp leave ret pivot_gadget",
+        "memory_manipulation": BehaviorClassifier.ANCHORS.get("memory_manipulation", ""),
+    }
+    orig = dict(classifier.ANCHORS)
+    classifier.ANCHORS.update(_EXPLOIT_ANCHORS)
+    classifier.clear_cache()
+    try:
+        hits = classifier.classify(chain_text, threshold=0.25, top_k=6, block=True)
+    finally:
+        classifier.ANCHORS.clear()
+        classifier.ANCHORS.update(orig)
+        classifier.clear_cache()
+
+    # Assess exploitability
+    primitives_present = list(all_gadgets.keys())
+    has_pivot = bool(all_gadgets.get("stack_pivot"))
+    has_www = bool(all_gadgets.get("write_what_where"))
+    has_rop = bool(all_gadgets.get("rop"))
+    has_syscall = bool(all_gadgets.get("syscall"))
+
+    if has_pivot and has_rop and (has_www or has_syscall):
+        assessment = "HIGH: Full ROP chain possible — stack pivot + write primitives + syscall/exec gadgets present"
+    elif has_rop and has_pivot:
+        assessment = "MEDIUM: Partial ROP chain — pivot and gadgets present, missing write-what-where or syscall"
+    elif has_rop:
+        assessment = "LOW: ROP gadgets present but no stack pivot found"
+    else:
+        assessment = "MINIMAL: Limited gadget surface"
+
+    return {
+        "ok": True,
+        "arch": _get_arch(),
+        "primitives_found": {k: len(v) for k, v in all_gadgets.items()},
+        "exploit_assessment": assessment,
+        "behavior_classifications": hits,
+        "top_primitive": hits[0]["behavior"] if hits else None,
+        "chain_building_blocks": {
+            k: [g.get("gadget") or g.get("insns") for g in v[:3]]
+            for k, v in all_gadgets.items() if v
+        },
+        "backend": embedder.backend,
+    }

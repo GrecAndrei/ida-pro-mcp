@@ -67,12 +67,12 @@ def _fuzzy_find_topic(query, topics_dict, cutoff=0.6):
 
 
 def protocol_resource() -> str:
-    """The Master Forensic RE Protocol - Rules of Engagement for AI Agents."""
-    path = os.path.join(_get_wiki_root(), "workflows", "ForensicProtocol.md")
+    """The Triage Binary workflow — operational guide for AI agents."""
+    path = os.path.join(_get_wiki_root(), "workflows", "TiageBinary.md")
     try:
         return _read_wiki_file(path)
     except Exception:
-        return "CRITICAL: Name everything. Define structs. Debug is truth. Use wiki(topic='workflows/ForensicProtocol') for details."
+        return "Use wiki(action='read', topic='workflows/TiageBinary') for the triage workflow."
 
 @tool
 def wiki(

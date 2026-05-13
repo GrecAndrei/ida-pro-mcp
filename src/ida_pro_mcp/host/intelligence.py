@@ -68,7 +68,7 @@ def _find_llama_server() -> str:
 
 
 def _find_model() -> str:
-    """Locate the embedding GGUF from env or project .opencode-swarm dir."""
+    """Locate the embedding GGUF from env or common locations."""
     env = os.environ.get("IDA_MCP_EMBED_MODEL", "")
     if env and os.path.isfile(env):
         return env
@@ -76,11 +76,23 @@ def _find_model() -> str:
         os.path.join(_PROJECT_ROOT, ".opencode-swarm", "bge-code-v1-q8_0.gguf"),
         os.path.join(os.path.dirname(_SCRIPT_DIR), "..", "..", ".opencode-swarm",
                      "bge-code-v1-q8_0.gguf"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "bge-code-v1-q8_0.gguf"),
+        os.path.join(os.path.expanduser("~"), "models", "bge-code-v1-q8_0.gguf"),
+        os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "bge-code-v1-q8_0.gguf"),
     ]
     for c in candidates:
         p = os.path.abspath(c)
         if os.path.isfile(p):
             return p
+    # Glob search in ~/Downloads and ~/models
+    import glob
+    for search_root in (
+        os.path.join(os.path.expanduser("~"), "Downloads"),
+        os.path.join(os.path.expanduser("~"), "models"),
+    ):
+        for p in glob.glob(os.path.join(search_root, "**", "bge-code-v1*.gguf"), recursive=True):
+            if os.path.isfile(p):
+                return p
     return ""
 
 
@@ -2937,16 +2949,29 @@ class ContextAssembler:
         if query_vec is not None and bb_store is not None and not self._semantic_circuit_open(session_id):
             try:
                 sem_thr = self._get_semantic_threshold(session_id)
-                sem_budget = self._adaptive_semantic_budget(session_id, default_max=24)
-                sem_bb = self._get_bb_semantic_vec(
-                    query_vec,
-                    bb_store,
-                    top_k=3,
-                    threshold=sem_thr,
-                    max_entries=sem_budget,
-                    api_calls=api_calls,
-                    session_id=session_id,
-                )
+                # Use stored vectors in the new blackboard (fast cosine scan, no re-embedding)
+                if hasattr(bb_store, "semantic_search"):
+                    # New blackboard: vectors already stored, O(n) cosine scan
+                    sig = _extract_signature(pseudocode, max_idents=40) or pseudocode[:512]
+                    sem_bb = bb_store.semantic_search(
+                        query=sig,
+                        top_k=5,
+                        threshold=sem_thr,
+                    )
+                    # Exclude the entry for this exact address to avoid self-reference
+                    sem_bb = [e for e in sem_bb if e.get("addr") != addr][:3]
+                else:
+                    # Legacy blackboard: embed on-the-fly
+                    sem_budget = self._adaptive_semantic_budget(session_id, default_max=24)
+                    sem_bb = self._get_bb_semantic_vec(
+                        query_vec,
+                        bb_store,
+                        top_k=3,
+                        threshold=sem_thr,
+                        max_entries=sem_budget,
+                        api_calls=api_calls,
+                        session_id=session_id,
+                    )
                 if sem_bb:
                     self._merge_related_findings(pack, sem_bb, "semantic_linked", session_id=session_id)
             except Exception:

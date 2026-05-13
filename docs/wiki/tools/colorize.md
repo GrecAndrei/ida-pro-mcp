@@ -1,66 +1,24 @@
-# COLORIZE Tool Manual
+# colorize
 
-## What It Does
-Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.
+Sets and queries background colors for functions, ranges, and instructions in IDA.
 
 ## Actions
-- `set_func`
-- `set_range`
-- `set_insn`
-- `get`
-- `clear`
-- `palette`
-- `highlight_pattern`
+- `set_func` — color an entire function; params: `address`, `color`
+- `set_range` — color an address range; params: `start`, `end`, `color`
+- `set_insn` — color a single instruction; params: `address`, `color`
+- `get` — get current color at address; params: `address`
+- `clear` — remove coloring; params: `address` or `start`/`end`
+- `palette` — list available named colors
+- `highlight_pattern` — color all matches of a pattern; params: `pattern`, `color`
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `set_func, set_range, set_insn, get, clear, palette, highlight_pattern, grep, pick, head, tail, next, stats`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "colorize",
-  "arguments": {
-    "action": "set_func"
-  }
-}
+{"name": "colorize", "arguments": {"action": "set_func", "address": "0x401000", "color": "0xCCFFCC"}}
+```
+```json
+{"name": "colorize", "arguments": {"action": "highlight_pattern", "pattern": "xor eax, eax", "color": "yellow"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- Colors are RGB hex values or named palette entries.
+- `highlight_pattern` is useful for visually marking suspicious instruction patterns.

@@ -1,66 +1,28 @@
-# MEMORY Tool Manual
+# memory
 
-## What It Does
-Direct database memory access. Actions: read, write, hexdump.
+Read, write, search, and analyze raw memory/binary content with auto-blackboard capture.
 
 ## Actions
-- `read`
-- `write`
-- `hexdump`
+- `read` — read `size` bytes from `address`; returns raw bytes.
+- `write` — write `data` (hex) to `address`. Guardrail-protected.
+- `hexdump` — formatted hex dump at `address`, optional `size`.
+- `search` — search memory for `pattern` (hex or string); optional `start`, `end`.
+- `compare` — compare memory at two addresses; params `addr1`, `addr2`, `size`.
+- `pointers` — scan for pointer-like values at `address`; auto-captured to blackboard.
+- `entropy` — compute entropy of region at `address`, `size`; auto-captured to blackboard.
+- `strings` — extract strings from region at `address`, `size`; auto-captured to blackboard.
+- `struct_walk` — walk memory as a structure; params `address`, `struct_name`; auto-captured to blackboard.
+- `histogram` — byte frequency histogram at `address`, `size`.
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `read, write, hexdump, grep, pick, head, tail, next, stats`
-- `addr`: `string`
-- `cursor`: `string`
-- `data`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `size`: `integer`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-- `type`: `string`; allowed: `bytes, u8, u16, u32, u64, s8, s16, s32, s64, f32, f64, ptr, string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "memory",
-  "arguments": {
-    "action": "read"
-  }
-}
+{"name": "memory", "arguments": {"action": "hexdump", "address": "0x401000", "size": 64}}
+```
+```json
+{"name": "memory", "arguments": {"action": "entropy", "address": "0x600000", "size": 4096}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `pointers`, `strings`, `entropy`, and `struct_walk` results are automatically written to the blackboard for persistent context.
+- Use `calc` tool for address arithmetic instead of computing offsets manually.
+- `write` is guardrail-protected; requires `_guardrail_ack=true` in strict mode.

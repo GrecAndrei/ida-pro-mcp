@@ -1,76 +1,25 @@
-# CALC Tool Manual
+# calc
 
-## What It Does
-Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.
+Evaluate expressions, resolve pointers, dereference chains, and perform address arithmetic safely.
 
 ## Actions
-- `eval`
-- `offset`
-- `convert`
-- `resolve`
-- `deref`
-- `chain`
-- `align`
+- `eval` — evaluate arithmetic/bitwise expression; param `expr` (e.g. `"0x401000 + 0x20"`).
+- `offset` — compute offset between two addresses; params `base`, `target`.
+- `convert` — convert value between representations; params `value`, `to` (hex/dec/bin/oct).
+- `resolve` — resolve symbol or address to concrete value; param `name` or `address`. Auto-captured to blackboard.
+- `deref` — dereference pointer at `address`, optional `size`/`depth`. Auto-captured to blackboard.
+- `chain` — follow pointer chain from `address`; optional `max_depth`. Auto-captured to blackboard.
+- `align` — align `address` to `boundary`.
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `eval, offset, convert, resolve, deref, chain, align, grep, pick, head, tail, next, stats`
-- `addr`: `string`
-- `cursor`: `string`
-- `expr`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `offsets`: `array | string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `size`: `integer`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target`: `string`
-- `target_action`: `string`
-- `token`: `string`
-- `type`: `string`
-- `value`: `string | integer`
-
-## Example
+## Examples
 ```json
-{
-  "name": "calc",
-  "arguments": {
-    "action": "eval"
-  }
-}
+{"name": "calc", "arguments": {"action": "eval", "expr": "0x401000 + 0x48 * 3"}}
+```
+```json
+{"name": "calc", "arguments": {"action": "chain", "address": "0x601020", "max_depth": 4}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-- `convert`/`resolve`/`align` accept integer suffixes (`k`, `m`, `g`, `t`) such as `4k` or `2m`.
-- `align` returns `nearest` in addition to `aligned_down` and `aligned_up`.
-- Pointer traversal actions (`deref`, `chain`) now stop cleanly on null/BADADDR and annotate termination.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- Always use `calc` for address math instead of mental arithmetic — this avoids pointer errors.
+- `resolve`, `deref`, and `chain` results are auto-captured to the blackboard for later reference.
+- Accepts natural language via `intent` param (e.g. `"offset from base to vtable entry 5"`).

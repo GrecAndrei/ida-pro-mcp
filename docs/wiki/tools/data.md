@@ -1,74 +1,25 @@
-# DATA Tool Manual
+# data
 
-## What It Does
-Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \w+alloc), glob (*alloc*), or plain substring.
+Queries structured data from the IDB: functions, globals, strings, imports, exports, and capability analysis.
 
 ## Actions
-- `functions`
-- `globals`
-- `strings`
-- `imports`
-- `exports`
-- `lookup`
-- `bulk_query`
+- `functions` — list functions. Optional `offset`, `count`, `filter`, `sort`
+- `globals` — list global variables. Optional `offset`, `count`
+- `strings` — list defined strings. Optional `offset`, `count`, `min_length`
+- `imports` — list imported functions grouped by library
+- `exports` — list exported symbols
+- `lookup` — look up a single symbol/address. Params: `name` or `address`
+- `bulk_query` — query multiple addresses/names at once. Params: `items` (array)
+- `capability_matrix` — high-level capability summary (crypto, network, file I/O, etc.)
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `functions, globals, strings, imports, exports, lookup, bulk_query, grep, pick, head, tail, next, stats`
-- `count`: `integer`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `include_prototype`: `boolean`
-- `include_xrefs`: `boolean`
-- `items`: `array`
-- `min_size`: `integer`
-- `named_only`: `boolean`
-- `next_token`: `string`
-- `offset`: `integer`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `query`: `string`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "data",
-  "arguments": {
-    "action": "functions"
-  }
-}
+{"name": "data", "arguments": {"action": "functions", "count": 20}}
+```
+```json
+{"name": "data", "arguments": {"action": "lookup", "name": "main"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- Paginate large results with `offset`/`count` to stay within context budget.
+- `capability_matrix` is useful for initial triage without reading every function.

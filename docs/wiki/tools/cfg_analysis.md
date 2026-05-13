@@ -1,69 +1,27 @@
-# CFG_ANALYSIS Tool Manual
+# cfg_analysis
 
-## What It Does
-Control flow graph metrics. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.
+Analyze control-flow graph properties: complexity, loops, dominators, and obfuscation detection.
 
 ## Actions
-- `complexity`
-- `loops`
-- `branches`
-- `paths`
-- `dominators`
-- `post_dominators`
-- `back_edges`
-- `natural_loops`
-- `irreducible`
-- `flatten_detect`
+- `complexity` — compute cyclomatic complexity of function at `address`.
+- `loops` — detect loops in function at `address`.
+- `branches` — enumerate branch points in function at `address`.
+- `paths` — enumerate paths through function CFG; params `address`, optional `max_paths`.
+- `dominators` — compute dominator tree for function at `address`.
+- `post_dominators` — compute post-dominator tree for function at `address`.
+- `back_edges` — identify back edges (loop indicators) in function at `address`.
+- `natural_loops` — identify natural loops with header/body info at `address`.
+- `flattening_detect` — detect control-flow flattening obfuscation at `address`.
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "cfg_analysis",
-  "arguments": {
-    "action": "complexity"
-  }
-}
+{"name": "cfg_analysis", "arguments": {"action": "complexity", "address": "0x401000"}}
+```
+```json
+{"name": "cfg_analysis", "arguments": {"action": "flattening_detect", "address": "0x401000"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- High cyclomatic complexity often indicates dispatch functions or obfuscated code.
+- `flattening_detect` identifies state-machine-based CFF obfuscation patterns.
+- All actions operate on a single function; pass the function start address.

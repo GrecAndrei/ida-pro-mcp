@@ -1,69 +1,24 @@
-# CRYPTO_ID Tool Manual
+# crypto_id
 
-## What It Does
-Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.
+Identifies cryptographic algorithms, constants, and encoding routines in binary code.
 
 ## Actions
-- `identify`
-- `constants`
-- `key_schedule`
-- `block_cipher`
-- `hash_detect`
-- `rng_detect`
-- `asymmetric`
-- `custom_crypto`
-- `encoding`
-- `checksums`
+- `identify` — Classify crypto usage via BehaviorClassifier on decompiled pseudocode + constant scanning; params: `address`
+- `constants` — Scan for known crypto constants (S-boxes, IVs, magic values); params: `address`, `algorithm`
+- `encoding` — Detect encoding/decoding routines (base64, XOR, RC4); params: `address`
+- `checksums` — Find checksum/hash computation patterns (CRC, MD5, SHA); params: `address`
+- `entropy_analysis` — Measure entropy to locate encrypted/compressed regions; params: `address`, `size`
+- `aes_ni` — Detect AES-NI hardware instruction usage; params: `address`
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed_count: `16`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "crypto_id",
-  "arguments": {
-    "action": "identify"
-  }
-}
+{"name": "crypto_id", "arguments": {"action": "identify", "address": "0x401000"}}
+```
+```json
+{"name": "crypto_id", "arguments": {"action": "constants"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `identify` combines behavioral classification with constant scanning for high-confidence results.
+- Works on decompiled pseudocode when Hex-Rays is available; falls back to disassembly patterns.
+- Pair with `entropy` tool for region-level packed/encrypted detection.

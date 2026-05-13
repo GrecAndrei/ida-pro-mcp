@@ -115,6 +115,14 @@ def memory(
     - end_addr: End address for region-based actions (search, compare, pointers, entropy, strings, histogram).
     - depth: Max recursion depth for struct_walk.
     """
+    result = _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
+    # Auto-capture interesting results to the blackboard (fire-and-forget)
+    if action in ("pointers", "strings", "entropy", "struct_walk"):
+        _memory_auto_capture(result, addr, action)
+    return result
+
+
+def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> dict:
     try:
         ea, error = validate_addr(addr)
         if error:
@@ -343,3 +351,18 @@ def memory(
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
+
+
+def _memory_auto_capture(result: dict, addr: str, action: str) -> None:
+    """Fire-and-forget blackboard capture for interesting memory results."""
+    if not result.get("ok"):
+        return
+    try:
+        from .blackboard import auto_capture_memory
+    except ImportError:
+        try:
+            from blackboard import auto_capture_memory  # type: ignore
+        except ImportError:
+            return
+    result["_action"] = action
+    auto_capture_memory(result, addr=addr)

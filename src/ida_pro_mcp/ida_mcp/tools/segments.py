@@ -377,7 +377,12 @@ def segments(
                                       f"Failed to rename segment to '{value}'")
             elif hasattr(seg, attr):
                 try:
-                    setattr(seg, attr, int(value) if isinstance(value, str) and value.startswith(("0x", "0X")) else value)
+                    # Convert string values to int for numeric attributes
+                    if isinstance(value, str):
+                        int_val = int(value, 0)  # handles "0x1F", "31", "0b11" etc.
+                    else:
+                        int_val = int(value)
+                    setattr(seg, attr, int_val)
                 except (ValueError, TypeError):
                     return make_error(MCPError.INVALID_ARG_TYPE,
                                       f"Cannot set attribute '{attr}' to value '{value}'")

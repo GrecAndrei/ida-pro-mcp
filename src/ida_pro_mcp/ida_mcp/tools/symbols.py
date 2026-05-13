@@ -33,13 +33,16 @@ def symbols(
             import ida_loader
             if path:
                 path, err = validate_path_safe(path)
-                if err: return err
-                if ida_loader.load_and_run_plugin("pdb", 0):
-                    return {"ok": True, "loaded": True, "path": path}
-            else:
-                if ida_loader.load_and_run_plugin("pdb", 0):
-                    return {"ok": True, "loaded": True, "note": "PDB auto-detection triggered"}
-            return make_error(MCPError.IDA_ERROR, "PDB loading failed")
+                if err:
+                    return err
+                if not os.path.exists(path):
+                    return make_error(MCPError.FILE_NOT_FOUND, f"PDB file not found: {path}")
+                # Set the PDB path via environment so the plugin picks it up
+                os.environ["_NT_SYMBOL_PATH"] = os.path.dirname(path)
+                os.environ["IDA_PDB_PATH"] = path
+            if ida_loader.load_and_run_plugin("pdb", 0):
+                return {"ok": True, "loaded": True, "path": path or "auto-detected"}
+            return make_error(MCPError.IDA_ERROR, "PDB loading failed or no PDB available")
         
         elif action == "load_dwarf":
             import ida_loader
@@ -76,13 +79,31 @@ def symbols(
                     return make_error(MCPError.INVALID_ARGS, "addr required")
             else:
                 ea, err = validate_addr(addr)
-                if err: return err
-            
+                if err:
+                    return err
+
             tif = ida_typeinf.tinfo_t()
-            # In IDA 9, use get_tinfo or similar
+            # Try to get existing type info first
             if ida_nalt.get_tinfo(tif, ea):
-                return {"ok": True, "addr": hex(ea), "type": str(tif)}
-            return {"ok": True, "applied": False, "note": "No symbol info found for address"}
+                # Re-apply it to force propagation to decompiler
+                if ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
+                    return {"ok": True, "addr": hex(ea), "type": str(tif), "applied": True}
+                return {"ok": True, "addr": hex(ea), "type": str(tif), "applied": False,
+                        "note": "Type read but re-apply failed"}
+
+            # Try to infer from function prototype in TIL
+            func = ida_funcs.get_func(ea)
+            if func:
+                name = idc.get_func_name(func.start_ea)
+                if name:
+                    til = ida_typeinf.get_idati()
+                    if til and ida_typeinf.get_named_type(til, name, ida_typeinf.NTF_TYPE, tif):
+                        if ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
+                            return {"ok": True, "addr": hex(ea), "type": str(tif), "applied": True,
+                                    "source": "til"}
+
+            return {"ok": True, "applied": False, "addr": hex(ea),
+                    "note": "No type info found; use types(action='set_prototype') to set one"}
         
         elif action == "export":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")

@@ -97,58 +97,62 @@ def history(
             if not name:
                 import datetime
                 name = f"snapshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            # Sanitize name to prevent path traversal
             safe_name = os.path.basename(name.replace("/", "_").replace("\\", "_"))
-            
-            # Use native snapshot if available (IDA 7.4+)
-            if hasattr(idautils, 'take_database_snapshot'):
-                try:
-                    if idautils.take_database_snapshot(safe_name):
-                        return {"ok": True, "type": "native_snapshot", "name": safe_name}
-                except Exception as e:
-                    # Log and fallback to save copy
-                    import logging
-                    logging.debug(f"Native snapshot failed, falling back: {e}")
-            
-            # Fallback: Save a copy of the database
+
+            # Save a copy of the IDB alongside the original
             root = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
             dirname = os.path.dirname(root)
-            filename = f"{safe_name}.i64"
-            target = os.path.join(dirname, filename)
+            snap_dir = os.path.join(dirname, ".ida_snapshots")
+            os.makedirs(snap_dir, exist_ok=True)
+            ext = ".i64" if root.endswith(".i64") else ".idb"
+            target = os.path.join(snap_dir, f"{safe_name}{ext}")
             _, path_err = validate_path_safe(target)
-            if path_err: return path_err
+            if path_err:
+                return path_err
 
             if ida_loader.save_database(target, 0):
-                return {"ok": True, "type": "idb_copy", "path": target}
-            
+                return {"ok": True, "name": safe_name, "path": target}
+
             return make_error(MCPError.IDA_ERROR, "Failed to create snapshot")
-        
+
         elif action == "restore":
             if not name:
                 return make_error(MCPError.INVALID_ARGS, "name required")
-            
-            # Sanitize name to prevent path traversal
+
             safe_name = os.path.basename(name.replace("/", "_").replace("\\", "_"))
-            
-            # List available snapshots
-            idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB)
-            snapshot_dir = os.path.join(os.path.dirname(idb_path), ".ida_snapshots")
-            
-            meta_path = os.path.join(snapshot_dir, f"{safe_name}.json")
-            _, path_err = validate_path_safe(meta_path)
-            if path_err: return path_err
-            if os.path.exists(meta_path):
-                import json as json_module
-                with open(meta_path, 'r') as f:
-                    metadata = json_module.load(f)
-                return {
-                    "ok": True,
-                    "found": True,
-                    "metadata": metadata,
-                    "note": "To fully restore, reload IDB from backup"
-                }
-            else:
-                return make_error(MCPError.FILE_NOT_FOUND, f"Snapshot '{name}' not found")
+
+            root = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
+            snap_dir = os.path.join(os.path.dirname(root), ".ida_snapshots")
+
+            # Find the snapshot file (try both extensions)
+            snap_path = None
+            for ext in (".i64", ".idb"):
+                candidate = os.path.join(snap_dir, f"{safe_name}{ext}")
+                if os.path.exists(candidate):
+                    snap_path = candidate
+                    break
+
+            if not snap_path:
+                # List available snapshots to help the user
+                available = []
+                if os.path.isdir(snap_dir):
+                    available = [
+                        os.path.splitext(f)[0]
+                        for f in os.listdir(snap_dir)
+                        if f.endswith((".i64", ".idb"))
+                    ]
+                return make_error(
+                    MCPError.FILE_NOT_FOUND,
+                    f"Snapshot '{name}' not found",
+                    hint=f"Available: {available}" if available else "No snapshots found",
+                )
+
+            return {
+                "ok": True,
+                "found": True,
+                "path": snap_path,
+                "note": "To restore, close IDA and replace the current IDB with this snapshot file",
+            }
         
         elif action == "diff":
             # Show changes since database was opened

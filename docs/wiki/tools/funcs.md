@@ -1,82 +1,30 @@
-# FUNCS Tool Manual
+# funcs
 
-## What It Does
-Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force deletion of overlaps), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).
+Create, delete, query, and annotate functions with metrics and ML-powered name suggestions.
 
 ## Actions
-- `create`
-- `delete`
-- `set_flags`
-- `set_name`
-- `rename`
-- `add_comment`
-- `list`
-- `info`
+- `create` — create a new function at address; params: `address`, `end` (optional)
+- `delete` — delete a function; params: `address`
+- `set_flags` — set function flags; params: `address`, `flags`
+- `set_name` (alias: `rename`) — rename a function; params: `address`, `name`
+- `add_comment` — add a comment to a function; params: `address`, `comment`, `repeatable`
+- `list` — list functions; params: `offset`, `count`, `filter`
+- `info` — get detailed function info; params: `address`
+- `metrics` — get cyclomatic complexity, instruction count, call depth; params: `address`
+- `find_similar` — find functions with similar structure; params: `address`, `limit`
+- `suggest_names` — suggest names for `sub_XXXX` functions using cosine similarity to nearest named function; params: `limit`, `threshold` (default 0.65)
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `create, delete, set_flags, set_name, rename, add_comment, list, info, grep, pick, head, tail, next, stats`
-- `addr`: `string`
-- `comment`: `string`
-- `count`: `integer`
-- `cursor`: `string`
-- `end`: `string`
-- `flags`: `integer`
-- `force`: `boolean`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `include_items`: `boolean`
-- `include_prototype`: `boolean`
-- `include_stack`: `boolean`
-- `include_xrefs`: `boolean`
-- `name`: `string`
-- `named_only`: `boolean`
-- `next_token`: `string`
-- `offset`: `integer`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `query`: `string`
-- `repeatable`: `boolean`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
+## Examples
 
-## Example
 ```json
-{
-  "name": "funcs",
-  "arguments": {
-    "action": "create"
-  }
-}
+{"name": "funcs", "arguments": {"action": "suggest_names", "limit": 20, "threshold": 0.6}}
+```
+
+```json
+{"name": "funcs", "arguments": {"action": "metrics", "address": "0x401000"}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `suggest_names` only targets unnamed (`sub_XXXX`) functions and ranks candidates by embedding cosine similarity.
+- `set_name` is an alias for `rename` — both work identically.
+- `metrics` returns structured data (cyclomatic complexity, instruction count, call depth) useful for prioritizing analysis effort.

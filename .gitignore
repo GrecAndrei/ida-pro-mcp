@@ -1,10 +1,20 @@
+# Python
 __pycache__/
 *.pyc
-.venv/
-.opencode-swarm/
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
 
-ida_mcp_cache/
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDA Pro artifacts
 *.i64
+*.idb
 *.id0
 *.id1
 *.id2
@@ -15,13 +25,43 @@ ida_mcp_cache/
 *.mcp.lock
 *.drcov
 *.binexport
+*.$$$
+*.schemaboot.db
 
-# Planning artifacts — preserve but don't commit
-GAP_ANALYSIS.md
-*.plan.md
+# Backup files
+*.bak
+*.orig
+*.swp
+*~
 
-# Web search cache
-.opencode-swarm/.search_cache/
+# Testing/CI artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# IDE / editor
+.idea/
+.vscode/
+*.code-workspace
+
+# Tool-specific working dirs
+.opencode-swarm/
+.codex/
+ida_mcp_cache/
 
 # Local probe/report artifacts
 reports/*.json
+
+# Planning artifacts
+GAP_ANALYSIS.md
+*.plan.md
+
+# Test result artifacts (generated, not source)
+tests/tool_sweep_*.json
+tests/improvement_test_results*.json
+tests/artifacts/
+
+# OS junk
+.DS_Store
+Thumbs.db

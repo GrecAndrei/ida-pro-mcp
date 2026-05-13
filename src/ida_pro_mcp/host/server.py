@@ -5748,19 +5748,6 @@ class IDAMCPServer:
 
         result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
         sid = getattr(self.current_session, "session_id", None) if self.current_session else None
-        # Active Blackboard Kernel: result shaping + observation logging
-        try:
-            pre = {"decision": "allow"}
-
-            self.attention_kernel.observe_result(
-                sid,
-                resolved_tool,
-                str(args.get("action", "") if isinstance(args, dict) else ""),
-                args if isinstance(args, dict) else {},
-                result,
-            )
-        except Exception:
-            pass
         latency_ms = (time.perf_counter() - start_ts) * 1000.0
         action_name = str(args.get("action", "")) if isinstance(args, dict) else ""
         guardrail_mode = self._guardrail_mode_from_args(args) if isinstance(args, dict) else "assist"
@@ -5946,13 +5933,7 @@ class IDAMCPServer:
                     },
                 )
             if ack:
-                # Analyst override: learn that this obligation may be over-eager
-                sid = getattr(self.current_session, "session_id", None) if self.current_session else None
-                try:
-                    for obl in []:  # attention_kernel removed
-                        self.attention_kernel.record_override(sid, obl["id"], tool_name, act, "guardrail_ack")
-                except Exception:
-                    pass
+                pass  # guardrail ack noted
         if tool_name == "wiki":
             return self._handle_wiki(args)
         if tool_name == "misc":
@@ -6328,6 +6309,7 @@ class IDAMCPServer:
                     "limit": limit,
                 }
             if action == "switch":
+                old_idb = getattr(self.current_session, "idb_path", None) if self.current_session else None
                 sid = args.get("session_id")
                 if not sid:
                     # Try to find by binary_path
@@ -6356,6 +6338,9 @@ class IDAMCPServer:
                 session = self.session_mgr.get_session(sid)
                 if session:
                     self.current_session = session
+                    new_idb = getattr(session, "idb_path", None)
+                    if old_idb and new_idb and old_idb != new_idb:
+                        _trigger_session_diff(old_idb, new_idb)
                     return {"ok": True, "session": self.current_session.to_dict()}
                 return make_error(
                     MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
@@ -7917,13 +7902,58 @@ class IDAMCPServer:
             return {"ok": True, **result}
         if action == "prune":
             result = store.prune(
-                max_entries=_bounded_int(args.get("max_entries", 1000), 1000, min_value=10, max_value=100000),
+                max_entries=_bounded_int(args.get("max_entries", 1000), 1000, min_value=1, max_value=100000),
                 min_q_value=float(args.get("min_q_value", 0.0)),
                 older_than_days=int(args.get("older_than_days", 0)),
             )
             return {"ok": True, **result}
+        if action == "contradict":
+            eid = str(args.get("entry_id") or "").strip()
+            reason = str(args.get("reason") or "").strip()
+            if not eid or not reason:
+                return make_error(MCPError.INVALID_ARGS, "entry_id and reason required")
+            ok = store.contradict(eid, reason)
+            return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
+        if action == "resolve":
+            eid = str(args.get("entry_id") or "").strip()
+            if not eid:
+                return make_error(MCPError.INVALID_ARGS, "entry_id required")
+            ok = store.mark_resolved(eid)
+            return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
+        if action == "next_target":
+            targets = store.next_target(limit=int(args.get("limit") or 5))
+            return {"ok": True, "targets": targets, "count": len(targets),
+                    "note": "Highest-priority unexplored addresses. Use code(action='decompile') on the top target."}
+        if action in ("start_crawler", "stop_crawler", "crawler_status", "accept", "reject"):
+            # Delegate to the tool module which owns the crawler singleton
+            mod = IDAMCPServer._blackboard_module
+            if mod is None:
+                return make_error(MCPError.IDA_ERROR, "BlackboardStore unavailable")
+            crawler = mod._BackgroundCrawler.instance()
+            if action == "start_crawler":
+                crawler.start(notify_fn=self._send_notification)
+                return {"ok": True, "running": crawler.is_running(),
+                        "note": "Crawler follows xrefs from known blackboard addresses every 30s."}
+            elif action == "stop_crawler":
+                crawler.stop()
+                return {"ok": True, "running": False}
+            elif action == "crawler_status":
+                proposals = crawler.pending_proposals()
+                return {"ok": True, "running": crawler.is_running(),
+                        "pending_proposals": len(proposals), "proposals": proposals[:10]}
+            elif action == "accept":
+                pid = str(args.get("proposal_id") or "").strip()
+                if not pid:
+                    return make_error(MCPError.INVALID_ARGS, "proposal_id required")
+                eid = crawler.accept(pid)
+                return {"ok": bool(eid), "entry_id": eid} if eid else make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found")
+            elif action == "reject":
+                pid = str(args.get("proposal_id") or "").strip()
+                if not pid:
+                    return make_error(MCPError.INVALID_ARGS, "proposal_id required")
+                ok = crawler.reject(pid)
+                return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found")
         if action == "attention_status":
-            sid = args.get("session_id") or (self.current_session.session_id if self.current_session else None)
             return {"ok": True, "note": "attention_kernel replaced by intelligence.py"}
         if action == "attention_policy_upsert":
             return {"ok": True, "action": "attention_policy_upsert",
@@ -7931,7 +7961,7 @@ class IDAMCPServer:
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",
-            hint="Valid actions: write, list, read, delete, clear, stats, merge, prune, attention_status, attention_policy_upsert",
+            hint="Valid actions: write, read, list, search, update, delete, clear, stats, merge, prune, contradict, resolve, next_target, start_crawler, stop_crawler, crawler_status, accept, reject",
         )
 
     def _handle_predictor(self, args: dict) -> dict:
@@ -8642,6 +8672,7 @@ class IDAMCPServer:
             msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
             msvcrt.setmode(_real_stdout.fileno(), os.O_BINARY)
         rs, si = _real_stdout.buffer, sys.stdin.buffer
+        self._rs = rs  # store for _send_notification
         try:
             while True:
                 if self._shutdown_requested:
@@ -8668,6 +8699,57 @@ class IDAMCPServer:
                     continue
         finally:
             self.shutdown()
+
+    def _send_notification(self, notification: dict) -> None:
+        """Send an unsolicited MCP notification to the client (no id field = notification)."""
+        try:
+            rs = getattr(self, "_rs", None)
+            if rs is None:
+                return
+            output = (
+                json.dumps(notification, ensure_ascii=False, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            rs.write(output)
+            rs.flush()
+        except Exception:
+            pass
+
+
+def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
+    import threading
+    def _diff():
+        try:
+            from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+        except ImportError:
+            return
+        try:
+            embedder = BgeCodeEmbedder()
+            new_idx = FunctionEmbeddingIndex(new_idb + ".embeddings.db", embedder)
+            old_idx = FunctionEmbeddingIndex(old_idb + ".embeddings.db", embedder)
+            if new_idx.size == 0 or old_idx.size == 0:
+                return
+            new_only = []
+            for ea, vec in list(new_idx._cache.items())[:200]:
+                matches = old_idx.similar_vec(vec, top_k=1, threshold=0.75)
+                if not matches:
+                    new_only.append(ea)
+            if new_only:
+                try:
+                    from ida_pro_mcp.ida_mcp.tools.blackboard import BlackboardStore
+                    store = BlackboardStore()
+                    store.write(
+                        title=f"Session diff: {len(new_only)} new/changed functions vs previous session",
+                        content=str(new_only[:20]),
+                        category="session_diff",
+                        tags=["auto", "diff", "session"],
+                        confidence=0.8,
+                        source="session_diff",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    threading.Thread(target=_diff, daemon=True, name="session-diff").start()
 
 
 if __name__ == "__main__":

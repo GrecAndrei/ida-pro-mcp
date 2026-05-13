@@ -1,68 +1,27 @@
-# QUERY Tool Manual
+# query
 
-## What It Does
-Unified read-only query hub. Actions: data, search, idb, code, types, imports_deep, symbols, patterns.
+Unified query interface that delegates to other tools (data, search, code, types, etc.) or performs natural-language semantic search.
 
 ## Actions
-- `data`
-- `search`
-- `idb`
-- `code`
-- `types`
-- `imports_deep`
-- `symbols`
-- `patterns`
+- `data` — proxy to `data` tool; pass through sub-action and params.
+- `search` — proxy to `search` tool.
+- `idb` — proxy to `idb` tool.
+- `code` — proxy to `code` tool.
+- `types` — proxy to `types` tool.
+- `imports_deep` — proxy to `imports_deep` tool.
+- `symbols` — proxy to `symbols` tool.
+- `patterns` — proxy to `patterns` tool.
+- `nl` — natural language query; embeds `query` string, cosine-searches FunctionEmbeddingIndex. Returns ranked function matches.
 
-## Parameters
-- `_compact`: `boolean` — Shortcut for compact/full mode toggle.
-- `_error_details`: `string`; allowed: `none, basic, full` — Controls verbosity of error details.
-- `_qol_mode`: `string`; allowed: `tiny, balanced, debug` — QoL profile shortcut for response compaction presets.
-- `_response_batch_compact`: `boolean` — Compact batch envelopes in compact mode.
-- `_response_char_budget`: `integer` — Approximate max output chars before truncation middleware applies.
-- `_response_fields`: `array | string` — Optional top-level field projection (comma-separated string or list).
-- `_response_max_items`: `integer` — Max list items retained in compact mode.
-- `_response_max_string`: `integer` — Max string length retained in compact mode.
-- `_response_mode`: `string`; allowed: `compact, full` — Output mode. compact is default and reduces token usage.
-- `_response_omit`: `array | string` — Optional top-level field omission list.
-- `_response_table`: `boolean` — Convert repetitive list-of-object payloads into {columns,rows}.
-- `action`: `string`; allowed: `data, search, idb, code, types, imports_deep, symbols, patterns, grep, pick, head, tail, next, stats`
-- `args`: `object`
-- `cursor`: `string`
-- `grep`: `string` — Grep pattern (substring by default; regex if grep_regex=true).
-- `grep_case_sensitive`: `boolean`
-- `grep_field`: `string` — Optional top-level source field to grep (e.g. matches, functions, content).
-- `grep_invert`: `boolean`
-- `grep_limit`: `integer`
-- `grep_offset`: `integer`
-- `grep_pattern`: `string`
-- `grep_regex`: `boolean`
-- `head_n`: `integer`
-- `idb`: `string` — Optional: session_id, SID_* IDB id, binary path, or full IDB path. If omitted, uses active session.
-- `next_token`: `string`
-- `on`: `string`
-- `pick_fields`: `array | string` — For action='pick': top-level fields to include.
-- `pick_omit`: `array | string` — For action='pick': top-level fields to omit after pick_fields.
-- `qol_mode`: `string`; allowed: `tiny, balanced, debug`
-- `source_action`: `string` — For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).
-- `stats_include_payload`: `boolean`
-- `subaction`: `string`
-- `tail_n`: `integer`
-- `target_action`: `string`
-- `token`: `string`
-
-## Example
+## Examples
 ```json
-{
-  "name": "query",
-  "arguments": {
-    "action": "data"
-  }
-}
+{"name": "query", "arguments": {"action": "nl", "query": "function that parses XML input"}}
+```
+```json
+{"name": "query", "arguments": {"action": "data", "sub_action": "functions", "count": 20}}
 ```
 
 ## Notes
-- `idb` is optional for most tools and resolves from active session when omitted.
-
----
-Doc status: Auto-generated from live tool metadata.
-Last reviewed: 2026-03-27
+- `nl` requires target functions to be decompiled first (so they exist in the embedding index).
+- Use `nl` for exploratory discovery when you don't know exact names or addresses.
+- Other actions are convenience proxies; calling the underlying tool directly is equivalent.

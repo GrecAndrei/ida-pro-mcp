@@ -122,9 +122,8 @@ class QueryParser:
         }
 
     def _parse_conditions(self, conditions: str) -> List[Dict]:
-        """Parse AND-separated conditions."""
+        """Parse AND-separated conditions, respecting quoted strings."""
         result = []
-        # Split by AND but be careful with string literals
         tokens = []
         current = ""
         in_quote = False
@@ -140,10 +139,10 @@ class QueryParser:
                 in_quote = False
                 quote_char = None
                 current += c
-            elif c.upper() == "A" and i + 3 < len(conditions) and conditions[i:i+4].upper() == " AND" and not in_quote:
+            elif not in_quote and conditions[i:i+5].upper() == " AND ":
                 tokens.append(current.strip())
                 current = ""
-                i += 4
+                i += 5
                 continue
             else:
                 current += c

@@ -169,42 +169,35 @@ class CFGExtractor:
             func = ida_funcs.get_func(func_ea)
             if not func:
                 return np.zeros((1, 64), dtype=np.float32), np.zeros((1, 1), dtype=np.float32)
-            
-            # Get basic blocks
-            blocks = list(idautils.Chunks(func.start_ea))
+
+            # Get basic blocks via FlowChart (correct CFG, not just code chunks)
+            try:
+                flow = idaapi.FlowChart(func)
+                blocks = list(flow)
+            except Exception:
+                return np.zeros((1, 64), dtype=np.float32), np.zeros((1, 1), dtype=np.float32)
             if not blocks:
                 return np.zeros((1, 64), dtype=np.float32), np.zeros((1, 1), dtype=np.float32)
-            
+
             n_blocks = len(blocks)
             input_dim = 64
-            
+
             node_features = np.zeros((n_blocks, input_dim), dtype=np.float32)
             adjacency = np.zeros((n_blocks, n_blocks), dtype=np.float32)
-            
-            for i, (start_ea, end_ea) in enumerate(blocks):
-                # Extract block features
-                features = CFGExtractor._extract_block_features(start_ea, end_ea)
+
+            # Build ea→block-index map for fast successor lookup
+            block_index = {}
+            for i, blk in enumerate(blocks):
+                block_index[blk.start_ea] = i
+
+            for i, blk in enumerate(blocks):
+                features = CFGExtractor._extract_block_features(blk.start_ea, blk.end_ea)
                 node_features[i] = features
-                
-                # Find successors
-                for head in idautils.Heads(start_ea, end_ea):
-                    if idc.is_code(idc.get_full_flags(head)):
-                        # Check if this is a branch instruction
-                        mnem = idc.print_insn_mnem(head)
-                        if mnem and mnem.lower().startswith(('jmp', 'j')):
-                            # Get jump target
-                            for ref in idautils.CodeRefsFrom(head, False):
-                                for j, (s, e) in enumerate(blocks):
-                                    if s <= ref < e:
-                                        adjacency[i, j] = 1.0
-                                        break
-                        # Fall-through
-                        next_head = idc.next_head(head, end_ea + 1)
-                        if next_head < end_ea:
-                            for j, (s, e) in enumerate(blocks):
-                                if s <= next_head < e:
-                                    adjacency[i, j] = 1.0
-                                    break
+                # Use FlowChart successor edges directly — correct control flow
+                for succ in blk.succs():
+                    j = block_index.get(succ.start_ea)
+                    if j is not None:
+                        adjacency[i, j] = 1.0
             
             return node_features, adjacency
         
@@ -454,13 +447,14 @@ def mbagcn(
             store.store(ea, name, query_emb, node_features.shape[0], int(np.sum(adjacency)))
         
         results = store.find_similar(query_emb, top_k=top_k)
+        query_ea_hex = hex(ea)
         return {
             "ok": True,
-            "query": hex(ea),
+            "query": query_ea_hex,
             "results": [
-                {"ea": hex(ea), "name": name, "similarity": round(score, 4)}
-                for ea, name, score in results
-                if hex(ea) != hex(int(addr, 16))  # exclude self
+                {"ea": hex(r_ea), "name": r_name, "similarity": round(score, 4)}
+                for r_ea, r_name, score in results
+                if hex(r_ea) != query_ea_hex  # exclude self
             ],
         }
 

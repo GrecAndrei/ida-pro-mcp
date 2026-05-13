@@ -238,7 +238,7 @@ def analysis(
             warnings_list = []
             prev = ""
             try:
-                                prev = getattr(inf, "procname", "") if inf else ""
+                prev = getattr(inf, "procname", "") if inf else ""
             except Exception:
                 pass
             if processor:

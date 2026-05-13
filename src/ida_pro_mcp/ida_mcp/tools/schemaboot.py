@@ -37,6 +37,7 @@ import math
 import time
 import sqlite3
 import tempfile
+import hashlib
 from collections import Counter
 from typing import Any
 
@@ -196,7 +197,7 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
     flow = idaapi.FlowChart(func)
     for block in flow:
         bb_count += 1
-        for ea in range(block.start_ea, block.end_ea):
+        for ea in idautils.Heads(block.start_ea, block.end_ea):
             mnem = idc.print_insn_mnem(ea)
             if not mnem:
                 continue

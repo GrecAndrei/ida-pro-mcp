@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def query(
-    action: Annotated[Literal["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns"],
-                      "Action: data|search|idb|code|types|imports_deep|symbols|patterns"],
+    action: Annotated[Literal["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl"],
+                      "Action: data|search|idb|code|types|imports_deep|symbols|patterns|nl"],
     subaction: Annotated[Optional[str], "Sub-action to perform"] = None,
     args: Annotated[Optional[dict], "Arguments to pass to sub-tool"] = None,
     **kwargs
@@ -61,6 +61,10 @@ def query(
     patterns - Pattern matching queries
         subaction: list_sigs|matched
         Example: query(action="patterns", subaction="list_sigs")
+
+    nl - Natural language semantic search over indexed functions
+        args: {q, limit}
+        Example: query(action="nl", args={"q": "function that decrypts data", "limit": 5})
     """
     try:
         merged_args = {}
@@ -112,7 +116,32 @@ def query(
             from .patterns import patterns as patterns_tool
             sub = subaction or "list_sigs"
             return patterns_tool(action=sub, **args)
-            
+
+        elif action == "nl":
+            q = args.get("q") or args.get("query") or ""
+            if not q:
+                return make_error(MCPError.INVALID_ARGS, "q required")
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+            except ImportError:
+                from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+            embedder = BgeCodeEmbedder()
+            idb_path = ""
+            try:
+                import idc as _idc
+                idb_path = _idc.get_idb_path() or ""
+            except Exception:
+                pass
+            if not idb_path:
+                return make_error(MCPError.INVALID_ARGS, "No IDB path")
+            idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
+            if idx.size == 0:
+                return {"ok": True, "results": [], "note": "No functions indexed yet. Run code(action='decompile') on functions first."}
+            q_vec = embedder.embed(q)
+            top_k = int(args.get("limit") or 10)
+            results = idx.similar_vec(q_vec, top_k=top_k, threshold=0.3)
+            return {"ok": True, "query": q, "results": results, "count": len(results), "backend": embedder.backend}
+
         else:
             return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown query action: {action}",
                             hint="Valid actions: data, search, idb, code, types, imports_deep, symbols, patterns")

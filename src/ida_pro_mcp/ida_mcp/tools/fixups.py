@@ -84,34 +84,46 @@ def fixups(
         elif action == "get":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea = parse_address(addr)
+            ea, err = validate_addr(addr)
+            if err:
+                return err
             fd = ida_fixup.fixup_data_t()
             if ida_fixup.get_fixup(fd, ea):
                 return {
                     "ok": True,
-                    "addr": addr,
+                    "addr": hex(ea),
                     "type": fd.get_type(),
                     "target": hex(fd.off) if fd.off != idaapi.BADADDR else None
                 }
-            return make_error(MCPError.FILE_NOT_FOUND, "No fixup at address")
-        
+            return make_error(MCPError.NOT_FOUND, f"No fixup at address {hex(ea)}")
+
         elif action == "add":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea = parse_address(addr)
+            ea, err = validate_addr(addr)
+            if err:
+                return err
             fd = ida_fixup.fixup_data_t()
             fd.set_type(fixup_type)
             if target:
-                fd.off = parse_address(target)
+                tgt_ea, tgt_err = validate_addr(target)
+                if tgt_err:
+                    return tgt_err
+                fd.off = tgt_ea
             ida_fixup.set_fixup(ea, fd)
-            return {"ok": True, "addr": addr}
-        
+            return {"ok": True, "addr": hex(ea)}
+
         elif action == "delete":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea = parse_address(addr)
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            existing = ida_fixup.fixup_data_t()
+            if not ida_fixup.get_fixup(existing, ea):
+                return make_error(MCPError.NOT_FOUND, f"No fixup at address {hex(ea)}")
             ida_fixup.del_fixup(ea)
-            return {"ok": True, "addr": addr}
+            return {"ok": True, "addr": hex(ea)}
         
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

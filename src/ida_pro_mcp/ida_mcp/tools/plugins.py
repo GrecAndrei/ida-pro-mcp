@@ -1,13 +1,20 @@
+"""
+plugins — thin compatibility alias for misc(action="plugin_list"|"plugin_run").
+
+Per AGENTS.md: `plugins` -> `misc`. This shim exists so the tool loader can
+discover the `plugins` name while the real implementation lives in misc.py.
+"""
 
 try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from .misc import misc as _misc
+except ImportError:
+    from misc import misc as _misc  # type: ignore[import-not-found]
 
-# ============================================================================
-# 13. PLUGINS - Plugin operations
-# ============================================================================
 
 @tool
 @unsafe
@@ -19,78 +26,14 @@ def plugins(
     **kwargs
 ) -> dict:
     """
-    Manage IDA plugins.
-    
+    Manage IDA plugins. Alias for misc(action="plugin_list"|"plugin_run").
+
     Actions:
-    - list: List loaded plugins (Note: May not be supported in newer IDA versions).
+    - list: Discover plugins via filesystem scan.
     - run: Run a plugin by name.
-    
-    Arguments:
-    - name: Plugin name (e.g. "Hex-Rays Decompiler").
-    - arg: Integer argument for the plugin run call.
     """
-    try:
-        import ida_loader
-        import pathlib
-        
-        if action == "list":
-            # IDA 9 removed old plugin-enumeration API; provide filesystem-based fallback.
-            plugin_dirs = []
-            try:
-                idadir = os.environ.get("IDADIR")
-                if idadir:
-                    plugin_dirs.append(os.path.join(idadir, "plugins"))
-            except Exception:
-                pass
-            try:
-                idausr = os.environ.get("IDAUSR") or os.path.join(pathlib.Path.home(), ".idapro")
-                plugin_dirs.append(os.path.join(str(idausr), "plugins"))
-            except Exception:
-                pass
-
-            discovered = []
-            seen = set()
-            exts = (".py", ".pyc", ".p64", ".plw", ".dll", ".so", ".dylib")
-            for d in plugin_dirs:
-                if not d or not os.path.isdir(d):
-                    continue
-                try:
-                    for entry in os.listdir(d):
-                        if not entry.lower().endswith(exts):
-                            continue
-                        full = os.path.join(d, entry)
-                        key = os.path.realpath(full)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        discovered.append({"name": entry, "path": full})
-                except Exception:
-                    continue
-
-            return {
-                "ok": True,
-                "plugins": sorted(discovered, key=lambda x: x["name"].lower()),
-                "count": len(discovered),
-                "note": "Filesystem-based plugin listing (runtime enumeration API not available in this IDA build).",
-            }
-
-        elif action == "run":
-            if not name:
-                return make_error(MCPError.INVALID_ARGS, "name required")
-            # Try to run plugin by name
-            plugin = ida_loader.find_plugin(name, True)
-            if plugin in (None, -1):
-                return make_error(MCPError.FILE_NOT_FOUND, f"Plugin not found: {name}")
-            if ida_loader.run_plugin(plugin, arg):
-                return {"ok": True, "name": name}
-            return make_error(MCPError.IDA_ERROR, f"Failed to run plugin: {name}")
-
-        else:
-            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
-    except Exception as e:
-        return handle_error(e)
-
-
-# ============================================================================
-# 14. TRACE - Trace operations
-# ============================================================================
+    if action == "list":
+        return _misc(action="plugin_list", **kwargs)
+    elif action == "run":
+        return _misc(action="plugin_run", name=name, arg=arg, **kwargs)
+    return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

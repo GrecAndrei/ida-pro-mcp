@@ -117,6 +117,21 @@ def _get_ptr_size():
         return 4
 
 
+def _inject_blackboard_context(result, pc_str):
+    """Inject blackboard entries for a given PC address into result dict."""
+    try:
+        from .blackboard import BlackboardStore
+        store = BlackboardStore()
+        entries = store.list(addr=pc_str, limit=3)
+        if entries:
+            result["blackboard_context"] = [
+                {"title": e["title"], "category": e["category"], "confidence": e["confidence"]}
+                for e in entries
+            ]
+    except Exception:
+        pass
+
+
 @tool
 @unsafe
 @idawrite
@@ -125,7 +140,7 @@ def debug(
         "status", "start", "stop", "continue", "step_into", "step_over", "run_to", "run_until",
         "breakpoints", "add_bp", "del_bp", "enable_bp", "add_hw_bp", "add_watch",
         "regs", "set_reg", "reg_diff", "snapshot_regs", "threads", "modules", "callstack",
-        "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map"
+        "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map", "bp_context"
     ], "Action"],
     addr: Annotated[Optional[str], "Address (for run_to/run_until/bp/watch)"] = None,
     condition: Annotated[Optional[str], "Python expression for run_until (e.g. 'cpu.rax == 5')"] = None,
@@ -165,6 +180,7 @@ def debug(
     - search_mem: Search for a byte pattern in debugged memory.
     - stack_dump: Dump the current stack (RSP/ESP-based).
     - mem_map: Show memory map of the debugged process.
+    - bp_context: Query blackboard for entries related to the current PC/function.
     """
     try:
         import ida_dbg
@@ -172,13 +188,22 @@ def debug(
 
         if action == "status":
             active, is_on, state, state_name = _debug_state()
-            return {
+            result = {
                 "ok": True,
                 "active": bool(active),
                 "is_debugger_on": bool(is_on),
                 "state": state,
                 "state_name": state_name,
             }
+            if state_name and "SUSP" in state_name:
+                try:
+                    pc = ida_dbg.get_ip_val()
+                    if pc:
+                        result["pc"] = hex(pc)
+                        _inject_blackboard_context(result, hex(pc))
+                except Exception:
+                    pass
+            return result
 
         if action == "start":
             started = bool(ida_dbg.start_process())
@@ -242,13 +267,29 @@ def debug(
             if not _debug_active():
                 return _debug_not_running()
             ida_dbg.step_into()
-            return {"ok": True}
+            result = {"ok": True}
+            try:
+                pc = ida_dbg.get_ip_val()
+                if pc:
+                    result["pc"] = hex(pc)
+                    _inject_blackboard_context(result, hex(pc))
+            except Exception:
+                pass
+            return result
 
         elif action == "step_over":
             if not _debug_active():
                 return _debug_not_running()
             ida_dbg.step_over()
-            return {"ok": True}
+            result = {"ok": True}
+            try:
+                pc = ida_dbg.get_ip_val()
+                if pc:
+                    result["pc"] = hex(pc)
+                    _inject_blackboard_context(result, hex(pc))
+            except Exception:
+                pass
+            return result
 
         elif action == "run_to":
             if not addr:
@@ -668,6 +709,39 @@ def debug(
                             "perms": perms,
                         })
             return {"ok": True, "regions": regions, "count": len(regions)}
+
+        elif action == "bp_context":
+            try:
+                pc = idaapi.get_reg_val("PC") or idaapi.get_reg_val("RIP") or idaapi.get_reg_val("EIP") or 0
+            except Exception:
+                pc = 0
+            if not pc:
+                return make_error(MCPError.INVALID_ARGS, "No active debugger or PC unavailable")
+            pc_hex = hex(pc)
+            try:
+                from .blackboard import BlackboardStore
+                store = BlackboardStore()
+                addr_entries = store.list(addr=pc_hex, limit=10)
+                func = idaapi.get_func(pc)
+                func_entries = []
+                if func:
+                    func_hex = hex(func.start_ea)
+                    func_entries = store.list(addr=func_hex, limit=5)
+                    fname = idc.get_func_name(func.start_ea) or ""
+                    if fname and not fname.startswith("sub_"):
+                        semantic = store.semantic_search(query=fname, top_k=3, threshold=0.5)
+                        func_entries.extend(semantic)
+                return {
+                    "ok": True,
+                    "pc": pc_hex,
+                    "func": hex(func.start_ea) if func else None,
+                    "func_name": idc.get_func_name(func.start_ea) if func else None,
+                    "blackboard_at_pc": addr_entries,
+                    "blackboard_at_func": func_entries[:8],
+                    "note": "Prior analysis findings for current execution context.",
+                }
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, str(e))
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

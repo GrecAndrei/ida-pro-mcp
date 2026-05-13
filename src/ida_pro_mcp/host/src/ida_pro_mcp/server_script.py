@@ -1,1 +1,0 @@
-/home/grec-alexander/Downloads/ida-pro-mcp/src/ida_pro_mcp/server_script.py
