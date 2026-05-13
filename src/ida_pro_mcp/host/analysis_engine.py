@@ -1,0 +1,791 @@
+"""
+Analysis Engine — background pipeline that runs continuously per session.
+
+Four stages share a single priority queue (next_target from blackboard):
+  1. Classifier sweep  — BehaviorClassifier on unnamed functions → blackboard entries
+  2. Contradiction monitor — cosine scan on every new write → flag conflicts
+  3. Taint tracer      — IOC entries → forward data-flow → vuln entries
+  4. Cross-session matcher — new embeddings → scan other sessions → match proposals
+
+The engine is reactive: stages 2–4 are triggered by blackboard writes, not polling.
+Stage 1 polls the function list on a slow timer.
+
+Usage (from server.py):
+    engine = AnalysisEngine(session_id, server_port, rpc_fn, notify_fn, bb_path)
+    engine.start()
+    engine.stop()
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import struct
+import threading
+import time
+import uuid
+from typing import Any, Callable, Dict, List, Optional
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _unpack(blob: bytes) -> List[float]:
+    n = len(blob) // 4
+    return list(struct.unpack(f"{n}f", blob))
+
+
+def _pack(v: List[float]) -> bytes:
+    return struct.pack(f"{len(v)}f", *v)
+
+
+# ── Proposal store ────────────────────────────────────────────────────────────
+
+class ProposalStore:
+    """
+    Thread-safe in-memory + SQLite-backed proposal queue.
+
+    Proposal types:
+      rename_batch    — suggest renaming N functions
+      annotation_batch — suggest adding comments to N functions
+      hypothesis      — engine believes X about address Y
+      cross_session   — N functions match a previous session
+      vuln            — taint trace found a dangerous sink
+    """
+
+    def __init__(self, db_path: str):
+        self._db_path = db_path
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _conn(self):
+        import sqlite3
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _init_db(self):
+        with self._conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS proposals (
+                    id TEXT PRIMARY KEY,
+                    proposal_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT,
+                    items TEXT,          -- JSON list of {addr, name, reason, ...}
+                    confidence REAL DEFAULT 0.5,
+                    created_at REAL,
+                    status TEXT DEFAULT 'pending',  -- pending/accepted/rejected
+                    accepted_ids TEXT,   -- JSON list of accepted item ids
+                    session_id TEXT
+                )
+            """)
+            conn.commit()
+
+    def add(self, proposal_type: str, title: str, summary: str,
+            items: List[Dict], confidence: float = 0.5,
+            session_id: str = "") -> str:
+        pid = uuid.uuid4().hex[:12]
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO proposals VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (pid, proposal_type, title, summary,
+                 json.dumps(items), confidence, time.time(),
+                 "pending", "[]", session_id)
+            )
+            conn.commit()
+        return pid
+
+    def list_pending(self) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id,proposal_type,title,summary,items,confidence,created_at,session_id "
+                "FROM proposals WHERE status='pending' ORDER BY confidence DESC"
+            ).fetchall()
+        return [
+            {"id": r[0], "proposal_type": r[1], "title": r[2], "summary": r[3],
+             "items": json.loads(r[4] or "[]"), "confidence": r[5],
+             "created_at": r[6], "session_id": r[7]}
+            for r in rows
+        ]
+
+    def accept(self, proposal_id: str, scope: str = "all",
+               selected_ids: Optional[List[str]] = None) -> Optional[Dict]:
+        """Accept a proposal. Returns the proposal dict with accepted items."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id,proposal_type,title,items FROM proposals WHERE id=? AND status='pending'",
+                (proposal_id,)
+            ).fetchone()
+            if not row:
+                return None
+            items = json.loads(row[3] or "[]")
+            if scope == "selected" and selected_ids:
+                accepted = [it for it in items if it.get("id") in selected_ids]
+            else:
+                accepted = items
+            conn.execute(
+                "UPDATE proposals SET status='accepted', accepted_ids=? WHERE id=?",
+                (json.dumps([it.get("id") for it in accepted]), proposal_id)
+            )
+            conn.commit()
+        return {"id": row[0], "proposal_type": row[1], "title": row[2],
+                "accepted_items": accepted}
+
+    def reject(self, proposal_id: str) -> bool:
+        with self._conn() as conn:
+            n = conn.execute(
+                "UPDATE proposals SET status='rejected' WHERE id=? AND status='pending'",
+                (proposal_id,)
+            ).rowcount
+            conn.commit()
+        return n > 0
+
+    def count_pending(self) -> int:
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM proposals WHERE status='pending'"
+            ).fetchone()[0]
+
+
+# ── Analysis Engine ───────────────────────────────────────────────────────────
+
+class AnalysisEngine:
+    """
+    Background analysis engine for a single session.
+
+    rpc_fn(tool, args) → dict   — calls IDA tool via TCP RPC
+    notify_fn(notification)     — sends MCP notification to client
+    bb_path                     — path to blackboard SQLite file
+    proposals_path              — path to proposals SQLite file
+    embeddings_dir              — directory containing *.embeddings.db files
+    """
+
+    # Sinks that indicate a dangerous data-flow endpoint
+    DANGEROUS_SINKS = {
+        "memcpy", "memmove", "strcpy", "strncpy", "sprintf", "vsprintf",
+        "gets", "scanf", "system", "exec", "execve", "popen",
+        "WinExec", "ShellExecute", "CreateProcess",
+    }
+
+    # Sources that indicate user-controlled input
+    TAINT_SOURCES = {
+        "recv", "recvfrom", "read", "fread", "fgets", "gets",
+        "scanf", "sscanf", "getenv", "RegQueryValueEx",
+        "ReadFile", "WSARecv",
+    }
+
+    def __init__(
+        self,
+        session_id: str,
+        rpc_fn: Callable[[str, Dict], Dict],
+        notify_fn: Callable[[Dict], None],
+        bb_path: str,
+        proposals_path: str,
+        embeddings_dir: str = "",
+    ):
+        self.session_id = session_id
+        self._rpc = rpc_fn
+        self._notify = notify_fn
+        self._bb_path = bb_path
+        self._proposals_path = proposals_path
+        self._embeddings_dir = embeddings_dir or os.path.dirname(bb_path)
+
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._proposals = ProposalStore(proposals_path)
+
+        # Track what we've already processed to avoid re-work
+        self._classified: set = set()   # function addrs already classified
+        self._checked_contradictions: set = set()  # bb entry ids already checked
+        self._tainted: set = set()      # IOC entry ids already traced
+        self._cross_checked: set = set()  # bb entry ids already cross-matched
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True,
+            name=f"analysis-engine-{self.session_id[:8]}"
+        )
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
+
+    # ── main loop ─────────────────────────────────────────────────────────────
+
+    def _loop(self):
+        """Interleave all 4 stages. Each iteration does one unit of work."""
+        sweep_interval = 60   # seconds between full classifier sweeps
+        last_sweep = 0.0
+
+        while not self._stop.is_set():
+            try:
+                now = time.time()
+
+                # Stage 2 & 4: reactive — run on every new blackboard entry
+                self._stage_contradiction_monitor()
+                self._stage_cross_session_matcher()
+
+                # Stage 3: reactive — run on new IOC entries
+                self._stage_taint_tracer()
+
+                # Stage 1: periodic — classifier sweep
+                if now - last_sweep >= sweep_interval:
+                    self._stage_classifier_sweep()
+                    last_sweep = time.time()
+
+            except Exception as e:
+                # Never crash the engine
+                pass
+
+            self._stop.wait(timeout=15)
+
+    # ── Stage 1: Classifier sweep ─────────────────────────────────────────────
+
+    def _stage_classifier_sweep(self):
+        """Classify all unnamed functions, batch-propose renames."""
+        try:
+            result = self._rpc("data", {"action": "functions", "count": 500})
+            funcs = result.get("functions", []) if isinstance(result, dict) else []
+        except Exception:
+            return
+
+        unnamed = [
+            f for f in funcs
+            if f.get("name", "").startswith("sub_") or f.get("name", "").startswith("j_")
+        ]
+        if not unnamed:
+            return
+
+        classifier = self._get_classifier()
+        if not classifier:
+            return
+
+        batch: List[Dict] = []
+        for fn in unnamed:
+            addr = fn.get("start_ea") or fn.get("addr")
+            if not addr or addr in self._classified:
+                continue
+            try:
+                dec = self._rpc("code", {"action": "decompile", "addr": hex(addr)})
+                pseudo = dec.get("pseudocode", "") if isinstance(dec, dict) else ""
+                if not pseudo:
+                    continue
+                tags = classifier.classify(pseudo)
+                if not tags:
+                    continue
+                top_tag = tags[0]
+                confidence = 0.55 + 0.1 * len(tags)  # more tags = more confident
+                suggested_name = f"{top_tag}_{hex(addr)[2:]}"
+                batch.append({
+                    "id": uuid.uuid4().hex[:8],
+                    "addr": hex(addr),
+                    "current_name": fn.get("name", ""),
+                    "suggested_name": suggested_name,
+                    "behavior_tags": tags,
+                    "confidence": round(min(confidence, 0.95), 3),
+                    "reason": f"BehaviorClassifier: {', '.join(tags)}",
+                })
+                self._classified.add(addr)
+            except Exception:
+                self._classified.add(addr)  # don't retry failures
+                continue
+
+        if not batch:
+            return
+
+        # Group by dominant tag for cleaner proposals
+        by_tag: Dict[str, List] = {}
+        for item in batch:
+            tag = item["behavior_tags"][0]
+            by_tag.setdefault(tag, []).append(item)
+
+        for tag, items in by_tag.items():
+            if len(items) < 2:
+                continue  # single-function proposals are noise
+            avg_conf = sum(i["confidence"] for i in items) / len(items)
+            pid = self._proposals.add(
+                proposal_type="rename_batch",
+                title=f"Rename {len(items)} {tag} functions",
+                summary=(
+                    f"BehaviorClassifier identified {len(items)} unnamed functions "
+                    f"with behavior '{tag}'. Suggested names based on tag + address."
+                ),
+                items=items,
+                confidence=round(avg_conf, 3),
+                session_id=self.session_id,
+            )
+            self._push_proposal_notification(pid, "rename_batch",
+                f"Found {len(items)} unnamed {tag} functions — rename batch ready",
+                avg_conf)
+
+        # Also write a blackboard region entry if we found a cluster
+        self._write_cluster_regions(by_tag)
+
+    def _write_cluster_regions(self, by_tag: Dict[str, List]):
+        """If a tag cluster spans a contiguous address range, write a region entry."""
+        store = self._bb_store()
+        if not store:
+            return
+        for tag, items in by_tag.items():
+            if len(items) < 3:
+                continue
+            addrs = []
+            for it in items:
+                try:
+                    addrs.append(int(it["addr"], 16))
+                except Exception:
+                    pass
+            if not addrs:
+                continue
+            lo, hi = min(addrs), max(addrs)
+            span = hi - lo
+            if span > 0x100000:  # > 1MB — not a cluster
+                continue
+            existing = store.list(category="region", addr=hex(lo))
+            if existing:
+                continue
+            store.write(
+                f"{tag} cluster ({len(items)} functions)",
+                category="region",
+                addr=hex(lo), addr_end=hex(hi),
+                tags=[tag, "engine", "cluster"],
+                confidence=0.7,
+                source="engine",
+            )
+            self._push_resource_updated("ida://blackboard/regions")
+            self._push_resource_updated("ida://state")
+
+    # ── Stage 2: Contradiction monitor ────────────────────────────────────────
+
+    def _stage_contradiction_monitor(self):
+        """Scan new blackboard entries for contradictions with existing ones."""
+        store = self._bb_store()
+        if not store:
+            return
+
+        # Get all entries with vectors that we haven't checked yet
+        try:
+            import sqlite3
+            with sqlite3.connect(self._bb_path, timeout=5) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                rows = conn.execute(
+                    "SELECT id, title, content, category, addr, vector, confidence "
+                    "FROM blackboard WHERE vector IS NOT NULL AND contradicted=0 AND resolved=0"
+                ).fetchall()
+        except Exception:
+            return
+
+        unchecked = [r for r in rows if r[0] not in self._checked_contradictions]
+        if not unchecked:
+            return
+
+        # Build lookup of all vectors
+        all_vecs = {r[0]: (r, _unpack(r[5])) for r in rows if r[5]}
+
+        for row in unchecked:
+            eid, title, content, category, addr, blob, conf = row
+            self._checked_contradictions.add(eid)
+            if not blob:
+                continue
+            vec = _unpack(blob)
+
+            for other_id, (other_row, other_vec) in all_vecs.items():
+                if other_id == eid:
+                    continue
+                sim = _cosine(vec, other_vec)
+                if sim < 0.80:
+                    continue
+                # High similarity but different category or conflicting title
+                other_cat = other_row[3]
+                other_title = other_row[1]
+                if category == other_cat:
+                    continue  # same category — not a contradiction
+                # Different categories with high semantic similarity = potential conflict
+                reason = (
+                    f"Entry '{title}' (cat={category}) is semantically similar "
+                    f"(sim={sim:.2f}) to '{other_title}' (cat={other_cat}) "
+                    f"but has a different classification."
+                )
+                # Write a hypothesis about the contradiction
+                store.write(
+                    f"Contradiction: {title[:40]} vs {other_title[:40]}",
+                    category="hypothesis",
+                    addr=addr or other_row[4],
+                    content=reason,
+                    tags=["contradiction", "engine", category, other_cat],
+                    confidence=round(sim * 0.8, 3),
+                    source="engine",
+                )
+                self._push_resource_updated("ida://state")
+                self._notify({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/message",
+                    "params": {
+                        "level": "warning",
+                        "data": {
+                            "type": "contradiction",
+                            "message": f"Contradiction detected: {title[:50]} vs {other_title[:50]}",
+                            "similarity": round(sim, 3),
+                            "addr": addr,
+                            "reason": reason,
+                        },
+                    },
+                })
+                break  # one contradiction per entry is enough
+
+    # ── Stage 3: Taint tracer ─────────────────────────────────────────────────
+
+    def _stage_taint_tracer(self):
+        """Follow IOC/source entries forward through xrefs to find dangerous sinks."""
+        store = self._bb_store()
+        if not store:
+            return
+
+        # Find IOC entries that are taint sources (network recv, file read, etc.)
+        iocs = store.list(category="ioc", include_resolved=False)
+        sources = [
+            e for e in iocs
+            if e.get("addr") and e["id"] not in self._tainted
+            and any(s in (e.get("ioc_value") or e.get("title") or "").lower()
+                    for s in self.TAINT_SOURCES)
+        ]
+
+        # Also check for imports that are taint sources
+        try:
+            imports_result = self._rpc("data", {"action": "imports", "count": 200})
+            imports = imports_result.get("imports", []) if isinstance(imports_result, dict) else []
+            for imp in imports:
+                name = imp.get("name", "")
+                if name in self.TAINT_SOURCES:
+                    addr = imp.get("ea") or imp.get("addr")
+                    if addr:
+                        # Synthesize a source entry
+                        sources.append({
+                            "id": f"import_{name}",
+                            "addr": hex(addr) if isinstance(addr, int) else addr,
+                            "title": f"Import: {name}",
+                            "ioc_value": name,
+                        })
+        except Exception:
+            pass
+
+        for source in sources[:5]:  # process at most 5 per cycle
+            self._tainted.add(source["id"])
+            self._trace_taint_from(source, store)
+
+    def _trace_taint_from(self, source: Dict, store):
+        """BFS from source address through xrefs, looking for dangerous sinks."""
+        start_addr = source.get("addr", "")
+        if not start_addr:
+            return
+
+        visited: set = set()
+        queue = [start_addr]
+        depth = 0
+        max_depth = 4
+
+        while queue and depth < max_depth:
+            next_queue = []
+            for addr in queue[:10]:  # cap breadth
+                if addr in visited:
+                    continue
+                visited.add(addr)
+                try:
+                    # Get callers of this address (who calls this source?)
+                    xrefs = self._rpc("code", {"action": "callers", "addr": addr})
+                    callers = xrefs.get("callers", []) if isinstance(xrefs, dict) else []
+                    for caller in callers[:5]:
+                        caller_addr = caller.get("addr") or caller.get("ea")
+                        if not caller_addr:
+                            continue
+                        caller_name = caller.get("name", "")
+                        # Check if this caller is a dangerous sink
+                        if any(sink in caller_name for sink in self.DANGEROUS_SINKS):
+                            self._report_taint_sink(source, caller, store, depth + 1)
+                        else:
+                            next_queue.append(
+                                hex(caller_addr) if isinstance(caller_addr, int) else caller_addr
+                            )
+                except Exception:
+                    pass
+            queue = next_queue
+            depth += 1
+
+    def _report_taint_sink(self, source: Dict, sink: Dict, store, depth: int):
+        """Write a vuln entry and push a notification for a taint path."""
+        sink_name = sink.get("name", "unknown")
+        sink_addr = sink.get("addr") or sink.get("ea", "?")
+        source_title = source.get("title", source.get("ioc_value", "?"))
+        confidence = max(0.5, 0.9 - depth * 0.1)
+
+        title = f"Taint: {source_title} → {sink_name}"
+        content = (
+            f"Data from '{source_title}' (addr={source.get('addr')}) "
+            f"reaches dangerous sink '{sink_name}' at {hex(sink_addr) if isinstance(sink_addr, int) else sink_addr} "
+            f"in {depth} hop(s). Potential buffer overflow or command injection."
+        )
+
+        # Don't duplicate
+        existing = store.list(category="vuln", addr=source.get("addr"))
+        if any(sink_name in e.get("title", "") for e in existing):
+            return
+
+        eid = store.write(
+            title, category="vuln",
+            addr=source.get("addr"),
+            content=content,
+            tags=["taint", "engine", sink_name],
+            confidence=confidence,
+            source="engine",
+        )
+
+        # Add to proposals
+        pid = self._proposals.add(
+            proposal_type="hypothesis",
+            title=title,
+            summary=content,
+            items=[{"id": eid, "addr": source.get("addr"),
+                    "sink": sink_name, "depth": depth}],
+            confidence=confidence,
+            session_id=self.session_id,
+        )
+
+        self._push_resource_updated("ida://state")
+        self._push_resource_updated("ida://proposals")
+        self._notify({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {
+                "level": "warning",
+                "data": {
+                    "type": "taint_sink",
+                    "message": title,
+                    "source": source.get("addr"),
+                    "sink": sink_name,
+                    "sink_addr": hex(sink_addr) if isinstance(sink_addr, int) else str(sink_addr),
+                    "depth": depth,
+                    "confidence": confidence,
+                    "proposal_id": pid,
+                },
+            },
+        })
+
+    # ── Stage 4: Cross-session matcher ────────────────────────────────────────
+
+    def _stage_cross_session_matcher(self):
+        """Compare new embeddings against all other session embedding indexes."""
+        try:
+            import sqlite3
+            with sqlite3.connect(self._bb_path, timeout=5) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                new_entries = conn.execute(
+                    "SELECT id, title, addr, vector FROM blackboard "
+                    "WHERE vector IS NOT NULL AND source != 'cross_session'"
+                ).fetchall()
+        except Exception:
+            return
+
+        unchecked = [r for r in new_entries if r[0] not in self._cross_checked]
+        if not unchecked:
+            return
+
+        # Find other session embedding DBs
+        other_dbs = self._find_other_embedding_dbs()
+        if not other_dbs:
+            for r in unchecked:
+                self._cross_checked.add(r[0])
+            return
+
+        store = self._bb_store()
+        if not store:
+            return
+
+        for row in unchecked[:10]:  # cap per cycle
+            eid, title, addr, blob = row
+            self._cross_checked.add(eid)
+            if not blob:
+                continue
+            vec = _unpack(blob)
+            self._match_against_other_sessions(eid, title, addr, vec, other_dbs, store)
+
+    def _find_other_embedding_dbs(self) -> List[str]:
+        """Find *.embeddings.db files from other sessions."""
+        results = []
+        try:
+            for fname in os.listdir(self._embeddings_dir):
+                if fname.endswith(".embeddings.db"):
+                    full = os.path.join(self._embeddings_dir, fname)
+                    # Skip the current session's db
+                    if self.session_id[:8].lower() in fname.lower():
+                        continue
+                    results.append(full)
+        except Exception:
+            pass
+        return results
+
+    def _match_against_other_sessions(
+        self, eid: str, title: str, addr: str,
+        vec: List[float], other_dbs: List[str], store
+    ):
+        """Scan other session embedding DBs for similar functions."""
+        import sqlite3
+        best_sim = 0.85  # threshold
+        best_match = None
+        best_db = None
+
+        for db_path in other_dbs:
+            try:
+                with sqlite3.connect(db_path, timeout=3) as conn:
+                    rows = conn.execute(
+                        "SELECT addr, name, vector FROM embeddings WHERE vector IS NOT NULL"
+                    ).fetchall()
+                for r in rows:
+                    if not r[2]:
+                        continue
+                    other_vec = _unpack(r[2])
+                    sim = _cosine(vec, other_vec)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_match = {"addr": r[0], "name": r[1], "sim": sim}
+                        best_db = os.path.basename(db_path)
+            except Exception:
+                continue
+
+        if not best_match:
+            return
+
+        match_name = best_match["name"] or f"sub_{best_match['addr']}"
+        content = (
+            f"Function at {addr} ('{title}') matches '{match_name}' "
+            f"from session '{best_db}' with similarity {best_match['sim']:.3f}."
+        )
+
+        # Don't duplicate
+        existing = store.list(category="cross_session", addr=addr)
+        if existing:
+            return
+
+        store.write(
+            f"Cross-session match: {match_name}",
+            category="cross_session",
+            addr=addr,
+            content=content,
+            tags=["cross_session", "engine", match_name],
+            confidence=round(best_match["sim"], 3),
+            source="cross_session",
+        )
+
+        pid = self._proposals.add(
+            proposal_type="cross_session",
+            title=f"Import name '{match_name}' from previous session?",
+            summary=content,
+            items=[{
+                "id": uuid.uuid4().hex[:8],
+                "addr": addr,
+                "suggested_name": match_name,
+                "source_session": best_db,
+                "similarity": best_match["sim"],
+            }],
+            confidence=round(best_match["sim"], 3),
+            session_id=self.session_id,
+        )
+
+        self._push_resource_updated("ida://proposals")
+        self._push_resource_updated("ida://state")
+        self._notify({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {
+                "level": "info",
+                "data": {
+                    "type": "cross_session_match",
+                    "message": f"Function at {addr} matches '{match_name}' from {best_db} (sim={best_match['sim']:.3f})",
+                    "addr": addr,
+                    "matched_name": match_name,
+                    "source_session": best_db,
+                    "similarity": best_match["sim"],
+                    "proposal_id": pid,
+                },
+            },
+        })
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _bb_store(self):
+        try:
+            import importlib.util
+            path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "ida_mcp", "tools", "blackboard.py"
+            )
+            spec = importlib.util.spec_from_file_location("_engine_bb", path)
+            mod = importlib.util.module_from_spec(spec)
+            mod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f,
+                                  "idawrite": lambda f: f, "IDAError": Exception})
+            spec.loader.exec_module(mod)
+            return mod.BlackboardStore(db_path=self._bb_path)
+        except Exception:
+            return None
+
+    def _get_classifier(self):
+        try:
+            from .intelligence import BehaviorClassifier
+            return BehaviorClassifier()
+        except Exception:
+            return None
+
+    def _push_resource_updated(self, uri: str):
+        self._notify({
+            "jsonrpc": "2.0",
+            "method": "notifications/resources/updated",
+            "params": {"uri": uri},
+        })
+
+    def _push_proposal_notification(self, pid: str, ptype: str, message: str, confidence: float):
+        self._notify({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {
+                "level": "info",
+                "data": {
+                    "type": "proposal_ready",
+                    "proposal_type": ptype,
+                    "proposal_id": pid,
+                    "message": message,
+                    "confidence": confidence,
+                    "action": "Read ida://proposals to review and accept/reject",
+                },
+            },
+        })
+
+    # ── public API for server ─────────────────────────────────────────────────
+
+    @property
+    def proposals(self) -> ProposalStore:
+        return self._proposals
+
+    def status(self) -> Dict:
+        return {
+            "running": self.is_running(),
+            "session_id": self.session_id,
+            "classified_functions": len(self._classified),
+            "checked_contradictions": len(self._checked_contradictions),
+            "tainted_sources": len(self._tainted),
+            "cross_checked": len(self._cross_checked),
+            "pending_proposals": self._proposals.count_pending(),
+        }
