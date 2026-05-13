@@ -4,7 +4,9 @@ MCP Resource provider: Exposes IDB data as read-only resources.
 Resources are hierarchical URIs that the LLM can read without calling tools.
 This turns the IDA database into a virtual filesystem.
 
-Supported URIs (65 total):
+Supported URIs (67 total):
+  ida://state                       - Complete analysis state (read this first on every turn)
+  ida://proposals                   - Pending engine proposals (rename/annotate/vuln/cross-session)
   ida://meta                        - IDB metadata
   ida://segments                    - All segments
   ida://segments/{name}             - Specific segment
@@ -34,6 +36,12 @@ Supported URIs (65 total):
   ida://archive                     - L4 Session Archive
   ida://xrefs                       - Cross-references
   ida://types                       - Type library
+  ida://blackboard                  - All blackboard findings
+  ida://blackboard/next_target      - Priority-ranked next targets
+  ida://blackboard/iocs             - IOC entries
+  ida://blackboard/hypotheses       - Hypothesis entries
+  ida://blackboard/regions          - Memory region annotations
+  ida://blackboard/{category}       - Entries by category
 """
 
 from __future__ import annotations
@@ -44,6 +52,9 @@ from typing import Any, Dict, List, Optional
 
 
 RESOURCE_TEMPLATES = [
+    # State (read this first — complete analysis picture)
+    "ida://state",
+    "ida://proposals",
     # Meta
     "ida://meta",
     # Segments (3)
@@ -91,6 +102,8 @@ RESOURCE_TEMPLATES = [
 def list_resources() -> List[Dict]:
     """Return static resource catalog."""
     return [
+        {"uri": "ida://state", "name": "Analysis State — complete picture (read first)", "mimeType": "application/json"},
+        {"uri": "ida://proposals", "name": "Engine Proposals — pending rename/vuln/cross-session actions", "mimeType": "application/json"},
         {"uri": "ida://meta", "name": "IDB Metadata", "mimeType": "application/json"},
         {"uri": "ida://segments", "name": "Segments", "mimeType": "application/json"},
         {"uri": "ida://functions", "name": "Functions", "mimeType": "application/json"},
@@ -129,11 +142,14 @@ def _make_json_content(data: Any) -> Dict:
 class ResourceResolver:
     """Resolves ida:// URIs by delegating to tool calls or memory tiers."""
 
-    def __init__(self, tool_executor, insight_index=None, global_facts=None, session_mgr=None):
+    def __init__(self, tool_executor, insight_index=None, global_facts=None,
+                 session_mgr=None, engine=None, bb_path: str = ""):
         self.tool_executor = tool_executor
         self.insight_index = insight_index
         self.global_facts = global_facts
         self.session_mgr = session_mgr
+        self.engine = engine          # AnalysisEngine instance (optional)
+        self.bb_path = bb_path        # path to blackboard db (optional)
 
     def read(self, uri: str) -> Optional[Dict]:
         if not uri.startswith("ida://"):
@@ -147,6 +163,10 @@ class ResourceResolver:
 
         if domain == "meta":
             return self._read_meta()
+        elif domain == "state":
+            return self._read_state()
+        elif domain == "proposals":
+            return self._read_proposals()
         elif domain == "segments":
             return self._read_segments_resource(parts)
         elif domain == "functions":
@@ -194,6 +214,173 @@ class ResourceResolver:
     def _read_meta(self) -> Dict:
         result = self._exec("idb", action="meta")
         return _make_json_content(result)
+
+    # ------------------------------------------------------------------
+    # State — complete analysis picture
+    # ------------------------------------------------------------------
+
+    def _read_state(self) -> Dict:
+        """
+        ida://state — the LLM's externalized working memory.
+
+        Read this at the start of every turn to orient yourself without
+        calling 6 separate tools. Updated by the analysis engine whenever
+        anything significant changes; the server pushes
+        notifications/resources/updated with uri=ida://state.
+        """
+        state: Dict[str, Any] = {}
+
+        # 1. Binary identity
+        try:
+            meta = self._exec("idb", action="meta")
+            state["binary"] = {
+                "name": meta.get("filename") or meta.get("input_file", ""),
+                "arch": meta.get("processor") or meta.get("arch", ""),
+                "bits": meta.get("bits", 0),
+                "size": meta.get("file_size", 0),
+            }
+        except Exception:
+            state["binary"] = {}
+
+        # 2. Coverage
+        try:
+            funcs = self._exec("data", action="functions", count=5000)
+            func_list = funcs.get("functions", []) if isinstance(funcs, dict) else []
+            total = len(func_list)
+            named = sum(1 for f in func_list
+                        if not (f.get("name", "").startswith("sub_")
+                                or f.get("name", "").startswith("j_")))
+            state["coverage"] = {
+                "total_functions": total,
+                "named_functions": named,
+                "unnamed_functions": total - named,
+                "pct_named": round(named / total * 100, 1) if total else 0,
+            }
+        except Exception:
+            state["coverage"] = {}
+
+        # 3. Blackboard summary
+        try:
+            bb = self._bb_store()
+            if bb:
+                stats = bb.stats()
+                targets = bb.next_target(limit=5)
+                hypotheses = bb.list(category="hypothesis", limit=5,
+                                     include_resolved=False, include_contradicted=False)
+                iocs = bb.list(category="ioc", limit=10, include_resolved=True)
+                vulns = bb.list(category="vuln", limit=5, include_resolved=False)
+                state["blackboard"] = {
+                    "stats": stats,
+                    "next_targets": targets,
+                    "top_hypotheses": [
+                        {"title": h["title"], "addr": h.get("addr"),
+                         "confidence": h.get("confidence")}
+                        for h in hypotheses
+                    ],
+                    "iocs": [
+                        {"type": i.get("ioc_type"), "value": i.get("ioc_value"),
+                         "addr": i.get("addr")}
+                        for i in iocs
+                    ],
+                    "vulns": [
+                        {"title": v["title"], "addr": v.get("addr"),
+                         "confidence": v.get("confidence")}
+                        for v in vulns
+                    ],
+                }
+        except Exception:
+            state["blackboard"] = {}
+
+        # 4. Engine status + pending proposals
+        if self.engine:
+            try:
+                eng_status = self.engine.status()
+                pending = self.engine.proposals.count_pending()
+                state["engine"] = {
+                    "running": eng_status.get("running"),
+                    "pending_proposals": pending,
+                    "classified_functions": eng_status.get("classified_functions"),
+                }
+                if pending:
+                    state["engine"]["note"] = (
+                        f"{pending} proposal(s) waiting. "
+                        "Read ida://proposals to review."
+                    )
+            except Exception:
+                state["engine"] = {}
+
+        # 5. Session info
+        try:
+            if self.session_mgr:
+                active = getattr(self.session_mgr, "active_session_id", None)
+                state["session"] = {"active_session_id": active}
+        except Exception:
+            state["session"] = {}
+
+        state["_note"] = (
+            "Read ida://proposals for pending engine actions. "
+            "Read ida://blackboard/next_target for the highest-priority address to analyze next. "
+            "This resource is pushed via notifications/resources/updated when anything changes."
+        )
+
+        return _make_json_content(state)
+
+    def _bb_store(self):
+        """Load BlackboardStore without IDA deps."""
+        try:
+            import importlib.util, os as _os
+            path = _os.path.join(
+                _os.path.dirname(_os.path.abspath(__file__)),
+                "..", "ida_mcp", "tools", "blackboard.py"
+            )
+            spec = importlib.util.spec_from_file_location("_res_bb2", _os.path.abspath(path))
+            mod = importlib.util.module_from_spec(spec)
+            mod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f,
+                                  "idawrite": lambda f: f, "IDAError": Exception})
+            spec.loader.exec_module(mod)
+            kwargs = {}
+            if self.bb_path:
+                kwargs["db_path"] = self.bb_path
+            return mod.BlackboardStore(**kwargs)
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
+    # Proposals
+    # ------------------------------------------------------------------
+
+    def _read_proposals(self) -> Dict:
+        """
+        ida://proposals — pending engine proposals.
+
+        Each proposal has a type:
+          rename_batch    — suggest renaming N functions
+          annotation_batch — suggest adding comments
+          hypothesis      — engine believes X about address Y
+          cross_session   — N functions match a previous session
+          vuln            — taint trace found a dangerous sink
+
+        To act: call blackboard(action="accept_proposal", proposal_id=..., scope="all")
+                or    blackboard(action="reject_proposal", proposal_id=...)
+        """
+        if not self.engine:
+            return _make_json_content({
+                "proposals": [],
+                "note": "Analysis engine not running. Start a session to activate it.",
+            })
+        try:
+            proposals = self.engine.proposals.list_pending()
+            return _make_json_content({
+                "count": len(proposals),
+                "proposals": proposals,
+                "note": (
+                    "Call blackboard(action='accept_proposal', proposal_id=ID, scope='all') "
+                    "to apply a proposal, or scope='selected' with selected_ids=[...] for partial. "
+                    "Call blackboard(action='reject_proposal', proposal_id=ID) to dismiss."
+                ),
+            })
+        except Exception as e:
+            return _make_json_content({"error": str(e), "proposals": []})
 
     # ------------------------------------------------------------------
     # Segments

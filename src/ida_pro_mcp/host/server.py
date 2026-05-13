@@ -323,6 +323,7 @@ class IDAMCPServer:
         self._shutdown_requested = False
         self._lease_thread_stop = threading.Event()
         self._lease_thread: Optional[threading.Thread] = None
+        self._analysis_engines: Dict[str, Any] = {}  # session_id -> AnalysisEngine
         self._wiki_cache: Dict[str, Any] = {
             "root": "",
             "expires": 0.0,
@@ -612,6 +613,12 @@ class IDAMCPServer:
         self._shutdown_requested = True
         self._stop_runtime_lease_heartbeat()
         self._cleanup_all_runtimes()
+        # Stop all analysis engines
+        for engine in list(getattr(self, "_analysis_engines", {}).values()):
+            try:
+                engine.stop()
+            except Exception:
+                pass
         # Persist VOERA memory tiers
         try:
             if hasattr(self, "_insight_index"):
@@ -3352,6 +3359,26 @@ class IDAMCPServer:
             except Exception:
                 pass
             log_rpc(f"[bg-index] Background indexing finished for {session_id}")
+            # Start the analysis engine for this session
+            try:
+                from .analysis_engine import AnalysisEngine
+                bb_path = os.path.join(self.cache_dir, f"{session_id}.blackboard.db")
+                proposals_path = os.path.join(self.cache_dir, f"{session_id}.proposals.db")
+                engine = AnalysisEngine(
+                    session_id=session_id,
+                    rpc_fn=lambda tool, args: self._send_rpc_raw(
+                        {"tool": tool, "args": args}, server_port, timeout=30.0
+                    ),
+                    notify_fn=self._send_notification,
+                    bb_path=bb_path,
+                    proposals_path=proposals_path,
+                    embeddings_dir=self.cache_dir,
+                )
+                engine.start()
+                self._analysis_engines[session_id] = engine
+                log_rpc(f"[bg-index] Analysis engine started for {session_id}")
+            except Exception as e:
+                log_rpc(f"[bg-index] Analysis engine failed to start (non-fatal): {e}")
 
         threading.Thread(target=_run, daemon=True, name=f"bg-index-{session_id}").start()
 
@@ -7958,11 +7985,81 @@ class IDAMCPServer:
         if action == "attention_policy_upsert":
             return {"ok": True, "action": "attention_policy_upsert",
                     "note": "attention_kernel replaced by intelligence.py"}
+        if action in ("accept_proposal", "reject_proposal"):
+            sid = self.current_session.session_id if self.current_session else ""
+            engine = self._analysis_engines.get(sid)
+            if not engine:
+                return make_error(MCPError.NOT_FOUND, "No analysis engine running for current session")
+            pid = str(args.get("proposal_id") or "").strip()
+            if not pid:
+                return make_error(MCPError.INVALID_PARAMS, "proposal_id required")
+            if action == "accept_proposal":
+                scope = str(args.get("scope") or "all").strip()
+                selected_ids = args.get("selected_ids") or []
+                result = engine.proposals.accept(pid, scope=scope, selected_ids=selected_ids)
+                if result is None:
+                    return make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found or already processed")
+                # Apply accepted items based on proposal type
+                applied = self._apply_proposal(result, engine)
+                self._send_notification({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/resources/updated",
+                    "params": {"uri": "ida://state"},
+                })
+                self._send_notification({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/resources/updated",
+                    "params": {"uri": "ida://proposals"},
+                })
+                return {"ok": True, "proposal_id": pid, "accepted_items": len(result.get("accepted_items", [])), "applied": applied}
+            else:
+                ok = engine.proposals.reject(pid)
+                if not ok:
+                    return make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found or already processed")
+                self._send_notification({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/resources/updated",
+                    "params": {"uri": "ida://proposals"},
+                })
+                return {"ok": True, "proposal_id": pid}
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",
-            hint="Valid actions: write, read, list, search, update, delete, clear, stats, merge, prune, contradict, resolve, next_target, start_crawler, stop_crawler, crawler_status, accept, reject",
+            hint="Valid actions: write, read, list, search, update, delete, clear, stats, merge, prune, contradict, resolve, next_target, start_crawler, stop_crawler, crawler_status, accept, reject, accept_proposal, reject_proposal",
         )
+
+    def _apply_proposal(self, proposal: dict, engine) -> dict:
+        """Apply accepted proposal items to IDA (renames, annotations, etc.)."""
+        ptype = proposal.get("proposal_type", "")
+        items = proposal.get("accepted_items", [])
+        applied = {"renamed": 0, "annotated": 0, "errors": []}
+        for item in items:
+            addr = item.get("addr", "")
+            try:
+                if ptype == "rename_batch":
+                    name = item.get("suggested_name", "")
+                    if addr and name:
+                        self._execute_tool("modify", {"action": "rename", "addr": addr, "name": name})
+                        applied["renamed"] += 1
+                elif ptype == "annotation_batch":
+                    comment = item.get("comment", "")
+                    if addr and comment:
+                        self._execute_tool("modify", {"action": "comment", "addr": addr, "comment": comment})
+                        applied["annotated"] += 1
+                elif ptype == "cross_session":
+                    name = item.get("suggested_name", "")
+                    if addr and name:
+                        self._execute_tool("modify", {"action": "rename", "addr": addr, "name": name})
+                        applied["renamed"] += 1
+            except Exception as e:
+                applied["errors"].append({"addr": addr, "error": str(e)})
+        # Push state update after applying
+        self._send_notification({
+            "jsonrpc": "2.0",
+            "method": "notifications/resources/updated",
+            "params": {"uri": "ida://state"},
+        })
+        return applied
 
     def _handle_predictor(self, args: dict) -> dict:
         action = str(args.get("action") or "suggest_next_tool").strip()
@@ -8638,6 +8735,13 @@ class IDAMCPServer:
                 insight_index=self._insight_index,
                 global_facts=self._global_facts,
                 session_mgr=self.session_mgr,
+                engine=self._analysis_engines.get(
+                    getattr(self, "current_session", None) or ""
+                ),
+                bb_path=os.path.join(
+                    self.cache_dir,
+                    f"{getattr(self, 'current_session', '') or ''}.blackboard.db"
+                ),
             )
             resource = resolver.read(uri)
             if resource is None:
