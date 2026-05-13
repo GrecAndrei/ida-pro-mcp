@@ -43,3 +43,7 @@ include = ["src/ida_pro_mcp"]
 
 [tool.ruff]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
+
+[tool.pytest.ini_options]
+timeout = 30
+timeout_method = "thread"

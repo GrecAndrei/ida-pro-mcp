@@ -308,6 +308,15 @@ class IDAMCPServer:
         self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
         self.rate_limiter = RateLimiter()
         self.assembler = get_assembler()  # bge-code-v1 intelligence layer
+        # Usage intelligence — passive observer and learner (started in run())
+        try:
+            from .usage_intelligence import UsageIntelligence
+            self._usage_intel = UsageIntelligence(
+                audit_dir=os.path.join(self.cache_dir, "audit"),
+                notify_fn=None,  # injected in run() once _rs is available
+            )
+        except Exception:
+            self._usage_intel = None
         self._last_injected_entries: List[Dict[str, Any]] = []
         self._last_query_bridges: List[str] = []
         self._call_counter = 0
@@ -617,6 +626,12 @@ class IDAMCPServer:
         for engine in list(getattr(self, "_analysis_engines", {}).values()):
             try:
                 engine.stop()
+            except Exception:
+                pass
+        # Stop usage intelligence
+        if getattr(self, "_usage_intel", None):
+            try:
+                self._usage_intel.stop()
             except Exception:
                 pass
         # Persist VOERA memory tiers
@@ -5801,6 +5816,16 @@ class IDAMCPServer:
             guardrail_blocked=guardrail_blocked,
             error=error_str,
         )
+        # Live observation for usage intelligence
+        if self._usage_intel and sid:
+            try:
+                addr = (args.get("addr") or args.get("address")) if isinstance(args, dict) else None
+                self._usage_intel.observe(
+                    resolved_tool, action_name, sid,
+                    latency_ms=latency_ms, error=error_str, addr=addr,
+                )
+            except Exception:
+                pass
         return result
 
     def _execute_tool_inner(self, tool_name, original_tool_name, args):
@@ -8743,6 +8768,7 @@ class IDAMCPServer:
                     self.cache_dir,
                     f"{getattr(self, 'current_session', '') or ''}.blackboard.db"
                 ),
+                usage_intel=getattr(self, "_usage_intel", None),
             )
             resource = resolver.read(uri)
             if resource is None:
@@ -8778,6 +8804,10 @@ class IDAMCPServer:
             msvcrt.setmode(_real_stdout.fileno(), os.O_BINARY)
         rs, si = _real_stdout.buffer, sys.stdin.buffer
         self._rs = rs  # store for _send_notification
+        # Now that _rs is available, wire notify_fn into usage intelligence and start it
+        if self._usage_intel:
+            self._usage_intel._notify = self._send_notification
+            self._usage_intel.start()
         try:
             while True:
                 if self._shutdown_requested:
