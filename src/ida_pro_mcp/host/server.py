@@ -1407,16 +1407,24 @@ class IDAMCPServer:
         if not isinstance(action, str):
             action = ""
 
-        # Auto-nudge tracking
+        # Auto-nudge tracking — use UsageIntelligence.observe if available, else auto_nudge
         try:
-            from .auto_nudge import record_tool_call
-            record_tool_call(
-                sid,
-                tool_name,
-                action,
-                addr=call_args.get("addr"),
-                query=call_args.get("query") or call_args.get("pattern"),
-            )
+            ui = getattr(self, "_usage_intel", None)
+            if ui:
+                ui.observe(
+                    tool_name, action,
+                    session_id=sid or "",
+                    addr=call_args.get("addr"),
+                )
+            else:
+                from .auto_nudge import record_tool_call
+                record_tool_call(
+                    sid,
+                    tool_name,
+                    action,
+                    addr=call_args.get("addr"),
+                    query=call_args.get("query") or call_args.get("pattern"),
+                )
         except Exception:
             pass
 
@@ -2365,15 +2373,36 @@ class IDAMCPServer:
             if self.enable_response_enrichment:
                 # ---- Auto-Nudge Injection ----
                 try:
-                    from .auto_nudge import get_nudge
-                    idb_key = (self.current_session.idb_path if self.current_session else "")
-                    nudge = get_nudge(
-                        idb_key,
-                        tool_name,
-                        action_name,
-                        compacted,
-                        call_args if isinstance(call_args, dict) else {},
-                    )
+                    nudge = None
+                    ui = getattr(self, "_usage_intel", None)
+                    if ui:
+                        # Primary: UsageIntelligence predictions (trained on real audit data)
+                        preds = ui.predict_next(tool_name, action_name, top_k=4)
+                        if preds:
+                            from .auto_nudge import suggest_smart_tools
+                            behavior_tags = (compacted.get("behavior_tags") or
+                                             compacted.get("tags") or [])
+                            static = suggest_smart_tools(tool_name, action_name,
+                                                         compacted, behavior_tags)
+                            # Merge: UI predictions first, then static suggestions not already covered
+                            ui_set = {f"{p['tool']}:{p['action']}" for p in preds}
+                            merged = [f"{p['tool']}:{p['action']}  p={p['probability']:.2f}  eff={p['effectiveness']:.2f}"
+                                      for p in preds]
+                            for s in static[:3]:
+                                ta = s.split("=")[0] if "=" in s else s
+                                if ta not in ui_set:
+                                    merged.append(s)
+                            nudge = {"suggested_next": merged[:5], "source": "usage_intelligence"}
+                    else:
+                        from .auto_nudge import get_nudge
+                        idb_key = (self.current_session.idb_path if self.current_session else "")
+                        nudge = get_nudge(
+                            idb_key,
+                            tool_name,
+                            action_name,
+                            compacted,
+                            call_args if isinstance(call_args, dict) else {},
+                        )
                     if nudge:
                         compacted["_nudge"] = nudge
                 except Exception:

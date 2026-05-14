@@ -457,7 +457,7 @@ def code(
         "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
         "callees", "callers", "blocks", "analyze", "callgraph", "export",
         "find_paths", "strings_in_func", "diff_functions", "semantic_decompile",
-        "decomp_dataflow", "decompile_chain", "smart_decompile", "annotate"
+        "decomp_dataflow", "decompile_chain", "smart_decompile", "annotate", "explain"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,
@@ -1440,13 +1440,42 @@ def code(
 
                 suggested = []
                 if dangerous:
-                    # Specific taint suggestion based on what's dangerous
-                    if "network_input" in " ".join(dangerous):
-                        suggested.append({
-                            "action": "taint(trace)",
-                            "addr": hex_ea(func.start_ea),
-                            "reason": "Network input reaches this function — trace recv→dangerous_sink path",
-                        })
+                    # Actual taint trace when network input is present
+                    _TAINT_SOURCES = {"recv","recvfrom","read","fread","fgets","gets","getenv","scanf"}
+                    active_sources = [a for a in found_apis if a in _TAINT_SOURCES]
+                    if active_sources:
+                        try:
+                            from taint import taint as _taint  # type: ignore
+                            taint_result = _taint(
+                                action="trace",
+                                addr=hex_ea(func.start_ea),
+                                source=active_sources[0],
+                                max_depth=4,
+                            )
+                            taint_paths = taint_result.get("paths", [])
+                            taint_vulns = taint_result.get("vulns", [])
+                            if taint_paths or taint_vulns:
+                                suggested.append({
+                                    "action": "taint(trace) — COMPLETED",
+                                    "addr": hex_ea(func.start_ea),
+                                    "source": active_sources[0],
+                                    "paths_found": len(taint_paths),
+                                    "vulns_found": len(taint_vulns),
+                                    "top_path": taint_paths[0] if taint_paths else None,
+                                    "top_vuln": taint_vulns[0] if taint_vulns else None,
+                                })
+                            else:
+                                suggested.append({
+                                    "action": "taint(trace)",
+                                    "addr": hex_ea(func.start_ea),
+                                    "reason": f"Network input ({active_sources[0]}) present — no direct sink path found at depth 4, try taint(action='paths') for deeper search",
+                                })
+                        except Exception:
+                            suggested.append({
+                                "action": "taint(trace)",
+                                "addr": hex_ea(func.start_ea),
+                                "reason": f"Network input ({', '.join(active_sources)}) reaches dangerous patterns — trace data flow",
+                            })
                     else:
                         suggested.append({"action": "taint(trace)", "reason": "Dangerous patterns — trace data flow"})
                 if crypto_hints:
@@ -1507,6 +1536,119 @@ def code(
                     })
                 except Exception as e:
                     results.append({"addr": addr, "error": str(e)})
+
+            elif action == "explain":
+                # Plain-English explanation of what a function does.
+                # Decompiles, extracts signals, and synthesizes a structured summary
+                # without requiring the LLM to read raw pseudocode.
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
+                if not cfunc:
+                    results.append({"addr": addr, "error": "Decompilation failed — cannot explain"})
+                    continue
+
+                pseudo = str(cfunc)
+                fname = ida_funcs.get_func_name(func.start_ea)
+                proto = get_prototype(func)
+
+                # Collect signals
+                _KNOWN_APIS = [
+                    "malloc","free","memcpy","memset","strcpy","strncpy","sprintf","snprintf",
+                    "recv","send","socket","connect","bind","listen","accept","recvfrom","sendto",
+                    "fopen","fread","fwrite","fclose","fgets","fputs",
+                    "system","exec","execve","popen","fork",
+                    "CreateFile","ReadFile","WriteFile","VirtualAlloc","CreateProcess",
+                    "RegSetValue","RegOpenKey","CryptEncrypt","CryptDecrypt","BCryptEncrypt",
+                    "AES_encrypt","AES_decrypt","SHA256_Update","MD5_Update","HMAC",
+                    "memcmp","strcmp","strstr","sscanf","gets","scanf","vsprintf",
+                    "mmap","munmap","ioctl","open","read","write","close",
+                ]
+                found_apis = [a for a in _KNOWN_APIS if a in pseudo]
+                pseudo_lower = pseudo.lower()
+
+                # Callers/callees count
+                n_callers = sum(1 for x in idautils.XrefsTo(func.start_ea, 0) if x.iscode)
+                callees_set = set()
+                for item in idautils.FuncItems(func.start_ea):
+                    for xr in idautils.XrefsFrom(item, 0):
+                        if xr.type in (idaapi.fl_CN, idaapi.fl_CF):
+                            callees_set.add(idc.get_name(xr.to) or hex(xr.to))
+
+                # Strings referenced
+                str_refs = []
+                for item in idautils.FuncItems(func.start_ea):
+                    for xr in idautils.XrefsFrom(item, 0):
+                        s = idc.get_strlit_contents(xr.to, -1, -1)
+                        if s:
+                            try:
+                                str_refs.append(s.decode("utf-8", errors="replace")[:80])
+                            except Exception:
+                                pass
+                str_refs = list(dict.fromkeys(str_refs))[:6]
+
+                # Complexity
+                n_blocks = sum(1 for _ in idaapi.FlowChart(func))
+                n_lines = len(pseudo.splitlines())
+
+                # Build plain-English summary
+                purpose_parts = []
+                if any(a in found_apis for a in ["recv","recvfrom","socket","connect","bind","listen","accept"]):
+                    purpose_parts.append("handles network I/O")
+                if any(a in found_apis for a in ["fopen","fread","fwrite","CreateFile","open","read","write"]):
+                    purpose_parts.append("performs file I/O")
+                if any(a in found_apis for a in ["malloc","VirtualAlloc","mmap"]):
+                    purpose_parts.append("allocates memory")
+                if any(a in found_apis for a in ["system","exec","execve","popen","CreateProcess"]):
+                    purpose_parts.append("executes external commands")
+                if any(a in found_apis for a in ["CryptEncrypt","CryptDecrypt","BCryptEncrypt","AES_encrypt","AES_decrypt"]):
+                    purpose_parts.append("performs cryptographic operations")
+                if any(a in found_apis for a in ["SHA256_Update","MD5_Update","HMAC"]):
+                    purpose_parts.append("computes a hash or MAC")
+                if any(a in found_apis for a in ["RegSetValue","RegOpenKey"]):
+                    purpose_parts.append("accesses the Windows registry")
+                if any(a in found_apis for a in ["memcpy","memset","strcpy","strncpy","sprintf","snprintf"]):
+                    purpose_parts.append("manipulates buffers/strings")
+                if any(a in found_apis for a in ["gets","scanf","sscanf","vsprintf"]):
+                    purpose_parts.append("reads user/external input (potentially unsafe)")
+                if not purpose_parts:
+                    purpose_parts.append("performs internal computation")
+
+                # Danger signals
+                _DANGEROUS = {"gets","strcpy","sprintf","system","exec","execve","popen","memcpy","strncpy"}
+                dangerous_calls = [a for a in found_apis if a in _DANGEROUS]
+
+                summary_lines = [
+                    f"Function: {fname}",
+                    f"Prototype: {proto}" if proto else "",
+                    f"Purpose: This function {', '.join(purpose_parts)}.",
+                ]
+                if str_refs:
+                    summary_lines.append(f"Key strings: {', '.join(repr(s) for s in str_refs[:4])}")
+                if found_apis:
+                    summary_lines.append(f"API calls: {', '.join(found_apis[:10])}")
+                if dangerous_calls:
+                    summary_lines.append(f"⚠ Dangerous calls: {', '.join(dangerous_calls)} — review for buffer overflows / injection")
+                summary_lines.append(f"Complexity: {n_blocks} basic blocks, {n_lines} pseudocode lines")
+                summary_lines.append(f"Called by: {n_callers} function(s)")
+                if callees_set:
+                    summary_lines.append(f"Calls: {', '.join(sorted(callees_set)[:8])}")
+
+                results.append({
+                    "ok": True,
+                    "addr": hex_ea(func.start_ea),
+                    "name": fname,
+                    "summary": "\n".join(l for l in summary_lines if l),
+                    "purpose": purpose_parts,
+                    "api_calls": found_apis[:15],
+                    "dangerous_calls": dangerous_calls,
+                    "strings": str_refs,
+                    "complexity": {"blocks": n_blocks, "pseudocode_lines": n_lines},
+                    "callers": n_callers,
+                    "callees": sorted(callees_set)[:12],
+                })
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
