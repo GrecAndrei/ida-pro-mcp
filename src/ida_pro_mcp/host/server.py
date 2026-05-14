@@ -8111,6 +8111,48 @@ class IDAMCPServer:
 
         if action == "suggest_next_tool":
             seq_suggestions = self._predict_next_tool_from_activity(log, limit=limit)
+
+            # Augment with UsageIntelligence predictions (trained on real audit data)
+            if getattr(self, "_usage_intel", None) and log:
+                try:
+                    last = log[-1] if log else {}
+                    last_tool = last.get("tool", "")
+                    last_action = last.get("action", "")
+                    if last_tool:
+                        ui_preds = self._usage_intel.predict_next(last_tool, last_action, top_k=limit)
+                        # Merge: UI predictions get a "usage_intelligence" source tag
+                        existing_keys = {(r.get("tool"), r.get("action")) for r in seq_suggestions}
+                        for p in ui_preds:
+                            key = (p["tool"], p["action"])
+                            if key not in existing_keys:
+                                seq_suggestions.append({
+                                    "tool": p["tool"],
+                                    "action": p["action"],
+                                    "score": p["score"],
+                                    "probability": p["probability"],
+                                    "effectiveness": p["effectiveness"],
+                                    "source": "usage_intelligence",
+                                    "blended_confidence": round(p["score"], 4),
+                                })
+                            else:
+                                # Boost existing suggestion with UI score
+                                for r in seq_suggestions:
+                                    if r.get("tool") == p["tool"] and r.get("action") == p["action"]:
+                                        r["ui_score"] = p["score"]
+                                        r["ui_effectiveness"] = p["effectiveness"]
+                                        r["blended_confidence"] = round(
+                                            (r.get("blended_confidence", r.get("score", 0)) + p["score"]) / 2, 4
+                                        )
+                    # Also check for drift signals
+                    sid_str = str(sid)
+                    drift = self._usage_intel.drift.check(sid_str)
+                    if drift:
+                        seq_suggestions = [{"drift_warning": d["message"],
+                                            "signal": d["type"],
+                                            "severity": d["severity"]}
+                                           for d in drift[:2]] + seq_suggestions
+                except Exception:
+                    pass
             strategy = self.session_mgr.suggest_strategy(str(sid), context=context)
             strategy_rows = []
             strategy_confidence = 0.5
