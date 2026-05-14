@@ -5899,14 +5899,26 @@ class IDAMCPServer:
         except Exception:
             pass
         
-        # ---- Blocking Stuck Detection ----
+        # ---- Stuck Detection (UsageIntelligence DriftDetector) ----
         action = args.get("action", "")
         try:
-            from .auto_nudge import check_stuck_blocking
-            idb_key = (self.current_session.idb_path if self.current_session else "")
-            stuck = check_stuck_blocking(idb_key, tool_name, str(action) if action else "", args)
-            if stuck:
-                return stuck
+            sid_for_drift = (getattr(self.current_session, "session_id", None)
+                             if self.current_session else None)
+            ui = getattr(self, "_usage_intel", None)
+            if sid_for_drift and ui and ui.is_running():
+                signals = ui.drift.check(sid_for_drift)
+                # Only block on LOOP — other signals are warnings, not blockers
+                for sig in signals:
+                    if sig.get("type") == "LOOP" and sig.get("severity") == "warning":
+                        return {
+                            "ok": False,
+                            "error": {"code": "STUCK_LOOP", "message": sig["message"]},
+                            "_nudge": {
+                                "type": "stuck",
+                                "signal": sig["type"],
+                                "suggestion": "Try a different approach. Read ida://state for orientation.",
+                            },
+                        }
         except Exception:
             pass
         
@@ -8241,47 +8253,82 @@ class IDAMCPServer:
             }
 
         if action == "suggest_next_address":
-            # Use schemaboot + embedding index to suggest the most interesting
-            # unanalyzed functions rather than just echoing recent addresses.
+            # Primary: blackboard next_target (priority queue with time decay + xref boost)
+            bb_targets = []
+            try:
+                sid_str = str(sid)
+                bb_path = os.path.join(self.cache_dir, f"{sid_str}.blackboard.db")
+                if os.path.exists(bb_path):
+                    import importlib.util as _ilu
+                    _bb_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "..", "ida_mcp", "tools", "blackboard.py"
+                    )
+                    _spec = _ilu.spec_from_file_location("_pred_bb", os.path.abspath(_bb_path))
+                    _bmod = _ilu.module_from_spec(_spec)
+                    _bmod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f,
+                                           "idawrite": lambda f: f, "IDAError": Exception})
+                    _spec.loader.exec_module(_bmod)
+                    store = _bmod.BlackboardStore(db_path=bb_path)
+                    raw_targets = store.next_target(limit=limit)
+                    for t in raw_targets:
+                        bb_targets.append({
+                            "addr": t["addr"],
+                            "reason": f"{t['category']}: {t['title'][:60]}",
+                            "priority_score": t["priority_score"],
+                            "source": "blackboard",
+                            "tool": "code",
+                            "action": "smart_decompile",
+                        })
+            except Exception:
+                pass
+
+            # Secondary: schemaboot + embedding index
             idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
-            targets = []
+            schema_targets = []
             if idb_path:
                 try:
                     from .intelligence import get_assembler
                     asm = get_assembler()
-                    targets = asm.suggest_next_targets(idb_path, limit=limit)
+                    schema_targets = asm.suggest_next_targets(idb_path, limit=limit)
                 except Exception:
                     pass
 
-            # Fallback: callers/callees of recent addresses
-            addrs = []
-            for e in log:
-                if not isinstance(e, dict):
-                    continue
-                for k in ("addr", "address", "ea"):
-                    v = e.get(k)
-                    if v and str(v).startswith("0x"):
-                        a = str(v).lower()
-                        if a not in addrs:
-                            addrs.append(a)
+            # Merge: blackboard first, then schemaboot for any not already covered
+            bb_addrs = {t["addr"] for t in bb_targets}
+            merged = list(bb_targets)
+            for t in schema_targets:
+                if t.get("addr") not in bb_addrs:
+                    t["source"] = "schemaboot"
+                    merged.append(t)
 
-            fallback = []
-            if addrs and not targets:
-                recent = addrs[-1]
-                fallback = [
-                    {"addr": recent, "reason": "recent focus — check callers",
-                     "tool": "code", "action": "callers"},
-                ]
+            # Fallback: recent addresses from activity log
+            if not merged:
+                addrs = []
+                for e in log:
+                    if not isinstance(e, dict):
+                        continue
+                    for k in ("addr", "address", "ea"):
+                        v = e.get(k)
+                        if v and str(v).startswith("0x"):
+                            a = str(v).lower()
+                            if a not in addrs:
+                                addrs.append(a)
+                if addrs:
+                    merged = [{"addr": addrs[-1], "reason": "recent focus — check callers",
+                               "tool": "code", "action": "callers", "source": "activity_log"}]
 
             return {
                 "ok": True,
                 "session_id": sid,
-                "suggestions": targets or fallback,
+                "suggestions": merged[:limit],
+                "sources_used": list({t.get("source", "unknown") for t in merged}),
                 "note": (
-                    "Ranked by xor_count, entropy, complexity, and dangerous API presence. "
-                    "Run schemaboot(action='ingest') for full results."
-                ) if targets else "Run schemaboot(action='ingest') to enable smarter suggestions.",
-                "recent_addresses": addrs[-10:],
+                    "Ranked by blackboard priority (confidence x time_decay x xref_boost). "
+                    "Use blackboard(action='next_target') for the full priority queue."
+                ) if bb_targets else (
+                    "No blackboard entries yet. Run schemaboot(action='ingest') for smarter suggestions."
+                ),
             }
 
         if action == "risk_of_stall":

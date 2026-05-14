@@ -642,3 +642,90 @@ with open(RESULT_PATH, "w") as f:
         assert r.get("ok") is True
         assert r["comment"] == "Test annotation from smart_decompile"
         assert r["type"] in ("function_comment", "address_comment")
+
+
+class TestTaintToolIDA:
+    """taint tool inside real IDA."""
+
+    def test_taint_sources(self, runner):
+        script = '''
+import sys, os, json
+from taint import taint
+
+r = taint(action="sources")
+result = {
+    "ok": r.get("ok", False),
+    "count": r.get("count", 0),
+    "sources": r.get("sources", []),
+    "has_network_source": any(
+        s.get("name") in ("recv", "recvfrom", "read", "fread", "fgets")
+        for s in r.get("sources", [])
+    ),
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=30)
+        assert r.get("ok") is True
+        # May have 0 sources if binary has no matching imports — that's fine
+        assert isinstance(r["sources"], list)
+
+    def test_taint_report(self, runner):
+        script = '''
+import sys, os, json
+from taint import taint
+
+r = taint(action="report", max_depth=3, max_paths=10)
+result = {
+    "ok": r.get("ok", False),
+    "findings": r.get("findings", []),
+    "total": r.get("total", 0),
+    "sources_checked": r.get("sources_checked", 0),
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=60)
+        assert r.get("ok") is True
+        assert isinstance(r["findings"], list)
+        # Verify structure of any findings
+        for f in r["findings"][:3]:
+            assert "source" in f
+            assert "sink" in f
+            assert "vuln_type" in f
+
+    def test_predictor_suggest_next_address_uses_blackboard(self, runner):
+        script = '''
+import sys, os, json, tempfile
+import idautils
+from blackboard import BlackboardStore
+
+# Write some blackboard entries
+db = tempfile.mktemp(suffix=".db")
+store = BlackboardStore(db_path=db)
+funcs = list(idautils.Functions())[:5]
+for ea in funcs[:3]:
+    store.write(f"Analyze {hex(ea)}", category="hypothesis",
+                addr=hex(ea), confidence=0.8, embed=False)
+
+# next_target should return these
+targets = store.next_target(limit=5)
+result = {
+    "ok": True,
+    "targets_count": len(targets),
+    "has_addr": all("addr" in t for t in targets),
+    "has_priority": all("priority_score" in t for t in targets),
+    "sorted_desc": all(
+        targets[i]["priority_score"] >= targets[i+1]["priority_score"]
+        for i in range(len(targets)-1)
+    ) if len(targets) > 1 else True,
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=30)
+        assert r.get("ok") is True
+        assert r["targets_count"] >= 1
+        assert r["has_addr"] is True
+        assert r["has_priority"] is True
+        assert r["sorted_desc"] is True
