@@ -52,6 +52,12 @@ HOST_TOOL_ACTIONS = {
         "start_crawler","stop_crawler","crawler_status","accept","reject",
         "add_evidence","calibrate","campaign_summary","auto_tag_propagate",
         "accept_proposal","reject_proposal",
+        # KG write
+        "add_system","add_struct","add_gap","fill_gap",
+        "add_state_machine","add_peripheral","add_attack_surface",
+        # KG read
+        "kg_summary","kg_systems","kg_gaps","kg_structs",
+        "kg_state_machines","kg_attack_surface","kg_peripherals",
     ],
     "filter": ["filter"],
     "modify": ["rename","comment","set_type","patch_asm"],
