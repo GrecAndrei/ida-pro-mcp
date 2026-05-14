@@ -90,6 +90,7 @@ TOOLS = [
     "predictor",
     "workflow",
     "gadgets",
+    "taint",
     # Deobfuscation & crypto
     "deobfuscate",
     "crypto_id",
@@ -421,6 +422,7 @@ TOOL_DESCRIPTIONS = {
     "string_ops": "Advanced string analysis and IOC extraction from binary strings. Actions: decode_all, find_urls, find_paths, find_registry, find_ips, find_emails, find_commands, encoding_stats, multilingual, suspicious, find_xrefs, find_stack_strings, find_base64, find_api_keys, find_configs, find_c2, find_databases, find_crypto_addrs, entropy_rank, score_c2, indicators, persistence, evasion, ioc_extract.",
     "summarize": "Generates structured summaries of binary components at various granularities. Actions: binary, function, segment, imports_by_category, strings_by_category, complexity, call_hierarchy, data_flow, security_posture, statistics, report.",
     "symbols": "Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.",
+    "taint": "Data flow taint analysis from user-controlled sources to dangerous sinks. Actions: sources (list all taint sources: recv/read/fgets/getenv imports + blackboard IOCs), sinks (dangerous sinks reachable from a source), trace (trace forward from addr/source, write vuln entries to blackboard), paths (full call-graph paths source→sink with dataflow description), report (all sources → all reachable sinks). Example: taint(action='trace', source='recv') finds all paths from recv to memcpy/strcpy/system.",
     "threat_hunt": "Runs automated threat-hunting passes to detect malware patterns, vulnerabilities, and suspicious behaviors. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy.",
     "trace": "Manages execution trace data for the current debug session. Actions: get, clear, set_options.",
     "trace_analysis": "Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis.",
@@ -1244,6 +1246,13 @@ TOOL_ACTIONS = {
         "status",
         "apply",
         "export",
+    ],
+    "taint": [
+        "sources",
+        "sinks",
+        "trace",
+        "report",
+        "paths",
     ],
     "threat_hunt": [
         "run",
