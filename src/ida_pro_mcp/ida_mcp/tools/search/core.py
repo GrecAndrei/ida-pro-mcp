@@ -197,7 +197,7 @@ SEARCH_ACTIONS = {
     "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
     "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
     "find", "semantic", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
-    "type", "export", "summary",
+    "type", "export", "summary", "nl", "behavior",
 }
 
 SEARCH_ALIASES = {
@@ -217,7 +217,9 @@ SEARCH_ALIASES = {
     "datarefs": "data_ref", "coderefs": "code_ref",
     "function_signature": "func_by_sig", "signature": "func_by_sig",
     "lookup": "find", "discover": "find",
-    "semantic_find": "semantic", "nl": "semantic", "natural_language": "semantic",
+    # nl/natural_language → real nl action (bge-code-v1 embeddings), NOT semantic
+    "natural_language": "nl", "embedding_search": "nl", "vector_search": "nl",
+    "semantic_find": "semantic",
     "caller": "callers", "callee": "callees",
     "imports": "api", "import": "api", "apis": "api",
     "vuln": "vulnerable", "vulns": "vulnerable",
@@ -226,6 +228,7 @@ SEARCH_ALIASES = {
     "types": "type", "typedef": "type", "typeinfo": "type",
     "exports": "export", "exported": "export",
     "overview": "summary", "count": "summary", "stats": "summary",
+    "tag": "behavior", "tags": "behavior", "classify": "behavior",
 }
 
 SEARCH_INTENT_PATTERNS = [
@@ -365,6 +368,29 @@ def resolve_target(
         if require_function and not idaapi.get_func(exact_ea):
             return idaapi.BADADDR, f"No function at {hex(exact_ea)}", {}
         return exact_ea, None, {"match": "exact_name"}
+
+    # Fast path: blackboard custom name lookup
+    # If the LLM has written a blackboard entry with a custom name for an address,
+    # resolve it here so callers/callees/api work with those names.
+    try:
+        from blackboard import BlackboardStore  # type: ignore
+        store = BlackboardStore()
+        bb_entries = store.list(limit=5, include_resolved=False)
+        # Search titles for the target name
+        for entry in bb_entries:
+            title = entry.get("title", "")
+            addr = entry.get("addr") or entry.get("address", "")
+            if title and addr and target.lower() in title.lower():
+                try:
+                    bb_ea = int(addr, 16) if isinstance(addr, str) else int(addr)
+                    if bb_ea != idaapi.BADADDR:
+                        if require_function and not idaapi.get_func(bb_ea):
+                            continue
+                        return bb_ea, None, {"match": "blackboard_name", "blackboard_title": title}
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     # Slow path: fuzzy matching
     matcher = compile_smart_pattern(target, case_sensitive=False)

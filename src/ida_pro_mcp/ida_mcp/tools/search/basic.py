@@ -8,7 +8,7 @@ except ImportError:
 from .core import (
     clip_text, paginate_records, iter_segments, build_response,
     resolve_target, MAX_LIMIT, safe_get_strlist_items, safe_get_strlit_contents,
-    safe_generate_disasm_line, SearchTimeout,
+    safe_generate_disasm_line, SearchTimeout, xref_count_limited,
 )
 
 
@@ -147,10 +147,12 @@ def search_string(pattern, case_sensitive, include_context, offset, limit):
             if s is not None and matcher(s):
                 matches_seen += 1
                 if matches_seen > offset:
-                    line = f"{hex(sc.ea)}  {s[:500]}"
+                    xref_count = len(list(idautils.XrefsTo(sc.ea)))
+                    line = f"{hex(sc.ea)}  xrefs={xref_count}  {s[:500]}"
                     if include_context:
-                        xref_count = len(list(idautils.XrefsTo(sc.ea)))
-                        line += f"  xrefs={xref_count}"
+                        func = idaapi.get_func(sc.ea)
+                        if func:
+                            line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
                     results.append(line)
                     if len(results) >= limit:
                         truncated = True
@@ -224,7 +226,8 @@ def search_name(pattern, case_sensitive, offset, limit):
             matches_seen += 1
             if matches_seen > offset:
                 kind = "func" if idaapi.get_func(ea) else ("data" if ida_bytes.is_data(ida_bytes.get_flags(ea)) else "label")
-                results.append(f"{hex(ea)}  {kind}  {name}")
+                xr = xref_count_limited(ea, 256)
+                results.append(f"{hex(ea)}  {kind}  xrefs={xr}  {name}")
                 if len(results) >= limit:
                     truncated = True
                     break

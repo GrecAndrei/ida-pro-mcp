@@ -193,6 +193,12 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         scanned += 1
 
         cache_key = _cache_key("decomp", func_ea)
+        # Invalidate cache when function has been modified (rename, retype, etc.)
+        try:
+            mod_ctr = ida_funcs.get_func(func_ea).flags if ida_funcs.get_func(func_ea) else 0
+        except Exception:
+            mod_ctr = 0
+        cache_key = _cache_key("decomp", func_ea, mod_ctr)
         cached = _cache_get(cache_key)
         if cached is not None:
             pseudocode = cached
