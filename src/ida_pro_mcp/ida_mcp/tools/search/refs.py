@@ -150,12 +150,24 @@ def search_regex(pattern, case_sensitive, range_start, range_end, include_contex
 
 
 def search_func_by_sig(pattern, offset, limit):
-    """Filter functions by characteristics."""
+    """Filter functions by characteristics.
+    
+    Supports structural filters in pattern:
+    - size:>N / size:<N / size:N-M  — function size in bytes
+    - calls:NAME  — calls a specific function
+    - args:N / args:N+  — argument count
+    - leaf  — no outgoing calls (leaf functions)
+    - no_callers  — no incoming calls (potential entry points / dead code)
+    - entry_point  — exported or has no callers
+    - no_callees  — alias for leaf
+    """
     criteria = pattern.lower()
     filter_matcher = compile_smart_pattern(pattern, case_sensitive=False)
     size_rules = []
     call_pattern = None
     args_rule = None
+    want_leaf = "leaf" in criteria or "no_callee" in criteria
+    want_no_callers = "no_caller" in criteria or "entry_point" in criteria or "entrypoint" in criteria
 
     for m in re_module.finditer(r"size\s*[:=]\s*([<>]?)(\d+)(?:\s*-\s*(\d+))?", criteria):
         op, val1, val2 = m.groups()
@@ -232,14 +244,27 @@ def search_func_by_sig(pattern, offset, limit):
                         matched = True
                         reason.append(f"args={actual_args}")
 
-        if not (size_rules or call_pattern or args_rule) and filter_matcher(name):
+        if want_leaf:
+            has_calls = any(xr.type in CALL_XREF_TYPES for xr in idautils.XrefsFrom(ea))
+            if not has_calls:
+                matched = True
+                reason.append("leaf")
+
+        if want_no_callers:
+            has_callers = any(xr.iscode for xr in idautils.XrefsTo(ea, 0))
+            if not has_callers:
+                matched = True
+                reason.append("no_callers")
+
+        if not (size_rules or call_pattern or args_rule or want_leaf or want_no_callers) and filter_matcher(name):
             matched = True
             reason.append("semantic:name")
 
         if matched:
             matches_seen += 1
             if matches_seen > offset:
-                results.append(f"{hex(ea)}  {name}  size={size}  {', '.join(reason)}")
+                n_callers = sum(1 for xr in idautils.XrefsTo(ea, 0) if xr.iscode)
+                results.append(f"{hex(ea)}  {name}  size={size}  callers={n_callers}  {', '.join(reason)}")
                 if len(results) >= limit:
                     truncated = True
                     break

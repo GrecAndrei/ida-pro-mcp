@@ -123,11 +123,8 @@ def search_summary(pattern, case_sensitive, range_start, range_end):
         "instructions": 0, "functions": 0, "types": 0, "exports": 0,
     }
 
-    # Names (sample first 2000 only for speed)
-    for i, (ea, name) in enumerate(idautils.Names()):
-        if i >= 2000:
-            summary["names_sampled"] = True
-            break
+    # Names (full scan — just iteration, no decompilation)
+    for ea, name in idautils.Names():
         if matcher(name):
             summary["names"] += 1
 
@@ -141,11 +138,8 @@ def search_summary(pattern, case_sensitive, range_start, range_end):
         if matcher(irec["name"]):
             summary["imports"] += 1
 
-    # Functions (sample names)
-    for i, ea in enumerate(idautils.Functions()):
-        if i >= 2000:
-            summary["functions_sampled"] = True
-            break
+    # Functions (full scan)
+    for ea in idautils.Functions():
         name = idc.get_func_name(ea) or ""
         if matcher(name):
             summary["functions"] += 1
