@@ -90,15 +90,15 @@ def data(
                     
                     # Collect paginated results
                     if total > offset and (count == 0 or len(func_lines) < count):
-                        parts = [hex_ea(ea), hex_size(func_size), name]
+                        # Always include capped xref count (hot functions can have thousands)
+                        xrefs_to = sum(1 for _ in zip(idautils.XrefsTo(ea), range(999)))
+                        parts = [hex_ea(ea), hex_size(func_size), f"xrefs={xrefs_to}", name]
                         
                         if include_prototype:
                             parts.append(get_prototype(fn))
                             
                         if include_xrefs:
-                            xrefs_to = len(list(idautils.XrefsTo(ea)))
-                            xrefs_from = len(list(idautils.XrefsFrom(ea)))
-                            parts.append(f"xrefs_to={xrefs_to}")
+                            xrefs_from = sum(1 for _ in zip(idautils.XrefsFrom(ea), range(999)))
                             parts.append(f"xrefs_from={xrefs_from}")
                             
                         func_lines.append("  ".join(parts))
@@ -182,11 +182,8 @@ def data(
                         if not _matcher or _matcher(content):
                             total += 1
                             if total > offset and (count == 0 or len(str_lines) < count):
-                                parts = [hex_ea(s.ea)]
-                                if include_xrefs:
-                                    xref_count = len(list(idautils.XrefsTo(s.ea)))
-                                    parts.append(f"xrefs={xref_count}")
-                                parts.append(content[:500])
+                                xref_count = sum(1 for _ in zip(idautils.XrefsTo(s.ea), range(999)))
+                                parts = [hex_ea(s.ea), f"xrefs={xref_count}", content[:500]]
                                 str_lines.append("  ".join(parts))
                     except Exception:
                         continue
@@ -226,11 +223,8 @@ def data(
                                 if not _matcher or _matcher(s):
                                     total += 1
                                     if total > offset and (count == 0 or len(str_lines) < count):
-                                        parts = [hex_ea(sc.ea)]
-                                        if include_xrefs:
-                                            xref_count = len(list(idautils.XrefsTo(sc.ea)))
-                                            parts.append(f"xrefs={xref_count}")
-                                        parts.append(s[:500])
+                                        xref_count = sum(1 for _ in zip(idautils.XrefsTo(sc.ea), range(999)))
+                                        parts = [hex_ea(sc.ea), f"xrefs={xref_count}", s[:500]]
                                         str_lines.append("  ".join(parts))
                             except Exception:
                                 continue
