@@ -613,6 +613,107 @@ def test_tool_write_with_evidence_and_source_type():
     assert len(e["evidence"]) == 1
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# KG write actions via blackboard tool
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_tool_add_system():
+    s = _store()
+    result = _bb.blackboard(
+        action="add_system", title="Crypto subsystem",
+        content="AES + SHA functions",
+        members=["0x401000", "0x402000"],
+        confidence=0.8, db_path=s.db_path,
+    )
+    assert result["ok"] is True
+    assert "system_id" in result
+    # Verify via kg_systems
+    r2 = _bb.blackboard(action="kg_systems", db_path=s.db_path)
+    assert r2["ok"] is True
+    assert any(sys["name"] == "Crypto subsystem" for sys in r2["systems"])
+
+
+def test_tool_add_gap_and_fill():
+    s = _store()
+    r1 = _bb.blackboard(
+        action="add_gap", title="WPA key derivation",
+        content="All WPA2 firmware must derive PTK/GTK",
+        hints=["Look for HMAC-SHA1"],
+        confidence=0.9, gap_type="security", db_path=s.db_path,
+    )
+    assert r1["ok"] is True
+    gid = r1["gap_id"]
+
+    # Fill it
+    r2 = _bb.blackboard(action="fill_gap", gap_id=gid,
+                        addr="0x401234", db_path=s.db_path)
+    assert r2["ok"] is True
+
+    # Verify filled
+    r3 = _bb.blackboard(action="kg_gaps", resolved=True, db_path=s.db_path)
+    assert r3["ok"] is True
+    assert any(g["filled_by"] == "0x401234" for g in r3["gaps"])
+
+
+def test_tool_add_struct():
+    s = _store()
+    result = _bb.blackboard(
+        action="add_struct", title="wifi_frame_t",
+        members=[{"offset": 0, "size": 2, "name": "frame_ctrl"}],
+        size_bytes=24, confidence=0.75, db_path=s.db_path,
+    )
+    assert result["ok"] is True
+    r2 = _bb.blackboard(action="kg_structs", db_path=s.db_path)
+    assert any(s["name"] == "wifi_frame_t" for s in r2["structs"])
+
+
+def test_tool_add_state_machine():
+    s = _store()
+    result = _bb.blackboard(
+        action="add_state_machine", title="Auth SM",
+        addr="0x80420000",
+        states=[{"value": 0, "name": "IDLE"}, {"value": 1, "name": "AUTH"}],
+        confidence=0.7, db_path=s.db_path,
+    )
+    assert result["ok"] is True
+    r2 = _bb.blackboard(action="kg_state_machines", db_path=s.db_path)
+    assert any(sm["name"] == "Auth SM" for sm in r2["state_machines"])
+
+
+def test_tool_add_peripheral():
+    s = _store()
+    result = _bb.blackboard(
+        action="add_peripheral", title="AES accelerator",
+        addr="0xA0010000", periph_type="crypto",
+        confidence=0.8, db_path=s.db_path,
+    )
+    assert result["ok"] is True
+    r2 = _bb.blackboard(action="kg_peripherals", db_path=s.db_path)
+    assert any(p["periph_type"] == "crypto" for p in r2["peripherals"])
+
+
+def test_tool_add_attack_surface():
+    s = _store()
+    result = _bb.blackboard(
+        action="add_attack_surface", title="Mgmt frame handler",
+        addr="0x401000", reachable_from="air_unauthenticated",
+        input_type="management_frame", confidence=0.9, db_path=s.db_path,
+    )
+    assert result["ok"] is True
+    r2 = _bb.blackboard(action="kg_attack_surface", db_path=s.db_path)
+    assert any(a["reachable_from"] == "air_unauthenticated" for a in r2["attack_surface"])
+
+
+def test_tool_kg_summary():
+    s = _store()
+    _bb.blackboard(action="add_system", title="Crypto", db_path=s.db_path)
+    _bb.blackboard(action="add_gap", title="WPA", confidence=0.9, db_path=s.db_path)
+    result = _bb.blackboard(action="kg_summary", db_path=s.db_path)
+    assert result["ok"] is True
+    assert result["systems"] == 1
+    assert result["gaps_open"] == 1
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])
