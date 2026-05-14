@@ -449,13 +449,32 @@ def classify(
         elif action == "all_functions":
             distribution = {}
             functions = []
+
+            # Try to get BehaviorClassifier for unnamed functions
+            _classifier = None
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                _classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+            except Exception:
+                pass
+
             for ea in idautils.Functions():
                 cat, matched, _ = _classify_func(ea)
+                fname = idc.get_func_name(ea)
+                # For unnamed functions, try BehaviorClassifier (more accurate than heuristic)
+                if _classifier and (fname.startswith("sub_") or fname.startswith("nullsub_")):
+                    try:
+                        cfunc = ida_hexrays.decompile(ea)
+                        if cfunc:
+                            hits = _classifier.classify(str(cfunc)[:2000], threshold=0.4, top_k=1, block=False)
+                            if hits and hits[0].get("score", 0) >= 0.4:
+                                cat = hits[0]["behavior"]
+                    except Exception:
+                        pass
                 distribution[cat] = distribution.get(cat, 0) + 1
                 if category and cat != category:
                     continue
                 if len(functions) < limit:
-                    fname = idc.get_func_name(ea)
                     functions.append(f"{hex(ea)}  {fname}  {cat}")
             return {
                 "ok": True,

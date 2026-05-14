@@ -915,6 +915,18 @@ def summarize(
             except Exception:
                 pass
             try:
+                # Live taint scan — finds source→sink paths not yet in blackboard
+                from .taint import taint as _taint
+                taint_result = _taint(action="report", max_depth=4, max_paths=30)
+                if taint_result.get("ok") and taint_result.get("total", 0) > 0:
+                    sections["taint_findings"] = {
+                        "total": taint_result["total"],
+                        "high_confidence": taint_result.get("high_confidence", []),
+                        "findings": taint_result.get("findings", [])[:10],
+                    }
+            except Exception:
+                pass
+            try:
                 from .blackboard import BlackboardStore
                 store = BlackboardStore()
                 findings = {}
@@ -932,7 +944,7 @@ def summarize(
             return {
                 "ok": True,
                 "report": sections,
-                "note": "Full analysis report assembled from blackboard + binary analysis. Use this as the executive summary."
+                "note": "Full analysis report assembled from blackboard + binary analysis + taint scan. Use this as the executive summary."
             }
 
         else:
