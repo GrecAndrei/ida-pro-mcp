@@ -129,8 +129,8 @@ def search(
         "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
         "find", "semantic", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
-        "type", "export", "summary", "query_lang",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang"],
+        "type", "export", "summary", "query_lang", "nl", "behavior",
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -313,8 +313,137 @@ def search(
         elif action == "query_lang":
             # query_lang uses the 'query' parameter directly, not pattern
             response = run_query_lang(query or actual_pattern or "")
+        elif action == "nl":
+            # Natural language search using bge-code-v1 embeddings (FunctionEmbeddingIndex)
+            # Much more accurate than heuristic semantic scoring for RE queries like
+            # "function that handles AES key schedule" or "packet parser with length check"
+            if not actual_pattern:
+                return make_error(MCPError.INVALID_ARGS, "pattern or query required for nl search")
+            try:
+                from ida_pro_mcp.host.intelligence import get_assembler
+                asm = get_assembler()
+                idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+                if not idb_path:
+                    return make_error(MCPError.INVALID_ARGS,
+                                      "nl search requires an active IDB with indexed embeddings. "
+                                      "Run agent(action='analyze_function') on some functions first.")
+                idx = asm._get_index(idb_path)
+                if idx.size == 0:
+                    return make_error(MCPError.INVALID_ARGS,
+                                      "No embeddings indexed yet. Decompile some functions first "
+                                      "or run schemaboot(action='ingest').")
+                # Embed the query and search
+                q_vec = asm._embedder.embed(actual_pattern)
+                results_raw = idx.search(q_vec, top_k=limit, threshold=0.3)
+                rows = []
+                for r in results_raw:
+                    ea_str = r.get("ea", "")
+                    name = r.get("name", ea_str)
+                    sim = r.get("similarity", 0)
+                    rows.append(f"{ea_str}  {name}  similarity={sim:.3f}")
+                response = {
+                    "ok": True,
+                    "query": actual_pattern,
+                    "results": "\n".join(rows),
+                    "count": len(rows),
+                    "items": [{"addr": r.get("ea"), "name": r.get("name"),
+                               "similarity": r.get("similarity")} for r in results_raw],
+                    "note": "Results ranked by bge-code-v1 cosine similarity. "
+                            "Higher similarity = more semantically similar to query.",
+                }
+            except Exception as e:
+                response = make_error(MCPError.IDA_ERROR, f"nl search failed: {e}",
+                                      hint="Ensure bge-code-v1 model is available and functions have been decompiled.")
+
+        elif action == "behavior":
+            # Find all functions matching a behavior tag using BehaviorClassifier
+            # Example: search(action="behavior", pattern="crypto_symmetric")
+            # Falls back to schemaboot tag search if embedder unavailable
+            if not actual_pattern:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "pattern required: behavior tag to search for "
+                                  "(e.g. crypto_symmetric, network_http, memory_alloc)")
+            tag = actual_pattern.strip().lower().replace(" ", "_")
+            rows = []
+            # Try L1 insight index first (fast)
+            l1_addrs = _query_insight_by_tags([tag], mode="or")
+            if l1_addrs:
+                for addr_str in l1_addrs[:limit]:
+                    try:
+                        ea = int(addr_str, 16)
+                        name = idc.get_func_name(ea) or addr_str
+                        rows.append({"addr": addr_str, "name": name, "source": "insight_index"})
+                    except Exception:
+                        pass
+            # Try BehaviorClassifier on unnamed functions if not enough results
+            if len(rows) < limit // 2:
+                try:
+                    from ida_pro_mcp.host.intelligence import get_assembler
+                    asm = get_assembler()
+                    classifier = asm._behavior_classifier()
+                    checked = 0
+                    for func_ea in idautils.Functions():
+                        if checked >= 200 or len(rows) >= limit:
+                            break
+                        fname = idc.get_func_name(func_ea) or ""
+                        if not (fname.startswith("sub_") or fname.startswith("j_")):
+                            continue  # skip already-named functions
+                        try:
+                            cfunc = ida_hexrays.decompile(func_ea)
+                            if not cfunc:
+                                continue
+                            pseudo = str(cfunc)[:2000]
+                            hits = classifier.classify(pseudo, threshold=0.4, top_k=3, block=False)
+                            if any(h.get("behavior", "").lower() == tag for h in hits):
+                                rows.append({
+                                    "addr": hex(func_ea),
+                                    "name": fname,
+                                    "source": "classifier",
+                                    "confidence": max((h.get("score", 0) for h in hits
+                                                       if h.get("behavior", "").lower() == tag), default=0),
+                                })
+                        except Exception:
+                            pass
+                        checked += 1
+                except Exception:
+                    pass
+            lines = [f"{r['addr']}  {r['name']}  [{r['source']}]" +
+                     (f"  conf={r.get('confidence', 0):.2f}" if r.get("confidence") else "")
+                     for r in rows]
+            response = {
+                "ok": True,
+                "behavior": tag,
+                "results": "\n".join(lines),
+                "count": len(rows),
+                "items": rows,
+                "note": f"Functions classified as '{tag}'. "
+                        "Use code(action='smart_decompile') on top results for full analysis.",
+            }
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+
+        # Inject blackboard context into find/semantic/nl results
+        if action in ("find", "semantic", "nl", "behavior") and isinstance(response, dict):
+            try:
+                from blackboard import BlackboardStore  # type: ignore
+                store = BlackboardStore()
+                items = response.get("items", [])
+                if items:
+                    bb_by_addr = {}
+                    for item in items[:20]:
+                        addr = item.get("addr") or item.get("address") or item.get("ea", "")
+                        if addr and addr not in bb_by_addr:
+                            entries = store.list(addr=str(addr), limit=2, include_resolved=False)
+                            if entries:
+                                bb_by_addr[addr] = [{"title": e["title"],
+                                                     "category": e["category"],
+                                                     "confidence": e.get("confidence")}
+                                                    for e in entries]
+                    if bb_by_addr:
+                        response["blackboard_context"] = bb_by_addr
+            except Exception:
+                pass
 
         # Add interpretation metadata
         if interpreted_action and isinstance(response, dict):
