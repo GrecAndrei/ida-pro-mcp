@@ -1408,5 +1408,107 @@ def blackboard(
         updated = store.auto_tag_propagate()
         return {"ok": True, "updated": updated}
 
+    # ── Knowledge Graph write actions ─────────────────────────────────────────
+    elif action in ("add_system", "add_struct", "add_gap", "fill_gap",
+                    "add_state_machine", "add_peripheral", "add_attack_surface",
+                    "kg_summary", "kg_systems", "kg_gaps", "kg_structs",
+                    "kg_state_machines", "kg_attack_surface", "kg_peripherals"):
+        try:
+            import importlib.util as _ilu, os as _os
+            _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                     "..", "..", "host", "knowledge_graph.py")
+            _spec = _ilu.spec_from_file_location("_bb_kg", _os.path.abspath(_kg_path))
+            _kgmod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_kgmod)
+            kg = _kgmod.KnowledgeGraph(db_path=store.db_path)
+        except Exception as e:
+            return {"ok": False, "error": f"KnowledgeGraph unavailable: {e}"}
+
+        if action == "add_system":
+            if not title:
+                return {"ok": False, "error": "title required (system name)"}
+            members = kwargs.get("members") or []
+            entry_points = kwargs.get("entry_points") or []
+            exit_points = kwargs.get("exit_points") or []
+            sid = kg.add_system(title, members=members, description=content,
+                                entry_points=entry_points, exit_points=exit_points,
+                                tags=tags or [], confidence=confidence)
+            return {"ok": True, "system_id": sid}
+
+        elif action == "add_struct":
+            if not title:
+                return {"ok": False, "error": "title required (struct name)"}
+            members_data = kwargs.get("members") or []
+            size = int(kwargs.get("size_bytes") or 0)
+            sid = kg.add_struct(title, members=members_data, size_bytes=size,
+                                confidence=confidence)
+            return {"ok": True, "struct_id": sid}
+
+        elif action == "add_gap":
+            if not title:
+                return {"ok": False, "error": "title required (expected capability)"}
+            hints = kwargs.get("hints") or []
+            gap_type = kwargs.get("gap_type") or "capability"
+            binary_type = kwargs.get("binary_type") or ""
+            gid = kg.add_gap(title, why=content, hints=hints,
+                             priority=confidence, gap_type=gap_type,
+                             binary_type=binary_type)
+            return {"ok": True, "gap_id": gid}
+
+        elif action == "fill_gap":
+            gap_id = kwargs.get("gap_id") or entry_id
+            if not gap_id:
+                return {"ok": False, "error": "gap_id or entry_id required"}
+            filled_by = addr or kwargs.get("filled_by") or ""
+            ok = kg.fill_gap(gap_id, filled_by)
+            return {"ok": ok}
+
+        elif action == "add_state_machine":
+            if not title:
+                return {"ok": False, "error": "title required (state machine name)"}
+            state_var = addr or kwargs.get("state_var") or ""
+            states = kwargs.get("states") or []
+            sid = kg.add_state_machine(title, state_var=state_var, states=states,
+                                       confidence=confidence)
+            return {"ok": True, "state_machine_id": sid}
+
+        elif action == "add_peripheral":
+            if not addr:
+                return {"ok": False, "error": "addr required (MMIO base address)"}
+            periph_type = kwargs.get("periph_type") or "unknown"
+            drivers = kwargs.get("drivers") or []
+            pid = kg.add_peripheral(addr, name=title, periph_type=periph_type,
+                                    drivers=drivers, confidence=confidence)
+            return {"ok": True, "peripheral_id": pid}
+
+        elif action == "add_attack_surface":
+            if not addr:
+                return {"ok": False, "error": "addr required (entry point address)"}
+            reachable_from = kwargs.get("reachable_from") or "unknown"
+            input_type = kwargs.get("input_type") or "unknown"
+            call_stack = kwargs.get("call_stack") or []
+            aid = kg.add_attack_surface(addr, name=title,
+                                        reachable_from=reachable_from,
+                                        input_type=input_type,
+                                        call_stack=call_stack,
+                                        confidence=confidence)
+            return {"ok": True, "attack_surface_id": aid}
+
+        elif action == "kg_summary":
+            return {"ok": True, **kg.summary()}
+        elif action == "kg_systems":
+            return {"ok": True, "systems": kg.list_systems()}
+        elif action == "kg_gaps":
+            resolved_flag = kwargs.get("resolved", False)
+            return {"ok": True, "gaps": kg.list_gaps(resolved=bool(resolved_flag))}
+        elif action == "kg_structs":
+            return {"ok": True, "structs": kg.list_structs()}
+        elif action == "kg_state_machines":
+            return {"ok": True, "state_machines": kg.list_state_machines()}
+        elif action == "kg_attack_surface":
+            return {"ok": True, "attack_surface": kg.list_attack_surface()}
+        elif action == "kg_peripherals":
+            return {"ok": True, "peripherals": kg.list_peripherals()}
+
     else:
         return {"ok": False, "error": f"Unknown action: {action}"}

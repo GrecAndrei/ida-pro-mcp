@@ -542,7 +542,13 @@ def auto_blackboard_write(
                             tags=['auto', 'hypothesis'] + behavior_tags[:3],
                             confidence=hyp['confidence'],
                             source='auto_hypothesis',
+                            source_type='engine_classifier',
+                            evidence=[{"type": "classifier", "value": t,
+                                       "weight": hyp['confidence'], "ts": __import__('time').time()}
+                                      for t in behavior_tags[:3]],
                         )
+                    # Update KG: if behavior_tags suggest a known system type, add to kg_systems
+                    _update_kg_from_hypothesis(store.db_path, addr or '', behavior_tags, hypotheses)
                 except Exception:
                     pass
     
@@ -685,3 +691,76 @@ def get_ghost_chain(tool: str, action: str, args: dict) -> List[Tuple[str, dict]
         result.append((ghost_tool, resolved_args))
     
     return result
+
+
+# ── KG integration ────────────────────────────────────────────────────────────
+
+# Map behavior tags to system names for KG auto-population
+_TAG_TO_SYSTEM = {
+    "crypto_symmetric": "Crypto subsystem",
+    "crypto_asymmetric": "Crypto subsystem",
+    "crypto_hash": "Crypto subsystem",
+    "network_http": "Network stack",
+    "network_socket": "Network stack",
+    "network_dns": "Network stack",
+    "memory_alloc": "Memory management",
+    "memory_free": "Memory management",
+    "file_io": "File I/O",
+    "process_exec": "Process management",
+    "auth_check": "Authentication",
+    "auth_bypass": "Authentication",
+    "firmware_init": "Firmware initialization",
+    "interrupt_handler": "Interrupt handling",
+    "dma_transfer": "DMA subsystem",
+}
+
+
+def _update_kg_from_hypothesis(db_path: str, addr: str,
+                                behavior_tags: list, hypotheses: list) -> None:
+    """
+    When auto-hypothesis fires, update the KnowledgeGraph:
+    - Add addr to the appropriate system (based on behavior_tags)
+    - If a gap matches the behavior, mark it as having a candidate
+    """
+    if not db_path or not addr:
+        return
+    try:
+        import importlib.util, os as _os
+        _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                 "knowledge_graph.py")
+        if not _os.path.exists(_kg_path):
+            return
+        spec = importlib.util.spec_from_file_location("_re_kg", _kg_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        kg = mod.KnowledgeGraph(db_path)
+    except Exception:
+        return
+
+    # Add addr to matching system
+    for tag in behavior_tags:
+        sys_name = _TAG_TO_SYSTEM.get(tag)
+        if not sys_name:
+            continue
+        # Find or create the system
+        existing = [s for s in kg.list_systems() if s["name"] == sys_name]
+        if existing:
+            kg.add_member_to_system(existing[0]["id"], addr)
+        else:
+            kg.add_system(sys_name, members=[addr],
+                          description=f"Auto-detected from {tag}",
+                          tags=[tag], confidence=0.6)
+        break  # one system per hypothesis
+
+    # Check if any open gap matches these behavior tags
+    try:
+        gaps = kg.list_gaps(resolved=False)
+        for gap in gaps:
+            hints_text = " ".join(gap.get("hints", [])).lower()
+            expected_text = gap.get("expected", "").lower()
+            for tag in behavior_tags:
+                if tag.replace("_", " ") in expected_text or tag in hints_text:
+                    kg.add_gap_candidate(gap["id"], addr)
+                    break
+    except Exception:
+        pass
