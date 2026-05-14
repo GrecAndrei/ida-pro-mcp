@@ -245,6 +245,34 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         result["hint"] = "Increase timeout_ms or scope with addr to search one function." if timed_out else "Increase max_functions or set sample=false for broader coverage."
     if include_items:
         result["items"] = [{"address": r["address"], "function": r["function"], "line_num": r["line_num"]} for r in page]
+
+    # Auto-write blackboard entries for unique matching functions
+    if rows and not scope_func:
+        try:
+            from blackboard import BlackboardStore  # type: ignore
+            store = BlackboardStore()
+            seen_funcs = set()
+            for r in rows[:10]:  # cap at 10 auto-writes
+                fea = r["address"]
+                if fea in seen_funcs:
+                    continue
+                seen_funcs.add(fea)
+                existing = store.list(addr=fea, limit=1, include_resolved=False)
+                if not existing:
+                    store.write(
+                        title=f"decompiled match: '{pattern[:40]}' in {r['function']}",
+                        category="hypothesis",
+                        addr=fea,
+                        content=r["line"],
+                        tags=["decompiled_search", "auto"],
+                        confidence=0.6,
+                        source="search_decompiled",
+                        source_type="human",
+                        embed=False,
+                    )
+        except Exception:
+            pass
+
     return result
 
 
