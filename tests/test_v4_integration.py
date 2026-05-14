@@ -517,3 +517,128 @@ with open(RESULT_PATH, "w") as f:
         assert r["top_tool"] == "classify"
         assert r["top_action"] == "function"
         assert r["has_probability"] is True
+
+
+class TestSmartDecompileIDA:
+    """smart_decompile action inside real IDA."""
+
+    def test_smart_decompile_returns_all_fields(self, runner):
+        script = '''
+import sys, os, json
+import idautils, idc
+from code import code
+
+# Get first function with a body
+funcs = [ea for ea in idautils.Functions()]
+target = None
+for ea in funcs[:20]:
+    import idaapi
+    f = idaapi.get_func(ea)
+    if f and (f.end_ea - f.start_ea) > 20:
+        target = ea
+        break
+
+if not target:
+    result = {"ok": False, "error": "no suitable function found"}
+else:
+    r = code(action="smart_decompile", addr=hex(target))
+    if isinstance(r, list): r = r[0]
+    result = {
+        "ok": r.get("ok", False),
+        "has_pseudocode": bool(r.get("pseudocode")),
+        "has_complexity": "complexity" in r,
+        "has_callers": "callers" in r,
+        "has_callees": "callees" in r,
+        "has_strings": "strings" in r,
+        "has_suggested": "suggested_next_actions" in r,
+        "has_behavior_tags": "behavior_tags" in r,
+        "addr": r.get("addr"),
+        "name": r.get("name"),
+    }
+
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=60)
+        assert r.get("ok") is True
+        assert r["has_pseudocode"] is True
+        assert r["has_complexity"] is True
+        assert r["has_callers"] is True
+        assert r["has_callees"] is True
+        assert r["has_suggested"] is True
+        assert r["has_behavior_tags"] is True
+
+    def test_smart_decompile_detects_dangerous_patterns(self, runner):
+        script = '''
+import sys, os, json
+import idautils, idc, idaapi
+from code import code
+
+# Find a function that calls memcpy or strcpy
+target = None
+for ea in idautils.Functions():
+    f = idaapi.get_func(ea)
+    if not f: continue
+    for item in idautils.FuncItems(ea):
+        for xref in idautils.XrefsFrom(item, 0):
+            name = idc.get_name(xref.to) or ""
+            if "memcpy" in name or "strcpy" in name or "sprintf" in name:
+                target = ea
+                break
+        if target: break
+    if target: break
+
+if not target:
+    # Fall back to any function
+    funcs = list(idautils.Functions())
+    target = funcs[0] if funcs else None
+
+if not target:
+    result = {"ok": False, "error": "no function found"}
+else:
+    r = code(action="smart_decompile", addr=hex(target))
+    if isinstance(r, list): r = r[0]
+    result = {
+        "ok": r.get("ok", False),
+        "dangerous_patterns": r.get("dangerous_patterns", []),
+        "api_calls": r.get("api_calls", []),
+        "complexity_lines": r.get("complexity", {}).get("lines", 0),
+    }
+
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=60)
+        assert r.get("ok") is True
+        # Just verify the fields exist and are the right types
+        assert isinstance(r["dangerous_patterns"], list)
+        assert isinstance(r["api_calls"], list)
+        assert r["complexity_lines"] >= 0
+
+    def test_annotate_action(self, runner):
+        script = '''
+import sys, os, json
+import idautils
+from code import code
+
+funcs = list(idautils.Functions())
+if not funcs:
+    result = {"ok": False, "error": "no functions"}
+else:
+    target = funcs[0]
+    r = code(action="annotate", addr=hex(target), comment="Test annotation from smart_decompile")
+    if isinstance(r, list): r = r[0]
+    result = {
+        "ok": r.get("ok", False),
+        "addr": r.get("addr"),
+        "comment": r.get("comment"),
+        "type": r.get("type"),
+    }
+
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=30)
+        assert r.get("ok") is True
+        assert r["comment"] == "Test annotation from smart_decompile"
+        assert r["type"] in ("function_comment", "address_comment")

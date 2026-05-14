@@ -217,6 +217,72 @@ def _get_next_func(ea: int):
     return getter(ea) if getter else None
 
 
+def _extract_var_rename_hints(cfunc) -> list:
+    """
+    Suggest better names for decompiler-generated variables (v1, v2, a1, etc.)
+    based on usage patterns in the pseudocode.
+    """
+    import re
+    hints = []
+    try:
+        pseudo = str(cfunc)
+        lvars = list(getattr(cfunc, "lvars", []) or [])
+        for v in lvars:
+            name = str(getattr(v, "name", "") or "").strip()
+            if not name or not re.match(r'^[va]\d+$', name):
+                continue
+            # Look for usage patterns around this variable name
+            patterns = re.findall(rf'\b{re.escape(name)}\b[^;{{}}]*', pseudo)
+            suggestion = None
+            for pat in patterns[:5]:
+                pat_lower = pat.lower()
+                if "->next" in pat_lower or "->prev" in pat_lower:
+                    suggestion = "node" if name.startswith("v") else "list_ptr"
+                elif "->size" in pat_lower or "->len" in pat_lower:
+                    suggestion = "buf" if name.startswith("v") else "size_ptr"
+                elif "socket" in pat_lower or "sock" in pat_lower:
+                    suggestion = "sock"
+                elif "key" in pat_lower or "aes" in pat_lower or "cipher" in pat_lower:
+                    suggestion = "key_buf"
+                elif "recv" in pat_lower or "packet" in pat_lower or "frame" in pat_lower:
+                    suggestion = "pkt_buf"
+                elif "malloc" in pat_lower or "alloc" in pat_lower:
+                    suggestion = "heap_buf"
+                elif "strlen" in pat_lower or "strcpy" in pat_lower:
+                    suggestion = "str_buf"
+                elif "= 0" in pat and name.startswith("v"):
+                    suggestion = "result"
+                if suggestion:
+                    break
+            if suggestion:
+                hints.append({"var": name, "suggested": suggestion,
+                               "reason": patterns[0][:60] if patterns else ""})
+    except Exception:
+        pass
+    return hints[:8]
+
+
+def _get_blackboard_context_for_addr(addr_hex: str) -> list:
+    """
+    Get relevant blackboard entries for this address without IDA deps.
+    Returns compact list of {title, category, confidence}.
+    """
+    try:
+        import importlib.util, os as _os
+        path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                             "..", "..", "host", "knowledge_graph.py")
+        # Use blackboard directly
+        from blackboard import BlackboardStore  # type: ignore
+        store = BlackboardStore()
+        entries = store.list(addr=addr_hex, limit=5, include_resolved=False)
+        return [{"title": e["title"], "category": e["category"],
+                 "confidence": e.get("confidence", 0.5),
+                 "source_type": e.get("source_type", "manual")}
+                for e in entries]
+    except Exception:
+        return []
+
+
 def _decompile_with_diagnostics(func_ea: int):
     """
     Decompile with structured diagnostics.
@@ -339,11 +405,11 @@ def code(
     action: Annotated[Literal[
         "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
         "callees", "callers", "blocks", "analyze", "callgraph", "export",
-        "find_paths", "strings_in_func", "diff_functions", "semantic_decompile", "decomp_dataflow",
-        "decompile_chain"
+        "find_paths", "strings_in_func", "diff_functions", "semantic_decompile",
+        "decomp_dataflow", "decompile_chain", "smart_decompile", "annotate"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
-    addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,  # Alias for compatibility
+    addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,
     max_items: Annotated[int, "Max items to return"] = 1000,
     max_depth: Annotated[int, "Max depth for callgraph/find_paths"] = 5,
     format: Annotated[Literal["json", "c_header", "prototypes"], "Export format"] = "json",
@@ -353,6 +419,7 @@ def code(
     limit: Annotated[Optional[int], "Alias for max_items (especially useful with disasm)"] = None,
     field_name: Annotated[Optional[str], "Struct field name (for xrefs_to_field)"] = None,
     target: Annotated[Optional[str], "Target address (for find_paths)"] = None,
+    comment: Annotated[Optional[str], "Comment text (for annotate action)"] = None,
     **kwargs
 ) -> list[dict] | dict:
     """
@@ -479,12 +546,84 @@ def code(
                 try:
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     if cfunc:
-                        results.append({
+                        pseudo = str(cfunc)
+                        result_entry = {
                             "ok": True,
                             "addr": hex_ea(func.start_ea),
-                            "code": str(cfunc),
-                            "prototype": get_prototype(func)
-                        })
+                            "code": pseudo,
+                            "prototype": get_prototype(func),
+                        }
+                        # Inline enrichment: API calls, behavior hints, var rename hints,
+                        # blackboard context — all in one response so LLM doesn't need extra calls
+                        try:
+                            import re as _re
+                            # Quick API extraction from pseudocode
+                            _KNOWN_APIS = [
+                                "malloc","free","memcpy","memset","strcpy","strncpy","sprintf",
+                                "recv","send","socket","connect","bind","listen","accept",
+                                "fopen","fread","fwrite","fclose","system","exec","popen",
+                                "CreateFile","ReadFile","WriteFile","VirtualAlloc","CreateProcess",
+                                "RegSetValue","RegOpenKey","CryptEncrypt","CryptDecrypt",
+                                "AES_encrypt","SHA256","MD5","HMAC","pbkdf2",
+                                "memcmp","strcmp","strstr","sscanf","gets","scanf",
+                            ]
+                            found_apis = [a for a in _KNOWN_APIS if a in pseudo]
+                            if found_apis:
+                                result_entry["api_calls"] = found_apis[:12]
+
+                            # Crypto constant detection
+                            _CRYPTO_PATTERNS = {
+                                "AES": ["0x63636363", "0x7c777c77", "AES_KEY", "aes_"],
+                                "SHA256": ["0x6a09e667", "0xbb67ae85", "sha256"],
+                                "MD5": ["0x67452301", "0xefcdab89", "md5_"],
+                                "RC4": ["rc4_", "KSA", "PRGA"],
+                                "XOR_cipher": [],  # detected by xor_count below
+                            }
+                            crypto_hints = []
+                            pseudo_lower = pseudo.lower()
+                            for algo, patterns in _CRYPTO_PATTERNS.items():
+                                if any(p.lower() in pseudo_lower for p in patterns):
+                                    crypto_hints.append(algo)
+                            # Count XOR operations as crypto signal
+                            xor_count = pseudo.count(" ^ ") + pseudo.count("^=")
+                            if xor_count >= 4:
+                                crypto_hints.append(f"XOR_heavy({xor_count})")
+                            if crypto_hints:
+                                result_entry["crypto_hints"] = crypto_hints
+
+                            # Dangerous patterns
+                            dangerous = []
+                            if any(a in found_apis for a in ["strcpy","sprintf","gets","scanf"]):
+                                dangerous.append("unsafe_string_ops")
+                            if "memcpy" in found_apis and "size" not in pseudo_lower:
+                                dangerous.append("memcpy_no_size_check")
+                            if any(a in found_apis for a in ["system","exec","popen"]):
+                                dangerous.append("command_execution")
+                            if dangerous:
+                                result_entry["dangerous_patterns"] = dangerous
+
+                            # Variable rename hints
+                            var_hints = _extract_var_rename_hints(cfunc)
+                            if var_hints:
+                                result_entry["var_rename_hints"] = var_hints
+
+                            # Blackboard context for this address
+                            bb_ctx = _get_blackboard_context_for_addr(hex_ea(func.start_ea))
+                            if bb_ctx:
+                                result_entry["blackboard_context"] = bb_ctx
+
+                            # Complexity summary
+                            lines = pseudo.splitlines()
+                            result_entry["complexity"] = {
+                                "lines": len(lines),
+                                "calls": len(_re.findall(r'\w+\s*\(', pseudo)),
+                                "branches": len(_re.findall(r'\bif\s*\(', pseudo)),
+                                "loops": len(_re.findall(r'\b(for|while|do)\b', pseudo)),
+                                "xor_ops": xor_count,
+                            }
+                        except Exception:
+                            pass
+                        results.append(result_entry)
                     else:
                         results.append({
                             "addr": addr,
@@ -508,31 +647,33 @@ def code(
                         suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
                     results.append({"addr": addr, "error": f"No function at {hex_ea(ea)}.{suggestion}"})
                     continue
-                chain_depth = max(1, min(max_depth, 5))
+                chain_depth = max(1, min(max_depth, 3))  # hard cap at 3
                 try:
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     main_pseudo = str(cfunc) if cfunc else ""
                     main_proto = get_prototype(func)
-                    # Collect callers (limit xref scan to avoid hanging on heavily-referenced funcs)
+                    # Collect callers (compact: name + first 5 lines of pseudocode)
                     callers_ctx = []
                     caller_addrs = set()
-                    max_xrefs = chain_depth * 20
                     for i, xref in enumerate(idautils.CodeRefsTo(func.start_ea, 0)):
-                        if i >= max_xrefs:
+                        if i >= 20:  # scan at most 20 xrefs
                             break
                         caller_fn = ida_funcs.get_func(xref)
                         if caller_fn and caller_fn.start_ea not in caller_addrs:
                             caller_addrs.add(caller_fn.start_ea)
                             ccfunc, _ = _decompile_with_diagnostics(caller_fn.start_ea)
                             if ccfunc:
+                                pseudo_lines = str(ccfunc).splitlines()
                                 callers_ctx.append({
                                     "addr": hex_ea(caller_fn.start_ea),
                                     "name": ida_funcs.get_func_name(caller_fn.start_ea),
-                                    "pseudocode": str(ccfunc),
+                                    # First 8 lines only — enough for call context
+                                    "pseudocode_head": "\n".join(pseudo_lines[:8]),
+                                    "total_lines": len(pseudo_lines),
                                 })
                             if len(callers_ctx) >= chain_depth:
                                 break
-                    # Collect callees
+                    # Collect callees (compact)
                     callees_ctx = []
                     callee_addrs = set()
                     for item in idautils.FuncItems(func.start_ea):
@@ -542,10 +683,12 @@ def code(
                                 callee_addrs.add(callee_fn.start_ea)
                                 ccfunc, _ = _decompile_with_diagnostics(callee_fn.start_ea)
                                 if ccfunc:
+                                    pseudo_lines = str(ccfunc).splitlines()
                                     callees_ctx.append({
                                         "addr": hex_ea(callee_fn.start_ea),
                                         "name": ida_funcs.get_func_name(callee_fn.start_ea),
-                                        "pseudocode": str(ccfunc),
+                                        "pseudocode_head": "\n".join(pseudo_lines[:8]),
+                                        "total_lines": len(pseudo_lines),
                                     })
                                 if len(callees_ctx) >= chain_depth:
                                     break
@@ -561,6 +704,7 @@ def code(
                         "callees_context": callees_ctx,
                         "caller_count": len(caller_addrs),
                         "callee_count": len(callee_addrs),
+                        "note": "callers/callees show first 8 lines only. Use code(action='decompile') for full pseudocode.",
                     })
                 except Exception as e:
                     results.append({"addr": addr, "error": str(e)})
@@ -1032,6 +1176,179 @@ def code(
                         "count": len(flow.get("edges", [])),
                     }
                 )
+
+            elif action == "smart_decompile":
+                # Best single call for understanding a function.
+                # Returns pseudocode + behavior_tags + api_calls + crypto_hints +
+                # dangerous_patterns + var_rename_hints + callers + callees +
+                # strings + blackboard_context + complexity + suggested_next_actions.
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
+                if not cfunc:
+                    results.append({
+                        "addr": addr,
+                        "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
+                    })
+                    continue
+
+                pseudo = str(cfunc)
+                fname = ida_funcs.get_func_name(func.start_ea)
+                import re as _re
+
+                _KNOWN_APIS = [
+                    "malloc","free","memcpy","memset","strcpy","strncpy","sprintf","snprintf",
+                    "recv","send","socket","connect","bind","listen","accept","recvfrom","sendto",
+                    "fopen","fread","fwrite","fclose","fgets","fputs",
+                    "system","exec","execve","popen","fork",
+                    "CreateFile","ReadFile","WriteFile","VirtualAlloc","CreateProcess",
+                    "RegSetValue","RegOpenKey","CryptEncrypt","CryptDecrypt","BCryptEncrypt",
+                    "AES_encrypt","AES_decrypt","SHA256_Update","MD5_Update","HMAC","pbkdf2",
+                    "memcmp","strcmp","strstr","sscanf","gets","scanf","vsprintf",
+                    "mmap","munmap","ioctl","open","read","write","close",
+                ]
+                found_apis = [a for a in _KNOWN_APIS if a in pseudo]
+
+                crypto_hints = []
+                pseudo_lower = pseudo.lower()
+                _CRYPTO_SIGS = {
+                    "AES": ["0x63636363","0x7c777c77","aes_key","aes_encrypt","aes_decrypt"],
+                    "SHA256": ["0x6a09e667","0xbb67ae85","sha256","sha_256"],
+                    "SHA1": ["0x67452301","sha1","sha_1"],
+                    "MD5": ["0xefcdab89","md5_","md5update"],
+                    "RC4": ["rc4_"," ksa"," prga"],
+                    "ChaCha20": ["chacha","0x61707865"],
+                    "PBKDF2": ["pbkdf2","hmac","iterations"],
+                }
+                for algo, sigs in _CRYPTO_SIGS.items():
+                    if any(s.lower() in pseudo_lower for s in sigs):
+                        crypto_hints.append(algo)
+                xor_count = pseudo.count(" ^ ") + pseudo.count("^=")
+                if xor_count >= 4:
+                    crypto_hints.append(f"XOR_heavy({xor_count})")
+
+                dangerous = []
+                if any(a in found_apis for a in ["strcpy","sprintf","gets","scanf","vsprintf"]):
+                    dangerous.append("unsafe_string_ops — potential buffer overflow")
+                if "memcpy" in found_apis and not _re.search(r'memcpy\s*\([^,]+,[^,]+,\s*sizeof', pseudo):
+                    dangerous.append("memcpy — verify size is bounded")
+                if any(a in found_apis for a in ["system","exec","execve","popen"]):
+                    dangerous.append("command_execution — check for injection")
+                if "VirtualAlloc" in found_apis and "WriteProcessMemory" in found_apis:
+                    dangerous.append("process_injection pattern")
+                if "recv" in found_apis or "recvfrom" in found_apis:
+                    dangerous.append("network_input — trace data flow to sinks")
+
+                var_hints = _extract_var_rename_hints(cfunc)
+
+                callers_compact = []
+                for i, xref in enumerate(idautils.CodeRefsTo(func.start_ea, 0)):
+                    if i >= 30: break
+                    cf = ida_funcs.get_func(xref)
+                    if cf:
+                        callers_compact.append({"addr": hex_ea(cf.start_ea),
+                                                "name": ida_funcs.get_func_name(cf.start_ea)})
+                    if len(callers_compact) >= 5: break
+
+                callees_compact = []
+                callee_seen = set()
+                for item in idautils.FuncItems(func.start_ea):
+                    for ref in idautils.CodeRefsFrom(item, 0):
+                        cf = ida_funcs.get_func(ref)
+                        if cf and cf.start_ea not in callee_seen:
+                            callee_seen.add(cf.start_ea)
+                            callees_compact.append({"addr": hex_ea(cf.start_ea),
+                                                    "name": ida_funcs.get_func_name(cf.start_ea)})
+                        if len(callees_compact) >= 8: break
+                    if len(callees_compact) >= 8: break
+
+                str_refs = []
+                for item in idautils.FuncItems(func.start_ea):
+                    for xref in idautils.XrefsFrom(item, 0):
+                        if not xref.iscode:
+                            s = idc.get_strlit_contents(xref.to)
+                            if s:
+                                if isinstance(s, bytes):
+                                    s = s.decode("utf-8", errors="replace")
+                                str_refs.append(s[:80])
+                    if len(str_refs) >= 10: break
+
+                bb_ctx = _get_blackboard_context_for_addr(hex_ea(func.start_ea))
+
+                lines = pseudo.splitlines()
+                complexity = {
+                    "lines": len(lines),
+                    "calls": len(_re.findall(r'\w+\s*\(', pseudo)),
+                    "branches": len(_re.findall(r'\bif\s*\(', pseudo)),
+                    "loops": len(_re.findall(r'\b(for|while|do)\b', pseudo)),
+                    "xor_ops": xor_count,
+                    "switch_cases": len(_re.findall(r'\bcase\b', pseudo)),
+                }
+
+                behavior_tags = list(set(
+                    crypto_hints
+                    + (["network"] if any(a in found_apis for a in ["recv","send","socket","connect"]) else [])
+                    + (["file_io"] if any(a in found_apis for a in ["fopen","fread","fwrite","CreateFile","open","read","write"]) else [])
+                    + (["memory_alloc"] if "malloc" in found_apis or "VirtualAlloc" in found_apis else [])
+                    + (["process_exec"] if any(a in found_apis for a in ["system","exec","CreateProcess"]) else [])
+                    + (["dangerous"] if dangerous else [])
+                ))
+
+                suggested = []
+                if dangerous:
+                    suggested.append({"action": "taint(trace)", "reason": "Dangerous patterns — trace data flow"})
+                if crypto_hints:
+                    suggested.append({"action": "crypto_id(identify)", "addr": hex_ea(func.start_ea),
+                                      "reason": f"Crypto: {', '.join(crypto_hints)}"})
+                if not bb_ctx:
+                    suggested.append({"action": "blackboard(write, category=hypothesis)",
+                                      "addr": hex_ea(func.start_ea),
+                                      "reason": "No blackboard entry — record findings"})
+                if var_hints:
+                    suggested.append({"action": "modify(rename) or funcs(suggest_names)",
+                                      "reason": f"{len(var_hints)} variables could be renamed"})
+
+                results.append({
+                    "ok": True,
+                    "addr": hex_ea(func.start_ea),
+                    "name": fname,
+                    "prototype": get_prototype(func),
+                    "pseudocode": pseudo,
+                    "behavior_tags": behavior_tags,
+                    "api_calls": found_apis[:15],
+                    "crypto_hints": crypto_hints,
+                    "dangerous_patterns": dangerous,
+                    "var_rename_hints": var_hints,
+                    "strings": str_refs,
+                    "callers": callers_compact,
+                    "callees": callees_compact,
+                    "blackboard_context": bb_ctx,
+                    "complexity": complexity,
+                    "suggested_next_actions": suggested[:4],
+                })
+
+            elif action == "annotate":
+                # Add a comment to a function or address. Shortcut for modify(comment).
+                if not comment:
+                    results.append(make_error(MCPError.INVALID_ARGS, "comment required for annotate"))
+                    continue
+                try:
+                    func = idaapi.get_func(ea)
+                    target_ea = func.start_ea if func else ea
+                    if func:
+                        idc.set_func_cmt(target_ea, comment, 1)
+                    else:
+                        idc.set_cmt(ea, comment, 1)
+                    results.append({
+                        "ok": True,
+                        "addr": hex_ea(target_ea),
+                        "comment": comment,
+                        "type": "function_comment" if func else "address_comment",
+                    })
+                except Exception as e:
+                    results.append({"addr": addr, "error": str(e)})
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
