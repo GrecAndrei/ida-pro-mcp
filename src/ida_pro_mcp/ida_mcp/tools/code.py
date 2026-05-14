@@ -219,8 +219,12 @@ def _get_next_func(ea: int):
 
 def _extract_var_rename_hints(cfunc) -> list:
     """
-    Suggest better names for decompiler-generated variables (v1, v2, a1, etc.)
-    based on usage patterns in the pseudocode.
+    Suggest better names for decompiler-generated variables (v1, v2, a1, etc.).
+
+    Priority:
+    1. IDA type info — if IDA knows the type, use it (wifi_frame_t* → frame)
+    2. Usage patterns in pseudocode — recv/malloc/key/sock etc.
+    3. Argument position heuristics — a1 in network function → likely fd or buf
     """
     import re
     hints = []
@@ -231,35 +235,82 @@ def _extract_var_rename_hints(cfunc) -> list:
             name = str(getattr(v, "name", "") or "").strip()
             if not name or not re.match(r'^[va]\d+$', name):
                 continue
-            # Look for usage patterns around this variable name
-            patterns = re.findall(rf'\b{re.escape(name)}\b[^;{{}}]*', pseudo)
+
             suggestion = None
-            for pat in patterns[:5]:
-                pat_lower = pat.lower()
-                if "->next" in pat_lower or "->prev" in pat_lower:
-                    suggestion = "node" if name.startswith("v") else "list_ptr"
-                elif "->size" in pat_lower or "->len" in pat_lower:
-                    suggestion = "buf" if name.startswith("v") else "size_ptr"
-                elif "socket" in pat_lower or "sock" in pat_lower:
-                    suggestion = "sock"
-                elif "key" in pat_lower or "aes" in pat_lower or "cipher" in pat_lower:
-                    suggestion = "key_buf"
-                elif "recv" in pat_lower or "packet" in pat_lower or "frame" in pat_lower:
-                    suggestion = "pkt_buf"
-                elif "malloc" in pat_lower or "alloc" in pat_lower:
-                    suggestion = "heap_buf"
-                elif "strlen" in pat_lower or "strcpy" in pat_lower:
-                    suggestion = "str_buf"
-                elif "= 0" in pat and name.startswith("v"):
-                    suggestion = "result"
-                if suggestion:
-                    break
-            if suggestion:
-                hints.append({"var": name, "suggested": suggestion,
-                               "reason": patterns[0][:60] if patterns else ""})
+            reason = ""
+
+            # 1. IDA type info — highest confidence
+            try:
+                tinfo = getattr(v, "type", None)
+                if tinfo is not None:
+                    type_str = str(tinfo).lower().strip("* ")
+                    # Strip pointer/array decorators for name inference
+                    base = re.sub(r'[\*\[\]0-9]', '', type_str).strip()
+                    if base and base not in ("void", "int", "char", "byte", "word", "dword",
+                                             "qword", "bool", "unsigned", "signed", "__int"):
+                        # Use last component of type name (e.g. wifi_frame_t → frame)
+                        parts = re.split(r'[_\s]', base)
+                        parts = [p for p in parts if len(p) > 2 and p not in ("type", "ptr", "ref")]
+                        if parts:
+                            suggestion = parts[-1].rstrip("t").rstrip("_") or parts[-1]
+                            reason = f"type={tinfo}"
+            except Exception:
+                pass
+
+            # 2. Usage patterns in pseudocode
+            if not suggestion:
+                patterns = re.findall(rf'\b{re.escape(name)}\b[^;{{}}\n]*', pseudo)
+                for pat in patterns[:6]:
+                    pl = pat.lower()
+                    if any(x in pl for x in ["recv(", "recvfrom(", "read("]):
+                        suggestion, reason = "recv_buf", pat[:50]
+                    elif any(x in pl for x in ["send(", "write(", "fwrite("]):
+                        suggestion, reason = "send_buf", pat[:50]
+                    elif any(x in pl for x in ["socket(", "accept(", "connect("]):
+                        suggestion, reason = "sock_fd", pat[:50]
+                    elif any(x in pl for x in ["malloc(", "calloc(", "alloc("]):
+                        suggestion, reason = "heap_buf", pat[:50]
+                    elif any(x in pl for x in ["aes", "key", "cipher", "encrypt", "decrypt"]):
+                        suggestion, reason = "key_buf", pat[:50]
+                    elif any(x in pl for x in ["packet", "frame", "pkt", "hdr"]):
+                        suggestion, reason = "pkt_buf", pat[:50]
+                    elif any(x in pl for x in ["strlen(", "strcpy(", "strcat("]):
+                        suggestion, reason = "str_buf", pat[:50]
+                    elif any(x in pl for x in ["->next", "->prev", "->list"]):
+                        suggestion, reason = "node", pat[:50]
+                    elif any(x in pl for x in ["->size", "->len", "->count"]):
+                        suggestion, reason = "size", pat[:50]
+                    elif any(x in pl for x in ["fopen(", "fread(", "fwrite("]):
+                        suggestion, reason = "fp", pat[:50]
+                    elif any(x in pl for x in ["ioctl(", "mmap("]):
+                        suggestion, reason = "fd", pat[:50]
+                    elif re.search(rf'\b{re.escape(name)}\s*=\s*0\b', pat) and name.startswith("v"):
+                        suggestion, reason = "result", pat[:50]
+                    if suggestion:
+                        break
+
+            # 3. Argument position heuristic for a1/a2/a3
+            if not suggestion and name.startswith("a"):
+                try:
+                    idx = int(name[1:]) - 1
+                    proto = str(getattr(cfunc, "type", "") or "")
+                    proto_lower = proto.lower()
+                    if idx == 0:
+                        if "socket" in proto_lower or "fd" in proto_lower:
+                            suggestion, reason = "fd", "arg0 in socket-like function"
+                        elif "buf" in proto_lower or "data" in proto_lower:
+                            suggestion, reason = "buf", "arg0 is buffer"
+                    elif idx == 1 and "size" in proto_lower:
+                        suggestion, reason = "size", "arg1 is size"
+                except Exception:
+                    pass
+
+            if suggestion and suggestion != name:
+                hints.append({"var": name, "suggested": suggestion, "reason": reason[:80]})
+
     except Exception:
         pass
-    return hints[:8]
+    return hints[:10]
 
 
 def _get_blackboard_context_for_addr(addr_hex: str) -> list:
@@ -475,9 +526,11 @@ def code(
         Returns: [{addr, nodes: "addr  depth=N  name\\n...", edges: "addr -> addr\\n..."}]
         Example: code(action="callgraph", addrs="main", max_depth=3)
         
-    find_paths - Find control flow paths between two addresses
-        Params: addrs (REQUIRED), target (REQUIRED)
-        Returns: [{addr, paths: [[addr1, addr2, ...], ...]}]
+    find_paths - Find call-graph paths from one function to another (BFS over call graph)
+        Note: this traverses the call graph (function-to-function), not intra-function CFG.
+        For intra-function basic block paths, use cfg_analysis(action="paths").
+        Params: addrs (REQUIRED - start function), target (REQUIRED - target function)
+        Returns: {from, to, paths: [[addr1, addr2, ...], ...]}
         Example: code(action="find_paths", addrs="0x401000", target="0x402000")
         
     strings_in_func - List strings referenced in function (compact text)
@@ -836,6 +889,7 @@ def code(
                 info = {"ok": True, "addr": hex_ea(func.start_ea), "name": fname, "size": hex_size(func.end_ea - func.start_ea)}
                 
                 # Decompile
+                cfunc = None
                 try:
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     info["pseudocode"] = str(cfunc) if cfunc else None
@@ -853,6 +907,52 @@ def code(
                     info["prototype"] = get_prototype(func)
                 except Exception:
                     info["prototype"] = None
+
+                # Enrichment (same as smart_decompile)
+                if cfunc and info.get("pseudocode"):
+                    pseudo = info["pseudocode"]
+                    import re as _re
+                    _KNOWN_APIS = [
+                        "malloc","free","memcpy","memset","strcpy","strncpy","sprintf","snprintf",
+                        "recv","send","socket","connect","bind","listen","accept","recvfrom","sendto",
+                        "fopen","fread","fwrite","fclose","system","exec","execve","popen",
+                        "CreateFile","ReadFile","WriteFile","VirtualAlloc","CreateProcess",
+                        "CryptEncrypt","CryptDecrypt","AES_encrypt","SHA256_Update","MD5_Update",
+                        "memcmp","strcmp","strstr","sscanf","gets","scanf","vsprintf",
+                    ]
+                    found_apis = [a for a in _KNOWN_APIS if a in pseudo]
+                    if found_apis:
+                        info["api_calls"] = found_apis[:12]
+                    xor_count = pseudo.count(" ^ ") + pseudo.count("^=")
+                    crypto_hints = []
+                    pseudo_lower = pseudo.lower()
+                    for algo, sigs in {"AES":["0x63636363","aes_encrypt"],"SHA256":["0x6a09e667","sha256"],
+                                       "MD5":["0xefcdab89","md5_"],"RC4":["rc4_"]}.items():
+                        if any(s.lower() in pseudo_lower for s in sigs):
+                            crypto_hints.append(algo)
+                    if xor_count >= 4:
+                        crypto_hints.append(f"XOR_heavy({xor_count})")
+                    if crypto_hints:
+                        info["crypto_hints"] = crypto_hints
+                    dangerous = []
+                    if any(a in found_apis for a in ["strcpy","sprintf","gets","scanf","vsprintf"]):
+                        dangerous.append("unsafe_string_ops")
+                    if any(a in found_apis for a in ["system","exec","execve","popen"]):
+                        dangerous.append("command_execution")
+                    if dangerous:
+                        info["dangerous_patterns"] = dangerous
+                    var_hints = _extract_var_rename_hints(cfunc)
+                    if var_hints:
+                        info["var_rename_hints"] = var_hints
+                    info["complexity"] = {
+                        "lines": len(pseudo.splitlines()),
+                        "calls": len(_re.findall(r'\w+\s*\(', pseudo)),
+                        "branches": len(_re.findall(r'\bif\s*\(', pseudo)),
+                        "loops": len(_re.findall(r'\b(for|while|do)\b', pseudo)),
+                    }
+                    bb_ctx = _get_blackboard_context_for_addr(hex_ea(func.start_ea))
+                    if bb_ctx:
+                        info["blackboard_context"] = bb_ctx
                 
                 # Callees
                 try:
@@ -953,52 +1053,94 @@ def code(
                                    "start": hex_ea(func.start_ea), "end": hex_ea(func.end_ea)})
             
             elif action == "xrefs_to_field":
-                # Find xrefs to a struct field
+                # Find code that accesses a specific struct field by offset
                 if not field_name:
                     results.append(make_error(MCPError.INVALID_ARGS, "field_name required"))
                     continue
                 
-                # Parse field_name in format "struct_name.field_name" or just "field_name"
                 struct_name = None
                 actual_field = field_name
                 if "." in field_name:
                     struct_name, actual_field = field_name.rsplit(".", 1)
                 
-                xrefs_found = []
                 try:
-                    # Get type info library
                     til = ida_typeinf.get_idati()
-                    
-                    # Search through all local types for matching fields
                     qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
+                    
+                    # Step 1: Find the field offset in the struct
+                    field_offset = None
+                    field_type_str = None
+                    found_struct = None
                     for ordinal in range(1, qty_func(til) + 1):
                         tinfo = ida_typeinf.tinfo_t()
-                        if tinfo.get_numbered_type(til, ordinal):
-                            type_name = tinfo.get_type_name()
-                            
-                            # Filter by struct name if specified
-                            if struct_name and type_name != struct_name:
-                                continue
-                            
-                            # Check if it's a struct/union
-                            if tinfo.is_struct() or tinfo.is_union():
-                                udt = ida_typeinf.udt_type_data_t()
-                                if tinfo.get_udt_details(udt):
-                                    for member in udt:
-                                        if member.name == actual_field:
-                                            # Found the field, now find xrefs to addresses using this struct
-                                            # member.offset is already in bytes in IDA 9
-                                            xrefs_found.append({
-                                                "struct": type_name,
-                                                "field": actual_field,
-                                                "offset": member.offset,
-                                                "field_type": str(member.type)
-                                            })
+                        if not tinfo.get_numbered_type(til, ordinal):
+                            continue
+                        type_name = tinfo.get_type_name()
+                        if struct_name and type_name != struct_name:
+                            continue
+                        if tinfo.is_struct() or tinfo.is_union():
+                            udt = ida_typeinf.udt_type_data_t()
+                            if tinfo.get_udt_details(udt):
+                                for member in udt:
+                                    if member.name == actual_field:
+                                        field_offset = member.offset  # bytes in IDA 9
+                                        field_type_str = str(member.type)
+                                        found_struct = type_name
+                                        break
+                        if field_offset is not None:
+                            break
                     
-                    if not xrefs_found:
-                        results.append({"addr": addr, "field": field_name, "xrefs": [], "note": "Field not found in any struct"})
-                    else:
-                        results.append({"addr": addr, "field": field_name, "struct_info": xrefs_found})
+                    if field_offset is None:
+                        results.append({"addr": addr, "field": field_name, "xrefs": [],
+                                        "note": f"Field '{actual_field}' not found in any struct"})
+                        continue
+                    
+                    # Step 2: Find code that accesses this offset
+                    # Strategy: scan decompiled functions for offset access patterns
+                    # and scan disassembly for load/store at [reg+offset]
+                    import re as _re
+                    code_refs = []
+                    offset_hex = hex(field_offset)
+                    offset_dec = str(field_offset)
+                    
+                    # Scan all functions for references to this offset
+                    for func_ea in idautils.Functions():
+                        func = idaapi.get_func(func_ea)
+                        if not func:
+                            continue
+                        # Quick disasm scan for [reg+offset] patterns
+                        found_in_func = False
+                        for item_ea in idautils.FuncItems(func_ea):
+                            disasm = idc.generate_disasm_line(item_ea, 0) or ""
+                            disasm_clean = ida_lines.tag_remove(disasm)
+                            # Match [reg+offset] or [reg-offset] patterns
+                            if (f"+{offset_hex}" in disasm_clean.lower() or
+                                f"+{offset_dec}]" in disasm_clean or
+                                f"+0x{field_offset:x}]" in disasm_clean.lower()):
+                                fn_name = ida_funcs.get_func_name(func_ea)
+                                code_refs.append({
+                                    "ea": hex_ea(item_ea),
+                                    "func": hex_ea(func_ea),
+                                    "func_name": fn_name,
+                                    "disasm": disasm_clean[:80],
+                                })
+                                found_in_func = True
+                                if len(code_refs) >= max_items:
+                                    break
+                        if found_in_func and len(code_refs) >= max_items:
+                            break
+                    
+                    results.append({
+                        "ok": True,
+                        "field": field_name,
+                        "struct": found_struct,
+                        "offset": field_offset,
+                        "offset_hex": hex(field_offset),
+                        "field_type": field_type_str,
+                        "xrefs": code_refs,
+                        "count": len(code_refs),
+                        "note": f"Found {len(code_refs)} code references to {found_struct}.{actual_field} (offset {hex(field_offset)})",
+                    })
                 except Exception as e:
                     results.append(make_error(MCPError.IDA_ERROR, f"Error searching for field: {str(e)}", details={"addr": addr}))
                 continue
@@ -1298,17 +1440,33 @@ def code(
 
                 suggested = []
                 if dangerous:
-                    suggested.append({"action": "taint(trace)", "reason": "Dangerous patterns — trace data flow"})
+                    # Specific taint suggestion based on what's dangerous
+                    if "network_input" in " ".join(dangerous):
+                        suggested.append({
+                            "action": "taint(trace)",
+                            "addr": hex_ea(func.start_ea),
+                            "reason": "Network input reaches this function — trace recv→dangerous_sink path",
+                        })
+                    else:
+                        suggested.append({"action": "taint(trace)", "reason": "Dangerous patterns — trace data flow"})
                 if crypto_hints:
                     suggested.append({"action": "crypto_id(identify)", "addr": hex_ea(func.start_ea),
-                                      "reason": f"Crypto: {', '.join(crypto_hints)}"})
+                                      "reason": f"Crypto signals: {', '.join(crypto_hints[:3])}"})
                 if not bb_ctx:
                     suggested.append({"action": "blackboard(write, category=hypothesis)",
                                       "addr": hex_ea(func.start_ea),
-                                      "reason": "No blackboard entry — record findings"})
+                                      "reason": "No blackboard entry — record findings now"})
                 if var_hints:
                     suggested.append({"action": "modify(rename) or funcs(suggest_names)",
-                                      "reason": f"{len(var_hints)} variables could be renamed"})
+                                      "reason": f"{len(var_hints)} variables could be renamed: "
+                                                 + ", ".join(f"{h['var']}→{h['suggested']}" for h in var_hints[:3])})
+                if len(callers_compact) == 0:
+                    suggested.append({"action": "blackboard(write, category=dead_end) or check entry points",
+                                      "reason": "No callers found — may be an entry point, callback, or dead code"})
+                elif len(callers_compact) >= 5:
+                    suggested.append({"action": "code(xrefs_to)",
+                                      "addr": hex_ea(func.start_ea),
+                                      "reason": f"Many callers ({len(callers_compact)}+) — this is a hot function, understand all call sites"})
 
                 results.append({
                     "ok": True,
