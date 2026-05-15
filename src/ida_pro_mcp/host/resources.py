@@ -294,9 +294,11 @@ class ResourceResolver:
             }
             if is_firmware:
                 state["binary"]["firmware_note"] = (
-                    "Raw firmware detected. "
-                    "CALL llm_helpers(action='guided_analysis') for step-by-step workflow. "
-                    "CALL llm_helpers(action='cheatsheet') and scroll to '== RAW FIRMWARE =='."
+                    "Raw firmware detected. Solve the three hard problems first: "
+                    "1) CALL firmware_view(action='detect_load_address') — is the binary rebased correctly? "
+                    "2) CALL firmware_view(action='detect_vector_table') — find all entry points (IVT). "
+                    "3) CALL firmware_view(action='detect_mmio') — identify MMIO peripheral registers. "
+                    "Then: CALL llm_helpers(action='guided_analysis') for the full step-by-step workflow."
                 )
         except Exception:
             state["binary"] = {}

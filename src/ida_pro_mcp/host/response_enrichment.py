@@ -974,8 +974,53 @@ def build_signal_directives(
                 "call": "taint(action='report')",
                 "reason": "Check for MMIO/UART input → dangerous sink paths",
             })
-        elif action_name == "pointer_sweep":
-            tables = payload.get("tables", payload.get("count", 0))
+        elif action_name == "detect_load_address":
+            candidates = payload.get("candidates", [])
+            if candidates:
+                best = candidates[0]
+                directives.append({
+                    "priority": "high",
+                    "call": f"firmware_view(action='detect_vector_table')",
+                    "reason": f"Load address identified as {best.get('base')} ({best.get('method')}) — now find entry points",
+                })
+            elif not candidates:
+                directives.append({
+                    "priority": "medium",
+                    "call": "firmware_view(action='scan_region')",
+                    "reason": "Could not determine load address — profile regions to find structure",
+                })
+
+        elif action_name == "detect_vector_table":
+            entry_points = payload.get("entry_points", [])
+            vectors = payload.get("vectors", [])
+            reset_handler = next((v.get("handler") for v in vectors if "Reset" in v.get("name", "")), None)
+            if reset_handler:
+                directives.append({
+                    "priority": "high",
+                    "call": f"code(action='smart_decompile', addrs='{reset_handler}')",
+                    "reason": f"Reset_Handler at {reset_handler} — this is the firmware entry point",
+                })
+            if entry_points:
+                directives.append({
+                    "priority": "high",
+                    "call": "firmware_view(action='detect_mmio')",
+                    "reason": "Entry points found — now identify MMIO peripheral registers",
+                })
+
+        elif action_name == "detect_mmio":
+            peripherals = payload.get("peripherals", [])
+            chip = payload.get("likely_chip_family", "")
+            if peripherals:
+                directives.append({
+                    "priority": "high",
+                    "call": "taint(action='report')",
+                    "reason": f"MMIO peripherals identified ({chip}) — trace UART/DMA inputs to dangerous sinks",
+                })
+                directives.append({
+                    "priority": "medium",
+                    "call": "firmware_view(action='scan_region')",
+                    "reason": "MMIO map complete — now profile binary regions for structure",
+                })
             if tables:
                 directives.append({
                     "priority": "medium",

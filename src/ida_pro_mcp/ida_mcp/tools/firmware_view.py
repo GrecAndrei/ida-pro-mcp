@@ -250,7 +250,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -1289,6 +1289,384 @@ def firmware_view(
                 ],
             }
             return _log_ml(result, action, f"anchor={hex(anchor)}")
+
+        if action == "detect_load_address":
+            # Heuristically determine the correct load/base address for a flat binary.
+            #
+            # Strategy:
+            # 1. Cortex-M: bytes[0:4] = initial SP (must be in RAM range),
+            #              bytes[4:8] = reset vector (must be in flash range, LSB=1 for Thumb)
+            # 2. Generic: find the base offset where the most pointer-like values
+            #    become self-referential (point back into the binary)
+            # 3. Known MCU fingerprinting: match entropy/size patterns to known chips
+            import struct as _struct
+
+            min_ea = idaapi.cvar.inf.min_ea
+            max_ea = idaapi.cvar.inf.max_ea
+            binary_size = max_ea - min_ea
+            candidates = []
+
+            # --- Cortex-M detection ---
+            # Read first 8 bytes
+            first8 = ida_bytes.get_bytes(min_ea, 8)
+            if first8 and len(first8) == 8:
+                sp_val = _struct.unpack_from("<I", first8, 0)[0]
+                reset_val = _struct.unpack_from("<I", first8, 4)[0]
+                reset_addr = reset_val & ~1  # clear Thumb bit
+                is_thumb = bool(reset_val & 1)
+
+                # Common Cortex-M RAM ranges: 0x20000000-0x20100000
+                # Common flash ranges: 0x08000000-0x08200000 (STM32), 0x00000000-0x00100000
+                sp_in_ram = 0x20000000 <= sp_val <= 0x20200000
+                reset_in_flash = (
+                    (0x08000000 <= reset_addr <= 0x08200000) or
+                    (0x00000000 <= reset_addr <= 0x00200000) or
+                    (0x10000000 <= reset_addr <= 0x10200000)
+                )
+
+                if sp_in_ram and reset_in_flash:
+                    # The binary is likely loaded at the flash base
+                    # Determine which flash base makes reset_addr point into the binary
+                    for flash_base in (0x08000000, 0x00000000, 0x10000000, 0x20000000):
+                        if flash_base <= reset_addr < flash_base + binary_size:
+                            candidates.append({
+                                "base": hex(flash_base),
+                                "confidence": 0.92,
+                                "method": "cortex_m_vector_table",
+                                "evidence": f"SP=0x{sp_val:08x} (RAM), reset_vector=0x{reset_val:08x} ({'Thumb' if is_thumb else 'ARM'})",
+                                "arch": "ARM Cortex-M",
+                                "thumb": is_thumb,
+                                "reset_handler": hex(reset_addr),
+                            })
+                            break
+
+            # --- Generic: pointer density analysis ---
+            # Try candidate bases and score by how many 4-byte values become valid pointers
+            if not candidates:
+                # Sample 256 bytes from start, middle, end
+                sample_eas = [min_ea, min_ea + binary_size // 2, max(min_ea, max_ea - 256)]
+                ptr_candidates = {}
+                for sample_ea in sample_eas:
+                    chunk = ida_bytes.get_bytes(sample_ea, min(256, max_ea - sample_ea)) or b""
+                    for i in range(0, len(chunk) - 3, 4):
+                        v = _struct.unpack_from("<I", chunk, i)[0]
+                        # Try common bases
+                        for base in (0x00000000, 0x08000000, 0x10000000, 0x20000000,
+                                     0x40000000, 0x80000000, 0xBFC00000):
+                            if base <= v < base + binary_size:
+                                ptr_candidates[base] = ptr_candidates.get(base, 0) + 1
+
+                if ptr_candidates:
+                    best_base = max(ptr_candidates, key=ptr_candidates.get)
+                    score = ptr_candidates[best_base]
+                    if score >= 3:
+                        candidates.append({
+                            "base": hex(best_base),
+                            "confidence": min(0.85, 0.5 + score * 0.05),
+                            "method": "pointer_density",
+                            "evidence": f"{score} pointer-like values resolve to binary range at this base",
+                            "arch": "unknown",
+                        })
+
+            # --- Known MCU fingerprinting by size ---
+            size_hints = []
+            if 0x10000 <= binary_size <= 0x20000:
+                size_hints.append("STM32F0/F1 (64-128KB flash)")
+            elif 0x20000 <= binary_size <= 0x80000:
+                size_hints.append("STM32F4/F7 or nRF52 (128KB-512KB flash)")
+            elif 0x80000 <= binary_size <= 0x200000:
+                size_hints.append("ESP32 / STM32H7 / i.MX RT (512KB-2MB flash)")
+            elif binary_size > 0x200000:
+                size_hints.append("Linux firmware / router / large SoC")
+
+            result = {
+                "ok": True,
+                "binary_size": hex(binary_size),
+                "current_base": hex(min_ea),
+                "candidates": candidates,
+                "size_hints": size_hints,
+                "note": (
+                    "If current_base is wrong, use Edit→Segments→Rebase in IDA "
+                    "or set the correct base when loading. "
+                    "For Cortex-M: base is typically 0x08000000 (STM32) or 0x00000000."
+                ),
+            }
+            if candidates:
+                best = candidates[0]
+                result["recommended_base"] = best["base"]
+                result["recommended_arch"] = best.get("arch", "")
+                if best.get("thumb"):
+                    result["recommended_note"] = (
+                        f"Set processor to ARM, Thumb mode. "
+                        f"Rebase to {best['base']}. "
+                        f"Reset handler at {best.get('reset_handler', '?')}."
+                    )
+            return result
+
+        if action == "detect_vector_table":
+            # Find the interrupt vector table and extract all entry points.
+            #
+            # Cortex-M: IVT at load base. Entry 0 = SP, entries 1+ = function pointers (LSB=1 Thumb).
+            # ARM Linux: exception vectors at 0x00000000 or 0xFFFF0000 (high vectors).
+            # MIPS: exception vectors at 0x80000000, 0xBFC00000.
+            # Generic: find dense cluster of valid function pointers near binary start.
+            import struct as _struct
+
+            min_ea = idaapi.cvar.inf.min_ea
+            max_ea = idaapi.cvar.inf.max_ea
+            binary_size = max_ea - min_ea
+            ptr_size = 8 if _is_64bit() else 4
+            proc = (idc.get_inf_attr(idc.INF_PROCNAME) or "").lower()
+
+            vectors = []
+            ivt_addr = None
+            arch_hint = ""
+
+            # Cortex-M: read up to 256 entries from min_ea
+            if "arm" in proc or not proc:
+                chunk = ida_bytes.get_bytes(min_ea, min(256 * 4, binary_size)) or b""
+                if len(chunk) >= 8:
+                    sp_val = _struct.unpack_from("<I", chunk, 0)[0]
+                    sp_in_ram = 0x20000000 <= sp_val <= 0x20200000
+
+                    if sp_in_ram:
+                        arch_hint = "ARM Cortex-M (IVT at binary start)"
+                        ivt_addr = min_ea
+                        # Standard Cortex-M vector names
+                        _CORTEX_M_VECTORS = [
+                            "Initial_SP", "Reset_Handler", "NMI_Handler", "HardFault_Handler",
+                            "MemManage_Handler", "BusFault_Handler", "UsageFault_Handler",
+                            "Reserved_7", "Reserved_8", "Reserved_9", "Reserved_10",
+                            "SVC_Handler", "DebugMon_Handler", "Reserved_13",
+                            "PendSV_Handler", "SysTick_Handler",
+                        ]
+                        for i in range(min(64, len(chunk) // 4)):
+                            v = _struct.unpack_from("<I", chunk, i * 4)[0]
+                            if i == 0:
+                                vectors.append({
+                                    "index": 0, "addr": hex(min_ea + i * 4),
+                                    "value": hex(v), "name": "Initial_SP",
+                                    "type": "stack_pointer",
+                                    "note": f"Initial stack pointer = 0x{v:08x}",
+                                })
+                                continue
+                            func_addr = v & ~1
+                            is_thumb = bool(v & 1)
+                            if min_ea <= func_addr < max_ea:
+                                name = _CORTEX_M_VECTORS[i] if i < len(_CORTEX_M_VECTORS) else f"IRQ{i - 16}_Handler"
+                                vectors.append({
+                                    "index": i, "addr": hex(min_ea + i * 4),
+                                    "value": hex(v), "name": name,
+                                    "handler": hex(func_addr),
+                                    "thumb": is_thumb,
+                                    "type": "exception_vector" if i < 16 else "irq_vector",
+                                })
+
+            # MIPS: check for exception vectors
+            if "mips" in proc:
+                arch_hint = "MIPS"
+                for vec_base in (0x80000000, 0xBFC00000, min_ea):
+                    if min_ea <= vec_base < max_ea:
+                        ivt_addr = vec_base
+                        vectors.append({"addr": hex(vec_base), "name": "MIPS_reset_vector", "type": "reset"})
+                        vectors.append({"addr": hex(vec_base + 0x180), "name": "MIPS_interrupt_vector", "type": "interrupt"})
+                        vectors.append({"addr": hex(vec_base + 0x200), "name": "MIPS_tlb_vector", "type": "tlb"})
+                        break
+
+            # Generic fallback: find dense cluster of valid function pointers
+            if not vectors:
+                arch_hint = "generic"
+                chunk = ida_bytes.get_bytes(min_ea, min(512, binary_size)) or b""
+                for i in range(0, len(chunk) - ptr_size + 1, ptr_size):
+                    if ptr_size == 4:
+                        v = _struct.unpack_from("<I", chunk, i)[0]
+                    else:
+                        v = _struct.unpack_from("<Q", chunk, i)[0]
+                    if min_ea <= v < max_ea:
+                        func = idaapi.get_func(v)
+                        if func or ida_bytes.is_code(ida_bytes.get_flags(v)):
+                            vectors.append({
+                                "index": i // ptr_size,
+                                "addr": hex(min_ea + i),
+                                "handler": hex(v),
+                                "name": idc.get_name(v) or f"entry_{i // ptr_size}",
+                                "type": "function_pointer",
+                            })
+
+            # Write entry points to blackboard
+            if vectors:
+                try:
+                    from blackboard import BlackboardStore  # type: ignore
+                    store = BlackboardStore()
+                    for v in vectors[:32]:
+                        handler = v.get("handler") or v.get("value", "")
+                        if handler and handler != "0x0":
+                            store.write(
+                                title=f"Entry point: {v['name']}",
+                                category="hypothesis",
+                                addr=handler,
+                                content=f"Vector table entry {v.get('index', '?')} at {v['addr']}",
+                                tags=["vector_table", "entry_point", "auto"],
+                                confidence=0.85,
+                                source="firmware_view",
+                                source_type="engine_firmware",
+                                embed=False,
+                            )
+                except Exception:
+                    pass
+
+            return {
+                "ok": True,
+                "arch_hint": arch_hint,
+                "ivt_addr": hex(ivt_addr) if ivt_addr else None,
+                "vectors": vectors,
+                "entry_count": len(vectors),
+                "entry_points": [v.get("handler") or v.get("value") for v in vectors
+                                 if v.get("type") not in ("stack_pointer",) and v.get("handler")],
+                "note": (
+                    f"Found {len(vectors)} vector table entries. "
+                    "Entry points written to blackboard. "
+                    "NEXT: code(action='smart_decompile', addrs='<reset_handler>') on Reset_Handler."
+                ),
+            }
+
+        if action == "detect_mmio":
+            # Find MMIO peripheral registers by identifying pointer-like values
+            # that point OUTSIDE the binary's address range.
+            # Cross-reference with known peripheral base addresses for common MCUs.
+            import struct as _struct
+
+            min_ea = idaapi.cvar.inf.min_ea
+            max_ea = idaapi.cvar.inf.max_ea
+            binary_size = max_ea - min_ea
+
+            # Known peripheral base addresses for common MCUs
+            # Format: (base, end, name, chip_family)
+            _KNOWN_PERIPHERALS = [
+                # STM32 (APB1/APB2/AHB)
+                (0x40000000, 0x40007FFF, "STM32_APB1", "STM32"),
+                (0x40010000, 0x40017FFF, "STM32_APB2", "STM32"),
+                (0x40020000, 0x4007FFFF, "STM32_AHB1", "STM32"),
+                (0x50000000, 0x5007FFFF, "STM32_AHB2", "STM32"),
+                # nRF52
+                (0x40000000, 0x40FFFFFF, "nRF52_peripherals", "nRF52"),
+                # ESP32
+                (0x3FF00000, 0x3FFFFFFF, "ESP32_peripherals", "ESP32"),
+                (0x60000000, 0x6FFFFFFF, "ESP32_IO_MUX", "ESP32"),
+                # RP2040
+                (0x40000000, 0x4007FFFF, "RP2040_APB", "RP2040"),
+                (0x50000000, 0x503FFFFF, "RP2040_AHB", "RP2040"),
+                # Generic ARM Cortex-M peripheral space
+                (0x40000000, 0x5FFFFFFF, "ARM_peripheral_space", "generic_cortex_m"),
+                # ARM system control
+                (0xE0000000, 0xFFFFFFFF, "ARM_system_space", "generic_cortex_m"),
+                # MIPS KSEG1 (uncached peripheral space)
+                (0xA0000000, 0xBFFFFFFF, "MIPS_KSEG1_peripherals", "MIPS"),
+            ]
+
+            # Scan all code for immediate values and data references outside binary range
+            mmio_accesses: dict = {}  # addr → {count, from_funcs, peripheral_name}
+
+            # Scan data references from code
+            for seg_ea in idautils.Segments():
+                seg = idaapi.getseg(seg_ea)
+                if not seg:
+                    continue
+                ea = seg.start_ea
+                while ea < seg.end_ea:
+                    flags = ida_bytes.get_flags(ea)
+                    if ida_bytes.is_code(flags):
+                        # Check instruction operands for MMIO addresses
+                        import ida_ua
+                        insn = ida_ua.insn_t()
+                        if ida_ua.decode_insn(insn, ea) > 0:
+                            for op in insn.ops:
+                                v = None
+                                if op.type == ida_ua.o_imm:
+                                    v = op.value
+                                elif op.type in (ida_ua.o_mem, ida_ua.o_displ):
+                                    v = op.addr
+                                if v and not (min_ea <= v < max_ea):
+                                    # Check if it looks like a peripheral address
+                                    for pbase, pend, pname, pfamily in _KNOWN_PERIPHERALS:
+                                        if pbase <= v <= pend:
+                                            key = v & ~0xFFF  # group by 4KB page
+                                            if key not in mmio_accesses:
+                                                mmio_accesses[key] = {
+                                                    "base": hex(key),
+                                                    "count": 0,
+                                                    "peripheral_name": pname,
+                                                    "chip_family": pfamily,
+                                                    "example_addrs": [],
+                                                    "from_funcs": set(),
+                                                }
+                                            mmio_accesses[key]["count"] += 1
+                                            if len(mmio_accesses[key]["example_addrs"]) < 5:
+                                                mmio_accesses[key]["example_addrs"].append(hex(v))
+                                            func = idaapi.get_func(ea)
+                                            if func:
+                                                mmio_accesses[key]["from_funcs"].add(
+                                                    idc.get_func_name(func.start_ea)
+                                                )
+                                            break
+                        ea = idc.next_head(ea, seg.end_ea)
+                    else:
+                        ea += 1
+
+            # Convert sets to lists for JSON serialization
+            peripherals = []
+            for key, info in sorted(mmio_accesses.items(), key=lambda x: -x[1]["count"]):
+                peripherals.append({
+                    "base": info["base"],
+                    "access_count": info["count"],
+                    "peripheral_name": info["peripheral_name"],
+                    "chip_family": info["chip_family"],
+                    "example_registers": info["example_addrs"],
+                    "accessed_from": sorted(info["from_funcs"])[:5],
+                })
+
+            # Detect chip family from peripheral pattern
+            chip_votes: dict = {}
+            for p in peripherals:
+                fam = p["chip_family"]
+                chip_votes[fam] = chip_votes.get(fam, 0) + p["access_count"]
+            likely_chip = max(chip_votes, key=chip_votes.get) if chip_votes else "unknown"
+
+            # Write to knowledge graph
+            if peripherals:
+                try:
+                    from blackboard import BlackboardStore  # type: ignore
+                    store = BlackboardStore()
+                    for p in peripherals[:10]:
+                        store.write(
+                            title=f"MMIO: {p['peripheral_name']} @ {p['base']}",
+                            category="ioc",
+                            addr=p["base"],
+                            content=f"Accessed {p['access_count']} times from: {', '.join(p['accessed_from'][:3])}",
+                            tags=["mmio", "peripheral", p["chip_family"], "auto"],
+                            confidence=0.75,
+                            ioc_type="mmio_input",
+                            ioc_value=p["peripheral_name"],
+                            source="firmware_view",
+                            source_type="engine_firmware",
+                            embed=False,
+                        )
+                except Exception:
+                    pass
+
+            return {
+                "ok": True,
+                "likely_chip_family": likely_chip,
+                "peripheral_count": len(peripherals),
+                "peripherals": peripherals[:20],
+                "note": (
+                    f"Found {len(peripherals)} MMIO peripheral regions. "
+                    f"Likely chip family: {likely_chip}. "
+                    "Peripheral addresses written to blackboard as IOC entries. "
+                    "Functions accessing MMIO are likely drivers/HAL — analyze them next. "
+                    "NEXT: taint(action='report') to trace MMIO reads to dangerous sinks."
+                ),
+            }
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
