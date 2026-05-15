@@ -1341,18 +1341,21 @@ def llm_helpers(
                 ])
             else:
                 steps.extend([
-                    "4. Profile all regions: firmware_view(action='scan_region')",
-                    "5. Check entropy distribution: firmware_view(action='region_profile')",
-                    "6. Find pointer tables: firmware_view(action='pointer_sweep')",
-                    "7. Find dispatch/jump tables: firmware_view(action='table_candidates', limit=50)",
-                    "8. Get retyping plan: firmware_view(action='carve_plan')",
-                    "9. Dry-run retyping: firmware_view(action='smart_carve', apply=false, limit=80)",
-                    "10. Apply retyping: firmware_view(action='smart_carve', apply=true)",
-                    "11. Check expected subsystems: ida://knowledge/gaps",
-                    "12. Find interrupt handlers: search(action='func_by_sig', pattern='no_callers')",
-                    "13. Find crypto: search(action='behavior', pattern='crypto_symmetric')",
-                    "14. Taint MMIO/UART inputs: taint(action='report')",
-                    "15. Run full campaign: firmware_view(action='campaign')",
+                    "4. Solve load address: firmware_view(action='detect_load_address')",
+                    "5. Find entry points: firmware_view(action='detect_vector_table')",
+                    "6. Find MMIO peripherals: firmware_view(action='detect_mmio')",
+                    "7. Profile all regions: firmware_view(action='scan_region')",
+                    "8. Check entropy distribution: firmware_view(action='region_profile')",
+                    "9. Find pointer tables: firmware_view(action='pointer_sweep')",
+                    "10. Find dispatch/jump tables: firmware_view(action='table_candidates', limit=50)",
+                    "11. Get retyping plan: firmware_view(action='carve_plan')",
+                    "12. Dry-run retyping: firmware_view(action='smart_carve', apply=false, limit=80)",
+                    "13. Apply retyping: firmware_view(action='smart_carve', apply=true)",
+                    "14. Check expected subsystems: ida://knowledge/gaps",
+                    "15. Find interrupt handlers: search(action='func_by_sig', pattern='no_callers')",
+                    "16. Find crypto: search(action='behavior', pattern='crypto_symmetric')",
+                    "17. Taint MMIO/UART inputs: taint(action='report')",
+                    "18. Run full campaign: firmware_view(action='campaign')",
                 ])
 
             return {"ok": True, "guided_steps": "\n".join(steps)}
@@ -1559,6 +1562,11 @@ def llm_helpers(
             # Firmware-specific section (always shown — many binaries are firmware)
             cheat.append("")
             cheat.append("== RAW FIRMWARE (flat binary / ROM / flash image) ==")
+            cheat.append("-- Step 0: Solve the three hard problems (no datasheet needed) --")
+            cheat.append("firmware_view(action='detect_load_address')    # Where is this binary mapped? (Cortex-M/MIPS/generic)")
+            cheat.append("firmware_view(action='detect_vector_table')    # Where are the entry points? (IVT extraction)")
+            cheat.append("firmware_view(action='detect_mmio')            # What are those register addresses? (peripheral detection)")
+            cheat.append("")
             cheat.append("-- Step 1: Identify what you have --")
             cheat.append("binary_info(action='headers')                  # File type, arch, base address")
             cheat.append("binary_info(action='sections')                 # Sections with entropy")
