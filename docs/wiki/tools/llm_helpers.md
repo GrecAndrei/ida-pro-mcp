@@ -1,63 +1,190 @@
 # llm_helpers
 
-Context-aware utilities that help LLMs work efficiently within token budgets, plan analysis steps, and maintain situational awareness during reverse engineering sessions.
+Context-optimized helpers for LLM agents. Start with `cheatsheet` for a full tool reference.
+
+## Quick Start
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "cheatsheet"}}
+```
+
+Returns a complete, up-to-date reference of every tool with concrete examples. Read this at the start of any analysis session.
+
+---
 
 ## Core Actions
-- `context_window` — show current token usage and remaining budget
-- `function_digest` — compact summary of a function; params: `address`
-- `binary_digest` — high-level binary overview (sections, imports, entry points)
-- `explain_address` — human-readable explanation of what lives at an address; params: `address`
-- `suggest_next` — recommend next analysis steps based on current session state
-- `progress_report` — summarize what has been analyzed and what remains
-- `focus_area` — identify the most promising area to investigate next; params: `goal` (optional)
-- `question_answer` — answer a natural-language question about the binary; params: `question`
-- `compact` — reduce tool output to fit context window; params: `text` or pipe from prior output
-- `enrich` — add confidence scores and suggested next actions to any tool output; params: `text` or pipe from prior output
 
-## Expansion Actions (22 of 50 most important)
-- `intent_tool_compiler` — translate natural-language intent into a tool call sequence
-- `adaptive_query_planner` — plan multi-step queries adapting to intermediate results
-- `token_aware_context_optimizer` — rewrite context to maximize information density
-- `behavioral_signature_search` — find functions matching a behavioral description
-- `cross_artifact_correlation_search` — correlate findings across strings, imports, xrefs
-- `auto_expansion_search_chains` — automatically expand search when initial results are sparse
-- `function_role_classifier` — classify function purpose (crypto, network, alloc, etc.)
-- `protocol_format_reconstruction_assistant` — reconstruct protocol/message formats from code
-- `interprocedural_data_lineage_graph` — trace data flow across function boundaries
-- `semantic_diff_explainer` — explain semantic differences between two code versions
-- `dangerous_pattern_explainer` — explain why a code pattern is dangerous
-- `binary_capability_matrix_builder` — build a capability matrix (network, file, crypto, etc.)
-- `execution_hypothesis_generator` — generate hypotheses about runtime behavior
-- `patch_impact_forecaster` — predict side effects of a proposed patch
-- `safe_idapython_orchestration_runtime` — execute IDAPython snippets with safety guardrails
-- `investigation_playbook_engine` — run structured investigation playbooks
-- `next_best_action_recommender` — rank possible next actions by expected value
-- `analysis_dead_end_detector` — detect when current analysis path is unproductive
-- `contradiction_tracker` — track contradictions between findings
-- `case_narrative_composer` — compose a coherent narrative from analysis findings
-- `cost_latency_optimizer` — optimize tool call sequences for token cost and latency
-- `learning_feedback_loop` — record what worked/failed to improve future suggestions
+### cheatsheet
+Full tool reference with concrete examples, organized by task. Read this first.
 
-## Examples
+### context_window
+Show current token usage and remaining budget. Params: `addr` (optional, for function context).
+
+### function_digest
+Compact one-line summary of a function. Params: `addr`.
+
+### binary_digest
+High-level binary overview: sections, imports, entry points, architecture.
+
+### explain_address
+Human-readable explanation of what lives at an address. Params: `addr`.
+
+### suggest_next
+Recommend next analysis steps based on session history. Params: `history` (optional).
+
+### progress_report
+Summarize what has been analyzed and what remains. Params: `history` (optional).
+
+### focus_area
+Identify the most promising area to investigate next. Params: `query` (optional goal).
+
+### question_answer
+Answer a natural-language question about the binary. Params: `query`.
+
+### compact
+Reduce tool output to fit context window. Params: `query` (text to compact).
+
+### enrich
+Add confidence scores and suggested next actions to any tool output.
+
+### guided_analysis
+Step-by-step analysis guidance for a specific goal. Params: `query`, `addr`.
+
+---
+
+## Security Analysis Actions
+
+### dangerous_pattern_explainer
+Explain why a code pattern is dangerous, what exploitation looks like, and how to mitigate it.
+
 ```json
-{"name": "llm_helpers", "arguments": {"action": "context_window"}}
-```
-```json
-{"name": "llm_helpers", "arguments": {"action": "compact", "text": "<large tool output>"}}
-```
-```json
-{"name": "llm_helpers", "arguments": {"action": "function_digest", "address": "0x401000"}}
-```
-```json
-{"name": "llm_helpers", "arguments": {"action": "suggest_next"}}
-```
-```json
-{"name": "llm_helpers", "arguments": {"action": "enrich", "text": "<tool output to annotate>"}}
+{"name": "llm_helpers", "arguments": {"action": "dangerous_pattern_explainer", "addr": "0x401000"}}
 ```
 
-## Notes
-- `compact` is essential when prior tool output exceeds context budget — use it to shrink results before reasoning.
-- `enrich` wraps any tool output with confidence scores and recommended follow-up actions.
-- The 50 expansion actions are advanced orchestration/planning features for autonomous analysis workflows.
-- `context_window` should be checked periodically to avoid context overflow.
-- Most expansion actions operate on session state and do not require explicit parameters beyond an optional `goal` or `query`.
+Returns: `dangerous_patterns` list with `api`, `vuln_type`, `why_dangerous`, `exploitation`, `mitigation`. Also runs BehaviorClassifier for additional context.
+
+**When to use**: When `code(smart_decompile)` returns dangerous_patterns or when taint finds a sink.
+
+### api_contract_extractor
+Infer what a function expects (preconditions) and returns (postconditions) by analyzing all call sites.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "api_contract_extractor", "addr": "0x401000"}}
+```
+
+Returns: `call_patterns` (how callers use it), `return_patterns`, `inferred_contract` with behavior tags.
+
+### global_state_influence_mapper
+Map which global variables a function reads and writes.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "global_state_influence_mapper", "addr": "0x401000"}}
+```
+
+Returns: `reads`, `writes` lists with addr/name/size, `summary` ("pure function" or lists modified globals).
+
+### interprocedural_data_lineage_graph
+Trace how data flows from a source through function calls to sinks. Delegates to `taint(action='paths')`.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "interprocedural_data_lineage_graph", "addr": "0x401000", "query": "recv"}}
+```
+
+---
+
+## Classification Actions
+
+### function_role_classifier
+Classify a function's architectural role: entry_point, callback, handler, parser, dispatcher, wrapper, crypto_primitive, etc.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "function_role_classifier", "addr": "0x401000"}}
+```
+
+Combines structural signals (callers=0 → entry_point, 1 callee → wrapper, 15+ callees → dispatcher) with BehaviorClassifier embeddings.
+
+Returns: `primary_role`, `confidence`, `all_roles[]`, `callers`, `callees`, `size`.
+
+### behavioral_signature_search
+Find all functions matching a behavioral signature using BehaviorClassifier (bge-code-v1 embeddings).
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "behavioral_signature_search", "query": "network_http", "limit": 20}}
+```
+
+More precise than `search(action='behavior')` — decompiles each function and runs the full classifier.
+
+---
+
+## Comparison / Diff Actions
+
+### semantic_diff_explainer
+Explain behavioral differences between two functions using embedding cosine distance + BehaviorClassifier tag diff.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "semantic_diff_explainer", "addr": "0x401000", "query": "0x402000"}}
+```
+
+Returns: `embedding_similarity`, `shared_behaviors`, `only_in_a`, `only_in_b`, `summary`.
+
+---
+
+## Search Actions
+
+### decompile_disasm_consistency_search
+Find functions where decompiler output and disassembly disagree on call structure.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "decompile_disasm_consistency_search", "limit": 20}}
+```
+
+### argument_semantics_search
+Find functions where an argument has a specific semantic role.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "argument_semantics_search", "query": "buffer pointer", "addr": "1"}}
+```
+
+### path_constrained_search
+Find functions reachable from a start address, optionally filtered by behavior tag.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "path_constrained_search", "addr": "0x401000", "query": "crypto"}}
+```
+
+### cross_artifact_correlation_search
+Correlate findings across strings, names, imports, and blackboard by query. Returns unified ranked results.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "cross_artifact_correlation_search", "query": "AES"}}
+```
+
+---
+
+## Planning Actions
+
+### intent_tool_compiler
+Translate a natural-language analysis goal into a multi-step tool call sequence.
+
+```json
+{"name": "llm_helpers", "arguments": {"action": "intent_tool_compiler", "query": "find all network input handlers"}}
+```
+
+### adaptive_query_planner
+Plan multi-step queries adapting to the current binary type and evidence.
+
+### question_type_router
+Route a question to the appropriate analysis workflow (vulnerability_triage, crypto_analysis, protocol_reconstruction, etc.).
+
+---
+
+## Workflow
+
+Recommended session start:
+```
+1. llm_helpers(action='cheatsheet')           → full tool reference
+2. ida://state                                 → current analysis state + next actions
+3. ida://blackboard/frontier                   → ranked unvisited functions
+4. code(action='smart_decompile', addrs='...') → analyze top frontier target
+5. blackboard(action='write', ...)             → record findings (triggers label propagation)
+```
