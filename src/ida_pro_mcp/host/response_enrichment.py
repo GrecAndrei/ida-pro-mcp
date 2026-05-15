@@ -764,3 +764,175 @@ def _update_kg_from_hypothesis(db_path: str, addr: str,
                     break
     except Exception:
         pass
+
+
+# ============================================================================
+# Signal-Specific Directive Injection
+# ============================================================================
+# These generate precise, copy-pasteable tool calls — not vague suggestions.
+
+_TAINT_SOURCES = frozenset({"recv", "recvfrom", "read", "fread", "fgets", "gets",
+                             "getenv", "scanf", "ReadFile", "RegQueryValue"})
+_DANGEROUS_SINKS = frozenset({"memcpy", "strcpy", "strcat", "sprintf", "vsprintf",
+                               "gets", "system", "execve", "popen", "printf"})
+
+
+def build_signal_directives(
+    tool_name: str,
+    action_name: str,
+    payload: Dict,
+    func_addr: str = "",
+) -> List[Dict]:
+    """
+    Examine a tool response payload and return a list of specific, actionable
+    directives — exact tool calls with addresses — that the LLM should execute next.
+
+    Each directive:
+      {"priority": "high|medium", "call": "tool(action='...', addr='...')", "reason": "..."}
+
+    Priority high = the LLM MUST do this before concluding.
+    Priority medium = strongly recommended.
+    """
+    directives: List[Dict] = []
+    addr = func_addr or ""
+
+    # --- code(decompile/smart_decompile/analyze/explain) ---
+    if tool_name == "code" and action_name in (
+        "decompile", "smart_decompile", "analyze", "explain", "semantic_decompile"
+    ):
+        pseudo = payload.get("pseudocode") or payload.get("code") or ""
+        api_calls = payload.get("api_calls", [])
+        dangerous = payload.get("dangerous_patterns", [])
+        behavior_tags = payload.get("behavior_tags", [])
+
+        # Taint: network input + dangerous sink
+        sources_found = [s for s in _TAINT_SOURCES if s in pseudo or s in api_calls]
+        sinks_found = [s for s in _DANGEROUS_SINKS if s in pseudo or s in api_calls]
+        if sources_found and sinks_found and addr:
+            directives.append({
+                "priority": "high",
+                "call": f"taint(action='trace', addr='{addr}', source='{sources_found[0]}')",
+                "reason": f"Network input ({sources_found[0]}) + dangerous sink ({sinks_found[0]}) detected — trace data flow NOW",
+            })
+
+        # Dangerous patterns: explain them
+        if (dangerous or sinks_found) and addr:
+            directives.append({
+                "priority": "high",
+                "call": f"llm_helpers(action='dangerous_pattern_explainer', addr='{addr}')",
+                "reason": f"Dangerous patterns found: {', '.join(dangerous[:3] or sinks_found[:3])}",
+            })
+
+        # Crypto signals
+        crypto_hints = payload.get("crypto_hints", [])
+        if crypto_hints and addr:
+            directives.append({
+                "priority": "medium",
+                "call": f"crypto_id(action='identify', addr='{addr}')",
+                "reason": f"Crypto signals: {', '.join(crypto_hints[:3])}",
+            })
+
+        # No blackboard entry yet
+        bb_ctx = payload.get("blackboard_context")
+        if not bb_ctx and addr:
+            directives.append({
+                "priority": "medium",
+                "call": f"blackboard(action='write', addr='{addr}', category='hypothesis', title='...', confidence=0.7)",
+                "reason": "No blackboard entry for this function — record findings now to enable label propagation",
+            })
+
+        # API contract if many callers
+        callers = payload.get("callers", [])
+        n_callers = len(callers) if isinstance(callers, list) else 0
+        if n_callers >= 5 and addr:
+            directives.append({
+                "priority": "medium",
+                "call": f"llm_helpers(action='api_contract_extractor', addr='{addr}')",
+                "reason": f"Hot function ({n_callers} callers) — extract its contract to understand all call sites",
+            })
+
+    # --- taint(report/trace) with findings ---
+    elif tool_name == "taint" and action_name in ("report", "trace"):
+        findings = payload.get("findings", payload.get("vulns", []))
+        if findings:
+            top = findings[0]
+            sink_addr = top.get("sink_addr") or top.get("path", [None])[-1] or ""
+            vuln_type = top.get("vuln_type", "vulnerability")
+            directives.append({
+                "priority": "high",
+                "call": f"llm_helpers(action='dangerous_pattern_explainer', addr='{sink_addr or addr}')",
+                "reason": f"{vuln_type} confirmed — get full exploitation analysis",
+            })
+            if sink_addr:
+                directives.append({
+                    "priority": "high",
+                    "call": f"blackboard(action='write', addr='{sink_addr}', category='vuln', "
+                            f"title='{vuln_type} at {sink_addr}', confidence=0.85)",
+                    "reason": "Record confirmed vulnerability to blackboard",
+                })
+
+    # --- search(find/nl/behavior/decompiled) with results ---
+    elif tool_name == "search" and action_name in ("find", "nl", "behavior", "decompiled"):
+        items = payload.get("items", [])
+        if items:
+            top_addr = items[0].get("addr") or items[0].get("address") or items[0].get("ea", "")
+            if top_addr:
+                directives.append({
+                    "priority": "medium",
+                    "call": f"code(action='smart_decompile', addrs='{top_addr}')",
+                    "reason": f"Top search result at {top_addr} — smart_decompile for full analysis",
+                })
+
+    # --- blackboard(frontier) ---
+    elif tool_name == "blackboard" and action_name == "frontier":
+        items = payload.get("items", [])
+        if items:
+            top = items[0]
+            top_addr = top.get("addr", "")
+            if top_addr:
+                directives.append({
+                    "priority": "high",
+                    "call": f"code(action='smart_decompile', addrs='{top_addr}')",
+                    "reason": f"Highest-priority frontier target: {top.get('name', top_addr)} "
+                              f"(score={top.get('score', 0):.3f})",
+                })
+
+    # --- blackboard(coverage) with low coverage ---
+    elif tool_name == "blackboard" and action_name == "coverage":
+        pct = payload.get("coverage_pct", 100)
+        unvisited = payload.get("unvisited", 0)
+        if pct < 30 and unvisited > 0:
+            directives.append({
+                "priority": "high",
+                "call": "blackboard(action='frontier', limit=10)",
+                "reason": f"Only {pct}% coverage ({unvisited} unvisited functions) — get frontier targets",
+            })
+
+    # --- classify(function) or classify(all_functions) ---
+    elif tool_name == "classify":
+        if action_name == "function":
+            fn_addr = payload.get("address", addr)
+            category = payload.get("category", "")
+            if category in ("crypto", "network", "process_exec") and fn_addr:
+                directives.append({
+                    "priority": "medium",
+                    "call": f"llm_helpers(action='function_role_classifier', addr='{fn_addr}')",
+                    "reason": f"High-value category '{category}' — get full role classification",
+                })
+
+    # --- data(functions) — orient phase ---
+    elif tool_name == "data" and action_name == "functions":
+        total = payload.get("total", 0)
+        if total > 50:
+            directives.append({
+                "priority": "medium",
+                "call": "blackboard(action='coverage')",
+                "reason": f"Binary has {total} functions — check coverage before choosing what to analyze",
+            })
+            directives.append({
+                "priority": "medium",
+                "call": "blackboard(action='frontier', limit=10)",
+                "reason": "Get ranked list of most-promising unanalyzed functions",
+            })
+
+    return directives

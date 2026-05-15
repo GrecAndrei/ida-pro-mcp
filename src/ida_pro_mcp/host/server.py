@@ -2408,6 +2408,30 @@ class IDAMCPServer:
                 except Exception:
                     pass
 
+            # ---- Signal-Specific Directives ----
+            # Precise, copy-pasteable tool calls based on what was found in this response.
+            try:
+                from .response_enrichment import build_signal_directives
+                func_addr = ""
+                if isinstance(call_args, dict):
+                    func_addr = str(call_args.get("addr") or call_args.get("addrs") or "")
+                    if isinstance(func_addr, list):
+                        func_addr = func_addr[0] if func_addr else ""
+                directives = build_signal_directives(
+                    tool_name, action_name, compacted, func_addr=func_addr
+                )
+                if directives:
+                    # High-priority directives become the execution directive
+                    high = [d for d in directives if d["priority"] == "high"]
+                    if high:
+                        top = high[0]
+                        compacted["llm_execution_directive"] = (
+                            f"REQUIRED: {top['call']}  ← {top['reason']}"
+                        )
+                    compacted["_next_calls"] = directives
+            except Exception:
+                pass
+
             # ---- Explicit tool-first directive ----
             try:
                 directive = self._build_llm_execution_directive(compacted)

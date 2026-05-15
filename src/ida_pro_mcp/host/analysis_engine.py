@@ -648,6 +648,8 @@ class AnalysisEngine:
 
         self._push_resource_updated("ida://state")
         self._push_resource_updated("ida://proposals")
+        self._push_resource_updated("ida://taint")
+        sink_addr_str = hex(sink_addr) if isinstance(sink_addr, int) else str(sink_addr)
         self._notify({
             "jsonrpc": "2.0",
             "method": "notifications/message",
@@ -658,10 +660,17 @@ class AnalysisEngine:
                     "message": title,
                     "source": source.get("addr"),
                     "sink": sink_name,
-                    "sink_addr": hex(sink_addr) if isinstance(sink_addr, int) else str(sink_addr),
+                    "sink_addr": sink_addr_str,
                     "depth": depth,
                     "confidence": confidence,
                     "proposal_id": pid,
+                    # Specific tool calls the LLM should execute
+                    "required_actions": [
+                        f"llm_helpers(action='dangerous_pattern_explainer', addr='{sink_addr_str}')",
+                        f"taint(action='trace', addr='{source.get('addr', '')}', source='{source.get('ioc_value', 'recv')}')",
+                        f"blackboard(action='write', addr='{sink_addr_str}', category='vuln', title='{title[:60]}', confidence={confidence:.2f})",
+                    ],
+                    "note": f"CALL llm_helpers(action='dangerous_pattern_explainer', addr='{sink_addr_str}') for full exploitation analysis",
                 },
             },
         })
@@ -1445,6 +1454,37 @@ class AnalysisEngine:
                 )
 
             self._push_resource_updated("ida://blackboard/frontier")
+
+            # Notify with top frontier target if coverage is low
+            cov = fe.coverage()
+            if cov["coverage_pct"] < 50 and frontier:
+                top = frontier[0]
+                self._notify({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/message",
+                    "params": {
+                        "level": "info",
+                        "data": {
+                            "type": "frontier_updated",
+                            "coverage_pct": cov["coverage_pct"],
+                            "analyzed": cov["analyzed"],
+                            "unvisited": cov["unvisited"],
+                            "top_target": top["addr"],
+                            "top_target_name": top["name"],
+                            "top_score": top["score"],
+                            "propagated": len(propagated),
+                            "required_actions": [
+                                f"code(action='smart_decompile', addrs='{top['addr']}')",
+                                "blackboard(action='frontier', limit=10)",
+                            ],
+                            "note": (
+                                f"Coverage: {cov['coverage_pct']}% ({cov['unvisited']} unvisited). "
+                                f"Top target: {top['name']} at {top['addr']} (score={top['score']:.3f}). "
+                                f"CALL code(action='smart_decompile', addrs='{top['addr']}')"
+                            ),
+                        },
+                    },
+                })
 
         except Exception:
             pass
