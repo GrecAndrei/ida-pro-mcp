@@ -37,8 +37,8 @@ It provides:
 
 - A host MCP server (`ida_mcp_stdio.py`) that LLM clients talk to via JSON-RPC over stdio
 - A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`) communicating over local TCP
-- 69 canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases
-- A local deterministic ML engine (Cartographer-mu) for relevance-ranked context injection
+- 72 canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases
+- A local ML engine (bge-code-v1 embeddings + BehaviorClassifier) for semantic search, label propagation, and frontier scoring
 - A full bootstrap evidence control loop in `session` actions (calibration, drift, mitigation, adaptation, readiness)
 - Structured audit logging, token-bucket rate limiting, and blackboard auto-pruning
 - Guardrail layer for safe writes: strict write mode, address lockstep validation, pointer safety notes
@@ -48,7 +48,7 @@ It provides:
 Important architecture note:
 
 - This project does **not** run any backend cloud LLM service.
-- Tool execution is deterministic IDA SDK logic plus local/statistical ML components (Cartographer-mu, schema induction, Q-learning).
+- Tool execution is deterministic IDA SDK logic plus local ML components (bge-code-v1 embeddings, BehaviorClassifier, FrontierEngine, schemaboot, Q-learning).
 - Any LLM behavior comes from the MCP client using this server, not from an embedded server-side LLM runtime.
 
 ## Why LLM Agents Use It
@@ -298,31 +298,62 @@ Additional specialized capabilities remain accessible via hub tools + wiki docs.
 
 For detailed per-tool docs, use the `wiki` tool or browse `docs/wiki/tools/`.
 
-### 633+ tool-action combinations
+### 700+ tool-action combinations
 
-Each tool exposes multiple actions. The entire surface provides 633+ deterministic operations across all tools, covering everything from decompilation and cross-referencing to pattern matching and vulnerability scanning.
+Each tool exposes multiple actions. The entire surface provides 700+ deterministic operations across all tools, covering everything from decompilation and cross-referencing to pattern matching, vulnerability scanning, and embedding-driven frontier analysis.
 
 ## Local ML Components
 
-All ML is local, deterministic, and zero-dependency (numpy only). No backend LLM runtime is required.
+All ML is local and runs without any backend LLM service.
 
-### Cartographer-mu
+### bge-code-v1 Embeddings
 
-A 32KB-parameter pure-Python semantic engine that replaces passive blackboard injection with utility-driven, relevance-ranked context selection. Components:
+The primary ML component. Runs via llama-server with the `bge-code-v1-q8_0.gguf` model. Produces 1536-dim float vectors from pseudocode/function signatures.
 
-- **S4REncoder**: Selective state-space encoder with RE-specific structural priors
-- **TurboQuantLite**: 4-bit PolarQuant for fast similarity comparisons
-- **BridgeRAGLite**: Cross-reference bridge extraction and scoring for multi-hop discovery
-- **MemRLUtility**: Non-parametric Q-learning on blackboard entry utility (reinforcement learning from usage patterns)
-- **SchemaBootRE**: Deterministic attribute induction for pre-filtering
-- **ContextComposer**: Pipeline orchestrator combining all components
+Used by:
+- `search(action='nl')` — natural language search by cosine similarity
+- `funcs(action='suggest_names')` — rename unnamed functions by similarity to named ones
+- `funcs(action='find_similar')` — find structurally similar functions
+- `FrontierEngine` — cluster all functions and score the analysis frontier
+- `blackboard(action='search')` — semantic search over blackboard entries
 
-Cartographer-mu runs on every tool response to encode, quantize, and index payloads for relevance-ranked retrieval.
+### BehaviorClassifier
+
+Zero-shot RE behavior detection using embedding similarity to labeled examples. Classifies pseudocode into behavior tags: `crypto_symmetric`, `network_http`, `process_injection`, `anti_analysis`, `persistence`, `credential_access`, etc.
+
+Used by:
+- `classify(action='function')` and `classify(action='all_functions')`
+- `search(action='behavior')` — find all functions matching a behavior tag
+- `llm_helpers(action='behavioral_signature_search')` — precise behavior search
+- `llm_helpers(action='function_role_classifier')` — architectural role classification
+- `string_ops(action='score_c2')` — malware family identification
+- `smart_decompile` — behavior_tags in every decompile response
+
+### FrontierEngine
+
+Embedding-driven analysis guidance (`host/frontier.py`). Answers "what should I analyze next?".
+
+- **Cluster**: k-means over all indexed embeddings → structural map of the binary
+- **Propagate**: LLM labels one function → engine propagates to cluster neighbors (cosine ≥ 0.82, confidence decay 0.75)
+- **Score**: ranks unvisited functions by proximity to labeled functions + xref count + entropy + cluster coverage
+- **Contradict**: detects same-cluster functions with different LLM labels
+
+Runs automatically every 180s in the analysis engine. Accessible via `blackboard(action='frontier')` and `ida://blackboard/frontier`.
+
+### UsageIntelligence
+
+Passive observer that mines audit logs and learns from real usage patterns (`host/usage_intelligence.py`).
+
+- **SequenceModel**: Markov chain over (tool, action) pairs — predicts what the LLM will call next
+- **EffectivenessModel**: EMA scoring by productive outcome — ranks suggestions by historical effectiveness
+- **DriftDetector**: detects LOOP, ANALYZE_WITHOUT_RECORD, REPEATED_ADDR, HIGH_ERROR_RATE signals
+
+Powers the `_nudge` field in every response.
 
 ### Additional ML tools
 
 - `schemaboot`: Structured semantic indexing with induced attribute-value schemas per function
-- `turboquant`: Dedicated quantization operations for fast embedding comparisons
+- `turboquant`: 4-bit quantization for fast embedding comparisons
 - `bridgerag`: Multi-hop bridge query expansion for discovering indirect relationships
 - `memrl`: Q-value learning and skill crystallization based on usage patterns
 - `predictor`: Deterministic prediction and strategy suggestion using crystallized skills
@@ -365,15 +396,35 @@ The blackboard provides:
 - Structured entries with category, address, confidence, tags, and evidence
 - Full CRUD: `write`, `read`, `list`, `update`, `delete`, `clear`, `prune`, `stats`
 - Auto-extraction from all tool responses
+- **Label propagation**: writing a high-confidence entry triggers FrontierEngine to propagate the label to embedding-similar functions
 
-### Context injection via Cartographer-mu
+### Signal-Specific Directives
 
-Before every tool call, Cartographer-mu injects relevance-ranked context from the blackboard into the response. The pipeline:
+Every tool response now includes `_next_calls` — a list of specific, copy-pasteable tool calls based on what was found:
+
+- `code(decompile)` with `recv` + `memcpy` → `taint(action='trace', addr='...', source='recv')`
+- `code(decompile)` with dangerous patterns → `llm_helpers(action='dangerous_pattern_explainer', addr='...')`
+- `taint(report)` with findings → `llm_helpers(action='dangerous_pattern_explainer', addr='<sink>')`
+- `data(functions)` with >50 functions → `blackboard(action='frontier', limit=10)`
+
+High-priority directives become `llm_execution_directive` (REQUIRED: ...).
+
+### Frontier Engine
+
+The FrontierEngine answers "what should I analyze next?" by:
+1. Clustering all indexed function embeddings (k-means)
+2. Propagating LLM labels to cluster neighbors
+3. Scoring unvisited functions by proximity to labeled functions + xref count + entropy
+
+Access via `blackboard(action='frontier')` or `ida://blackboard/frontier`.
+
+### Context injection via Intelligence Layer
+
+Before every tool call, the intelligence layer injects relevance-ranked context from the blackboard into the response. The pipeline:
 
 1. Queries recent blackboard entries
-2. Runs Cartographer-mu encoding and BridgeRAG bridge extraction on the current payload
-3. Scores blackboard entries against the current query context
-4. Returns top-K entries ranked by relevance, weighted by MemRL Q-values
+2. Runs embedding-based relevance scoring against the current payload
+3. Returns top-K entries ranked by relevance, weighted by MemRL Q-values
 
 This gives the LLM a persistent, auto-maintained working memory that survives context window resets.
 
