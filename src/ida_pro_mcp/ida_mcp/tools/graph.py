@@ -35,6 +35,16 @@ def graph(
     - mermaid: Mermaid.js flowchart syntax (best for LLMs and rendering)
     """
     try:
+        # Normalize: if action is a format/direction alias, remap to callgraph with that format/direction
+        _FORMAT_ALIASES = {"mermaid", "dot", "json"}
+        _DIR_ALIASES = {"down", "up", "both"}
+        if action in _FORMAT_ALIASES:
+            format = action
+            action = "callgraph"
+        elif action in _DIR_ALIASES:
+            direction = action
+            action = "callgraph"
+
         if action == "callgraph":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)

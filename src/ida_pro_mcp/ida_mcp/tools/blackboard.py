@@ -1264,32 +1264,41 @@ def blackboard(
             evidence=evidence or [], source_type=source_type or "manual",
             entropy=entropy, xref_count=xref_count,
         )
-        # Async label propagation: when a high-confidence entry with an address
-        # is written, trigger FrontierEngine to propagate to cluster neighbors.
+        # Async label propagation: only when inside IDA (idc module available)
+        # and confidence is high enough to be worth propagating
         if addr and confidence >= 0.6 and source_type not in ("propagated", "engine_frontier"):
-            import threading as _thr
-            def _propagate():
-                try:
-                    from ida_pro_mcp.host.frontier import FrontierEngine
-                except ImportError:
+            try:
+                import idc as _idc_check  # noqa: F401 — only start thread if IDA is available
+                import threading as _thr
+                def _propagate():
                     try:
-                        from host.frontier import FrontierEngine  # type: ignore
+                        from ida_pro_mcp.host.frontier import FrontierEngine
                     except ImportError:
-                        return
-                try:
-                    idb_path = ""
+                        try:
+                            from host.frontier import FrontierEngine  # type: ignore
+                        except ImportError:
+                            return
                     try:
-                        import idc as _idc
-                        idb_path = _idc.get_idb_path() or ""
+                        idb_path = ""
+                        try:
+                            import idc as _idc
+                            idb_path = _idc.get_idb_path() or ""
+                        except Exception:
+                            pass
+                        if not idb_path:
+                            return  # no IDB path — skip propagation
+                        emb_db = idb_path + ".embeddings.db"
+                        import os as _os
+                        if not _os.path.exists(emb_db):
+                            return  # no embeddings indexed yet — skip
+                        fe = FrontierEngine(emb_db, store.db_path)
+                        if fe.refresh() >= 3:
+                            fe.propagate_labels()
                     except Exception:
                         pass
-                    emb_db = (idb_path + ".embeddings.db") if idb_path else ""
-                    fe = FrontierEngine(emb_db, store.db_path)
-                    if fe.refresh() >= 3:
-                        fe.propagate_labels()
-                except Exception:
-                    pass
-            _thr.Thread(target=_propagate, daemon=True, name="bb-propagate").start()
+                _thr.Thread(target=_propagate, daemon=True, name="bb-propagate").start()
+            except ImportError:
+                pass  # not inside IDA — skip propagation
         return {"ok": True, "entry_id": eid}
 
     elif action == "read":

@@ -37,6 +37,7 @@ def binary_info(
     try:
         import ida_entry
         from collections import Counter
+        info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
         file_type = info.filetype if info else 0
         proc_name = info.procname if info else ""
 
