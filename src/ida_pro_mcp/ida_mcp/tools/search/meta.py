@@ -114,10 +114,23 @@ def search_export(pattern, case_sensitive, offset, limit, include_items):
 def search_summary(pattern, case_sensitive, range_start, range_end):
     """Quick summary of match counts across categories (fast, no full enumeration).
     
-    Returns counts for: names, strings, imports, instructions, functions.
+    If pattern is None or empty, returns total counts for all categories.
     Useful for LLM planning before running an expensive search.
     """
-    matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
+    if not pattern:
+        try:
+            total_funcs = sum(1 for _ in idautils.Functions())
+            total_names = sum(1 for _ in idautils.Names())
+            total_strings = sum(1 for _ in safe_get_strlist_items())
+            return {
+                "ok": True, "action": "summary", "pattern": None,
+                "summary": {"functions": total_funcs, "names": total_names, "strings": total_strings},
+                "total": total_funcs + total_names + total_strings,
+                "note": "Total counts (no pattern filter). Pass pattern= to filter by keyword.",
+            }
+        except Exception:
+            pass
+    matcher = compile_smart_pattern(pattern or "", case_sensitive=case_sensitive)
     summary = {
         "names": 0, "strings": 0, "imports": 0,
         "instructions": 0, "functions": 0, "types": 0, "exports": 0,

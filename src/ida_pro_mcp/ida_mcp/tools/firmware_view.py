@@ -291,9 +291,10 @@ def firmware_view(
                     result["memrl_suggestion_id"] = sug
             except Exception:
                 pass
-            if auto_blackboard and BlackboardStore is not None:
+            _BB = BlackboardStore  # capture at definition time to avoid closure bug
+            if auto_blackboard and _BB is not None:
                 try:
-                    store = BlackboardStore()
+                    store = _BB()
                     entry_id = store.write(
                         title=f"firmware_view:{act} {hex(s_ea)}-{hex(e_ea)}",
                         content=details,

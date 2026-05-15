@@ -161,6 +161,8 @@ def modify(
                 value = name
             elif action == "comment" and text:
                 value = text
+            elif action == "comment" and kwargs.get("comment"):
+                value = kwargs["comment"]
             elif action == "set_type" and type_str:
                 value = type_str
             elif action == "patch_asm" and asm:

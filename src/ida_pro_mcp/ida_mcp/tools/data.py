@@ -359,8 +359,15 @@ def data(
 
         elif action == "bulk_query":
             items = kwargs.get("items") or kwargs.get("queries") or []
-            if not isinstance(items, list):
-                return make_error(MCPError.INVALID_ARGS, "items must be a list")
+            if not isinstance(items, list) or not items:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "bulk_query requires items=[{kind, query, ...}, ...]. "
+                    "Example: data(action='bulk_query', items=["
+                    "{'kind':'functions','count':10},"
+                    "{'kind':'strings','query':'http'},"
+                    "{'kind':'imports'}])"
+                )
             results = []
             for i, item in enumerate(items):
                 if not isinstance(item, dict):

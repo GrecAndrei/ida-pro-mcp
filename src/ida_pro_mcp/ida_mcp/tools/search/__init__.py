@@ -214,7 +214,7 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "structured"}
+        pattern_not_required = {"vulnerable", "constants", "structured", "summary"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
 

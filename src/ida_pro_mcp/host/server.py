@@ -2118,7 +2118,12 @@ class IDAMCPServer:
                 bb_store=bb_store,
             )
             if pack:
-                payload["context_pack"] = pack
+                # Only inject context_pack in full mode — it's verbose
+                if opts.get("mode") == "full":
+                    payload["context_pack"] = pack
+                elif pack.get("top_entries"):
+                    # In compact mode, only inject the top entry titles (not full content)
+                    payload["_context"] = [e.get("title", "") for e in pack["top_entries"][:3] if e.get("title")]
         except Exception:
             pass
 
@@ -2755,12 +2760,13 @@ class IDAMCPServer:
                     and tool_name not in {"session", "blackboard", "batch", "predictor", "workflow"}
                 ):
                     sid = self.current_session.session_id
-                    contract = self.session_mgr.check_state_contract(sid, window=8)
+                    contract = self.session_mgr.check_state_contract(sid, window=16)
                     if isinstance(contract, dict) and contract.get("ok") and not contract.get("contract_met"):
+                        # Only show reminder every 16 calls to reduce bloat
                         compacted.setdefault(
                             "llm_state_contract_reminder",
                             {
-                                "message": f"No blackboard write in last {contract.get('window_size', 8)} calls. Persist findings to maintain state.",
+                                "message": f"No blackboard write in last {contract.get('window_size', 16)} calls. Persist findings to maintain state.",
                                 "recommended_action": contract.get("recommended_action"),
                                 "contract_met": False,
                             },
@@ -5678,11 +5684,15 @@ class IDAMCPServer:
             include_vuln, include_malware, include_tracing = False, False, True
 
         if not (include_vuln or include_malware or include_tracing):
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "No threat_hunt modules enabled",
-                hint="Enable at least one of include_vuln/include_malware/include_tracing or use action run|vuln|malware|tracing.",
-            )
+            # Default: enable all modules for 'run' action
+            if action in {"run", "legacy"}:
+                include_vuln = include_malware = include_tracing = True
+            else:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "No threat_hunt modules enabled",
+                    hint="Enable at least one of include_vuln/include_malware/include_tracing or use action run|vuln|malware|tracing.",
+                )
 
         idb_path = args.get(
             "idb", self.current_session.idb_path if self.current_session else None
