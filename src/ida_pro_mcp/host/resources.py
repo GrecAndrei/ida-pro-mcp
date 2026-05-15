@@ -275,14 +275,32 @@ class ResourceResolver:
         # 1. Binary identity
         try:
             meta = self._exec("idb", action="meta")
+            file_type = meta.get("filetype", 0) or meta.get("file_type", 0)
+            # Detect firmware: no PE/ELF/Mach-O header, or ARM/MIPS/PPC with no imports
+            _PE_TYPES = {11, 12}   # f_PE, f_COFF
+            _ELF_TYPE = 18         # f_ELF
+            _MACHO_TYPE = 25       # f_MACHO
+            is_firmware = (
+                file_type not in _PE_TYPES | {_ELF_TYPE, _MACHO_TYPE}
+                or (meta.get("processor", "").lower() in ("arm", "mips", "ppc", "msp430", "avr", "xtensa")
+                    and meta.get("import_count", 0) == 0)
+            )
             state["binary"] = {
                 "name": meta.get("filename") or meta.get("input_file", ""),
                 "arch": meta.get("processor") or meta.get("arch", ""),
                 "bits": meta.get("bits", 0),
                 "size": meta.get("file_size", 0),
+                "is_firmware": is_firmware,
             }
+            if is_firmware:
+                state["binary"]["firmware_note"] = (
+                    "Raw firmware detected. "
+                    "CALL llm_helpers(action='guided_analysis') for step-by-step workflow. "
+                    "CALL llm_helpers(action='cheatsheet') and scroll to '== RAW FIRMWARE =='."
+                )
         except Exception:
             state["binary"] = {}
+            is_firmware = False
 
         # 2. Coverage (cached with 30s TTL — expensive on large binaries)
         cache_key = f"coverage_{id(self.tool_executor)}"

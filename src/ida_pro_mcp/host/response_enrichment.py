@@ -935,4 +935,52 @@ def build_signal_directives(
                 "reason": "Get ranked list of most-promising unanalyzed functions",
             })
 
+    # --- firmware_view results ---
+    elif tool_name == "firmware_view":
+        if action_name == "scan_region":
+            regions = payload.get("regions", [])
+            code_regions = [r for r in regions if isinstance(r, dict) and "code" in str(r.get("type", "")).lower()]
+            if regions:
+                directives.append({
+                    "priority": "high",
+                    "call": "firmware_view(action='carve_plan')",
+                    "reason": f"scan_region found {len(regions)} regions — get retyping plan before applying changes",
+                })
+                directives.append({
+                    "priority": "medium",
+                    "call": "firmware_view(action='pointer_sweep')",
+                    "reason": "Find pointer tables and vtables in the scanned regions",
+                })
+        elif action_name == "carve_plan":
+            directives.append({
+                "priority": "high",
+                "call": "firmware_view(action='smart_carve', apply=false)",
+                "reason": "Dry-run the carve plan to preview what will be created",
+            })
+        elif action_name == "smart_carve" and not payload.get("applied", True):
+            directives.append({
+                "priority": "high",
+                "call": "firmware_view(action='smart_carve', apply=true)",
+                "reason": "Dry-run complete — apply the carve plan to create functions/structs/strings",
+            })
+        elif action_name in ("smart_carve", "auto_retype") and payload.get("applied"):
+            directives.append({
+                "priority": "medium",
+                "call": "search(action='func_by_sig', pattern='no_callers')",
+                "reason": "After retyping, find interrupt handlers and entry points (no_callers functions)",
+            })
+            directives.append({
+                "priority": "medium",
+                "call": "taint(action='report')",
+                "reason": "Check for MMIO/UART input → dangerous sink paths",
+            })
+        elif action_name == "pointer_sweep":
+            tables = payload.get("tables", payload.get("count", 0))
+            if tables:
+                directives.append({
+                    "priority": "medium",
+                    "call": "firmware_view(action='table_candidates', limit=50)",
+                    "reason": f"Pointer sweep found tables — identify dispatch/jump tables",
+                })
+
     return directives

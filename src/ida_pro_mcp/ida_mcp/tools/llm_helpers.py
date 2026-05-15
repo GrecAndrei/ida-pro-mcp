@@ -1341,11 +1341,18 @@ def llm_helpers(
                 ])
             else:
                 steps.extend([
-                    "4. Inspect unknown/raw format: binary_info(action='compiler')",
-                    "5. Profile raw regions: firmware_view(action='scan_region')",
-                    "6. Sweep pointers/tables: firmware_view(action='pointer_sweep')",
-                    "7. Try dry-run retyping: firmware_view(action='smart_carve', apply=false)",
-                    "8. Focus on interesting areas: llm_helpers(action='focus_area')",
+                    "4. Profile all regions: firmware_view(action='scan_region')",
+                    "5. Check entropy distribution: firmware_view(action='region_profile')",
+                    "6. Find pointer tables: firmware_view(action='pointer_sweep')",
+                    "7. Find dispatch/jump tables: firmware_view(action='table_candidates', limit=50)",
+                    "8. Get retyping plan: firmware_view(action='carve_plan')",
+                    "9. Dry-run retyping: firmware_view(action='smart_carve', apply=false, limit=80)",
+                    "10. Apply retyping: firmware_view(action='smart_carve', apply=true)",
+                    "11. Check expected subsystems: ida://knowledge/gaps",
+                    "12. Find interrupt handlers: search(action='func_by_sig', pattern='no_callers')",
+                    "13. Find crypto: search(action='behavior', pattern='crypto_symmetric')",
+                    "14. Taint MMIO/UART inputs: taint(action='report')",
+                    "15. Run full campaign: firmware_view(action='campaign')",
                 ])
 
             return {"ok": True, "guided_steps": "\n".join(steps)}
@@ -1548,6 +1555,47 @@ def llm_helpers(
             cheat.append("ida://blackboard/coverage   # Coverage map")
             cheat.append("ida://taint                 # Taint report")
             cheat.append("ida://knowledge/gaps        # Expected but not found subsystems")
+
+            # Firmware-specific section (always shown — many binaries are firmware)
+            cheat.append("")
+            cheat.append("== RAW FIRMWARE (flat binary / ROM / flash image) ==")
+            cheat.append("-- Step 1: Identify what you have --")
+            cheat.append("binary_info(action='headers')                  # File type, arch, base address")
+            cheat.append("binary_info(action='sections')                 # Sections with entropy")
+            cheat.append("binary_info(action='compiler')                 # Compiler/toolchain hints")
+            cheat.append("firmware_view(action='scan_region')            # Classify all regions (code/data/strings/pointers)")
+            cheat.append("firmware_view(action='region_profile')         # Entropy + type distribution per region")
+            cheat.append("")
+            cheat.append("-- Step 2: Find structure --")
+            cheat.append("firmware_view(action='pointer_sweep')          # Find pointer tables and vtables")
+            cheat.append("firmware_view(action='pointer_clusters')       # Group pointers by target region")
+            cheat.append("firmware_view(action='table_candidates')       # Jump tables, dispatch tables")
+            cheat.append("firmware_view(action='carve_plan')             # Recommended retyping plan")
+            cheat.append("")
+            cheat.append("-- Step 3: Apply structure --")
+            cheat.append("firmware_view(action='smart_carve', apply=false)  # Dry-run: see what would be created")
+            cheat.append("firmware_view(action='smart_carve', apply=true)   # Apply: create functions/structs/strings")
+            cheat.append("firmware_view(action='auto_retype')            # Auto-retype data regions")
+            cheat.append("")
+            cheat.append("-- Step 4: Campaign (full automated workflow) --")
+            cheat.append("firmware_view(action='campaign')               # Run full firmware analysis campaign")
+            cheat.append("firmware_view(action='campaign_checkpoint')    # Save progress")
+            cheat.append("firmware_view(action='campaign_resume')        # Resume from checkpoint")
+            cheat.append("firmware_view(action='campaign_feedback')      # Provide feedback to improve campaign")
+            cheat.append("")
+            cheat.append("-- Step 5: Understand what's there --")
+            cheat.append("blackboard(action='list', category='firmware_view')  # All firmware findings")
+            cheat.append("ida://knowledge/gaps                           # Expected subsystems not yet found")
+            cheat.append("ida://knowledge/peripherals                    # MMIO peripheral map")
+            cheat.append("ida://knowledge/state_machines                 # Detected state machines")
+            cheat.append("taint(action='report')                         # MMIO/DMA/UART input → dangerous sinks")
+            cheat.append("")
+            cheat.append("-- Firmware-specific search --")
+            cheat.append("search(action='behavior', pattern='crypto_symmetric')  # Crypto primitives")
+            cheat.append("search(action='func_by_sig', pattern='no_callers')     # Interrupt handlers / entry points")
+            cheat.append("search(action='func_by_sig', pattern='leaf size:>200') # Large leaf functions (crypto/codec)")
+            cheat.append("string_ops(action='find_paths')                # Unix paths (Linux firmware)")
+            cheat.append("string_ops(action='find_commands')             # Shell commands")
 
 
 

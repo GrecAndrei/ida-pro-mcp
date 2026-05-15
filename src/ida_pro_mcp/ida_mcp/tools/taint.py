@@ -34,6 +34,22 @@ TAINT_SOURCES = {
     # Windows
     "ReadFile", "RegQueryValueEx", "GetEnvironmentVariable",
     "WinHttpReceiveResponse", "InternetReadFile",
+    # Firmware: UART receive (common naming patterns across MCU SDKs)
+    "UART_Receive", "UART_Read", "uart_read", "uart_receive", "uart_getc",
+    "HAL_UART_Receive", "HAL_UART_Receive_IT", "HAL_UART_Receive_DMA",
+    "USART_ReceiveData", "USART_GetFlagStatus",
+    "Serial_Read", "serial_read", "serial_getchar",
+    # Firmware: DMA receive buffers
+    "DMA_Receive", "dma_read", "HAL_DMA_Start", "HAL_DMA_PollForTransfer",
+    # Firmware: SPI/I2C/USB receive
+    "SPI_Receive", "HAL_SPI_Receive", "HAL_I2C_Master_Receive",
+    "HAL_I2C_Slave_Receive", "USB_ReadPacket", "USBD_LL_DataOutStage",
+    "HAL_PCD_DataOutStageCallback",
+    # Firmware: network stack (lwIP, FreeRTOS+TCP)
+    "pbuf_alloc", "netconn_recv", "xNetworkInterfaceInput",
+    "FreeRTOS_recv", "FreeRTOS_recvfrom",
+    # Firmware: MMIO reads (generic — matched by name pattern in _get_import_addrs)
+    # These are detected via blackboard IOC entries with ioc_type='mmio_input'
 }
 
 # ── Dangerous sinks ───────────────────────────────────────────────────────────
@@ -64,6 +80,15 @@ DANGEROUS_SINKS = {
     "VirtualAlloc": "memory_control",
     "WriteProcessMemory": "process_injection",
     "mmap": "memory_control",
+    # Firmware: unsafe UART/network transmit with attacker-controlled data
+    "UART_Transmit": "firmware_output_injection",
+    "HAL_UART_Transmit": "firmware_output_injection",
+    "netconn_write": "firmware_output_injection",
+    "FreeRTOS_send": "firmware_output_injection",
+    # Firmware: flash write (attacker-controlled data written to flash = persistent compromise)
+    "HAL_FLASH_Program": "firmware_flash_write",
+    "flash_write": "firmware_flash_write",
+    "spi_flash_write": "firmware_flash_write",
 }
 
 
@@ -223,13 +248,30 @@ def taint(
                 store = BlackboardStore()
                 iocs = store.list(category="ioc", include_resolved=False, limit=50)
                 for ioc in iocs:
-                    if ioc.get("ioc_type") in ("ip_port", "url", "domain"):
+                    ioc_type = ioc.get("ioc_type", "")
+                    if ioc_type in ("ip_port", "url", "domain", "mmio_input", "dma_buffer", "uart_rx"):
                         result.append({
                             "name": ioc.get("title", ""),
                             "addr": ioc.get("addr", ""),
                             "type": "ioc",
+                            "category": ioc_type,
                             "ioc_value": ioc.get("ioc_value", ""),
                         })
+            except Exception:
+                pass
+            # Also scan for firmware MMIO read patterns in names (sub_ functions near peripheral addresses)
+            try:
+                _MMIO_PATTERNS = ("UART", "uart", "DMA", "dma", "SPI", "I2C", "USB", "ETH", "WIFI", "BLE")
+                for ea, name in idautils.Names():
+                    if any(p in name for p in _MMIO_PATTERNS) and ("Receive" in name or "Read" in name or "Get" in name):
+                        if name not in {r["name"] for r in result}:
+                            callers = list(idautils.CodeRefsTo(ea, 0))
+                            result.append({
+                                "name": name,
+                                "addr": hex_ea(ea),
+                                "caller_count": len(callers),
+                                "type": "firmware_peripheral",
+                            })
             except Exception:
                 pass
             return {"ok": True, "sources": result, "count": len(result)}
