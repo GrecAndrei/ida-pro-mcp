@@ -1264,6 +1264,32 @@ def blackboard(
             evidence=evidence or [], source_type=source_type or "manual",
             entropy=entropy, xref_count=xref_count,
         )
+        # Async label propagation: when a high-confidence entry with an address
+        # is written, trigger FrontierEngine to propagate to cluster neighbors.
+        if addr and confidence >= 0.6 and source_type not in ("propagated", "engine_frontier"):
+            import threading as _thr
+            def _propagate():
+                try:
+                    from ida_pro_mcp.host.frontier import FrontierEngine
+                except ImportError:
+                    try:
+                        from host.frontier import FrontierEngine  # type: ignore
+                    except ImportError:
+                        return
+                try:
+                    idb_path = ""
+                    try:
+                        import idc as _idc
+                        idb_path = _idc.get_idb_path() or ""
+                    except Exception:
+                        pass
+                    emb_db = (idb_path + ".embeddings.db") if idb_path else ""
+                    fe = FrontierEngine(emb_db, store.db_path)
+                    if fe.refresh() >= 3:
+                        fe.propagate_labels()
+                except Exception:
+                    pass
+            _thr.Thread(target=_propagate, daemon=True, name="bb-propagate").start()
         return {"ok": True, "entry_id": eid}
 
     elif action == "read":
@@ -1509,6 +1535,119 @@ def blackboard(
             return {"ok": True, "attack_surface": kg.list_attack_surface()}
         elif action == "kg_peripherals":
             return {"ok": True, "peripherals": kg.list_peripherals()}
+
+    elif action == "frontier":
+        # Return ranked unvisited functions from FrontierEngine.
+        # Requires embeddings to be indexed (code(action='decompile') or schemaboot).
+        try:
+            from ida_pro_mcp.host.frontier import FrontierEngine
+        except ImportError:
+            from host.frontier import FrontierEngine  # type: ignore
+        idb_path = ""
+        try:
+            import idc as _idc
+            idb_path = _idc.get_idb_path() or ""
+        except Exception:
+            pass
+        emb_db = (idb_path + ".embeddings.db") if idb_path else ""
+        fe = FrontierEngine(emb_db, store.db_path)
+        n = fe.refresh()
+        if n < 3:
+            return {
+                "ok": True, "frontier": [], "count": 0,
+                "note": "Not enough indexed embeddings. Decompile some functions first.",
+            }
+        # Gather xref/entropy hints from blackboard
+        xref_counts: dict = {}
+        entropy_map: dict = {}
+        try:
+            import sqlite3 as _sq3
+            with _sq3.connect(store.db_path, timeout=5) as conn:
+                for row in conn.execute(
+                    "SELECT addr, xref_count, entropy FROM blackboard "
+                    "WHERE addr != '' AND addr IS NOT NULL"
+                ):
+                    if row[0]:
+                        xref_counts[row[0]] = int(row[1] or 0)
+                        entropy_map[row[0]] = float(row[2] or 0.0)
+        except Exception:
+            pass
+        results = fe.frontier(limit=limit, xref_counts=xref_counts, entropy_map=entropy_map)
+        lines = [
+            f"{r['addr']}  {r['name']}  score={r['score']:.3f}  "
+            f"cluster={r['cluster']}  proximity={r['proximity']:.3f}"
+            + (f"  near='{r['nearest_label_title'][:30]}'" if r.get("nearest_label_title") else "")
+            for r in results
+        ]
+        return {
+            "ok": True,
+            "frontier": "\n".join(lines),
+            "items": results,
+            "count": len(results),
+            "indexed": n,
+            "note": (
+                "Ranked by: proximity to labeled functions (embedding cosine) + "
+                "xref count + entropy + cluster coverage. "
+                "Use code(action='smart_decompile') on top results."
+            ),
+        }
+
+    elif action == "coverage":
+        # Coverage map: analyzed/visited/unvisited counts + per-cluster breakdown.
+        try:
+            from ida_pro_mcp.host.frontier import FrontierEngine
+        except ImportError:
+            from host.frontier import FrontierEngine  # type: ignore
+        idb_path = ""
+        try:
+            import idc as _idc
+            idb_path = _idc.get_idb_path() or ""
+        except Exception:
+            pass
+        emb_db = (idb_path + ".embeddings.db") if idb_path else ""
+        fe = FrontierEngine(emb_db, store.db_path)
+        n = fe.refresh()
+        if n < 1:
+            return {
+                "ok": True,
+                "coverage_pct": 0.0,
+                "total_indexed": 0,
+                "analyzed": 0,
+                "unvisited": 0,
+                "note": "No embeddings indexed yet.",
+            }
+        return {"ok": True, **fe.coverage()}
+
+    elif action == "propagate_labels":
+        # Propagate LLM blackboard labels to embedding-similar neighbors.
+        # Writes 'propagated' source_type entries for neighbors within cosine threshold.
+        try:
+            from ida_pro_mcp.host.frontier import FrontierEngine
+        except ImportError:
+            from host.frontier import FrontierEngine  # type: ignore
+        idb_path = ""
+        try:
+            import idc as _idc
+            idb_path = _idc.get_idb_path() or ""
+        except Exception:
+            pass
+        emb_db = (idb_path + ".embeddings.db") if idb_path else ""
+        fe = FrontierEngine(emb_db, store.db_path)
+        n = fe.refresh()
+        if n < 3:
+            return {"ok": True, "propagated": 0, "note": "Not enough embeddings."}
+        new_entries = fe.propagate_labels()
+        return {
+            "ok": True,
+            "propagated": len(new_entries),
+            "entries": new_entries[:20],
+            "note": (
+                f"Propagated {len(new_entries)} labels to embedding neighbors "
+                f"(threshold={FrontierEngine.PROPAGATE_THRESHOLD}, "
+                f"decay={FrontierEngine.PROPAGATE_DECAY}). "
+                "Use blackboard(action='list', source_type='propagated') to review."
+            ),
+        }
 
     else:
         return {"ok": False, "error": f"Unknown action: {action}"}

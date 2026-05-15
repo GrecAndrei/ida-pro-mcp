@@ -262,6 +262,10 @@ class AnalysisEngine:
         self._last_narrative_ts = 0.0
         self._narrative_interval = 120.0  # regenerate every 2 min
 
+        # Frontier engine state
+        self._fe = None          # FrontierEngine, lazy-init
+        self._fe_built = False   # clusters built at least once
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def start(self):
@@ -288,10 +292,12 @@ class AnalysisEngine:
         entropy_interval = 120
         tag_interval = 300
         kg_interval = 90       # KG analysis every 90s
+        frontier_interval = 180  # frontier rebuild every 3 min
         last_sweep = 0.0
         last_entropy = 0.0
         last_tag = 0.0
         last_kg = 0.0
+        last_frontier = 0.0
 
         while not self._stop.is_set():
             try:
@@ -319,6 +325,10 @@ class AnalysisEngine:
                 if now - last_kg >= kg_interval:
                     self._stage_knowledge_graph()
                     last_kg = time.time()
+
+                if now - last_frontier >= frontier_interval:
+                    self._stage_frontier()
+                    last_frontier = time.time()
 
             except Exception:
                 pass
@@ -1308,6 +1318,136 @@ class AnalysisEngine:
             except Exception:
                 pass
         return self._kg
+
+    def _get_fe(self):
+        """Lazy-init FrontierEngine."""
+        if self._fe is None:
+            try:
+                from .frontier import FrontierEngine
+                # embeddings DB lives next to the IDB: <idb>.embeddings.db
+                # We find it by scanning embeddings_dir for *.embeddings.db
+                emb_db = ""
+                if self._embeddings_dir and os.path.isdir(self._embeddings_dir):
+                    for fname in os.listdir(self._embeddings_dir):
+                        if fname.endswith(".embeddings.db"):
+                            emb_db = os.path.join(self._embeddings_dir, fname)
+                            break
+                if not emb_db:
+                    emb_db = self._bb_path.replace(".blackboard.db", ".embeddings.db")
+                self._fe = FrontierEngine(emb_db, self._bb_path)
+            except Exception:
+                pass
+        return self._fe
+
+    # ── Stage 9: Frontier (cluster + propagate + score) ───────────────────────
+
+    def _stage_frontier(self):
+        """
+        1. Rebuild embedding clusters (k-means over all indexed functions)
+        2. Propagate LLM labels to cluster neighbors
+        3. Score unvisited functions and seed blackboard with top frontier entries
+        4. Detect embedding contradictions and push as proposals
+        """
+        try:
+            fe = self._get_fe()
+            if fe is None:
+                return
+
+            # Rebuild clusters
+            n = fe.refresh()
+            if n < 5:
+                return  # not enough indexed functions yet
+            self._fe_built = True
+
+            # Propagate labels
+            propagated = fe.propagate_labels()
+
+            # Score frontier — get xref/entropy hints from blackboard
+            xref_counts: dict = {}
+            entropy_map: dict = {}
+            try:
+                import sqlite3 as _sq3
+                with _sq3.connect(self._bb_path, timeout=5) as conn:
+                    for row in conn.execute(
+                        "SELECT addr, xref_count, entropy FROM blackboard "
+                        "WHERE addr != '' AND addr IS NOT NULL"
+                    ):
+                        if row[0]:
+                            xref_counts[row[0]] = int(row[1] or 0)
+                            entropy_map[row[0]] = float(row[2] or 0.0)
+            except Exception:
+                pass
+
+            frontier = fe.frontier(limit=30, xref_counts=xref_counts, entropy_map=entropy_map)
+
+            # Seed top frontier entries into blackboard as hypothesis entries
+            bb = self._bb_store()
+            if bb and frontier:
+                for entry in frontier[:10]:
+                    addr = entry["addr"]
+                    # Skip if already in blackboard
+                    existing = bb.list(addr=addr, limit=1, include_resolved=False)
+                    if existing:
+                        continue
+                    reason_parts = []
+                    if entry["nearest_label_title"]:
+                        reason_parts.append(f"near '{entry['nearest_label_title'][:40]}'")
+                    if entry["xref_count"] > 5:
+                        reason_parts.append(f"xrefs={entry['xref_count']}")
+                    if entry["entropy"] > 6.0:
+                        reason_parts.append(f"entropy={entry['entropy']:.1f}")
+                    reason = ", ".join(reason_parts) or "frontier scoring"
+                    bb.write(
+                        title=f"[frontier] {entry['name']} — {reason}",
+                        category="hypothesis",
+                        addr=addr,
+                        content=f"Frontier score={entry['score']:.3f}, cluster={entry['cluster']}, "
+                                f"proximity={entry['proximity']:.3f}",
+                        tags=["frontier", "auto"],
+                        confidence=min(0.7, entry["score"] + 0.2),
+                        source="frontier_engine",
+                        source_type="engine_frontier",
+                        embed=False,
+                    )
+
+            # Contradiction detection — push as proposals
+            contradictions = fe.detect_contradictions()
+            if contradictions:
+                items = [
+                    {
+                        "id": f"contra_{c['addr_a']}_{c['addr_b']}",
+                        "addr_a": c["addr_a"],
+                        "addr_b": c["addr_b"],
+                        "title_a": c["title_a"],
+                        "title_b": c["title_b"],
+                        "category_a": c["category_a"],
+                        "category_b": c["category_b"],
+                        "similarity": c["embedding_similarity"],
+                        "note": c["note"],
+                    }
+                    for c in contradictions[:5]
+                ]
+                pid = self._proposals.add(
+                    proposal_type="embedding_contradiction",
+                    title=f"Embedding contradictions detected ({len(contradictions)} pairs)",
+                    summary=(
+                        f"{len(contradictions)} function pairs are in the same embedding cluster "
+                        "but have different labels. Review and correct."
+                    ),
+                    items=items,
+                    confidence=0.65,
+                    session_id=self.session_id,
+                )
+                self._push_proposal_notification(
+                    pid, "embedding_contradiction",
+                    f"{len(contradictions)} label contradictions detected by embedding analysis",
+                    0.65,
+                )
+
+            self._push_resource_updated("ida://blackboard/frontier")
+
+        except Exception:
+            pass
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
