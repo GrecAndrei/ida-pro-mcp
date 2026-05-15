@@ -115,6 +115,10 @@ RESOURCE_TEMPLATES = [
     "ida://blackboard/hypotheses",
     "ida://blackboard/regions",
     "ida://blackboard/{category}",
+    # Frontier / Coverage (new)
+    "ida://blackboard/frontier",
+    "ida://blackboard/coverage",
+    "ida://taint",
 ]
 
 
@@ -151,6 +155,9 @@ def list_resources() -> List[Dict]:
         {"uri": "ida://blackboard/iocs", "name": "Blackboard — IOCs", "mimeType": "application/json"},
         {"uri": "ida://blackboard/hypotheses", "name": "Blackboard — hypotheses", "mimeType": "application/json"},
         {"uri": "ida://blackboard/regions", "name": "Blackboard — memory regions", "mimeType": "application/json"},
+        {"uri": "ida://blackboard/frontier", "name": "Frontier — ranked unvisited functions (read when choosing what to analyze next)", "mimeType": "application/json"},
+        {"uri": "ida://blackboard/coverage", "name": "Coverage map — analyzed vs unvisited per cluster (read to understand progress)", "mimeType": "application/json"},
+        {"uri": "ida://taint", "name": "Taint report — all source→sink paths (read after finding network/file input)", "mimeType": "application/json"},
     ]
 
 
@@ -228,6 +235,8 @@ class ResourceResolver:
             return self._read_archive()
         elif domain == "blackboard":
             return self._read_blackboard_resource(parts)
+        elif domain == "taint":
+            return self._read_taint()
         return None
 
     def _exec(self, tool_name: str, **kwargs) -> Any:
@@ -411,9 +420,43 @@ class ResourceResolver:
         except Exception:
             pass
 
+        # Actionable guidance based on current state
+        actions = []
+        bb_state = state.get("blackboard", {})
+        cov = state.get("coverage", {})
+        eng = state.get("engine", {})
+
+        if eng.get("pending_proposals", 0) > 0:
+            actions.append(f"READ ida://proposals — {eng['pending_proposals']} engine proposal(s) waiting")
+
+        next_targets = bb_state.get("next_targets", [])
+        if next_targets:
+            top = next_targets[0]
+            top_addr = top.get("addr", "")
+            top_title = top.get("title", top_addr)[:50]
+            actions.append(f"CALL code(action='smart_decompile', addrs='{top_addr}') — top target: {top_title}")
+
+        vulns = bb_state.get("vulns", [])
+        if vulns:
+            v = vulns[0]
+            v_addr = v.get("addr", "")
+            actions.append(f"CALL llm_helpers(action='dangerous_pattern_explainer', addr='{v_addr}'")
+
+        pct = cov.get("pct_named", 100)
+        total = cov.get("total_functions", 0)
+        if total > 20 and pct < 40:
+            actions.append(f"READ ida://blackboard/frontier — {pct}% named, {total} functions — get ranked targets")
+
+        if not actions:
+            actions.append("CALL idb(action='summary') then data(action='imports') to orient")
+            actions.append("CALL llm_helpers(action='cheatsheet') for full tool reference")
+
+        state["_next_actions"] = actions
         state["_note"] = (
             "Read ida://proposals for pending engine actions. "
-            "Read ida://blackboard/next_target for the highest-priority address to analyze next. "
+            "Read ida://blackboard/frontier for ranked unvisited functions. "
+            "Read ida://blackboard/coverage for analysis progress. "
+            "Read ida://taint for vulnerability paths. "
             "This resource is pushed via notifications/resources/updated when anything changes."
         )
 
@@ -835,6 +878,71 @@ class ResourceResolver:
             regions = store.list(category="region", limit=100, include_resolved=True)
             return _make_json_content({"regions": regions, "count": len(regions)})
 
+        if sub == "frontier":
+            # Ranked unvisited functions — read this when choosing what to analyze next
+            try:
+                from .frontier import FrontierEngine
+                import os as _os2
+                idb_path = self.bb_path.replace(".blackboard.db", "") if self.bb_path else ""
+                emb_db = idb_path + ".embeddings.db" if idb_path else ""
+                fe = FrontierEngine(emb_db, self.bb_path or store.db_path)
+                n = fe.refresh()
+                if n < 3:
+                    return _make_json_content({
+                        "frontier": [],
+                        "note": "Not enough indexed embeddings. Decompile some functions first, then re-read.",
+                    })
+                results = fe.frontier(limit=20)
+                coverage = fe.coverage()
+                lines = [
+                    f"{r['addr']}  {r['name']}  score={r['score']:.3f}"
+                    + (f"  near='{r['nearest_label_title'][:30]}'" if r.get("nearest_label_title") else "")
+                    for r in results
+                ]
+                return _make_json_content({
+                    "frontier": "\n".join(lines),
+                    "items": results,
+                    "count": len(results),
+                    "coverage_pct": coverage["coverage_pct"],
+                    "analyzed": coverage["analyzed"],
+                    "unvisited": coverage["unvisited"],
+                    "note": (
+                        f"Coverage: {coverage['coverage_pct']}% ({coverage['analyzed']}/{coverage['total_indexed']} functions). "
+                        "NEXT ACTION: code(action='smart_decompile', addrs='<top addr>') on the first result."
+                    ),
+                })
+            except Exception as e:
+                return _make_json_content({"error": str(e), "note": "Frontier requires indexed embeddings."})
+
+        if sub == "coverage":
+            try:
+                from .frontier import FrontierEngine
+                idb_path = self.bb_path.replace(".blackboard.db", "") if self.bb_path else ""
+                emb_db = idb_path + ".embeddings.db" if idb_path else ""
+                fe = FrontierEngine(emb_db, self.bb_path or store.db_path)
+                n = fe.refresh()
+                if n < 1:
+                    return _make_json_content({"coverage_pct": 0, "note": "No embeddings indexed yet."})
+                cov = fe.coverage()
+                cov["note"] = (
+                    f"You have analyzed {cov['analyzed']}/{cov['total_indexed']} functions ({cov['coverage_pct']}%). "
+                    f"Read ida://blackboard/frontier to get the {cov['unvisited']} unvisited functions ranked by priority."
+                )
+                return _make_json_content(cov)
+            except Exception as e:
+                return _make_json_content({"error": str(e)})
+
         # Generic category
         entries = store.list(category=sub, limit=100, include_resolved=False)
         return _make_json_content({"category": sub, "entries": entries, "count": len(entries)})
+
+    def _read_taint(self) -> Dict:
+        """ida://taint — full taint report (source→sink paths). Read after finding network/file input."""
+        result = self._exec("taint", action="report", max_depth=4, max_paths=30)
+        if isinstance(result, dict):
+            result.setdefault("note", (
+                "Taint report: all source→sink paths in the binary. "
+                "For each finding, call llm_helpers(action='dangerous_pattern_explainer', addr='<sink_addr>') "
+                "to get full exploitation analysis."
+            ))
+        return _make_json_content(result)
