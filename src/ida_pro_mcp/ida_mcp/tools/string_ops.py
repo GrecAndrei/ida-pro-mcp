@@ -664,10 +664,26 @@ def _detect_api_triads(apis):
 
 def _score_strings_c2(all_strings):
     """
-    StringSifter-style string ranking for C2 relevance.
-    Scores each string on: type match weight, entropy, length, keyword presence.
-    Returns ranked list of (score, ea, text, category).
+    Rank strings by C2/malware relevance.
+    Primary: BehaviorClassifier embeddings (catches novel patterns).
+    Secondary: regex keyword patterns (fast, deterministic for known IOC formats).
     """
+    classifier = None
+    try:
+        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+        classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+    except Exception:
+        pass
+
+    _BEH_MAP = {
+        "c2_communication": ("c2_url", 0.80),
+        "network_http": ("c2_url", 0.65),
+        "persistence": ("registry_run", 0.72),
+        "anti_analysis": ("vm_check", 0.70),
+        "process_injection": ("suspended_process", 0.75),
+        "credential_access": ("credential_dump", 0.72),
+    }
+
     ranked = []
     for s_ea, raw, _st in all_strings:
         if not raw or len(raw) < 3:
@@ -676,46 +692,99 @@ def _score_strings_c2(all_strings):
         raw_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")
         best_score = 0.0
         best_cat = "general"
+
+        # Regex patterns (fast, high-precision for known formats)
         for category, patterns in _SUSPICIOUS_STRING_KEYWORDS.items():
             for pat, weight, label in patterns:
                 if pat.search(raw_bytes):
-                    score = weight
-                    if score > best_score:
-                        best_score = score
+                    if weight > best_score:
+                        best_score = weight
                         best_cat = label
+
+        # BehaviorClassifier on string text (catches novel/obfuscated patterns)
+        if classifier and best_score < 0.70 and len(text) >= 8:
+            try:
+                hits = classifier.classify(text, threshold=0.45, top_k=1, block=False)
+                if hits:
+                    beh = hits[0].get("behavior", "")
+                    sc = float(hits[0].get("score", 0))
+                    if beh in _BEH_MAP and sc >= 0.45:
+                        mapped_cat, mapped_weight = _BEH_MAP[beh]
+                        combined = mapped_weight * sc
+                        if combined > best_score:
+                            best_score = combined
+                            best_cat = mapped_cat
+            except Exception:
+                pass
+
         if best_score >= 0.60:
             ranked.append((best_score, s_ea, text[:120], best_cat))
+
     ranked.sort(key=lambda x: x[0], reverse=True)
     return ranked
 
 
 def _c2_family_guess(api_findings, string_scores):
-    """Guess likely C2 framework based on API triads and strings."""
+    """
+    Identify likely malware family using BehaviorClassifier on combined
+    import+string evidence. Falls back to deterministic framework detection.
+    """
+    evidence_parts = []
+    for f in api_findings:
+        evidence_parts.append(f["technique"])
+        evidence_parts.extend(f.get("matched_apis", []))
+    for s in string_scores[:20]:
+        evidence_parts.append(s[2])
+    evidence_text = " ".join(evidence_parts)
+
     families = []
-    all_evidence = " ".join(
-        f.get("technique", "") for f in api_findings
-    ) + " " + " ".join(
-        s[3] for s in string_scores
-    )
-    all_evidence_lower = all_evidence.lower()
-    if "cobalt" in all_evidence_lower or ("process_hollowing" in all_evidence_lower and "c2_http" in all_evidence_lower):
-        families.append({"family": "Cobalt Strike", "confidence": 0.85 if "cobalt" in all_evidence_lower else 0.65})
-    if "meterpreter" in all_evidence_lower or "metasploit" in all_evidence_lower:
-        families.append({"family": "Metasploit/Meterpreter", "confidence": 0.82})
-    if "c2_http" in all_evidence_lower and "screen_capture" in all_evidence_lower:
-        families.append({"family": "AgentTesla/AsyncRAT style", "confidence": 0.55})
-    if "credential_dump" in all_evidence_lower:
-        if "keylogger" in all_evidence_lower:
-            families.append({"family": "Infostealer (generic)", "confidence": 0.62})
-    if "reflective_dll" in all_evidence_lower and "c2_raw_socket" in all_evidence_lower:
-        families.append({"family": "TrickBot/Emotet style", "confidence": 0.58})
-    if "anti_debug" in all_evidence_lower and "anti_vm" in all_evidence_lower and "anti_sandbox" in all_evidence_lower:
-        families.append({"family": "Banking trojan (generic)", "confidence": 0.55})
+    classifier = None
+    try:
+        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+        classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+    except Exception:
+        pass
+
+    if classifier and evidence_text.strip():
+        try:
+            hits = classifier.classify(evidence_text, threshold=0.40, top_k=4, block=False)
+            _FAMILY_MAP = {
+                "c2_communication": "C2 implant (generic)",
+                "process_injection": "Process injection malware",
+                "credential_access": "Credential stealer / infostealer",
+                "persistence": "Persistent malware",
+                "anti_analysis": "Evasive malware (anti-VM/debug)",
+                "ransomware": "Ransomware",
+                "rootkit": "Rootkit",
+                "keylogger": "Keylogger",
+                "lateral_movement": "Lateral movement tool",
+                "exfiltration": "Data exfiltration tool",
+            }
+            for h in hits:
+                beh = h.get("behavior", "")
+                sc = float(h.get("score", 0))
+                if beh in _FAMILY_MAP and sc >= 0.40:
+                    families.append({"family": _FAMILY_MAP[beh], "confidence": round(sc, 3),
+                                     "behavior": beh})
+        except Exception:
+            pass
+
+    # High-precision framework detection (deterministic, not heuristic)
+    all_lower = evidence_text.lower()
+    if "cobalt" in all_lower or "beacon.dll" in all_lower:
+        families.insert(0, {"family": "Cobalt Strike", "confidence": 0.88, "behavior": "c2_communication"})
+    if "meterpreter" in all_lower or "metasploit" in all_lower:
+        families.insert(0, {"family": "Metasploit/Meterpreter", "confidence": 0.85, "behavior": "c2_communication"})
+
     if not families:
-        families.append({"family": "Unknown/unclassified", "confidence": 0.30})
-    return families
+        families.append({"family": "Unknown/unclassified", "confidence": 0.20, "behavior": ""})
 
-
+    seen, deduped = set(), []
+    for f in families:
+        if f["family"] not in seen:
+            seen.add(f["family"])
+            deduped.append(f)
+    return deduped
 def _compile_c2_report(all_strings, addr_scope=None):
     """
     Full C2 risk report: API triads + string scoring + IOC extraction + family guess.
