@@ -1021,6 +1021,9 @@ def build_signal_directives(
                     "call": "firmware_view(action='scan_region')",
                     "reason": "MMIO map complete — now profile binary regions for structure",
                 })
+
+        elif action_name == "pointer_sweep":
+            tables = payload.get("tables", payload.get("count", 0))
             if tables:
                 directives.append({
                     "priority": "medium",

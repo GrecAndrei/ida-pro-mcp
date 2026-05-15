@@ -729,3 +729,183 @@ with open(RESULT_PATH, "w") as f:
         assert r["has_addr"] is True
         assert r["has_priority"] is True
         assert r["sorted_desc"] is True
+
+
+class TestFirmwareDetectIDA:
+    """firmware_view detect_* actions inside real IDA."""
+
+    def test_detect_load_address(self, runner):
+        script = '''
+import sys, os, json
+from firmware_view import firmware_view
+
+r = firmware_view(action="detect_load_address")
+result = {
+    "ok": r.get("ok", False),
+    "has_binary_size": "binary_size" in r,
+    "has_current_base": "current_base" in r,
+    "has_candidates": "candidates" in r,
+    "has_size_hints": "size_hints" in r,
+    "candidates_are_list": isinstance(r.get("candidates"), list),
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=30)
+        assert r.get("ok") is True
+        assert r["has_binary_size"]
+        assert r["has_current_base"]
+        assert r["has_candidates"]
+        assert r["candidates_are_list"]
+
+    def test_detect_vector_table(self, runner):
+        script = '''
+import sys, os, json
+from firmware_view import firmware_view
+
+r = firmware_view(action="detect_vector_table")
+result = {
+    "ok": r.get("ok", False),
+    "has_vectors": "vectors" in r,
+    "has_entry_count": "entry_count" in r,
+    "has_entry_points": "entry_points" in r,
+    "vectors_are_list": isinstance(r.get("vectors"), list),
+    "entry_count_non_negative": r.get("entry_count", 0) >= 0,
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=30)
+        assert r.get("ok") is True
+        assert r["has_vectors"]
+        assert r["vectors_are_list"]
+        assert r["entry_count_non_negative"]
+
+    def test_detect_mmio(self, runner):
+        script = '''
+import sys, os, json
+from firmware_view import firmware_view
+
+r = firmware_view(action="detect_mmio")
+result = {
+    "ok": r.get("ok", False),
+    "has_peripherals": "peripherals" in r,
+    "has_peripheral_count": "peripheral_count" in r,
+    "has_chip_family": "likely_chip_family" in r,
+    "peripherals_are_list": isinstance(r.get("peripherals"), list),
+    "peripheral_count_non_negative": r.get("peripheral_count", 0) >= 0,
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=60)
+        assert r.get("ok") is True
+        assert r["has_peripherals"]
+        assert r["peripherals_are_list"]
+        assert r["peripheral_count_non_negative"]
+
+    def test_detect_vector_table_writes_blackboard(self, runner):
+        script = '''
+import sys, os, json, tempfile
+from firmware_view import firmware_view
+from blackboard import BlackboardStore
+
+db = tempfile.mktemp(suffix=".db")
+# Run detect_vector_table — it should write entry points to blackboard
+r = firmware_view(action="detect_vector_table")
+vectors = r.get("vectors", [])
+entry_points = r.get("entry_points", [])
+
+# Check blackboard was written (if any entry points found)
+bb_written = 0
+if entry_points:
+    store = BlackboardStore()
+    for ep in entry_points[:3]:
+        entries = store.list(addr=ep, limit=1)
+        if entries:
+            bb_written += 1
+
+result = {
+    "ok": r.get("ok", False),
+    "vectors_found": len(vectors),
+    "entry_points_found": len(entry_points),
+    "bb_written": bb_written,
+    # If entry points found, at least some should be in blackboard
+    "bb_consistent": bb_written > 0 if entry_points else True,
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=30)
+        assert r.get("ok") is True
+        assert r["bb_consistent"]
+
+
+class TestFrontierIDA:
+    """FrontierEngine integration tests inside real IDA."""
+
+    def test_frontier_after_decompile(self, runner):
+        script = '''
+import sys, os, json, tempfile
+import idautils
+from code import code
+from blackboard import BlackboardStore
+
+# Decompile a few functions to get embeddings indexed
+funcs = list(idautils.Functions())[:5]
+for ea in funcs[:3]:
+    try:
+        code(action="decompile", addrs=hex(ea))
+    except Exception:
+        pass
+
+# Write a blackboard entry for the first function
+store = BlackboardStore()
+if funcs:
+    store.write(
+        title="test entry for frontier",
+        category="hypothesis",
+        addr=hex(funcs[0]),
+        confidence=0.8,
+        embed=False,
+    )
+
+# Now test frontier
+bb_result = store.blackboard(action="frontier", limit=5) if hasattr(store, "blackboard") else None
+
+# Use the blackboard tool directly
+from blackboard import blackboard as bb_tool
+r = bb_tool(action="frontier", limit=5)
+
+result = {
+    "ok": r.get("ok", False),
+    "has_frontier": "frontier" in r or "items" in r,
+    "has_count": "count" in r,
+    "has_note": "note" in r,
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=60)
+        assert r.get("ok") is True
+        assert r["has_frontier"] or r["has_count"]
+
+    def test_coverage_action(self, runner):
+        script = '''
+import sys, os, json
+from blackboard import blackboard as bb_tool
+
+r = bb_tool(action="coverage")
+result = {
+    "ok": r.get("ok", False),
+    "has_coverage_pct": "coverage_pct" in r,
+    "has_note": "note" in r,
+    "coverage_pct_valid": 0 <= r.get("coverage_pct", -1) <= 100,
+}
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f); f.flush(); os.fsync(f.fileno())
+'''
+        r = runner.run_script(script, timeout=30)
+        assert r.get("ok") is True
+        assert r["has_coverage_pct"]
+        assert r["coverage_pct_valid"]
