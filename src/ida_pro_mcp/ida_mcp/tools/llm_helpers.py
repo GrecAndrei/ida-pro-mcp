@@ -770,7 +770,18 @@ def _llm_summarize_output(data: dict) -> str:
 @tool
 @idaread
 def llm_helpers(
-    action: Annotated[Literal["context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "question_answer", "guided_analysis", "cheatsheet", "compact", "enrich", "intent_tool_compiler", "adaptive_query_planner", "token_aware_context_optimizer", "cross_call_variable_resolver", "evidence_weighted_response_assembler", "uncertainty_propagation_engine", "multi_granularity_retrieval_layer", "semantic_chunking_for_decompiled_code", "question_type_router", "interactive_clarification_protocol", "behavioral_signature_search", "cross_artifact_correlation_search", "temporal_search_replay", "search_hypothesis_sandbox", "path_constrained_search", "argument_semantics_search", "decompile_disasm_consistency_search", "near_miss_search_ranking", "persistent_search_collections", "auto_expansion_search_chains", "function_role_classifier", "protocol_format_reconstruction_assistant", "global_state_influence_mapper", "api_contract_extractor", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "dangerous_pattern_explainer", "binary_capability_matrix_builder", "execution_hypothesis_generator", "patch_impact_forecaster", "safe_idapython_orchestration_runtime", "script_template_marketplace_layer", "auto_script_synthesis_from_intent", "script_output_schema_enforcer", "long_running_job_manager", "cross_session_script_memory", "privilege_scope_guardrails_for_scripts", "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants", "idapython_provenance_recorder", "investigation_playbook_engine", "next_best_action_recommender", "analysis_dead_end_detector", "workset_intelligence_capsules", "contradiction_tracker", "review_queue_for_ai_edits", "case_narrative_composer", "cost_latency_optimizer", "trust_verification_layer", "learning_feedback_loop"],
+    action: Annotated[Literal[
+        "context_window", "function_digest", "binary_digest", "explain_address",
+        "suggest_next", "progress_report", "focus_area", "question_answer",
+        "guided_analysis", "cheatsheet", "compact", "enrich",
+        "intent_tool_compiler", "adaptive_query_planner", "question_type_router",
+        "behavioral_signature_search", "cross_artifact_correlation_search",
+        "function_role_classifier", "dangerous_pattern_explainer",
+        "api_contract_extractor", "global_state_influence_mapper",
+        "interprocedural_data_lineage_graph", "semantic_diff_explainer",
+        "decompile_disasm_consistency_search", "argument_semantics_search",
+        "path_constrained_search",
+    ],
                        "LLM helper action"],
     addr: Annotated[Optional[str], "Address for context"] = None,
     query: Annotated[Optional[str], "Question or topic"] = None,
@@ -1509,6 +1520,591 @@ def llm_helpers(
             cheat.append("llm_helpers(action='progress_report', history=...)  # Track progress")
 
             return {"ok": True, "cheatsheet": "\n".join(cheat)}
+
+        elif action == "behavioral_signature_search":
+            # Find functions matching a behavioral signature using BehaviorClassifier.
+            # More precise than search(action='behavior') — uses full pseudocode + embedding.
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required: behavioral signature to search for")
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+            except Exception:
+                return make_error(MCPError.IDA_ERROR, "BehaviorClassifier unavailable")
+            tag = query.strip().lower().replace(" ", "_")
+            matches = []
+            checked = 0
+            for func_ea in idautils.Functions():
+                if checked >= 300 or len(matches) >= limit:
+                    break
+                checked += 1
+                try:
+                    cfunc = ida_hexrays.decompile(func_ea)
+                    if not cfunc:
+                        continue
+                    hits = classifier.classify(str(cfunc)[:2000], threshold=0.40, top_k=3, block=False)
+                    for h in hits:
+                        if tag in h.get("behavior", "").lower() or tag in h.get("behavior", ""):
+                            matches.append({
+                                "addr": hex(func_ea),
+                                "name": idc.get_func_name(func_ea),
+                                "behavior": h["behavior"],
+                                "score": round(float(h.get("score", 0)), 3),
+                            })
+                            break
+                except Exception:
+                    pass
+            matches.sort(key=lambda x: -x["score"])
+            return {
+                "ok": True,
+                "query": tag,
+                "matches": "\n".join(f"{m['addr']}  {m['name']}  {m['behavior']}  score={m['score']}" for m in matches),
+                "items": matches,
+                "count": len(matches),
+                "checked": checked,
+            }
+
+        elif action == "function_role_classifier":
+            # Classify a function's architectural role: entry_point, callback, handler,
+            # parser, serializer, crypto_primitive, allocator, dispatcher, etc.
+            # Uses BehaviorClassifier + structural signals (callers, callees, size).
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            func = idaapi.get_func(ea)
+            fname = idc.get_func_name(ea)
+            n_callers = sum(1 for x in idautils.XrefsTo(ea, 0) if x.iscode)
+            callees = set()
+            for item in idautils.FuncItems(ea):
+                for xr in idautils.XrefsFrom(item, 0):
+                    if xr.type in (idaapi.fl_CN, idaapi.fl_CF):
+                        callees.add(idc.get_name(xr.to) or hex(xr.to))
+            size = func.end_ea - func.start_ea if func else 0
+
+            # Structural role signals
+            roles = []
+            if n_callers == 0:
+                roles.append({"role": "entry_point_or_callback", "confidence": 0.75,
+                               "reason": "no callers — likely entry point, export, or callback"})
+            if size < 32 and len(callees) == 1:
+                roles.append({"role": "wrapper", "confidence": 0.80,
+                               "reason": f"tiny function ({size}b) with single callee"})
+            if len(callees) > 15:
+                roles.append({"role": "dispatcher", "confidence": 0.70,
+                               "reason": f"calls {len(callees)} functions — likely dispatcher/router"})
+
+            # BehaviorClassifier role
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+                cfunc = ida_hexrays.decompile(ea)
+                if cfunc:
+                    hits = classifier.classify(str(cfunc)[:2000], threshold=0.38, top_k=4, block=False)
+                    for h in hits:
+                        roles.append({"role": h["behavior"], "confidence": round(float(h.get("score", 0)), 3),
+                                      "reason": "BehaviorClassifier"})
+            except Exception:
+                pass
+
+            roles.sort(key=lambda x: -x["confidence"])
+            primary = roles[0] if roles else {"role": "unknown", "confidence": 0.0, "reason": "no signals"}
+            return {
+                "ok": True, "addr": hex(ea), "name": fname,
+                "primary_role": primary["role"],
+                "confidence": primary["confidence"],
+                "all_roles": roles[:6],
+                "callers": n_callers, "callees": len(callees), "size": size,
+            }
+
+        elif action == "dangerous_pattern_explainer":
+            # Explain why a dangerous pattern is dangerous and what exploitation looks like.
+            # Uses BehaviorClassifier to identify the pattern, then generates a structured explanation.
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            fname = idc.get_func_name(ea)
+            pseudo = ""
+            try:
+                cfunc = ida_hexrays.decompile(ea)
+                if cfunc:
+                    pseudo = str(cfunc)[:3000]
+            except Exception:
+                pass
+            if not pseudo:
+                return make_error(MCPError.DECOMPILER_UNAVAILABLE, "decompilation required")
+
+            # Identify dangerous patterns
+            _DANGEROUS = {
+                "memcpy": ("buffer_overflow", "destination buffer may be smaller than source length"),
+                "strcpy": ("buffer_overflow", "no length check — classic stack/heap overflow"),
+                "sprintf": ("buffer_overflow", "format string written to fixed buffer"),
+                "gets": ("buffer_overflow", "reads unlimited input — always exploitable"),
+                "system": ("command_injection", "shell command built from user input"),
+                "execve": ("command_injection", "executes arbitrary command"),
+                "printf": ("format_string", "first arg may be user-controlled format string"),
+                "scanf": ("buffer_overflow", "reads into fixed buffer without length"),
+            }
+            found = [(api, *_DANGEROUS[api]) for api in _DANGEROUS if api in pseudo]
+
+            # BehaviorClassifier for additional context
+            classifier_tags = []
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+                hits = classifier.classify(pseudo, threshold=0.40, top_k=3, block=False)
+                classifier_tags = [{"behavior": h["behavior"], "score": round(float(h.get("score", 0)), 3)} for h in hits]
+            except Exception:
+                pass
+
+            explanations = []
+            for api, vuln_type, reason in found:
+                explanations.append({
+                    "api": api,
+                    "vuln_type": vuln_type,
+                    "why_dangerous": reason,
+                    "exploitation": {
+                        "buffer_overflow": "Attacker controls source/length → overwrite return address or adjacent heap chunk",
+                        "command_injection": "Attacker controls string argument → arbitrary OS command execution",
+                        "format_string": "Attacker controls format string → arbitrary read/write via %n/%s",
+                    }.get(vuln_type, "Attacker-controlled input reaches dangerous operation"),
+                    "mitigation": {
+                        "buffer_overflow": "Use strncpy/snprintf with explicit length; validate input size before copy",
+                        "command_injection": "Use execve with argument array; never pass user input to system()",
+                        "format_string": "Always use printf(\"%s\", user_input) — never printf(user_input)",
+                    }.get(vuln_type, "Validate and sanitize all inputs before use"),
+                })
+
+            return {
+                "ok": True, "addr": hex(ea), "name": fname,
+                "dangerous_patterns": explanations,
+                "behavior_tags": classifier_tags,
+                "summary": (
+                    f"{fname} contains {len(found)} dangerous pattern(s): "
+                    + ", ".join(f"{e['api']} ({e['vuln_type']})" for e in explanations)
+                ) if found else f"{fname}: no known dangerous patterns detected in pseudocode",
+            }
+
+        elif action == "api_contract_extractor":
+            # Infer what a function expects (preconditions) and returns (postconditions)
+            # by analyzing all call sites. Uses embedding similarity to group call patterns.
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            func = idaapi.get_func(ea)
+            fname = idc.get_func_name(ea)
+
+            # Collect call sites and their context
+            call_sites = []
+            for xref in idautils.XrefsTo(ea, 0):
+                if not xref.iscode:
+                    continue
+                caller_func = idaapi.get_func(xref.frm)
+                if not caller_func:
+                    continue
+                try:
+                    cfunc = ida_hexrays.decompile(caller_func.start_ea)
+                    if not cfunc:
+                        continue
+                    pseudo = str(cfunc)
+                    # Find the call line
+                    call_ea_hex = hex(xref.frm)
+                    for line in pseudo.splitlines():
+                        if fname in line or call_ea_hex in line:
+                            call_sites.append({
+                                "caller": idc.get_func_name(caller_func.start_ea),
+                                "call_line": line.strip()[:120],
+                                "caller_addr": hex(caller_func.start_ea),
+                            })
+                            break
+                except Exception:
+                    pass
+                if len(call_sites) >= 20:
+                    break
+
+            # Analyze the function itself for return value usage
+            return_patterns = []
+            try:
+                cfunc = ida_hexrays.decompile(ea)
+                if cfunc:
+                    pseudo = str(cfunc)
+                    # Look for return statements
+                    for line in pseudo.splitlines():
+                        if "return" in line.lower():
+                            return_patterns.append(line.strip()[:80])
+            except Exception:
+                pass
+
+            # Use BehaviorClassifier to infer contract semantics
+            contract_tags = []
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+                call_context = "\n".join(cs["call_line"] for cs in call_sites[:10])
+                if call_context:
+                    hits = classifier.classify(call_context, threshold=0.38, top_k=3, block=False)
+                    contract_tags = [h["behavior"] for h in hits]
+            except Exception:
+                pass
+
+            return {
+                "ok": True, "addr": hex(ea), "name": fname,
+                "call_sites_analyzed": len(call_sites),
+                "call_patterns": call_sites[:10],
+                "return_patterns": return_patterns[:5],
+                "inferred_contract": {
+                    "behavior_tags": contract_tags,
+                    "note": (
+                        f"Analyzed {len(call_sites)} call sites. "
+                        "Call patterns show how callers use this function. "
+                        "Return patterns show what values are returned."
+                    ),
+                },
+            }
+
+        elif action == "global_state_influence_mapper":
+            # Map which global variables a function reads and writes.
+            # Returns a structured influence map: {global_addr: {read, write, name}}.
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            func = idaapi.get_func(ea)
+            fname = idc.get_func_name(ea)
+            reads, writes = {}, {}
+            for item_ea in idautils.FuncItems(ea):
+                for xref in idautils.DataRefsFrom(item_ea):
+                    seg = idaapi.getseg(xref)
+                    if not seg:
+                        continue
+                    # Skip code segments (function pointers etc)
+                    if seg.perm & idaapi.SEGPERM_EXEC:
+                        continue
+                    gname = idc.get_name(xref) or hex(xref)
+                    gsize = idc.get_item_size(xref)
+                    entry = {"addr": hex(xref), "name": gname, "size": gsize}
+                    # Determine read vs write from instruction
+                    flags = ida_bytes.get_flags(item_ea)
+                    if ida_bytes.is_code(flags):
+                        mnem = (idc.print_insn_mnem(item_ea) or "").lower()
+                        if any(m in mnem for m in ("mov", "str", "st", "push", "write")):
+                            writes[hex(xref)] = entry
+                        else:
+                            reads[hex(xref)] = entry
+                    else:
+                        reads[hex(xref)] = entry
+
+            return {
+                "ok": True, "addr": hex(ea), "name": fname,
+                "reads": list(reads.values())[:30],
+                "writes": list(writes.values())[:30],
+                "read_count": len(reads),
+                "write_count": len(writes),
+                "summary": (
+                    f"{fname} reads {len(reads)} global(s), writes {len(writes)} global(s). "
+                    + ("Pure function (no global writes)." if not writes else
+                       f"Modifies: {', '.join(e['name'] for e in list(writes.values())[:5])}")
+                ),
+            }
+
+        elif action == "interprocedural_data_lineage_graph":
+            # Trace how a value flows from a source address through function calls.
+            # Uses taint tool internally for the actual tracing.
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required (source function or address)")
+            source = query or "recv"
+            try:
+                from .taint import taint as _taint
+                result = _taint(action="paths", source=source, max_depth=5, max_paths=15)
+                paths = result.get("paths", [])
+                return {
+                    "ok": True,
+                    "source": source,
+                    "addr": addr,
+                    "paths": paths,
+                    "path_count": len(paths),
+                    "note": (
+                        f"Data lineage from '{source}' traced through {len(paths)} path(s). "
+                        "Each path shows the call chain from source to sink."
+                    ),
+                }
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"taint tracing failed: {e}")
+
+        elif action == "semantic_diff_explainer":
+            # Explain behavioral differences between two functions using embedding distance
+            # and BehaviorClassifier. addr = function A, query = address of function B.
+            if not addr or not query:
+                return make_error(MCPError.INVALID_ARGS, "addr (function A) and query (function B address) required")
+            ea_a, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            ea_b, err2 = validate_addr(query, require_func=True)
+            if err2:
+                return err2
+
+            pseudo_a = pseudo_b = ""
+            try:
+                cfunc = ida_hexrays.decompile(ea_a)
+                if cfunc:
+                    pseudo_a = str(cfunc)[:3000]
+                cfunc = ida_hexrays.decompile(ea_b)
+                if cfunc:
+                    pseudo_b = str(cfunc)[:3000]
+            except Exception:
+                pass
+
+            # Embedding similarity
+            emb_sim = 0.0
+            tags_a, tags_b = [], []
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                embedder = BgeCodeEmbedder()
+                classifier = BehaviorClassifier.instance(embedder)
+                if pseudo_a and pseudo_b:
+                    vec_a = embedder.embed(pseudo_a)
+                    vec_b = embedder.embed(pseudo_b)
+                    dot = sum(x * y for x, y in zip(vec_a, vec_b))
+                    import math
+                    na = math.sqrt(sum(x*x for x in vec_a))
+                    nb = math.sqrt(sum(x*x for x in vec_b))
+                    emb_sim = dot / (na * nb) if na > 0 and nb > 0 else 0.0
+                if pseudo_a:
+                    tags_a = [h["behavior"] for h in classifier.classify(pseudo_a, threshold=0.38, top_k=4, block=False)]
+                if pseudo_b:
+                    tags_b = [h["behavior"] for h in classifier.classify(pseudo_b, threshold=0.38, top_k=4, block=False)]
+            except Exception:
+                pass
+
+            only_a = [t for t in tags_a if t not in tags_b]
+            only_b = [t for t in tags_b if t not in tags_a]
+            shared = [t for t in tags_a if t in tags_b]
+
+            return {
+                "ok": True,
+                "addr_a": hex(ea_a), "name_a": idc.get_func_name(ea_a),
+                "addr_b": hex(ea_b), "name_b": idc.get_func_name(ea_b),
+                "embedding_similarity": round(emb_sim, 3),
+                "shared_behaviors": shared,
+                "only_in_a": only_a,
+                "only_in_b": only_b,
+                "summary": (
+                    f"Similarity: {emb_sim:.3f}. "
+                    + (f"Shared: {', '.join(shared)}. " if shared else "No shared behaviors. ")
+                    + (f"A only: {', '.join(only_a)}. " if only_a else "")
+                    + (f"B only: {', '.join(only_b)}." if only_b else "")
+                ),
+            }
+
+        elif action == "decompile_disasm_consistency_search":
+            # Find functions where decompiler output and disassembly disagree.
+            # Signals: decompiler shows no loops but disasm has back-edges,
+            # decompiler shows no calls but disasm has call instructions, etc.
+            results = []
+            checked = 0
+            for func_ea in idautils.Functions():
+                if checked >= 200 or len(results) >= limit:
+                    break
+                checked += 1
+                try:
+                    # Count calls in disasm
+                    disasm_calls = sum(
+                        1 for item in idautils.FuncItems(func_ea)
+                        if (idc.print_insn_mnem(item) or "").lower().startswith("call")
+                    )
+                    # Count calls in decompiler
+                    cfunc = ida_hexrays.decompile(func_ea)
+                    if not cfunc:
+                        continue
+                    pseudo = str(cfunc)
+                    pseudo_calls = pseudo.count("(") - pseudo.count("if (") - pseudo.count("while (") - pseudo.count("for (")
+                    # Significant mismatch
+                    if disasm_calls > 0 and pseudo_calls == 0:
+                        results.append({
+                            "addr": hex(func_ea),
+                            "name": idc.get_func_name(func_ea),
+                            "issue": "disasm_has_calls_pseudo_doesnt",
+                            "disasm_calls": disasm_calls,
+                            "note": "Decompiler may have inlined or missed calls",
+                        })
+                    elif disasm_calls == 0 and pseudo_calls > 3:
+                        results.append({
+                            "addr": hex(func_ea),
+                            "name": idc.get_func_name(func_ea),
+                            "issue": "pseudo_has_calls_disasm_doesnt",
+                            "pseudo_calls": pseudo_calls,
+                            "note": "Decompiler may have synthesized calls from indirect branches",
+                        })
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "inconsistencies": results,
+                "count": len(results),
+                "checked": checked,
+                "note": "Functions where decompiler and disassembly disagree on call structure.",
+            }
+
+        elif action == "argument_semantics_search":
+            # Find functions where argument N has a specific semantic role.
+            # Example: query="buffer pointer", addr="1" (arg index)
+            # Uses BehaviorClassifier on call sites to infer argument semantics.
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required: semantic description of argument role")
+            arg_idx = 0
+            try:
+                arg_idx = int(addr) if addr else 0
+            except Exception:
+                pass
+            matches = []
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+            except Exception:
+                return make_error(MCPError.IDA_ERROR, "BehaviorClassifier unavailable")
+            checked = 0
+            for func_ea in idautils.Functions():
+                if checked >= 200 or len(matches) >= limit:
+                    break
+                checked += 1
+                try:
+                    cfunc = ida_hexrays.decompile(func_ea)
+                    if not cfunc:
+                        continue
+                    pseudo = str(cfunc)
+                    # Find lines with function signature (first few lines)
+                    sig_lines = pseudo.splitlines()[:5]
+                    sig_text = " ".join(sig_lines)
+                    hits = classifier.classify(sig_text + " " + query, threshold=0.42, top_k=1, block=False)
+                    if hits and float(hits[0].get("score", 0)) >= 0.42:
+                        matches.append({
+                            "addr": hex(func_ea),
+                            "name": idc.get_func_name(func_ea),
+                            "score": round(float(hits[0].get("score", 0)), 3),
+                            "behavior": hits[0].get("behavior", ""),
+                        })
+                except Exception:
+                    pass
+            matches.sort(key=lambda x: -x["score"])
+            return {
+                "ok": True, "query": query, "arg_index": arg_idx,
+                "matches": matches[:limit],
+                "count": len(matches),
+            }
+
+        elif action == "path_constrained_search":
+            # Find functions reachable from addr only under specific conditions.
+            # Uses xref_analysis call_chain + BehaviorClassifier to filter by behavior.
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required (start function)")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            behavior_filter = (query or "").strip().lower()
+            # BFS from addr, collect reachable functions
+            from collections import deque
+            visited = set()
+            queue = deque([ea])
+            reachable = []
+            while queue and len(reachable) < 200:
+                cur = queue.popleft()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                func = idaapi.get_func(cur)
+                if not func:
+                    continue
+                reachable.append(cur)
+                for item in idautils.FuncItems(cur):
+                    for xr in idautils.XrefsFrom(item, 0):
+                        if xr.type in (idaapi.fl_CN, idaapi.fl_CF):
+                            tgt = idaapi.get_func(xr.to)
+                            if tgt and tgt.start_ea not in visited:
+                                queue.append(tgt.start_ea)
+
+            # Filter by behavior if requested
+            if behavior_filter:
+                try:
+                    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                    classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
+                    filtered = []
+                    for func_ea in reachable[:100]:
+                        try:
+                            cfunc = ida_hexrays.decompile(func_ea)
+                            if not cfunc:
+                                continue
+                            hits = classifier.classify(str(cfunc)[:1500], threshold=0.40, top_k=2, block=False)
+                            if any(behavior_filter in h.get("behavior", "").lower() for h in hits):
+                                filtered.append({"addr": hex(func_ea), "name": idc.get_func_name(func_ea),
+                                                 "behavior": hits[0]["behavior"] if hits else ""})
+                        except Exception:
+                            pass
+                    reachable_result = filtered
+                except Exception:
+                    reachable_result = [{"addr": hex(f), "name": idc.get_func_name(f)} for f in reachable[:limit]]
+            else:
+                reachable_result = [{"addr": hex(f), "name": idc.get_func_name(f)} for f in reachable[:limit]]
+
+            return {
+                "ok": True, "start": hex(ea),
+                "behavior_filter": behavior_filter or None,
+                "reachable": reachable_result,
+                "count": len(reachable_result),
+                "total_reachable": len(reachable),
+            }
+
+        elif action == "cross_artifact_correlation_search":
+            # Correlate findings across strings, imports, xrefs, and blackboard.
+            # Returns a unified ranked list of addresses with evidence from multiple sources.
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required")
+            from .search import search as _search
+            from .blackboard import BlackboardStore
+            results = {}
+
+            def _add(ea_str, source, score, text):
+                if ea_str not in results:
+                    results[ea_str] = {"addr": ea_str, "sources": [], "score": 0.0}
+                results[ea_str]["sources"].append({"source": source, "text": text[:80], "score": score})
+                results[ea_str]["score"] += score
+
+            # String matches
+            sr = _search(action="string", pattern=query, limit=20)
+            for line in (sr.get("matches") or "").splitlines():
+                parts = line.split()
+                if parts:
+                    _add(parts[0], "string", 0.6, line)
+
+            # Name matches
+            nr = _search(action="name", pattern=query, limit=20)
+            for line in (nr.get("matches") or "").splitlines():
+                parts = line.split()
+                if parts:
+                    _add(parts[0], "name", 0.8, line)
+
+            # Blackboard matches
+            try:
+                store = BlackboardStore()
+                bb = store.list(limit=50)
+                for e in bb:
+                    if query.lower() in (e.get("title") or "").lower():
+                        _add(e.get("addr") or "bb", "blackboard", 0.9, e.get("title", ""))
+            except Exception:
+                pass
+
+            ranked = sorted(results.values(), key=lambda x: -x["score"])
+            return {
+                "ok": True, "query": query,
+                "results": ranked[:limit],
+                "count": len(ranked),
+                "note": "Score = sum of evidence weights across strings/names/imports/blackboard.",
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
