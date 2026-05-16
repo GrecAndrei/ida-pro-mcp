@@ -311,6 +311,28 @@ class TestHostHardening(unittest.TestCase):
             # Raw profile inference should populate processor defaults.
             self.assertEqual(inferred.get("processor"), "arm")
             self.assertEqual(inferred.get("bitness"), 32)
+            self.assertTrue(arch_profile.get("inference_applied"))
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def test_session_create_ambiguous_raw_does_not_force_architecture(self):
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            tf.write(os.urandom(1024))
+            path = tf.name
+        try:
+            res = self.server._execute_tool(
+                "session", {"action": "create", "binary_path": path}
+            )
+            self.assertTrue(res.get("ok"), res)
+            arch_profile = res.get("architecture_profile", {})
+            inferred = arch_profile.get("inferred_profile", {})
+            opts = (res.get("session") or {}).get("analysis_options", {}) or {}
+            if inferred.get("processor") in (None, ""):
+                self.assertNotIn("processor", opts)
+                self.assertFalse(arch_profile.get("inference_applied"))
         finally:
             try:
                 os.unlink(path)

@@ -7,7 +7,7 @@ Pure-python helpers (no IDA imports) so host + server_script can share logic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple
 import os
 import struct
@@ -84,6 +84,7 @@ class ArchInference:
     file_kind: str = "unknown"
     confidence: float = 0.0
     reason: str = ""
+    candidates: list[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -93,7 +94,77 @@ class ArchInference:
             "file_kind": self.file_kind,
             "confidence": round(float(self.confidence), 3),
             "reason": self.reason,
+            "candidates": self.candidates,
         }
+
+
+def _score_raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
+    """
+    Score likely architectures for raw blobs from lightweight opcode signatures.
+    Returns sorted candidates with normalized confidence.
+    """
+    if not data:
+        return []
+
+    sample = data[: min(len(data), 8192)]
+    n = max(1, len(sample))
+
+    def _count(pat: bytes) -> int:
+        return sample.count(pat)
+
+    # x86/x64-ish patterns
+    x86_score = 0.0
+    x86_score += _count(b"\x55\x8b\xec") * 2.0   # push ebp; mov ebp,esp
+    x86_score += _count(b"\x55\x48\x89\xe5") * 2.5  # x64 prologue
+    x86_score += _count(b"\xe8") * 0.02           # call rel32 opcode density
+    x86_score += _count(b"\xc3") * 0.03           # ret opcode density
+
+    # ARM Thumb signatures (common in firmware)
+    arm_thumb_score = 0.0
+    arm_thumb_score += _count(b"\x70\x47") * 1.2  # bx lr
+    arm_thumb_score += _count(b"\xf0\xb5") * 1.8  # push {..., lr}
+    arm_thumb_score += _count(b"\x00\xf0") * 0.8  # bl/branch prefix
+
+    # ARM A32 signatures
+    arm_a32_score = 0.0
+    arm_a32_score += _count(b"\x2d\xe9") * 1.8    # stmfd sp!, {...}
+    arm_a32_score += _count(b"\xbd\xe8") * 1.6    # ldmfd sp!, {...}
+    arm_a32_score += _count(b"\x1e\xff\x2f\xe1") * 2.0  # bx lr
+
+    # MIPS prologues (both endian variants represented in bytes)
+    mips_le_score = 0.0
+    mips_le_score += _count(b"\xbd\x27") * 1.8    # addiu sp,sp,-imm (LE)
+    mips_le_score += _count(b"\xbf\xaf") * 1.4    # sw ra,off(sp) (LE)
+    mips_le_score += _count(b"\x0c") * 0.02       # jal opcode high byte often 0x0c in BE word view
+
+    mips_be_score = 0.0
+    mips_be_score += _count(b"\x27\xbd") * 1.8    # addiu sp,sp,-imm (BE)
+    mips_be_score += _count(b"\xaf\xbf") * 1.4    # sw ra,off(sp) (BE)
+    mips_be_score += _count(b"\x03\xe0\x00\x08") * 1.8  # jr ra
+
+    raw = [
+        {"processor": "metapc", "bitness": 32, "endian": "little", "score": x86_score, "reason": "x86/x64 opcode density"},
+        {"processor": "arm", "bitness": 32, "endian": "little", "score": arm_thumb_score + arm_a32_score, "reason": "ARM/Thumb opcode density"},
+        {"processor": "mipsl", "bitness": 32, "endian": "little", "score": mips_le_score, "reason": "MIPS little-endian opcode density"},
+        {"processor": "mipsb", "bitness": 32, "endian": "big", "score": mips_be_score, "reason": "MIPS big-endian opcode density"},
+    ]
+    raw.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
+    best = float(raw[0]["score"]) if raw else 0.0
+    if best <= 0.0:
+        return []
+    out = []
+    for row in raw[:4]:
+        norm = max(0.0, min(0.95, float(row["score"]) / (best + 1e-6)))
+        out.append(
+            {
+                "processor": row["processor"],
+                "bitness": row["bitness"],
+                "endian": row["endian"],
+                "confidence": round(norm, 3),
+                "reason": row["reason"],
+            }
+        )
+    return out
 
 
 def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
@@ -105,6 +176,8 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
     try:
         with open(binary_path, "rb") as f:
             head = f.read(64)
+            f.seek(0)
+            sample = f.read(8192)
     except Exception:
         inf.reason = "binary unreadable"
         return inf.to_dict()
@@ -144,11 +217,23 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
             inf.reason = "raw Cortex-M vector table heuristic"
             return inf.to_dict()
 
-    # Conservative fallback for raw blobs: ARM32 little is most common in embedded dumps.
-    inf.processor = "arm"
-    inf.bitness = 32
-    inf.endian = "little"
-    inf.confidence = 0.45
-    inf.reason = "raw binary fallback (low confidence)"
-    return inf.to_dict()
+    candidates = _score_raw_arch_candidates(sample)
+    inf.candidates = candidates
+    if candidates:
+        top = candidates[0]
+        top_conf = float(top.get("confidence") or 0.0)
+        if top_conf >= 0.6:
+            inf.processor = str(top.get("processor") or "")
+            inf.bitness = int(top.get("bitness") or 32)
+            inf.endian = str(top.get("endian") or "little")
+            inf.confidence = min(0.85, top_conf)
+            inf.reason = f"raw opcode signature heuristic ({top.get('reason')})"
+            return inf.to_dict()
 
+    # Unknown raw: avoid forcing a wrong processor. Keep suggestions only.
+    inf.processor = None
+    inf.bitness = None
+    inf.endian = None
+    inf.confidence = 0.2
+    inf.reason = "raw binary ambiguous; no safe auto-architecture"
+    return inf.to_dict()
