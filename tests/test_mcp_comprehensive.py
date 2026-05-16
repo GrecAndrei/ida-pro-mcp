@@ -302,6 +302,292 @@ class TestCalcTool:
             assert "nearest" in result
 
 
+class TestWorkflowTool:
+    def test_workflow_audit_plan_action(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="audit_plan",
+            planned_calls=[
+                {"name": "misc", "arguments": {"action": "health"}},
+                {"name": "search", "arguments": {"action": "vulnerable"}},
+            ],
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("action") == "audit_plan"
+        assert isinstance(result.get("audit"), dict)
+        assert isinstance(result["audit"].get("score"), int)
+
+    def test_workflow_execute_plan_action(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="execute_plan",
+            planned_calls=[
+                {"name": "misc", "arguments": {"action": "health"}},
+            ],
+            continue_on_error=True,
+            max_steps=5,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is not True
+        assert isinstance(result.get("execution_meta"), dict)
+        assert result["execution_meta"].get("action") == "execute_plan"
+
+    def test_workflow_prioritize_action(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="prioritize",
+            workflow_action="triage_fast",
+            priority_mode="coverage",
+            limit=3,
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("action") == "prioritize"
+        assert result.get("dry_run") is True
+        assert isinstance(result.get("planned_calls"), list)
+        assert "workflow_meta" in result
+
+    def test_workflow_compose_action(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="compose",
+            workflow_actions=["triage_fast", "vuln_audit"],
+            limit=3,
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("action") == "compose"
+        assert result.get("dry_run") is True
+        assert isinstance(result.get("planned_calls"), list)
+        assert "workflow_meta" in result
+
+    def test_workflow_estimate_action(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="estimate",
+            workflow_action="recon_sweep",
+            profile="deep",
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("action") == "estimate"
+        assert result.get("dry_run") is True
+        estimate = result.get("estimate")
+        assert isinstance(estimate, dict)
+        assert isinstance(estimate.get("risk_score"), int)
+        assert isinstance(estimate.get("category_counts"), dict)
+
+    def test_workflow_explain_action(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="explain",
+            workflow_action="triage_fast",
+            limit=3,
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("action") == "explain"
+        assert result.get("dry_run") is True
+        assert isinstance(result.get("explained_steps"), list)
+        assert "workflow_meta" in result
+
+    def test_workflow_plan_action(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="plan",
+            workflow_action="recon_sweep",
+            profile="deep",
+            include_tools=["idb", "search"],
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("dry_run") is True
+        assert result.get("requested_action") == "plan"
+        assert result.get("planned_action") == "recon_sweep"
+        assert isinstance(result.get("planned_calls"), list)
+        assert "workflow_meta" in result
+
+    def test_workflow_plan_requires_target(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="plan")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_explain_requires_target(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="explain")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_estimate_requires_target(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="estimate")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_compose_requires_targets(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="compose")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_prioritize_requires_input(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="prioritize")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_execute_plan_requires_input(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="execute_plan")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_audit_plan_requires_input(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="audit_plan")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_catalog(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="catalog")
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("action") == "catalog"
+        assert isinstance(result.get("workflow_catalog"), dict)
+        assert "triage_fast" in result.get("workflow_catalog", {})
+        assert "recon_sweep" in result.get("workflow_catalog", {})
+
+    def test_workflow_triage_fast_returns_workflow_meta(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="triage_fast", limit=3)
+        assert isinstance(result, dict)
+        assert "workflow_meta" in result
+        meta = result["workflow_meta"]
+        assert meta.get("version") == 1
+        assert meta.get("action") == "triage_fast"
+        assert "profile" in meta
+        assert "step_count" in meta
+        assert isinstance(meta.get("firmware_detected"), bool)
+        assert isinstance(meta.get("trigger"), str)
+        assert isinstance(meta.get("step_tools"), list)
+        assert "idb" in meta.get("step_tools", [])
+        assert isinstance(meta.get("step_actions"), list)
+        assert "idb.overview" in meta.get("step_actions", [])
+        assert isinstance(meta.get("step_calls"), list)
+        assert any(c.get("tool") == "idb" and c.get("action") == "overview" for c in meta.get("step_calls", []))
+
+    def test_workflow_patch_review_requires_addr(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="patch_review")
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+    def test_workflow_meta_survives_output_fields_projection(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="triage_fast",
+            limit=2,
+            output_fields=["summary"],
+        )
+        assert isinstance(result, dict)
+        assert "workflow_meta" in result
+        assert result["workflow_meta"].get("version") == 1
+        assert result["workflow_meta"].get("action") == "triage_fast"
+
+    def test_workflow_meta_not_removed_by_output_omit(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="triage_fast",
+            limit=2,
+            output_omit=["workflow_meta"],
+        )
+        assert isinstance(result, dict)
+        assert "workflow_meta" in result
+        assert result["workflow_meta"].get("version") == 1
+        assert result["workflow_meta"].get("action") == "triage_fast"
+
+    def test_workflow_meta_present_in_full_mode(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="triage_fast",
+            limit=2,
+            _response_mode="full",
+        )
+        assert isinstance(result, dict)
+        assert "workflow_meta" in result
+        assert result["workflow_meta"].get("version") == 1
+        assert result["workflow_meta"].get("action") == "triage_fast"
+
+    def test_workflow_meta_survives_output_path_summary(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="triage_fast",
+            limit=2,
+            output_path="summary",
+        )
+        assert isinstance(result, dict)
+        assert "workflow_meta" in result
+        assert result["workflow_meta"].get("version") == 1
+        assert result["workflow_meta"].get("action") == "triage_fast"
+        assert isinstance(result["workflow_meta"].get("trigger"), str)
+        assert isinstance(result["workflow_meta"].get("firmware_detected"), bool)
+        assert isinstance(result["workflow_meta"].get("step_tools"), list)
+        assert isinstance(result["workflow_meta"].get("step_actions"), list)
+        assert isinstance(result["workflow_meta"].get("step_calls"), list)
+        assert any(
+            c.get("tool") == "idb" and c.get("action") == "overview"
+            for c in result["workflow_meta"].get("step_calls", [])
+        )
+
+    def test_workflow_recon_sweep_returns_workflow_meta(self, mcp_client):
+        result = mcp_client.call_tool("workflow", action="recon_sweep", limit=3, profile="deep")
+        assert isinstance(result, dict)
+        assert "workflow_meta" in result
+        meta = result["workflow_meta"]
+        assert meta.get("version") == 1
+        assert meta.get("action") == "recon_sweep"
+        assert meta.get("profile") == "deep"
+        assert isinstance(meta.get("firmware_detected"), bool)
+        assert isinstance(meta.get("step_calls"), list)
+        assert any(c.get("tool") == "search" and c.get("action") == "structured" for c in meta.get("step_calls", []))
+
+    def test_workflow_dry_run_returns_planned_calls(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="recon_sweep",
+            limit=3,
+            dry_run=True,
+            include_tools=["idb", "search", "threat_hunt"],
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert result.get("dry_run") is True
+        assert isinstance(result.get("planned_calls"), list)
+        assert "workflow_meta" in result
+        meta = result["workflow_meta"]
+        assert meta.get("dry_run") is True
+        assert meta.get("action") == "recon_sweep"
+        assert meta.get("include_tools") == ["idb", "search", "threat_hunt"]
+
+    def test_workflow_dry_run_reports_filter_diagnostics(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="recon_sweep",
+            dry_run=True,
+            include_tools=["idb", "nonexistent_tool"],
+            exclude_tools=["idb"],
+        )
+        assert isinstance(result, dict)
+        assert result.get("ok") is True
+        assert "workflow_meta" in result
+        meta = result["workflow_meta"]
+        assert "nonexistent_tool" in meta.get("unknown_include_tools", [])
+        assert "idb" in meta.get("conflicting_tools", [])
+        assert isinstance(meta.get("plan_diagnostics"), list)
+
+    def test_workflow_execute_rejects_empty_filtered_plan(self, mcp_client):
+        result = mcp_client.call_tool(
+            "workflow",
+            action="recon_sweep",
+            include_tools=["nonexistent_tool"],
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True or "error" in result
+
+
 class TestAnalysisTool:
     def test_analysis_no_session(self, mcp_client):
         result = mcp_client.call_tool("analysis", action="get_options")

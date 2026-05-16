@@ -70,13 +70,37 @@ def idb(
             summary = idb_summary()
             segs = idb_segments_detailed()
             entries = idb_entrypoints_detailed()
-            return {
+            result = {
                 "ok": True,
                 "meta": meta,
                 "summary": summary,
-                "segments": segs[:20],  # Cap at 20 segments to keep response manageable
+                "segments": segs[:20],
                 "entrypoints": entries.get("entrypoints", [])[:30],
             }
+            # Firmware detection hint
+            file_type = meta.get("file_type", "")
+            proc = (meta.get("processor") or "").lower()
+            import_count = summary.get("import_count", 0) if isinstance(summary, dict) else 0
+            is_firmware = (
+                file_type in ("raw", "unknown", "")
+                or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and import_count == 0)
+            )
+            if is_firmware:
+                result["firmware_detected"] = True
+                result["next_actions"] = [
+                    "firmware_view(action='triage_snapshot')",
+                    "firmware_view(action='detect_load_address')",
+                    "firmware_view(action='detect_vector_table')",
+                    "firmware_view(action='detect_mmio')",
+                    "llm_helpers(action='guided_analysis')",
+                ]
+            else:
+                result["next_actions"] = [
+                    "data(action='imports')",
+                    "search(action='find', pattern='main')",
+                    "llm_helpers(action='cheatsheet')",
+                ]
+            return result
         if action == "segments":
             segs = idb_segments_detailed()
             total = len(segs)

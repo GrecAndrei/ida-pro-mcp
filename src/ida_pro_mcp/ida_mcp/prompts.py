@@ -105,6 +105,7 @@ QUICKREF_TEXT = """\
 - `binary_info(action="headers")` - Identify format, processor, entrypoints, and image bounds
 - `binary_info(action="sections")` - Inspect segments, permissions, and entropy
 - `binary_info(action="compiler")` - Detect compiler/runtime hints before retyping
+- `firmware_view(action="triage_snapshot")` - One-shot load/vector/MMIO orientation before deeper carving
 - `firmware_view(action="scan_region")` - Profile unknown raw regions
 - `firmware_view(action="region_profile")` - Measure pointer, string, and unknown-byte density
 - `firmware_view(action="pointer_sweep")` - Find pointer-like cells and candidate tables
@@ -275,11 +276,12 @@ WORKFLOW_FIRMWARE = """\
 1. **Identify Format**: `binary_info(action="headers")` → format, processor, entrypoints, bounds
 2. **Inspect Sections**: `binary_info(action="sections")` → permissions, entropy, segment layout
 3. **Check Compiler Hints**: `binary_info(action="compiler")` → compiler/runtime clues before retyping
-4. **Profile Raw Regions**: `firmware_view(action="scan_region")` → estimate code/data/unknown mix
-5. **Summarize Region**: `firmware_view(action="region_profile")` → pointer/string/unknown density
-6. **Sweep Pointers**: `firmware_view(action="pointer_sweep")` → table and vtable candidates
-7. **Dry-Run Carving**: `firmware_view(action="smart_carve", apply=false)` → safe retyping plan
-8. **Review Prior Decisions**: `blackboard(action="list", category="firmware_view")` → reuse local analysis
-9. **Anchor Conversions**: `data_ops(action="cycle_data", addr="<known_addr>")` → only after a concrete address is identified
-10. **Continue Search**: `search(action="semantic", pattern="entry init parser")` → map the now-sharpened binary
+4. **One-Shot Orientation**: `firmware_view(action="triage_snapshot")` → aggregate load-address, vector-table, and MMIO signals
+5. **Profile Raw Regions**: `firmware_view(action="scan_region")` → estimate code/data/unknown mix
+6. **Summarize Region**: `firmware_view(action="region_profile")` → pointer/string/unknown density
+7. **Sweep Pointers**: `firmware_view(action="pointer_sweep")` → table and vtable candidates
+8. **Dry-Run Carving**: `firmware_view(action="smart_carve", apply=false)` → safe retyping plan
+9. **Review Prior Decisions**: `blackboard(action="list", category="firmware_view")` → reuse local analysis
+10. **Anchor Conversions**: `data_ops(action="cycle_data", addr="<known_addr>")` → only after a concrete address is identified
+11. **Continue Search**: `search(action="semantic", pattern="entry init parser")` → map the now-sharpened binary
 """
