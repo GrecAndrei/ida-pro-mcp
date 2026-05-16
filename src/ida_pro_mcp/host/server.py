@@ -120,6 +120,7 @@ from .schemas import (
     classify_tool_category,
     sanitize_schema_for_vertex,
 )
+from .arch_profile import normalize_arch_options, infer_binary_arch_profile
 
 # Import truncation middleware
 try:
@@ -6238,59 +6239,7 @@ class IDAMCPServer:
                             )
                         analysis_options[key] = top_val
 
-                # Canonicalize convenience aliases.
-                if "loader_options" in analysis_options and "value" not in analysis_options:
-                    analysis_options["value"] = analysis_options.get("loader_options")
-
-                # Canonicalize processor/endian user-facing aliases so IDA gets
-                # stable names even when callers use architecture-family labels.
-                proc_val = analysis_options.get("processor")
-                if proc_val is not None:
-                    proc_txt = str(proc_val).strip().lower()
-                    proc_aliases = {
-                        "aarch64": "arm",
-                        "arm64": "arm",
-                        "armv8": "arm",
-                        "x64": "metapc",
-                        "x86_64": "metapc",
-                        "amd64": "metapc",
-                        "i386": "metapc",
-                        "i486": "metapc",
-                        "i586": "metapc",
-                        "i686": "metapc",
-                        "x86": "metapc",
-                        "mipsel": "mipsl",
-                        "mipseb": "mipsb",
-                        "ppc": "powerpc",
-                    }
-                    canonical_proc = proc_aliases.get(proc_txt, proc_txt)
-                    analysis_options["processor"] = canonical_proc
-                    if "bitness" not in analysis_options or analysis_options.get("bitness") is None:
-                        implied_bits = {
-                            "aarch64": 64,
-                            "arm64": 64,
-                            "armv8": 64,
-                            "x64": 64,
-                            "x86_64": 64,
-                            "amd64": 64,
-                            "i386": 32,
-                            "i486": 32,
-                            "i586": 32,
-                            "i686": 32,
-                            "x86": 32,
-                            "mipsel": 32,
-                            "mipseb": 32,
-                        }.get(proc_txt)
-                        if implied_bits is not None:
-                            analysis_options["bitness"] = implied_bits
-
-                end_val = analysis_options.get("endian")
-                if end_val is not None:
-                    e = str(end_val).strip().lower()
-                    if e in ("little", "little_endian", "little-endian", "littleendian", "le", "0", "false"):
-                        analysis_options["endian"] = "little"
-                    elif e in ("big", "big_endian", "big-endian", "bigendian", "be", "1", "true"):
-                        analysis_options["endian"] = "big"
+                analysis_options, arch_meta = normalize_arch_options(analysis_options)
 
                 preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
                 has_preload_request = any(k in analysis_options and analysis_options.get(k) is not None for k in preload_keys)
@@ -6315,6 +6264,22 @@ class IDAMCPServer:
                                 "hint": "Provide an absolute path to an existing binary file.",
                             },
                         )
+                    # Raw-binary profile inference to avoid metapc/default dead-ends.
+                    if analysis_options.get("processor") is None:
+                        inferred = infer_binary_arch_profile(binary_path)
+                        if inferred.get("processor"):
+                            # Apply automatically only when confidence is meaningful
+                            # or when file is a raw blob.
+                            conf = float(inferred.get("confidence") or 0.0)
+                            kind = str(inferred.get("file_kind") or "unknown")
+                            if conf >= 0.55 or kind == "raw":
+                                analysis_options["processor"] = inferred.get("processor")
+                                if inferred.get("bitness") is not None:
+                                    analysis_options.setdefault("bitness", inferred.get("bitness"))
+                                if inferred.get("endian"):
+                                    analysis_options.setdefault("endian", inferred.get("endian"))
+                                arch_meta = dict(arch_meta or {})
+                                arch_meta["inferred_profile"] = inferred
 
                 if not binary_path:
                     return make_error(
@@ -6378,6 +6343,8 @@ class IDAMCPServer:
                 out = {"ok": True, "session": self.current_session.to_dict()}
                 if create_note:
                     out["note"] = create_note
+                if arch_meta:
+                    out["architecture_profile"] = arch_meta
                 return out
             if action == "discover":
                 self.session_mgr._load_orphaned_idbs()

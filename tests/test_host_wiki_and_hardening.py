@@ -4,6 +4,8 @@ import os
 import shutil
 import tempfile
 import unittest
+import tempfile
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -292,6 +294,28 @@ class TestHostHardening(unittest.TestCase):
             "llm_helpers", {"action": "quickstart"}
         )
         self.assertEqual(normalized.get("action"), "bootstrap")
+
+    def test_session_create_infers_raw_architecture_profile(self):
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            tf.write((0x20002000).to_bytes(4, "little"))
+            tf.write((0x08000101).to_bytes(4, "little"))
+            tf.write(b"\x00" * 64)
+            path = tf.name
+        try:
+            res = self.server._execute_tool(
+                "session", {"action": "create", "binary_path": path}
+            )
+            self.assertTrue(res.get("ok"), res)
+            arch_profile = res.get("architecture_profile", {})
+            inferred = arch_profile.get("inferred_profile", {})
+            # Raw profile inference should populate processor defaults.
+            self.assertEqual(inferred.get("processor"), "arm")
+            self.assertEqual(inferred.get("bitness"), 32)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     def test_compile_smart_pattern_allows_fuzzy_cutoff_tuning(self):
         strict = compile_smart_pattern("decompyle trace", semantic_enabled=True, fuzzy_cutoff=0.95)
