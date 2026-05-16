@@ -83,7 +83,7 @@ def memory(
         "read", "write", "hexdump", "search", "compare", "pointers",
         "entropy", "strings", "struct_walk", "histogram"
     ], "Action: read|write|hexdump|search|compare|pointers|entropy|strings|struct_walk|histogram"],
-    addr: Annotated[str, "Address"],
+    addr: Annotated[Optional[str], "Address (required for most actions; optional for search with start/end)"] = None,
     type: Annotated[Literal["bytes", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "ptr", "string"],
                     "Data type (for read). Default 'bytes' — returns hex dump of size bytes"] = "bytes",
     size: Annotated[int, "Size in bytes (for type=bytes or hexdump)"] = 16,
@@ -124,9 +124,14 @@ def memory(
 
 def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> dict:
     try:
-        ea, error = validate_addr(addr)
-        if error:
-            return error
+        ea = None
+        if addr is not None and str(addr).strip() != "":
+            ea, error = validate_addr(str(addr))
+            if error:
+                return error
+
+        if action != "search" and ea is None:
+            return make_error(MCPError.INVALID_ARGS, "addr required")
 
         if action == "read":
             if size > 1024 * 1024:
@@ -237,6 +242,13 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
         elif action == "search":
             if not data:
                 return make_error(MCPError.INVALID_ARGS, "data (pattern) required for search")
+            if ea is None:
+                if end_addr:
+                    return make_error(MCPError.INVALID_ARGS, "addr required when end_addr is provided")
+                min_ea = _inf_min_ea()
+                if min_ea in (None, idaapi.BADADDR):
+                    return make_error(MCPError.INVALID_ARGS, "addr required for search when IDB min address is unavailable")
+                ea = int(min_ea)
             end_ea = parse_address(end_addr) if end_addr else ea + 0x10000
             if end_ea <= ea:
                 end_ea = ea + 0x10000

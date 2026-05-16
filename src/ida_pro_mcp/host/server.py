@@ -7992,11 +7992,41 @@ class IDAMCPServer:
                 offset=_bounded_int(args.get("offset", 0), 0, min_value=0),
             )
             return {"ok": True, "entries": entries, "count": len(entries)}
+        if action == "search":
+            query = str(args.get("query") or args.get("pattern") or "").strip()
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query/pattern required for blackboard search")
+            entries = store.semantic_search(
+                query=query,
+                top_k=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500),
+                threshold=float(args.get("threshold", 0.4)),
+                category=str(args.get("category") or "").strip() or None,
+                include_resolved=bool(args.get("include_resolved", True)),
+                include_contradicted=bool(args.get("include_contradicted", False)),
+            )
+            return {"ok": True, "query": query, "entries": entries, "count": len(entries)}
         if action == "read":
             entry = store.read(str(args.get("entry_id") or ""))
             if entry is None:
                 return make_error(MCPError.INVALID_ARGS, "Entry not found")
             return {"ok": True, "entry": entry}
+        if action == "update":
+            entry_id = str(args.get("entry_id") or "").strip()
+            if not entry_id:
+                return make_error(MCPError.INVALID_ARGS, "entry_id required")
+            updates = {
+                k: v
+                for k, v in (args or {}).items()
+                if k
+                not in {
+                    "action",
+                    "entry_id",
+                }
+            }
+            if not updates:
+                return make_error(MCPError.INVALID_ARGS, "No update fields provided")
+            ok = store.update(entry_id, **updates)
+            return {"ok": ok, "action": "update", "entry_id": entry_id} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found or no valid fields")
         if action == "delete":
             ok = store.delete(str(args.get("entry_id") or ""))
             return {"ok": ok, "action": "delete"}
@@ -8036,6 +8066,36 @@ class IDAMCPServer:
             targets = store.next_target(limit=int(args.get("limit") or 5))
             return {"ok": True, "targets": targets, "count": len(targets),
                     "note": "Highest-priority unexplored addresses. Use code(action='decompile') on the top target."}
+        if action == "frontier":
+            try:
+                from .frontier import FrontierEngine
+                emb_db = os.path.join(self.cache_dir, "embeddings.sqlite3")
+                fe = FrontierEngine(emb_db, getattr(store, "db_path", None))
+                results = fe.frontier(limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200))
+                return {"ok": True, "frontier": results, "count": len(results)}
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"frontier unavailable: {e}")
+        if action == "add_evidence":
+            entry_id = str(args.get("entry_id") or "").strip()
+            evidence_type = str(args.get("evidence_type") or args.get("type") or "").strip()
+            value = str(args.get("value") or "").strip()
+            if not entry_id or not evidence_type or not value:
+                return make_error(MCPError.INVALID_ARGS, "entry_id, evidence_type/type, and value required")
+            ok = store.add_evidence(entry_id, evidence_type=evidence_type, value=value, weight=float(args.get("weight", 1.0)))
+            return {"ok": ok, "entry_id": entry_id} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+        if action == "calibrate":
+            entry_id = str(args.get("entry_id") or "").strip()
+            if not entry_id:
+                return make_error(MCPError.INVALID_ARGS, "entry_id required")
+            new_conf = store.calibrate_confidence(entry_id)
+            if new_conf is None:
+                return make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+            return {"ok": True, "entry_id": entry_id, "confidence": new_conf}
+        if action == "campaign_summary":
+            return {"ok": True, "summary": store.campaign_summary()}
+        if action == "auto_tag_propagate":
+            updated = store.auto_tag_propagate()
+            return {"ok": True, "updated": int(updated)}
         if action in ("start_crawler", "stop_crawler", "crawler_status", "accept", "reject"):
             # Delegate to the tool module which owns the crawler singleton
             mod = IDAMCPServer._blackboard_module

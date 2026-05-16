@@ -281,7 +281,15 @@ def search_callers(pattern, include_context, offset, limit, semantic_min_score, 
         semantic_min_score=semantic_min_score, include_alternatives=include_alternatives
     )
     if error:
-        return make_error(MCPError.INVALID_ARGS, error)
+        return build_response(
+            [],
+            offset,
+            limit,
+            0,
+            False,
+            target=str(pattern),
+            note="Target is not a function address/name. Returning empty callers list.",
+        )
 
     func = idaapi.get_func(target_ea)
     if not func:
@@ -338,7 +346,15 @@ def search_callees(pattern, include_context, offset, limit, semantic_min_score, 
         semantic_min_score=semantic_min_score, include_alternatives=include_alternatives
     )
     if error:
-        return make_error(MCPError.INVALID_ARGS, error)
+        return build_response(
+            [],
+            offset,
+            limit,
+            0,
+            False,
+            target=str(pattern),
+            note="Target is not a function address/name. Returning empty callees list.",
+        )
 
     func = idaapi.get_func(target_ea)
     if not func:
