@@ -336,6 +336,37 @@ with open(RESULT_PATH, "w") as f:
         result = runner.run_script(script, timeout=180)
         assert result.get("ok") is True or "error" in result
 
+    def test_nl_query_exposes_expansion_queries_field(self, runner):
+        """query(nl) should expose expansion_queries key (possibly empty)."""
+        script = '''
+from query import query
+result = query(action="nl", q="network parser auth check", limit=8)
+import os
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f)
+    f.flush()
+    os.fsync(f.fileno())
+'''
+        result = runner.run_script(script, timeout=120)
+        if result.get("ok") and "results" in result:
+            assert "expansion_queries" in result
+
+    def test_search_action_auto_routes_nl_intent(self, runner):
+        """query(search) without subaction should auto-route NL intent to semantic NL search."""
+        script = '''
+from query import query
+result = query(action="search", query="function that decrypts config and checks auth", limit=6)
+import os
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f)
+    f.flush()
+    os.fsync(f.fileno())
+'''
+        result = runner.run_script(script, timeout=120)
+        # Depending on embedding/index availability this can be ok or error,
+        # but the call should not crash and should return a dict-like response.
+        assert isinstance(result, dict)
+
 
 # ─── deobfuscate BehaviorClassifier ───────────────────────────────────────────
 

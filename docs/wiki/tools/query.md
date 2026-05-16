@@ -23,5 +23,7 @@ Unified query interface that delegates to other tools (data, search, code, types
 
 ## Notes
 - `nl` requires target functions to be decompiled first (so they exist in the embedding index).
+- `nl` now does embedding-driven query expansion via BehaviorClassifier tags and merges those neighbors into final ranking.
+- `search` auto-routes to `search(action="nl")` when called without `subaction` and the query looks like natural language intent.
 - Use `nl` for exploratory discovery when you don't know exact names or addresses.
 - Other actions are convenience proxies; calling the underlying tool directly is equivalent.

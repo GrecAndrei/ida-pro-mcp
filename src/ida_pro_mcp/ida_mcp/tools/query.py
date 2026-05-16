@@ -67,6 +67,13 @@ def query(
         Example: query(action="nl", args={"q": "function that decrypts data", "limit": 5})
     """
     try:
+        def _nl_like(text: str) -> bool:
+            t = str(text or "").strip().lower()
+            if len(t.split()) >= 4:
+                return True
+            hints = ("function", "find", "that", "which", "where", "parse", "decrypt", "handler", "vuln", "protocol")
+            return any(h in t for h in hints)
+
         merged_args = {}
         if isinstance(args, dict):
             merged_args.update(args)
@@ -85,6 +92,11 @@ def query(
         elif action == "search":
             from .search import search as search_tool
             sub = subaction or "find"
+            q_text = str(args.get("query") or args.get("q") or args.get("pattern") or "").strip()
+            # If caller gives a natural-language search intent, route to embedding-backed search.
+            if not subaction and q_text and _nl_like(q_text):
+                sub = "nl"
+                args.setdefault("query", q_text)
             return search_tool(action=sub, **args)
             
         elif action == "idb":
@@ -136,11 +148,74 @@ def query(
                 return make_error(MCPError.INVALID_ARGS, "No IDB path")
             idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
             if idx.size == 0:
-                return {"ok": True, "results": [], "note": "No functions indexed yet. Run code(action='decompile') on functions first."}
+                return {
+                    "ok": True,
+                    "query": q,
+                    "results": [],
+                    "count": 0,
+                    "expansion_queries": [],
+                    "backend": embedder.backend,
+                    "note": "No functions indexed yet. Run code(action='decompile') on functions first.",
+                }
             q_vec = embedder.embed(q)
             top_k = int(args.get("limit") or 10)
             results = idx.similar_vec(q_vec, top_k=top_k, threshold=0.3)
-            return {"ok": True, "query": q, "results": results, "count": len(results), "backend": embedder.backend}
+            expansion_queries = []
+            try:
+                from ida_pro_mcp.host.intelligence import BehaviorClassifier
+            except ImportError:
+                try:
+                    from host.intelligence import BehaviorClassifier  # type: ignore
+                except ImportError:
+                    BehaviorClassifier = None  # type: ignore
+            if "BehaviorClassifier" in locals() and BehaviorClassifier is not None:
+                try:
+                    classifier = BehaviorClassifier.instance(embedder)
+                    hits = classifier.classify(str(q)[:500], threshold=0.35, top_k=3, block=False)
+                    expansion_queries = [
+                        str(h.get("behavior") or "").strip().replace("_", " ")
+                        for h in (hits or [])
+                        if h.get("behavior")
+                    ]
+                    expansion_queries = [x for x in expansion_queries if x]
+                except Exception:
+                    expansion_queries = []
+            if expansion_queries:
+                by_addr = {}
+                for r in results:
+                    ea = str(r.get("ea") or "")
+                    if ea:
+                        by_addr[ea] = dict(r)
+                for eq in expansion_queries[:3]:
+                    try:
+                        ev = embedder.embed(eq)
+                        extras = idx.similar_vec(ev, top_k=max(3, top_k // 2), threshold=0.28)
+                    except Exception:
+                        continue
+                    for r in extras:
+                        ea = str(r.get("ea") or "")
+                        if not ea:
+                            continue
+                        sim = float(r.get("similarity") or 0.0)
+                        cur = by_addr.get(ea)
+                        if not cur:
+                            row = dict(r)
+                            row["similarity"] = sim * 0.92
+                            row["expansion_query"] = eq
+                            by_addr[ea] = row
+                        else:
+                            if sim > float(cur.get("similarity") or 0.0):
+                                cur["similarity"] = sim * 0.96
+                                cur["expansion_query"] = eq
+                results = sorted(by_addr.values(), key=lambda x: float(x.get("similarity") or 0.0), reverse=True)[:top_k]
+            return {
+                "ok": True,
+                "query": q,
+                "expansion_queries": expansion_queries[:3],
+                "results": results,
+                "count": len(results),
+                "backend": embedder.backend,
+            }
 
         else:
             return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown query action: {action}",
