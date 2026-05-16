@@ -1383,8 +1383,42 @@ def blackboard(
 
     elif action == "next_target":
         targets = store.next_target(limit=limit or 5)
-        return {"ok": True, "targets": targets, "count": len(targets),
-                "note": "Highest-priority unexplored addresses. Use code(action='decompile') on the top target."}
+        # Optional semantic rerank: when query is provided, blend queue priority with embedding similarity.
+        if query:
+            sem_hits = store.semantic_search(
+                query=query,
+                top_k=max(limit or 5, 10),
+                threshold=max(0.2, float(threshold or 0.4) - 0.1),
+                include_resolved=False,
+                include_contradicted=False,
+            )
+            sim_by_addr = {}
+            for h in sem_hits:
+                a = str(h.get("addr") or "").strip()
+                if a:
+                    sim_by_addr[a] = float(h.get("similarity") or 0.0)
+            if sim_by_addr:
+                for t in targets:
+                    a = str(t.get("addr") or "").strip()
+                    sim = sim_by_addr.get(a, 0.0)
+                    base = float(t.get("priority_score") or 0.0)
+                    t["semantic_similarity"] = round(sim, 4)
+                    t["blended_priority"] = round((0.78 * base) + (0.22 * sim), 4)
+                targets = sorted(
+                    targets,
+                    key=lambda x: (float(x.get("blended_priority") or 0.0), float(x.get("priority_score") or 0.0)),
+                    reverse=True,
+                )
+        return {
+            "ok": True,
+            "targets": targets,
+            "count": len(targets),
+            "query": query or None,
+            "note": (
+                "Highest-priority unexplored addresses. With query set, ranking blends queue priority "
+                "and embedding similarity."
+            ),
+        }
 
     elif action == "start_crawler":
         crawler = _BackgroundCrawler.instance(db_path=db_path or None)
