@@ -38,15 +38,15 @@ def binary_info(
         import ida_entry
         from collections import Counter
         info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
-        file_type = info.filetype if info else 0
-        proc_name = info.procname if info else ""
+        file_type = _inf_filetype_id()
+        proc_name = _inf_procname()
 
         # Determine binary format
         is_pe = file_type in (idaapi.f_PE, idaapi.f_COFF) if hasattr(idaapi, 'f_PE') else False
         is_elf = file_type == idaapi.f_ELF if hasattr(idaapi, 'f_ELF') else False
         is_macho = file_type == idaapi.f_MACHO if hasattr(idaapi, 'f_MACHO') else False
 
-        fmt_name = "PE" if is_pe else "ELF" if is_elf else "Mach-O" if is_macho else "Unknown"
+        fmt_name = "PE" if is_pe else "ELF" if is_elf else "Mach-O" if is_macho else _filetype_name(file_type).upper()
 
         if action == "headers":
             # Entry points
@@ -62,9 +62,7 @@ def binary_info(
             min_ea = _inf_min_ea() if info else 0
             max_ea = _inf_max_ea() if info else 0
 
-            bitness = 32
-            if info:
-                bitness = 16 if info.is_16bit() else (64 if _inf_is_64bit() else 32)
+            bitness = _inf_bitness()
             lines = [
                 f"format: {fmt_name}",
                 f"processor: {proc_name}",

@@ -145,16 +145,14 @@ def idb_meta():
                       6: "gnu", 7: "visual_cxx", 8: "bp", 9: "clang"}
     
     # File type
-    file_type = _safe_inf_get("filetype", 0)
-    file_type_names = {0: "unknown", 1: "exe", 2: "obj", 3: "lib", 4: "script",
-                       7: "elf", 8: "pe", 9: "coff", 10: "macho", 17: "raw"}
+    file_type = _inf_filetype_id()
     
     return {
         "binary_path": binary_path,
         "idb_path": idb_path,
-        "processor": idc.get_inf_attr(idc.INF_PROCNAME),
-        "bitness": 64 if (hasattr(ida_ida, 'inf_is_64bit') and ida_ida.inf_is_64bit()) else (32 if (hasattr(ida_ida, 'inf_is_32bit_exactly') and ida_ida.inf_is_32bit_exactly()) else 16),
-        "file_type": file_type_names.get(file_type, f"type_{file_type}"),
+        "processor": _inf_procname(),
+        "bitness": _inf_bitness(),
+        "file_type": _filetype_name(file_type),
         "file_type_id": file_type,
         "compiler": compiler_names.get(comp, f"compiler_{comp}"),
         "image_base": hex(_safe_inf_get("baseaddr", 0)),

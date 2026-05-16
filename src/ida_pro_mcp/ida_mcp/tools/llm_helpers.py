@@ -1030,18 +1030,14 @@ def llm_helpers(
                     if len(top_strings) >= 20:
                         break
 
-            if info:
-                file_type_name = "PE" if info.filetype in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1)) else \
-                                 "ELF" if info.filetype == getattr(idaapi, 'f_ELF', -1) else \
-                                 "Mach-O" if info.filetype == getattr(idaapi, 'f_MACHO', -1) else "other"
-            else:
-                file_type_name = "unknown"
+            file_type_id = _inf_filetype_id() if info else 0
+            file_type_name = _filetype_name(file_type_id).upper() if info else "UNKNOWN"
 
             image_size = (_inf_max_ea() - _inf_min_ea()) if info else 0
             seg_count = sum(1 for _ in idautils.Segments())
 
-            proc_name = info.procname if info else ""
-            bits = (64 if _inf_is_64bit() else 32) if info else 0
+            proc_name = _inf_procname() if info else ""
+            bits = _inf_bitness() if info else 0
             min_ea = _inf_min_ea() if info else 0
             max_ea = _inf_max_ea() if info else 0
             lines = [
@@ -1056,7 +1052,7 @@ def llm_helpers(
                 lines.append(f"Import modules: {', '.join(modules[:10])}")
             if top_strings:
                 lines.append(f"Notable strings: {'; '.join(top_strings[:10])}")
-            if file_type_name == "unknown":
+            if file_type_name in ("UNKNOWN", "RAW"):
                 lines.append(
                     "Raw/unknown format: start with firmware_view(action='scan_region') and firmware_view(action='pointer_sweep') after confirming the load architecture."
                 )
@@ -1330,7 +1326,7 @@ def llm_helpers(
 
             else:
                 # General overview
-                answer_parts.append(f"Binary: {info.procname if info else ''} {'64-bit' if (info and _inf_is_64bit()) else '32-bit'}")
+                answer_parts.append(f"Binary: {_inf_procname() if info else ''} {_inf_bitness()}-bit")
                 answer_parts.append(f"Functions: {_count_functions()}")
                 modules, imports = _get_imports_summary()
                 answer_parts.append(f"Imports: {len(imports)} from {len(modules)} modules")
@@ -1339,7 +1335,7 @@ def llm_helpers(
             return {"ok": True, "answer": "\n".join(answer_parts)}
 
         elif action == "guided_analysis":
-            file_type = info.filetype if info else 0
+            file_type = _inf_filetype_id() if info else 0
             is_pe = file_type in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1))
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
 
@@ -1518,12 +1514,12 @@ def llm_helpers(
             }
 
         elif action == "cheatsheet":
-            file_type = info.filetype if info else 0
+            file_type = _inf_filetype_id() if info else 0
             is_pe = file_type in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1))
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
 
             cheat = ["=== Quick Reference for This Binary ==="]
-            cheat.append(f"Arch: {info.procname if info else ''} | {'64-bit' if (info and _inf_is_64bit()) else '32-bit'}")
+            cheat.append(f"Arch: {_inf_procname() if info else ''} | {_inf_bitness()}-bit")
             cheat.append("")
             cheat.append("== START HERE ==")
             cheat.append("ida://state                                    # READ FIRST — full picture + next actions")
