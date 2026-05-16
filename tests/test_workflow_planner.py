@@ -421,6 +421,36 @@ def test_workflow_triage_fast_trigger_overview_error():
     assert not any(c.get("name") == "firmware_view" for c in calls)
 
 
+def test_workflow_triage_fast_meta_fallback_uses_file_type_name():
+    server = IDAMCPServer()
+    captured = {"idb_calls": 0}
+
+    def _fake_execute(tool, args):
+        if tool == "idb":
+            captured["idb_calls"] += 1
+            if args.get("action") == "overview":
+                return {"firmware_detected": False}
+            if args.get("action") == "meta":
+                return {"file_type": "raw", "file_type_id": 17}
+        return {}
+
+    server._execute_tool = _fake_execute  # type: ignore[method-assign]
+
+    def _fake_batch(args):
+        captured["calls"] = args.get("calls", [])
+        return {"ok": True, "calls": captured["calls"]}
+
+    server._handle_batch = _fake_batch  # type: ignore[method-assign]
+    result = server._handle_workflow({"action": "triage_fast", "limit": 4})
+    assert result.get("ok") is True
+    meta = result.get("workflow_meta", {})
+    assert meta.get("firmware_detected") is True
+    assert meta.get("firmware_mode") == "enabled"
+    assert meta.get("trigger") == "idb_meta_filetype"
+    calls = captured.get("calls", [])
+    assert any(c.get("name") == "firmware_view" for c in calls)
+
+
 def test_workflow_recon_sweep_includes_broad_steps():
     server = IDAMCPServer()
     captured = {}

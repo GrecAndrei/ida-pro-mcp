@@ -8791,10 +8791,17 @@ class IDAMCPServer:
             try:
                 meta = self._execute_tool("idb", {"action": "meta"})
                 if isinstance(meta, dict):
-                    if "filetype" not in meta:
+                    ft_name = str(meta.get("file_type") or meta.get("filetype") or "").strip().lower()
+                    ft_id = meta.get("file_type_id")
+                    if not ft_name and ft_id is None:
                         return False, overview_trigger
-                    ft = str(meta.get("filetype") or "").strip().lower()
-                    if ft in {"raw", "unknown", "bin", "binary", ""}:
+                    if ft_name in {"raw", "unknown", "bin", "binary", ""}:
+                        return True, "idb_meta_filetype"
+                    try:
+                        ft_num = int(ft_id) if ft_id is not None else None
+                    except Exception:
+                        ft_num = None
+                    if ft_num in {0, 17}:
                         return True, "idb_meta_filetype"
                     return False, overview_trigger
                 return False, overview_trigger
