@@ -110,6 +110,15 @@ def _seg_bounds(start: str | None, end: str | None):
     return min_ea, max_ea, None
 
 
+def _safe_idb_bounds() -> tuple[int | None, int | None]:
+    """Return IDB bounds or (None, None) when the session is not fully mapped."""
+    min_ea = _inf_min_ea()
+    max_ea = _inf_max_ea()
+    if min_ea in (None, idaapi.BADADDR) or max_ea in (None, idaapi.BADADDR) or max_ea <= min_ea:
+        return None, None
+    return int(min_ea), int(max_ea)
+
+
 def _item_kind(ea: int) -> str:
     f = ida_bytes.get_flags(ea)
     if ida_bytes.is_code(f):
@@ -250,7 +259,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio", "triage_snapshot"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio|triage_snapshot"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -274,9 +283,23 @@ def firmware_view(
     """
     try:
         state = _load_fw_state()
-        s_ea, e_ea, err = _seg_bounds(start, end)
-        if err:
-            return err
+        range_actions = {
+            "scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates",
+            "smart_carve", "rollback_last", "review_contradictions", "region_profile",
+            "pointer_clusters", "carve_plan", "campaign", "segment_sweep",
+            "multi_region_campaign", "campaign_checkpoint", "campaign_resume",
+            "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query",
+        }
+        if action in range_actions:
+            s_ea, e_ea, err = _seg_bounds(start, end)
+            if err:
+                return err
+        else:
+            min_ea, max_ea = _safe_idb_bounds()
+            if min_ea is None or max_ea is None:
+                s_ea, e_ea = 0, 0
+            else:
+                s_ea, e_ea = min_ea, max_ea
 
         limit = max(1, min(int(limit), 2048))
         stride = max(1, min(int(stride), 16))
@@ -1302,8 +1325,16 @@ def firmware_view(
             # 3. Known MCU fingerprinting: match entropy/size patterns to known chips
             import struct as _struct
 
-            min_ea = idaapi.cvar.inf.min_ea
-            max_ea = idaapi.cvar.inf.max_ea
+            min_ea, max_ea = _safe_idb_bounds()
+            if min_ea is None or max_ea is None:
+                return {
+                    "ok": True,
+                    "binary_size": "0x0",
+                    "current_base": None,
+                    "candidates": [],
+                    "size_hints": [],
+                    "note": "IDB bounds unavailable in current session; open or map a binary to run load-address heuristics.",
+                }
             binary_size = max_ea - min_ea
             candidates = []
 
@@ -1413,8 +1444,17 @@ def firmware_view(
             # Generic: find dense cluster of valid function pointers near binary start.
             import struct as _struct
 
-            min_ea = idaapi.cvar.inf.min_ea
-            max_ea = idaapi.cvar.inf.max_ea
+            min_ea, max_ea = _safe_idb_bounds()
+            if min_ea is None or max_ea is None:
+                return {
+                    "ok": True,
+                    "arch_hint": "unknown",
+                    "ivt_addr": None,
+                    "vectors": [],
+                    "entry_count": 0,
+                    "entry_points": [],
+                    "note": "IDB bounds unavailable in current session; map a binary before vector-table detection.",
+                }
             binary_size = max_ea - min_ea
             ptr_size = 8 if _is_64bit() else 4
             proc = (idc.get_inf_attr(idc.INF_PROCNAME) or "").lower()
@@ -1497,8 +1537,8 @@ def firmware_view(
             # Write entry points to blackboard
             if vectors:
                 try:
-                    from blackboard import BlackboardStore  # type: ignore
-                    store = BlackboardStore()
+                    from blackboard import BlackboardStore as _BBStore  # type: ignore
+                    store = _BBStore()
                     for v in vectors[:32]:
                         handler = v.get("handler") or v.get("value", "")
                         if handler and handler != "0x0":
@@ -1537,8 +1577,15 @@ def firmware_view(
             # Cross-reference with known peripheral base addresses for common MCUs.
             import struct as _struct
 
-            min_ea = idaapi.cvar.inf.min_ea
-            max_ea = idaapi.cvar.inf.max_ea
+            min_ea, max_ea = _safe_idb_bounds()
+            if min_ea is None or max_ea is None:
+                return {
+                    "ok": True,
+                    "likely_chip_family": "unknown",
+                    "peripheral_count": 0,
+                    "peripherals": [],
+                    "note": "IDB bounds unavailable in current session; map a binary before MMIO discovery.",
+                }
             binary_size = max_ea - min_ea
 
             # Known peripheral base addresses for common MCUs
@@ -1636,8 +1683,8 @@ def firmware_view(
             # Write to knowledge graph
             if peripherals:
                 try:
-                    from blackboard import BlackboardStore  # type: ignore
-                    store = BlackboardStore()
+                    from blackboard import BlackboardStore as _BBStore  # type: ignore
+                    store = _BBStore()
                     for p in peripherals[:10]:
                         store.write(
                             title=f"MMIO: {p['peripheral_name']} @ {p['base']}",
@@ -1668,6 +1715,74 @@ def firmware_view(
                     "NEXT: taint(action='report') to trace MMIO reads to dangerous sinks."
                 ),
             }
+
+        if action == "triage_snapshot":
+            # One-shot firmware orientation bundle so users/agents can start from
+            # a compact, actionable snapshot instead of orchestrating three calls.
+            load = firmware_view(action="detect_load_address", auto_blackboard=False)
+            vectors = firmware_view(action="detect_vector_table", auto_blackboard=False)
+            mmio = firmware_view(action="detect_mmio", auto_blackboard=False)
+
+            load_candidates = len(load.get("candidates", []) if isinstance(load, dict) else [])
+            vector_entries = int(vectors.get("entry_count", 0) if isinstance(vectors, dict) else 0)
+            mmio_regions = int(mmio.get("peripheral_count", 0) if isinstance(mmio, dict) else 0)
+            likely_chip = (mmio.get("likely_chip_family") if isinstance(mmio, dict) else None) or "unknown"
+
+            confidence = 0.2
+            if load_candidates > 0:
+                confidence += 0.3
+            if vector_entries > 0:
+                confidence += 0.3
+            if mmio_regions > 0:
+                confidence += 0.2
+            if likely_chip != "unknown":
+                confidence += 0.1
+            confidence = round(min(1.0, confidence), 3)
+
+            findings = []
+            if load_candidates:
+                findings.append(f"Load-address candidates: {load_candidates}")
+            if vector_entries:
+                findings.append(f"Vector/entry points found: {vector_entries}")
+            if mmio_regions:
+                findings.append(f"MMIO peripheral regions found: {mmio_regions}")
+            if likely_chip != "unknown":
+                findings.append(f"Likely chip family: {likely_chip}")
+            if not findings:
+                findings.append("No strong firmware fingerprints yet; likely unmapped or non-firmware image.")
+
+            next_actions = []
+            if load_candidates == 0:
+                next_actions.append("firmware_view(action='scan_region')")
+            else:
+                next_actions.append("firmware_view(action='detect_vector_table')")
+            if vector_entries > 0:
+                next_actions.append("code(action='smart_decompile', addrs='<reset_or_entry_handler>')")
+            if mmio_regions > 0:
+                next_actions.append("taint(action='report')")
+            else:
+                next_actions.append("firmware_view(action='detect_mmio')")
+            next_actions.append("firmware_view(action='carve_plan')")
+
+            result = {
+                "ok": True,
+                "action": action,
+                "confidence": confidence,
+                "summary": {
+                    "load_candidates": load_candidates,
+                    "vector_entries": vector_entries,
+                    "mmio_regions": mmio_regions,
+                    "likely_chip_family": likely_chip,
+                },
+                "findings": findings,
+                "subresults": {
+                    "load_address": load,
+                    "vector_table": vectors,
+                    "mmio": mmio,
+                },
+                "next_actions": next_actions,
+            }
+            return _log_ml(result, action, f"triage_confidence={confidence}; vectors={vector_entries}; mmio={mmio_regions}")
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

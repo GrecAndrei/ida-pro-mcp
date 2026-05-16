@@ -294,10 +294,12 @@ class ResourceResolver:
             }
             if is_firmware:
                 state["binary"]["firmware_note"] = (
-                    "Raw firmware detected. Solve the three hard problems first: "
-                    "1) CALL firmware_view(action='detect_load_address') — is the binary rebased correctly? "
-                    "2) CALL firmware_view(action='detect_vector_table') — find all entry points (IVT). "
-                    "3) CALL firmware_view(action='detect_mmio') — identify MMIO peripheral registers. "
+                    "Raw firmware detected. Start with a one-shot orientation pass: "
+                    "1) CALL firmware_view(action='triage_snapshot') — aggregate load base, vectors, and MMIO hints. "
+                    "Then solve the three hard problems directly when needed: "
+                    "2) CALL firmware_view(action='detect_load_address') — is the binary rebased correctly? "
+                    "3) CALL firmware_view(action='detect_vector_table') — find all entry points (IVT). "
+                    "4) CALL firmware_view(action='detect_mmio') — identify MMIO peripheral registers. "
                     "Then: CALL llm_helpers(action='guided_analysis') for the full step-by-step workflow."
                 )
         except Exception:
@@ -445,6 +447,11 @@ class ResourceResolver:
         bb_state = state.get("blackboard", {})
         cov = state.get("coverage", {})
         eng = state.get("engine", {})
+        binary = state.get("binary", {})
+
+        if binary.get("is_firmware"):
+            actions.append("CALL firmware_view(action='triage_snapshot') — one-shot load/vector/MMIO orientation")
+            actions.append("CALL llm_helpers(action='guided_analysis') — full firmware workflow")
 
         if eng.get("pending_proposals", 0) > 0:
             actions.append(f"READ ida://proposals — {eng['pending_proposals']} engine proposal(s) waiting")
@@ -477,6 +484,7 @@ class ResourceResolver:
             "Read ida://blackboard/frontier for ranked unvisited functions. "
             "Read ida://blackboard/coverage for analysis progress. "
             "Read ida://taint for vulnerability paths. "
+            "For raw firmware sessions, call firmware_view(action='triage_snapshot') first. "
             "This resource is pushed via notifications/resources/updated when anything changes."
         )
 

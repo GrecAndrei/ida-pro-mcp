@@ -19,7 +19,7 @@ import time
 @tool
 @idawrite
 def analysis(
-    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze"],
+    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze"],
                       "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze"],
     options: Annotated[Optional[dict], "Options dict for set_options"] = None,
     processor: Annotated[Optional[str], "Processor name for set_processor"] = None,
@@ -325,7 +325,7 @@ def analysis(
                     applied["endian_note"] = "inf_set_be unavailable in this IDA build"
             return {"ok": True, "applied": applied}
 
-        if action == "reanalyze":
+        if action in ("reanalyze", "run", "analyze"):
             if start and end:
                 s_ea, err = validate_addr(start)
                 if err: return err

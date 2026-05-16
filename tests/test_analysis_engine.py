@@ -410,6 +410,30 @@ def test_state_resource_basic_structure():
     assert "_note" in data
 
 
+def test_state_resource_firmware_note_mentions_triage_snapshot():
+    resolver, _ = _make_resolver()
+    result = resolver.read("ida://state")
+    data = json.loads(result["text"])
+    note = data.get("binary", {}).get("firmware_note", "")
+    assert "triage_snapshot" in note
+
+
+def test_state_resource_firmware_next_actions_include_triage_snapshot():
+    resolver, _ = _make_resolver()
+    result = resolver.read("ida://state")
+    data = json.loads(result["text"])
+    actions = data.get("_next_actions", [])
+    assert any("triage_snapshot" in a for a in actions)
+
+
+def test_state_resource_note_mentions_firmware_triage_snapshot():
+    resolver, _ = _make_resolver()
+    result = resolver.read("ida://state")
+    data = json.loads(result["text"])
+    note = data.get("_note", "")
+    assert "triage_snapshot" in note
+
+
 def test_state_resource_coverage():
     resolver, _ = _make_resolver()
     result = resolver.read("ida://state")

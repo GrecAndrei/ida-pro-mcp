@@ -100,6 +100,8 @@ EMBED_DIM = 1536          # bge-code-v1 embedding dimension
 EMBED_CTX = int(os.environ.get("IDA_MCP_EMBED_CTX", "2048"))
 EMBED_THREADS = int(os.environ.get("IDA_MCP_EMBED_THREADS",
                                     str(max(2, (os.cpu_count() or 4) // 2))))
+EMBED_REQUEST_TIMEOUT = float(os.environ.get("IDA_MCP_EMBED_REQUEST_TIMEOUT", "5.0"))
+EMBED_MAX_FAILURES = int(os.environ.get("IDA_MCP_EMBED_MAX_FAILURES", "2"))
 EMBED_DISABLED = os.environ.get("IDA_MCP_EMBED_DISABLED", "") in ("1", "true", "yes")
 INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "yes")
 
@@ -233,6 +235,8 @@ class BgeCodeEmbedder:
         self._batch_size = max(1, min(64, self._batch_size))
         self._batch_lock = threading.Lock()
         self._owns_proc = False
+        self._consecutive_rpc_failures = 0
+        self._max_rpc_failures = max(1, EMBED_MAX_FAILURES)
 
     # ── subprocess management ──────────────────────────────────────────────
 
@@ -342,13 +346,19 @@ class BgeCodeEmbedder:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=EMBED_REQUEST_TIMEOUT) as resp:
                 data = json.loads(resp.read())
             vec = data["data"][0]["embedding"]
             # Server already L2-normalizes; verify and re-normalize just in case
             norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+            self._consecutive_rpc_failures = 0
             return [x / norm for x in vec]
         except Exception:
+            self._consecutive_rpc_failures += 1
+            if self._consecutive_rpc_failures >= self._max_rpc_failures:
+                # Avoid long hangs in latency-sensitive flows (tests/interactive MCP).
+                self._use_llama = False
+                self.stop()
             return None
 
     def _llama_embed_batch(self, texts: List[str]) -> Optional[List[List[float]]]:
@@ -364,7 +374,7 @@ class BgeCodeEmbedder:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=max(EMBED_REQUEST_TIMEOUT, 10.0)) as resp:
                 data = json.loads(resp.read())
             rows = data.get("data") or []
             if not isinstance(rows, list) or len(rows) != len(texts):
@@ -376,8 +386,13 @@ class BgeCodeEmbedder:
                     return None
                 norm = math.sqrt(sum(x * x for x in vec)) or 1.0
                 out.append([x / norm for x in vec])
+            self._consecutive_rpc_failures = 0
             return out
         except Exception:
+            self._consecutive_rpc_failures += 1
+            if self._consecutive_rpc_failures >= self._max_rpc_failures:
+                self._use_llama = False
+                self.stop()
             return None
 
     def embed(self, text: str) -> List[float]:

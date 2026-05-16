@@ -389,7 +389,7 @@ TOOL_DESCRIPTIONS = {
     "entropy": "Compute entropy over regions to detect packing, encryption, or compressed data. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
     "export": "Export IDB content in various formats for external tooling. Actions: listing, html, idc, json, binexport, headers, redact.",
     "filter": "Apply structured predicate filters to tool result sets for focused output. Actions: filter.",
-    "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, and multi-region campaigns. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, campaign_checkpoint, campaign_resume, campaign_feedback, fingerprint_index_sync, fingerprint_index_query.",
+    "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, detection heuristics, and multi-region campaigns. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, campaign_checkpoint, campaign_resume, campaign_feedback, fingerprint_index_sync, fingerprint_index_query, detect_load_address, detect_vector_table, detect_mmio, triage_snapshot.",
     "fixups": "Manage relocation fixup entries in the IDB. Actions: list, get, add, delete.",
     "funcs": "Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, set_name/rename, add_comment, list, info, metrics, find_similar, suggest_names.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
@@ -430,7 +430,7 @@ TOOL_DESCRIPTIONS = {
     "turboquant": "4-bit quantized embedding store for fast semantic similarity queries over binary artifacts. Actions: ingest, query, stats, delete.",
     "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph.",
     "wiki": "Accesses built-in documentation and tool usage guides within MCP context. Actions: list_topics, read, search, semantic_search, index, sections, suggest.",
-    "workflow": "Executes predefined multi-step analysis workflows for common RE tasks. Actions: triage_fast, malware_deep, vuln_audit, patch_review.",
+    "workflow": "Executes predefined multi-step analysis workflows for common RE tasks. audit_plan validates and scores a plan before execution. execute_plan runs a planned call list (or generated plan) through batch execution with execution metadata. prioritize reorders a dry-run plan by strategy (original/coverage/risk_first). compose merges multiple workflow plans into one deduplicated dry-run execution plan. estimate returns dry-run complexity/risk/category projections. explain returns a dry-run plan plus per-step rationale. plan previews another workflow action without executing it. catalog returns available workflows and required inputs. triage_fast auto-checks idb overview and, for firmware-like binaries, injects firmware_view(action='triage_snapshot') plus guided analysis. recon_sweep runs broader orientation + structured retrieval + protocol + security posture in one pass. Supports dry_run plan preview and include/exclude tool filtering for controlled orchestration. Actions: audit_plan, execute_plan, prioritize, compose, estimate, explain, plan, catalog, triage_fast, malware_deep, vuln_audit, recon_sweep, patch_review.",
     "xref_analysis": "Performs cross-reference graph analysis: call chains, dominators, hubs, dead code, and dependency graphs. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions, forward, backward, both.",
     "yara_hunt": "Scans the binary with YARA rules and provides match context and xref correlation. Actions: scan, compile, list_rules, match_context, extract_strings, xref_matches.",
 }
@@ -795,6 +795,7 @@ TOOL_ACTIONS = {
         "detect_load_address",
         "detect_vector_table",
         "detect_mmio",
+        "triage_snapshot",
     ],
     "fixups": [
         "list",
@@ -1323,9 +1324,18 @@ TOOL_ACTIONS = {
         "suggest",
     ],
     "workflow": [
+        "audit_plan",
+        "execute_plan",
+        "prioritize",
+        "compose",
+        "estimate",
+        "explain",
+        "plan",
+        "catalog",
         "triage_fast",
         "malware_deep",
         "vuln_audit",
+        "recon_sweep",
         "patch_review",
     ],
     "xref_analysis": [
@@ -1672,6 +1682,35 @@ TOOL_ARG_SCHEMAS = {
     },
     "workflow": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["workflow"]},
+        "planned_calls": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "For action='prioritize'/'execute_plan'/'audit_plan': optional dry-run call list to reorder, execute, or validate.",
+        },
+        "priority_mode": {
+            "type": "string",
+            "enum": ["original", "coverage", "risk_first"],
+            "description": "For action='prioritize': sorting strategy for dry-run plan ordering.",
+        },
+        "continue_on_error": {
+            "type": "boolean",
+            "description": "For action='execute_plan': continue executing later calls when one call fails.",
+        },
+        "max_steps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "For action='execute_plan': maximum calls to execute from the provided/generated plan.",
+        },
+        "workflow_actions": {
+            "type": ["array", "string"],
+            "items": {"type": "string"},
+            "description": "For action='compose': list of workflow actions to merge into one dry-run plan.",
+        },
+        "workflow_action": {
+            "type": "string",
+            "description": "For action='plan': target workflow action to preview (for example triage_fast or recon_sweep).",
+        },
         "addr": {
             "type": "string",
             "description": "Optional address focus for the workflow.",
@@ -1686,6 +1725,20 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "enum": ["quick", "balanced", "deep"],
             "description": "Depth profile override for underlying pipelines.",
+        },
+        "dry_run": {
+            "type": "boolean",
+            "description": "When true, return the planned calls and workflow metadata without executing tool steps.",
+        },
+        "include_tools": {
+            "type": ["array", "string"],
+            "items": {"type": "string"},
+            "description": "Optional allow-list of tool names to keep in the generated plan.",
+        },
+        "exclude_tools": {
+            "type": ["array", "string"],
+            "items": {"type": "string"},
+            "description": "Optional deny-list of tool names to remove from the generated plan.",
         },
     },
     "segments": {

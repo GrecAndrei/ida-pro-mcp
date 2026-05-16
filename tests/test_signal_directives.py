@@ -158,6 +158,17 @@ class TestSignalDirectives(unittest.TestCase):
         d = self._get("data", "functions", {"total": 10})
         self.assertEqual(len(d), 0)
 
+    def test_idb_overview_firmware_suggests_triage_snapshot(self):
+        d = self._get("idb", "overview", {"firmware_detected": True})
+        calls = [x["call"] for x in d]
+        self.assertTrue(any("triage_snapshot" in c for c in calls))
+        self.assertTrue(any("guided_analysis" in c for c in calls))
+
+    def test_idb_overview_non_firmware_no_triage_snapshot(self):
+        d = self._get("idb", "overview", {"firmware_detected": False})
+        calls = [x["call"] for x in d]
+        self.assertFalse(any("triage_snapshot" in c for c in calls))
+
     # ── firmware_view ─────────────────────────────────────────────────────────
 
     def test_firmware_scan_region_suggests_carve_plan(self):
@@ -197,6 +208,20 @@ class TestSignalDirectives(unittest.TestCase):
                        "likely_chip_family": "STM32"})
         calls = [x["call"] for x in d]
         self.assertTrue(any("taint" in c for c in calls))
+
+    def test_firmware_triage_snapshot_without_load_suggests_scan(self):
+        d = self._get("firmware_view", "triage_snapshot",
+                      {"summary": {"load_candidates": 0, "vector_entries": 0, "mmio_regions": 0}})
+        calls = [x["call"] for x in d]
+        self.assertTrue(any("scan_region" in c for c in calls))
+        self.assertTrue(any("detect_mmio" in c for c in calls))
+
+    def test_firmware_triage_snapshot_with_vectors_and_mmio_suggests_taint(self):
+        d = self._get("firmware_view", "triage_snapshot",
+                      {"summary": {"load_candidates": 1, "vector_entries": 5, "mmio_regions": 2}})
+        calls = [x["call"] for x in d]
+        self.assertTrue(any("func_by_sig" in c and "no_callers" in c for c in calls))
+        self.assertTrue(any("taint(action='report')" in c for c in calls))
 
     # ── priority ordering ─────────────────────────────────────────────────────
 

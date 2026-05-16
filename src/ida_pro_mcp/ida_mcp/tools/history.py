@@ -72,25 +72,48 @@ def history(
             return {"ok": True, "redone": redone, "requested": count}
         
         elif action == "list":
-            # Get undo/redo status
             result = {
                 "ok": True,
                 "undo_available": False,
                 "redo_available": False,
-                "note": "Detailed history API varies by IDA version"
             }
-            
-            # Check if undo is available by trying to get description
-            if hasattr(ida_undo, 'get_undo_description'):
-                desc = ida_undo.get_undo_description()
-                result["undo_available"] = bool(desc)
-                result["undo_description"] = desc
-            
-            if hasattr(ida_undo, 'get_redo_description'):
-                desc = ida_undo.get_redo_description()
-                result["redo_available"] = bool(desc)
-                result["redo_description"] = desc
-            
+
+            # Build undo stack by iterating descriptions
+            undo_stack = []
+            redo_stack = []
+            try:
+                if hasattr(ida_undo, 'get_undo_description'):
+                    desc = ida_undo.get_undo_description()
+                    if desc:
+                        result["undo_available"] = True
+                        undo_stack.append(desc)
+                        # Try to get more entries (IDA 9.x supports multiple levels)
+                        if hasattr(ida_undo, 'get_undo_description_at'):
+                            for i in range(1, 20):
+                                d = ida_undo.get_undo_description_at(i)
+                                if not d:
+                                    break
+                                undo_stack.append(d)
+                if hasattr(ida_undo, 'get_redo_description'):
+                    desc = ida_undo.get_redo_description()
+                    if desc:
+                        result["redo_available"] = True
+                        redo_stack.append(desc)
+                        if hasattr(ida_undo, 'get_redo_description_at'):
+                            for i in range(1, 20):
+                                d = ida_undo.get_redo_description_at(i)
+                                if not d:
+                                    break
+                                redo_stack.append(d)
+            except Exception:
+                pass
+
+            result["undo_stack"] = undo_stack
+            result["redo_stack"] = redo_stack
+            result["undo_depth"] = len(undo_stack)
+            result["redo_depth"] = len(redo_stack)
+            if not undo_stack and not redo_stack:
+                result["note"] = "No undo/redo history available. Make some edits first."
             return result
         
         elif action == "snapshot":

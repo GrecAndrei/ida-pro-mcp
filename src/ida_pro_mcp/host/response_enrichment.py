@@ -934,6 +934,18 @@ def build_signal_directives(
                 "call": "blackboard(action='frontier', limit=10)",
                 "reason": "Get ranked list of most-promising unanalyzed functions",
             })
+    elif tool_name == "idb" and action_name == "overview":
+        if payload.get("firmware_detected"):
+            directives.append({
+                "priority": "high",
+                "call": "firmware_view(action='triage_snapshot')",
+                "reason": "Firmware-like binary detected — run one-shot load/vector/MMIO orientation first",
+            })
+            directives.append({
+                "priority": "medium",
+                "call": "llm_helpers(action='guided_analysis')",
+                "reason": "Use guided firmware workflow so rebasing/entry-point steps are not skipped",
+            })
 
     # --- firmware_view results ---
     elif tool_name == "firmware_view":
@@ -1020,6 +1032,35 @@ def build_signal_directives(
                     "priority": "medium",
                     "call": "firmware_view(action='scan_region')",
                     "reason": "MMIO map complete — now profile binary regions for structure",
+                })
+        elif action_name == "triage_snapshot":
+            summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+            vectors = int(summary.get("vector_entries", 0) or 0)
+            mmio = int(summary.get("mmio_regions", 0) or 0)
+            load = int(summary.get("load_candidates", 0) or 0)
+            if load == 0:
+                directives.append({
+                    "priority": "high",
+                    "call": "firmware_view(action='scan_region')",
+                    "reason": "No load-address candidates detected — profile regions to recover structure",
+                })
+            if vectors > 0:
+                directives.append({
+                    "priority": "high",
+                    "call": "search(action='func_by_sig', pattern='no_callers')",
+                    "reason": "Vector entries found — enumerate likely handlers/entry points for triage",
+                })
+            if mmio > 0:
+                directives.append({
+                    "priority": "high",
+                    "call": "taint(action='report')",
+                    "reason": "MMIO discovered — trace peripheral input flow to risky sinks",
+                })
+            else:
+                directives.append({
+                    "priority": "medium",
+                    "call": "firmware_view(action='detect_mmio')",
+                    "reason": "MMIO map missing — run peripheral discovery to orient driver analysis",
                 })
 
         elif action_name == "pointer_sweep":

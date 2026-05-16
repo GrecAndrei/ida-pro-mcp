@@ -215,6 +215,7 @@ def _build_tool_plan(query: str, addr: Optional[str]) -> list[dict]:
             {"tool": "binary_info", "action": "headers"},
             {"tool": "binary_info", "action": "sections"},
             {"tool": "binary_info", "action": "compiler"},
+            {"tool": "firmware_view", "action": "triage_snapshot"},
             {"tool": "firmware_view", "action": "scan_region"},
             {"tool": "firmware_view", "action": "region_profile"},
             {"tool": "firmware_view", "action": "pointer_sweep"},
@@ -355,6 +356,7 @@ def _handle_feature_expansion_action(
             order = [
                 "binary_info.headers",
                 "binary_info.sections",
+                "firmware_view.triage_snapshot",
                 "firmware_view.scan_region",
                 "firmware_view.region_profile",
                 "firmware_view.pointer_sweep",
@@ -1341,21 +1343,22 @@ def llm_helpers(
                 ])
             else:
                 steps.extend([
-                    "4. Solve load address: firmware_view(action='detect_load_address')",
-                    "5. Find entry points: firmware_view(action='detect_vector_table')",
-                    "6. Find MMIO peripherals: firmware_view(action='detect_mmio')",
-                    "7. Profile all regions: firmware_view(action='scan_region')",
-                    "8. Check entropy distribution: firmware_view(action='region_profile')",
-                    "9. Find pointer tables: firmware_view(action='pointer_sweep')",
-                    "10. Find dispatch/jump tables: firmware_view(action='table_candidates', limit=50)",
-                    "11. Get retyping plan: firmware_view(action='carve_plan')",
-                    "12. Dry-run retyping: firmware_view(action='smart_carve', apply=false, limit=80)",
-                    "13. Apply retyping: firmware_view(action='smart_carve', apply=true)",
-                    "14. Check expected subsystems: ida://knowledge/gaps",
-                    "15. Find interrupt handlers: search(action='func_by_sig', pattern='no_callers')",
-                    "16. Find crypto: search(action='behavior', pattern='crypto_symmetric')",
-                    "17. Taint MMIO/UART inputs: taint(action='report')",
-                    "18. Run full campaign: firmware_view(action='campaign')",
+                    "4. One-shot orientation: firmware_view(action='triage_snapshot')",
+                    "5. Solve load address: firmware_view(action='detect_load_address')",
+                    "6. Find entry points: firmware_view(action='detect_vector_table')",
+                    "7. Find MMIO peripherals: firmware_view(action='detect_mmio')",
+                    "8. Profile all regions: firmware_view(action='scan_region')",
+                    "9. Check entropy distribution: firmware_view(action='region_profile')",
+                    "10. Find pointer tables: firmware_view(action='pointer_sweep')",
+                    "11. Find dispatch/jump tables: firmware_view(action='table_candidates', limit=50)",
+                    "12. Get retyping plan: firmware_view(action='carve_plan')",
+                    "13. Dry-run retyping: firmware_view(action='smart_carve', apply=false, limit=80)",
+                    "14. Apply retyping: firmware_view(action='smart_carve', apply=true)",
+                    "15. Check expected subsystems: ida://knowledge/gaps",
+                    "16. Find interrupt handlers: search(action='func_by_sig', pattern='no_callers')",
+                    "17. Find crypto: search(action='behavior', pattern='crypto_symmetric')",
+                    "18. Taint MMIO/UART inputs: taint(action='report')",
+                    "19. Run full campaign: firmware_view(action='campaign')",
                 ])
 
             return {"ok": True, "guided_steps": "\n".join(steps)}
@@ -1562,6 +1565,8 @@ def llm_helpers(
             # Firmware-specific section (always shown — many binaries are firmware)
             cheat.append("")
             cheat.append("== RAW FIRMWARE (flat binary / ROM / flash image) ==")
+            cheat.append("firmware_view(action='triage_snapshot')       # One-shot load/vector/MMIO orientation snapshot")
+            cheat.append("")
             cheat.append("-- Step 0: Solve the three hard problems (no datasheet needed) --")
             cheat.append("firmware_view(action='detect_load_address')    # Where is this binary mapped? (Cortex-M/MIPS/generic)")
             cheat.append("firmware_view(action='detect_vector_table')    # Where are the entry points? (IVT extraction)")

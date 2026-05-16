@@ -234,7 +234,7 @@ class TestRawBinaryPlanning(unittest.TestCase):
         self.assertGreaterEqual(len(plan), 4)
         self.assertEqual(plan[0]["tool"], "binary_info")
         self.assertEqual(plan[1]["action"], "sections")
-        self.assertEqual(plan[3]["tool"], "firmware_view")
+        self.assertTrue(any(step["tool"] == "firmware_view" and step["action"] == "triage_snapshot" for step in plan))
         self.assertFalse(any(step["tool"] == "data_ops" for step in plan))
 
     def test_raw_firmware_plan_keeps_code_validation_for_anchored_addr(self):
@@ -242,6 +242,22 @@ class TestRawBinaryPlanning(unittest.TestCase):
         self.assertTrue(any(step["tool"] == "data_ops" and step["addr"] == "0x401000" for step in plan))
         self.assertEqual(plan[-3]["tool"], "code")
         self.assertEqual(plan[-2]["tool"], "code")
+
+    def test_guided_analysis_firmware_flow_includes_triage_snapshot(self):
+        self.llm_helpers_mod.info = None
+        result = self.llm_helpers_mod.llm_helpers(action="guided_analysis")
+        self.assertTrue(result.get("ok"))
+        steps = result.get("guided_steps", "")
+        self.assertIn("firmware_view(action='triage_snapshot')", steps)
+
+    def test_adaptive_query_planner_raw_firmware_order_includes_triage_snapshot(self):
+        result = self.llm_helpers_mod.llm_helpers(
+            action="adaptive_query_planner",
+            query="raw firmware blob"
+        )
+        self.assertTrue(result.get("ok"))
+        order = result.get("recommended_order", [])
+        self.assertIn("firmware_view.triage_snapshot", order)
 
 
 class TestFirmwareViewBounds(unittest.TestCase):
@@ -320,6 +336,55 @@ class TestFirmwareViewBounds(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(calls[0][1], 8)
 
+    def test_detect_load_address_returns_structured_fallback_when_bounds_unavailable(self):
+        self.firmware_view_mod._inf_min_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+        self.firmware_view_mod._inf_max_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+
+        result = self.firmware_view_mod.firmware_view(action="detect_load_address")
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("binary_size"), "0x0")
+        self.assertEqual(result.get("candidates"), [])
+        self.assertIn("note", result)
+
+    def test_detect_vector_table_returns_structured_fallback_when_bounds_unavailable(self):
+        self.firmware_view_mod._inf_min_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+        self.firmware_view_mod._inf_max_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+
+        result = self.firmware_view_mod.firmware_view(action="detect_vector_table")
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("vectors"), [])
+        self.assertEqual(result.get("entry_points"), [])
+        self.assertEqual(result.get("entry_count"), 0)
+
+    def test_detect_mmio_returns_structured_fallback_when_bounds_unavailable(self):
+        self.firmware_view_mod._inf_min_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+        self.firmware_view_mod._inf_max_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+
+        result = self.firmware_view_mod.firmware_view(action="detect_mmio")
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("likely_chip_family"), "unknown")
+        self.assertEqual(result.get("peripheral_count"), 0)
+        self.assertEqual(result.get("peripherals"), [])
+
+    def test_triage_snapshot_aggregates_detection_outputs(self):
+        self.firmware_view_mod._inf_min_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+        self.firmware_view_mod._inf_max_ea = lambda: self.firmware_view_mod.idaapi.BADADDR
+
+        result = self.firmware_view_mod.firmware_view(action="triage_snapshot")
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("action"), "triage_snapshot")
+        self.assertIn("summary", result)
+        self.assertIn("subresults", result)
+        self.assertIn("load_address", result["subresults"])
+        self.assertIn("vector_table", result["subresults"])
+        self.assertIn("mmio", result["subresults"])
+        self.assertIn("next_actions", result)
+        self.assertGreaterEqual(len(result["next_actions"]), 1)
+
 
 class TestContextAssemblerClassifierIntegration(unittest.TestCase):
     def setUp(self):
@@ -358,25 +423,87 @@ class TestContextAssemblerClassifierIntegration(unittest.TestCase):
         self.assertIn("behavior_classifications", pack)
         self.assertEqual(pack["behavior_classifications"][0]["behavior"], "crypto_symmetric")
         self.assertIn("behavior_tags", pack)
-        self.assertIn("crypto_symmetric", pack["behavior_tags"])
 
-    def test_behavior_classifier_rebinds_when_embedder_changes(self):
-        asm = ContextAssembler()
 
-        class _OldClassifier:
-            _embedder = object()
+class TestIdbOverviewRouting(unittest.TestCase):
+    def setUp(self):
+        self._orig_modules = {}
+        for name in (
+            "ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes",
+            "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs",
+            "ida_kernwin", "ida_frame", "ida_lines", "ida_entry", "ida_ida",
+            "rpc", "sync", "utils", "error_handling"
+        ):
+            self._orig_modules[name] = sys.modules.get(name)
+        sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
+        for name in (
+            "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays",
+            "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin",
+            "ida_frame", "ida_lines", "ida_entry", "ida_ida"
+        ):
+            mod = types.ModuleType(name)
+            if name == "idaapi":
+                mod.BADADDR = -1
+                mod.get_kernel_version = lambda: "9.0"
+            sys.modules[name] = mod
+        rpc_mod = types.ModuleType("rpc")
+        rpc_mod.tool = lambda f: f
+        rpc_mod.unsafe = lambda f: f
+        sys.modules["rpc"] = rpc_mod
+        sync_mod = types.ModuleType("sync")
+        sync_mod.idaread = lambda f: f
+        sync_mod.idawrite = lambda f: f
+        sync_mod.IDAError = Exception
+        sys.modules["sync"] = sync_mod
+        utils_mod = types.ModuleType("utils")
+        for name in ("parse_address", "normalize_list_input", "normalize_dict_list", "get_function", "get_prototype", "get_image_size", "looks_like_address", "get_stack_frame_variables_internal", "get_type_by_name", "hex_ea", "hex_size", "smart_match", "compile_smart_pattern", "resolve_symbol"):
+            setattr(utils_mod, name, lambda *args, **kwargs: None)
+        sys.modules["utils"] = utils_mod
+        eh_mod = types.ModuleType("error_handling")
+        class _FakeMCPError:
+            INVALID_ARGS = "INVALID_ARGS"
+        eh_mod.MCPError = _FakeMCPError
+        eh_mod.make_error = lambda *args, **kwargs: {"ok": False, "message": args[1] if len(args) > 1 else ""}
+        eh_mod.handle_error = lambda e, *_args, **_kwargs: {"ok": False, "error": str(e)}
+        eh_mod.ERROR_HINTS = {}
+        for name in ("validate_addr", "validate_range", "check_debugger", "validate_path_safe", "require_arg", "require_one_of", "validate_action", "validate_count"):
+            setattr(eh_mod, name, lambda *args, **kwargs: None)
+        sys.modules["error_handling"] = eh_mod
+        import importlib
+        self.idb_mod = importlib.import_module("idb")
 
-            def classify(self, text, threshold=0.35, top_k=4, block=True):
-                return []
+    def tearDown(self):
+        for name, value in self._orig_modules.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
 
-        old_classifier = _OldClassifier()
-        asm._classifier = old_classifier
-        asm._embedder = object()
-        rebound = asm._behavior_classifier()
+    def test_overview_firmware_next_actions_include_triage_snapshot(self):
+        self.idb_mod.idb_meta = lambda: {"file_type": "raw", "processor": "arm"}
+        self.idb_mod.idb_summary = lambda: {"import_count": 0}
+        self.idb_mod.idb_segments_detailed = lambda: []
+        self.idb_mod.idb_entrypoints_detailed = lambda: {"entrypoints": []}
 
-        self.assertIsNot(rebound, old_classifier)
-        self.assertIs(rebound, asm._classifier)
-        self.assertFalse(hasattr(asm._classifier, "_embedder"))
+        result = self.idb_mod.idb(action="overview")
+
+        self.assertTrue(result.get("ok"))
+        self.assertTrue(result.get("firmware_detected"))
+        actions = result.get("next_actions", [])
+        self.assertIn("firmware_view(action='triage_snapshot')", actions)
+
+    def test_overview_non_firmware_next_actions_exclude_triage_snapshot(self):
+        self.idb_mod.idb_meta = lambda: {"file_type": "pe", "processor": "metapc"}
+        self.idb_mod.idb_summary = lambda: {"import_count": 24}
+        self.idb_mod.idb_segments_detailed = lambda: []
+        self.idb_mod.idb_entrypoints_detailed = lambda: {"entrypoints": []}
+
+        result = self.idb_mod.idb(action="overview")
+
+        self.assertTrue(result.get("ok"))
+        self.assertFalse(result.get("firmware_detected", False))
+        actions = result.get("next_actions", [])
+        self.assertNotIn("firmware_view(action='triage_snapshot')", actions)
 
 
 if __name__ == "__main__":

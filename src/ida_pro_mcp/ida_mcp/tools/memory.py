@@ -85,7 +85,7 @@ def memory(
     ], "Action: read|write|hexdump|search|compare|pointers|entropy|strings|struct_walk|histogram"],
     addr: Annotated[str, "Address"],
     type: Annotated[Literal["bytes", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "ptr", "string"],
-                    "Data type (for read)"] = "u32",
+                    "Data type (for read). Default 'bytes' — returns hex dump of size bytes"] = "bytes",
     size: Annotated[int, "Size in bytes (for type=bytes or hexdump)"] = 16,
     data: Annotated[Optional[str], "Hex data to write (for write) or pattern to search (for search)"] = None,
     end_addr: Annotated[Optional[str], "End address for compare/search/pointers/entropy/strings"] = None,
