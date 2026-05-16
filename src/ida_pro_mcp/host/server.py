@@ -8393,10 +8393,38 @@ class IDAMCPServer:
             if not pivots:
                 pivots = [f"{t}:*" for t in phase_tools[:5]] if phase_tools else ["data:functions", "code:decompile", "search:name"]
 
+            # Embedding-guided pivots from analyst context: map intent text to likely function targets.
+            context_text = str(context or "").strip()
+            embedding_focus = []
+            if context_text:
+                try:
+                    idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
+                    if idb_path:
+                        from .intelligence import get_assembler
+                        asm = get_assembler()
+                        idx = asm._get_index(idb_path)
+                        if getattr(idx, "size", 0) > 0:
+                            q_vec = asm._embedder.embed(context_text[:500])
+                            hits = idx.search(q_vec, top_k=min(3, max(1, limit)), threshold=0.3)
+                            for h in hits:
+                                ea = str(h.get("ea") or "").strip()
+                                if not ea:
+                                    continue
+                                embedding_focus.append(
+                                    {
+                                        "pivot": f"code:smart_decompile:{ea}",
+                                        "similarity": round(float(h.get("similarity") or 0.0), 4),
+                                        "name": h.get("name") or ea,
+                                    }
+                                )
+                except Exception:
+                    embedding_focus = []
+
             return {
                 "ok": True,
                 "session_id": sid,
                 "focus_pivots": pivots[:limit],
+                "embedding_focus": embedding_focus,
                 "phase": phase.get("phase") if isinstance(phase, dict) else None,
                 "dead_end": dead_end or {},
             }
@@ -8450,6 +8478,39 @@ class IDAMCPServer:
                 if t.get("addr") not in bb_addrs:
                     t["source"] = "schemaboot"
                     merged.append(t)
+
+            # Embedding-guided expansion from context when address set is sparse.
+            context_text = str(context or "").strip()
+            if context_text and len(merged) < limit:
+                try:
+                    idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
+                    if idb_path:
+                        from .intelligence import get_assembler
+                        asm = get_assembler()
+                        idx = asm._get_index(idb_path)
+                        if getattr(idx, "size", 0) > 0:
+                            q_vec = asm._embedder.embed(context_text[:500])
+                            hits = idx.search(q_vec, top_k=limit, threshold=0.3)
+                            known = {str(t.get("addr") or "") for t in merged}
+                            for h in hits:
+                                ea = str(h.get("ea") or "").strip()
+                                if not ea or ea in known:
+                                    continue
+                                merged.append(
+                                    {
+                                        "addr": ea,
+                                        "reason": f"context semantic match ({context_text[:48]})",
+                                        "tool": "code",
+                                        "action": "smart_decompile",
+                                        "source": "embedding_context",
+                                        "similarity": round(float(h.get("similarity") or 0.0), 4),
+                                    }
+                                )
+                                known.add(ea)
+                                if len(merged) >= limit:
+                                    break
+                except Exception:
+                    pass
 
             # Fallback: recent addresses from activity log
             if not merged:
@@ -9358,8 +9419,10 @@ class IDAMCPServer:
                 {"name": "idb", "arguments": {"action": "meta"}},
                 {"name": "data", "arguments": {"action": "functions", "count": limit}},
                 {"name": "data", "arguments": {"action": "imports", "count": limit}},
+                {"name": "search", "arguments": {"action": "nl", "query": "entrypoint parser auth decode crypto", "limit": limit}},
                 {"name": "string_ops", "arguments": {"action": "find_urls", "limit": limit}},
                 {"name": "threat_hunt", "arguments": {"action": "quick", "limit": limit, "profile": profile}},
+                {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
             ]
             if firmware_detected:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
@@ -9370,6 +9433,7 @@ class IDAMCPServer:
         elif action == "malware_deep":
             step_plan = [
                 {"name": "string_ops", "arguments": {"action": "find_c2", "limit": limit}},
+                {"name": "search", "arguments": {"action": "nl", "query": "beacon c2 command parser persistence injection", "limit": limit}},
                 {"name": "deobfuscate", "arguments": {"action": "stack_strings", "limit": limit}},
                 {"name": "deobfuscate", "arguments": {"action": "api_hashing", "limit": limit}},
                 {"name": "crypto_id", "arguments": {"action": "identify", "limit": limit}},
@@ -9379,6 +9443,7 @@ class IDAMCPServer:
         elif action == "vuln_audit":
             step_plan = [
                 {"name": "gadgets", "arguments": {"action": "rop", "limit": limit}},
+                {"name": "search", "arguments": {"action": "nl", "query": "input validation memcpy strcpy length check auth bypass", "limit": limit}},
                 {"name": "search", "arguments": {"action": "vulnerable", "limit": limit}},
                 {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
                 {"name": "threat_hunt", "arguments": {"action": "vuln", "limit": limit, "profile": profile}},
@@ -9401,7 +9466,9 @@ class IDAMCPServer:
                 {"name": "idb", "arguments": {"action": "overview"}},
                 {"name": "idb", "arguments": {"action": "meta"}},
                 {"name": "data", "arguments": {"action": "functions", "count": limit}},
+                {"name": "search", "arguments": {"action": "nl", "query": "dispatcher parser crypto network auth", "limit": limit}},
                 {"name": "search", "arguments": {"action": "structured", "limit": limit}},
+                {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
                 {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
                 {"name": "summarize", "arguments": {"action": "security_posture", "max_items": limit}},
                 {"name": "threat_hunt", "arguments": {"action": "quick", "limit": limit, "profile": profile}},

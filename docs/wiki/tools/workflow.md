@@ -33,4 +33,5 @@ Deterministic orchestration façade for multi-step analysis plans and execution.
 ## Notes
 - `dry_run`, `include_tools`, and `exclude_tools` work across planning paths.
 - `triage_fast`/`recon_sweep` auto-inject firmware orientation steps when firmware is detected.
+- Core run workflows now include embedding-native discovery steps (`search(action="nl")`) and frontier ranking (`blackboard(action="frontier")`) so plans default to semantic recon instead of only lexical scans.
 - `workflow_meta` is preserved across compact/full/output projection modes.

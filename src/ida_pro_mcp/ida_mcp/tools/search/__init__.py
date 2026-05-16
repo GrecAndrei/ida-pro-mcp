@@ -376,9 +376,54 @@ def search(
                     return make_error(MCPError.INVALID_ARGS,
                                       "No embeddings indexed yet. Decompile some functions first "
                                       "or run schemaboot(action='ingest').")
-                # Embed the query and search
+                # Embed the query and search (with lightweight embedding-driven expansion).
                 q_vec = asm._embedder.embed(actual_pattern)
                 results_raw = idx.search(q_vec, top_k=limit, threshold=0.3)
+                expansion_queries = []
+                try:
+                    classifier = asm._behavior_classifier()
+                    q_hits = classifier.classify(actual_pattern[:600], threshold=0.35, top_k=3, block=False)
+                    expansion_queries = [
+                        str(h.get("behavior") or "").strip().replace("_", " ")
+                        for h in q_hits
+                        if h.get("behavior")
+                    ]
+                    expansion_queries = [q for q in expansion_queries if q]
+                except Exception:
+                    expansion_queries = []
+
+                if expansion_queries:
+                    merged_by_ea = {}
+                    for r in results_raw:
+                        ea_key = str(r.get("ea") or "")
+                        if ea_key:
+                            merged_by_ea[ea_key] = dict(r)
+                    for extra_q in expansion_queries[:3]:
+                        try:
+                            extra_vec = asm._embedder.embed(extra_q)
+                            extra_hits = idx.search(extra_vec, top_k=max(3, limit // 2), threshold=0.28)
+                        except Exception:
+                            continue
+                        for h in extra_hits:
+                            ea_key = str(h.get("ea") or "")
+                            if not ea_key:
+                                continue
+                            base = merged_by_ea.get(ea_key)
+                            extra_sim = float(h.get("similarity") or 0.0)
+                            if not base:
+                                merged_by_ea[ea_key] = dict(h)
+                                merged_by_ea[ea_key]["similarity"] = extra_sim * 0.92
+                                merged_by_ea[ea_key]["expansion_query"] = extra_q
+                            else:
+                                base_sim = float(base.get("similarity") or 0.0)
+                                if extra_sim > base_sim:
+                                    base["similarity"] = max(base_sim, extra_sim * 0.96)
+                                    base["expansion_query"] = extra_q
+                    results_raw = sorted(
+                        merged_by_ea.values(),
+                        key=lambda x: float(x.get("similarity") or 0.0),
+                        reverse=True,
+                    )[:limit]
                 rows = []
                 for r in results_raw:
                     ea_str = r.get("ea", "")
@@ -388,6 +433,7 @@ def search(
                 response = {
                     "ok": True,
                     "query": actual_pattern,
+                    "expansion_queries": expansion_queries[:3],
                     "results": "\n".join(rows),
                     "count": len(rows),
                     "items": [{"addr": r.get("ea"), "name": r.get("name"),
