@@ -282,6 +282,29 @@ class ResourceResolver:
                 (overview.get("firmware_detected") if isinstance(overview, dict) else False)
                 or (arch_profile.get("raw_binary_mode") if isinstance(arch_profile, dict) else False)
             )
+            if not is_firmware:
+                # Fallback heuristic for older/partial IDB metadata payloads.
+                ft_name = str(meta.get("file_type") or meta.get("filetype") or "").strip().lower()
+                ft_id = meta.get("file_type_id")
+                try:
+                    ft_num = int(ft_id) if ft_id is not None else None
+                except Exception:
+                    ft_num = None
+                proc = str(meta.get("processor") or meta.get("arch") or "").strip().lower()
+                imports = (
+                    summary.get("imports")
+                    if isinstance(summary, dict) and summary.get("imports") is not None
+                    else meta.get("import_count", 0)
+                )
+                try:
+                    imports = int(imports or 0)
+                except Exception:
+                    imports = 0
+                is_firmware = bool(
+                    ft_name in {"", "raw", "unknown", "bin", "binary"}
+                    or ft_num in {0, 17}
+                    or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and imports == 0)
+                )
             state["binary"] = {
                 "name": meta.get("binary_path") or meta.get("filename") or meta.get("input_file", ""),
                 "arch": meta.get("processor") or meta.get("arch", ""),
