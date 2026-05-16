@@ -1,22 +1,36 @@
 # workflow
 
-Pre-built analysis workflow templates that orchestrate multiple tools in sequence.
+Deterministic orchestration façade for multi-step analysis plans and execution.
 
-## Actions
-- `triage_fast` — quick binary triage (imports, strings, entry points, suspicious patterns)
-- `malware_deep` — deep malware analysis workflow (unpacking, C2, persistence, evasion)
-- `vuln_audit` — vulnerability audit (dangerous APIs, buffer handling, format strings)
-- `patch_review` — review binary patches (diff against known-good, verify integrity)
+## Core Run Actions
+- `triage_fast` — fast first-pass triage (firmware-aware).
+- `malware_deep` — deeper malware-focused sequence.
+- `vuln_audit` — exploit/vulnerability-oriented sequence.
+- `recon_sweep` — broad orientation + structured retrieval + protocol + posture.
+- `patch_review` — xref/dependency review around one target address.
+
+## Planning & Control Actions
+- `catalog` — list available workflows/capabilities.
+- `plan` — return dry-run plan for one workflow action.
+- `explain` — dry-run plan + per-step rationale.
+- `estimate` — complexity/risk/category projection for a plan.
+- `compose` — merge multiple workflow plans with dedup + source annotations.
+- `prioritize` — reorder a plan by strategy (`original`, `coverage`, `risk_first`).
+- `audit_plan` — validate/score a plan before execution.
+- `execute_plan` — execute a provided/generated plan through batch.
 
 ## Examples
 ```json
-{"name": "workflow", "arguments": {"action": "triage_fast"}}
+{"name":"workflow","arguments":{"action":"plan","workflow_action":"recon_sweep","profile":"deep"}}
 ```
 ```json
-{"name": "workflow", "arguments": {"action": "vuln_audit"}}
+{"name":"workflow","arguments":{"action":"compose","workflow_actions":["triage_fast","vuln_audit"],"priority_mode":"coverage"}}
+```
+```json
+{"name":"workflow","arguments":{"action":"execute_plan","workflow_action":"triage_fast","continue_on_error":true}}
 ```
 
 ## Notes
-- Workflows run multiple tools internally and return consolidated results.
-- `triage_fast` is the recommended first action on any new binary.
-- Results are automatically written to the blackboard for later reference.
+- `dry_run`, `include_tools`, and `exclude_tools` work across planning paths.
+- `triage_fast`/`recon_sweep` auto-inject firmware orientation steps when firmware is detected.
+- `workflow_meta` is preserved across compact/full/output projection modes.

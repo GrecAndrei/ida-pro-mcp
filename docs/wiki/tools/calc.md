@@ -10,6 +10,7 @@ Evaluate expressions, resolve pointers, dereference chains, and perform address 
 - `deref` — dereference pointer at `address`, optional `size`/`depth`. Auto-captured to blackboard.
 - `chain` — follow pointer chain from `address`; optional `max_depth`. Auto-captured to blackboard.
 - `align` — align `address` to `boundary`.
+- `bitops` — bitwise operations (`and|or|xor|not|shl|shr`) on integer values.
 
 ## Examples
 ```json
@@ -17,6 +18,9 @@ Evaluate expressions, resolve pointers, dereference chains, and perform address 
 ```
 ```json
 {"name": "calc", "arguments": {"action": "chain", "address": "0x601020", "max_depth": 4}}
+```
+```json
+{"name":"calc","arguments":{"action":"bitops","value":"0xff","target":"0x0f","bit_op":"xor"}}
 ```
 
 ## Notes
