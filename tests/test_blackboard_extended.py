@@ -338,6 +338,21 @@ def test_blackboard_tool_next_target():
     assert "targets" in result
     assert len(result["targets"]) >= 1
 
+def test_blackboard_tool_next_target_query_blends_semantic_priority():
+    s = _store()
+    s.write("Auth parser hotspot", category="hypothesis", addr="0x401100", confidence=0.85)
+    s.write("UI string formatting", category="note", addr="0x402200", confidence=0.7)
+    result = _bb.blackboard(
+        action="next_target",
+        query="auth parser",
+        db_path=s.db_path,
+    )
+    assert result.get("ok") is True
+    assert result.get("query") == "auth parser"
+    assert len(result.get("targets", [])) >= 1
+    top = result["targets"][0]
+    assert "blended_priority" in top
+
 
 def test_blackboard_tool_crawler_status():
     result = _bb.blackboard(action="crawler_status",
