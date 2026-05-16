@@ -24,5 +24,6 @@ Detects and analyzes network protocol implementations, parsers, and state machin
 
 ## Notes
 - `detect` uses anchors: `http_protocol`, `tls_ssl`, `custom_binary`, `dns_protocol`, `smtp_ftp`.
+- `detect` accepts `query` and returns `query_protocol_hints` from embedding/classifier intent matching when available.
 - Combine with `string_ops(action="find_urls")` and `imports_deep` for full network surface mapping.
 - `state_machine` works best on binaries with clear handler dispatch patterns.

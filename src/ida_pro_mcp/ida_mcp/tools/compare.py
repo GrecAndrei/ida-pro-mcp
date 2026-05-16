@@ -386,6 +386,29 @@ def compare(
 
             call_sim = difflib.SequenceMatcher(None, cs1, cs2).ratio()
             data_jaccard = _jaccard(dr1, dr2)
+            embedding_similarity = None
+            behavior_overlap = []
+            try:
+                from ida_pro_mcp.host.intelligence import get_assembler
+                asm = get_assembler()
+                p1 = "\n".join(_decompile_lines(ea1))[:8000]
+                p2 = "\n".join(_decompile_lines(ea2))[:8000]
+                if p1 and p2:
+                    v1 = asm._embedder.embed(p1)
+                    v2 = asm._embedder.embed(p2)
+                    sim = sum(float(a) * float(b) for a, b in zip(v1, v2))
+                    embedding_similarity = round(sim, 4)
+                    try:
+                        clf = asm._behavior_classifier()
+                        h1 = clf.classify(p1[:3000], threshold=0.35, top_k=4, block=False)
+                        h2 = clf.classify(p2[:3000], threshold=0.35, top_k=4, block=False)
+                        t1 = {str(x.get("behavior") or "") for x in (h1 or []) if x.get("behavior")}
+                        t2 = {str(x.get("behavior") or "") for x in (h2 or []) if x.get("behavior")}
+                        behavior_overlap = sorted(t1 & t2)
+                    except Exception:
+                        behavior_overlap = []
+            except Exception:
+                embedding_similarity = None
 
             return {
                 "ok": True,
@@ -396,6 +419,8 @@ def compare(
                 "data_refs2": len(dr2),
                 "data_jaccard": data_jaccard,
                 "overall_similarity": round((call_sim + data_jaccard) / 2, 3),
+                "embedding_similarity": embedding_similarity,
+                "behavior_overlap": behavior_overlap,
             }
 
         elif action == "batch_compare":

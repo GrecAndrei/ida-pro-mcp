@@ -935,6 +935,29 @@ def summarize(
                     if entries:
                         findings[cat] = entries
                 sections["blackboard_findings"] = findings
+                # Embedding-backed recall of related prior findings for executive context.
+                recall_query = "vulnerability protocol crypto parser network auth input validation"
+                if addr:
+                    try:
+                        ea, _ = validate_addr(addr, require_func=False)
+                        if ea is not None:
+                            fname = idc.get_func_name(ea) or ""
+                            if fname:
+                                recall_query = f"{recall_query} {fname}"
+                    except Exception:
+                        pass
+                related = store.semantic_search(
+                    query=recall_query,
+                    top_k=8,
+                    threshold=0.38,
+                    include_resolved=False,
+                    include_contradicted=False,
+                )
+                sections["semantic_recall"] = {
+                    "query": recall_query,
+                    "count": len(related),
+                    "items": related,
+                }
             except Exception:
                 pass
             try:
