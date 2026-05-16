@@ -27,5 +27,6 @@ Generates structured summaries and reports from binary analysis data without req
 
 ## Notes
 - `report` assembles data entirely from the blackboard and deterministic analysis — no LLM round-trips needed for data gathering. Best used after substantial analysis has populated the blackboard.
+- `report` now includes `semantic_recall`, an embedding-backed retrieval of related blackboard findings to surface relevant prior evidence.
 - `function` includes `behavior_tags` from BehaviorClassifier, giving semantic labels alongside structural summary.
 - Use `security_posture` as a quick triage entry point to identify the most security-relevant areas before deep-diving.

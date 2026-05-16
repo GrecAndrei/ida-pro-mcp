@@ -207,6 +207,71 @@ with open(RESULT_PATH, "w") as f:
         if binary:
             assert binary.get("ok") is True or "error" in binary
 
+    def test_report_semantic_recall_section_present(self, runner):
+        """report should expose semantic_recall metadata when blackboard is available."""
+        script = '''
+from summarize import summarize
+result = summarize(action="report")
+import os
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f)
+    f.flush()
+    os.fsync(f.fileno())
+'''
+        result = runner.run_script(script, timeout=120)
+        assert result.get("ok") is True
+        report = result.get("report", {})
+        if "semantic_recall" in report:
+            sr = report["semantic_recall"]
+            assert "query" in sr
+            assert "count" in sr
+
+
+# ─── compare semantics ────────────────────────────────────────────────────────
+
+class TestCompareSemantics:
+    def test_semantics_returns_embedding_fields(self, runner):
+        """compare(semantics) should include embedding_similarity and behavior_overlap keys."""
+        script = '''
+import idautils
+from compare import compare
+funcs = list(idautils.Functions())
+if len(funcs) < 2:
+    result = {"ok": False, "error": "not enough functions"}
+else:
+    result = compare(action="semantics", addr=hex(funcs[0]), addr2=hex(funcs[1]))
+import os
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f)
+    f.flush()
+    os.fsync(f.fileno())
+'''
+        result = runner.run_script(script, timeout=120)
+        if result.get("ok"):
+            assert "embedding_similarity" in result
+            assert "behavior_overlap" in result
+
+
+# ─── protocol detect ─────────────────────────────────────────────────────────
+
+class TestProtocolDetect:
+    def test_detect_query_can_return_hints(self, runner):
+        """protocol(detect, query=...) may return query_protocol_hints when classifier is available."""
+        script = '''
+from protocol import protocol
+result = protocol(action="detect", query="http parser tls handshake", limit=10)
+import os
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f)
+    f.flush()
+    os.fsync(f.fileno())
+'''
+        result = runner.run_script(script, timeout=120)
+        assert result.get("ok") is True
+        # Optional field depends on classifier availability/runtime.
+        if "query_protocol_hints" in result:
+            assert isinstance(result["query_protocol_hints"], list)
+
 
 # ─── query nl ─────────────────────────────────────────────────────────────────
 

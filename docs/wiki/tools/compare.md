@@ -22,5 +22,5 @@ Compares two functions or binaries across multiple dimensions (code, APIs, strin
 ```
 
 ## Notes
-- `semantics` uses local ML scoring (no external calls).
+- `semantics` now includes `embedding_similarity` and `behavior_overlap` in addition to call/data-shape similarity.
 - `find_clones` scans all functions and returns those above the similarity threshold.

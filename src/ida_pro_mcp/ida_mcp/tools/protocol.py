@@ -284,6 +284,7 @@ def protocol(
             api_usage = {}
             string_evidence = {}
             classifier_results = []
+            query_protocol_hints = []
 
             # --- BehaviorClassifier-based detection ---
             classifier = _get_protocol_classifier()
@@ -306,6 +307,20 @@ def protocol(
                         protocols_detected[r["behavior"]] = r["confidence"]
                 except Exception:
                     classifier_results = []
+
+                # Query-guided embedding hinting: map analyst intent into protocol candidates.
+                if query:
+                    try:
+                        query_protocol_hints = classifier.classify(str(query)[:600], threshold=0.25, top_k=4)
+                        for h in query_protocol_hints:
+                            b = str(h.get("behavior") or "")
+                            if not b:
+                                continue
+                            conf = float(h.get("confidence") or h.get("score") or 0.0)
+                            existing = float(protocols_detected.get(b, 0.0))
+                            protocols_detected[b] = max(existing, conf * 0.9)
+                    except Exception:
+                        query_protocol_hints = []
 
             # --- Fallback heuristics when classifier unavailable or no results ---
             if not classifier_results:
@@ -347,6 +362,8 @@ def protocol(
             }
             if classifier_results:
                 result["classifier_hits"] = classifier_results
+            if query_protocol_hints:
+                result["query_protocol_hints"] = query_protocol_hints
             return result
 
         elif action == "parsers":
