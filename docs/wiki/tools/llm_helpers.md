@@ -1,10 +1,11 @@
 # llm_helpers
 
-Context-optimized helpers for LLM agents. Start with `cheatsheet` for a full tool reference.
+Context-optimized helpers for LLM agents. Start with `bootstrap` if the model is unfamiliar with this MCP, then `cheatsheet`.
 
 ## Quick Start
 
 ```json
+{"name": "llm_helpers", "arguments": {"action": "bootstrap"}}
 {"name": "llm_helpers", "arguments": {"action": "cheatsheet"}}
 ```
 
@@ -13,6 +14,9 @@ Returns a complete, up-to-date reference of every tool with concrete examples. R
 ---
 
 ## Core Actions
+
+### bootstrap
+Opinionated first-turn playbook for unfamiliar LLMs. Returns concrete `first_calls` and operating rules to prevent random decompile-first loops.
 
 ### cheatsheet
 Full tool reference with concrete examples, organized by task. Read this first.
@@ -182,9 +186,10 @@ Route a question to the appropriate analysis workflow (vulnerability_triage, cry
 
 Recommended session start:
 ```
-1. llm_helpers(action='cheatsheet')           → full tool reference
-2. ida://state                                 → current analysis state + next actions
-3. ida://blackboard/frontier                   → ranked unvisited functions
-4. code(action='smart_decompile', addrs='...') → analyze top frontier target
-5. blackboard(action='write', ...)             → record findings (triggers label propagation)
+1. llm_helpers(action='bootstrap')             → concrete onboarding calls + rules
+2. llm_helpers(action='cheatsheet')            → full tool reference
+3. ida://state                                 → current analysis state + next actions
+4. ida://blackboard/frontier                   → ranked unvisited functions
+5. code(action='smart_decompile', addrs='...') → analyze top frontier target
+6. blackboard(action='write', ...)             → record findings (triggers label propagation)
 ```
