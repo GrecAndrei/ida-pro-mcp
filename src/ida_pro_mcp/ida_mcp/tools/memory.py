@@ -49,21 +49,12 @@ def _extract_strings(data, min_len=4):
 
 
 def _is_be():
-    try:
-        import ida_ida as _ida_ida
-        if hasattr(_ida_ida, "inf_is_be"):
-            return _ida_ida.inf_is_be()
-    except Exception:
-        pass
-    try:
-                return _inf_is_be() if hasattr(inf, "is_be") else False
-    except Exception:
-        return False
+    return _inf_is_be()
 
 
 def _find_pointers(data, start_ea):
     """Find all valid pointers in a byte sequence."""
-    is_64 = _inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
+    is_64 = _inf_bitness() == 64
     ptr_size = 8 if is_64 else 4
     endian = ">" if _is_be() else "<"
     fmt = f"{endian}Q" if is_64 else f"{endian}I"
@@ -178,7 +169,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 endian = ">" if _is_be() else "<"
                 value = struct.unpack(f"{endian}d", raw)[0]
             elif type == "ptr":
-                is_64 = _inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
+                is_64 = _inf_bitness() == 64
                 value = ida_bytes.get_qword(ea) if is_64 else ida_bytes.get_wide_dword(ea)
             elif type == "string":
                 s = idc.get_strlit_contents(ea, -1, 0)
@@ -325,7 +316,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             return {"ok": True, "strings": lines, "count": len(strings), "region": f"{hex(ea)}-{hex(ea + region_size)}"}
 
         elif action == "struct_walk":
-            is_64 = _inf_is_64bit() if hasattr(idaapi, "inf_is_64bit") else (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100)
+            is_64 = _inf_bitness() == 64
             ptr_size = 8 if is_64 else 4
             endian = ">" if _is_be() else "<"
             fmt = f"{endian}Q" if is_64 else f"{endian}I"

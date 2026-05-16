@@ -239,15 +239,7 @@ def _get_func_strings(func_ea):
 
 def _get_file_type_name():
     """Get IDA's file type description."""
-    if info and hasattr(info, "filetype"):
-        ft = info.filetype
-        type_map = {
-            0: "Unknown", 1: "EXE (old)", 2: "COM (old)", 3: "BIN",
-            4: "DRV", 5: "WinPE", 11: "ELF", 13: "Mach-O",
-            25: "PE+", 18: "COFF",
-        }
-        return type_map.get(ft, f"type_{ft}")
-    return "Unknown"
+    return _filetype_name(_inf_filetype_id()).upper()
 
 
 def _decompile_preview(ea, max_lines=20):

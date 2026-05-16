@@ -1464,7 +1464,7 @@ def firmware_view(
                 }
             binary_size = max_ea - min_ea
             ptr_size = 8 if _is_64bit() else 4
-            proc = (idc.get_inf_attr(idc.INF_PROCNAME) or "").lower()
+            proc = (_inf_procname() or "").lower()
 
             vectors = []
             ivt_addr = None

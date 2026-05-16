@@ -109,13 +109,13 @@ def _iter_frame_members(frame):
 
 def _get_arch_info():
     """Return architecture info dict for context."""
-    is_64 = _inf_is_64bit() if hasattr(info, "is_64bit") else False
-    is_32 = info.is_32bit() if hasattr(info, "is_32bit") else (not is_64)
-    proc = info.procname if hasattr(info, "procname") else ""
+    bits = _inf_bitness()
+    is_64 = bits == 64
+    proc = _inf_procname()
     ptr_size = 8 if is_64 else 4
     return {
         "proc": proc.strip().upper(),
-        "bits": 64 if is_64 else (32 if is_32 else 16),
+        "bits": bits,
         "ptr_size": ptr_size,
     }
 

@@ -258,24 +258,10 @@ def calc(
             raise ValueError(f"Invalid address: {val}")
 
         def ptr_size():
-            if hasattr(idaapi, "inf_is_64bit"):
-                return 8 if _inf_is_64bit() else 4
-            try:
-                                return 8 if _inf_is_64bit() else 4
-            except Exception:
-                return 8 if (idc.get_inf_attr(idc.INF_LFLAGS) & 0x100) else 4
+            return 8 if _inf_bitness() == 64 else 4
 
         def _is_be():
-            try:
-                import ida_ida as _ida_ida
-                if hasattr(_ida_ida, "inf_is_be"):
-                    return _ida_ida.inf_is_be()
-            except Exception:
-                pass
-            try:
-                                return _inf_is_be() if hasattr(inf, "is_be") else False
-            except Exception:
-                return False
+            return _inf_is_be()
 
         def read_int(ea, width, signed=False):
             data = ida_bytes.get_bytes(ea, width)
