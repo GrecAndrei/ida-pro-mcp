@@ -45,7 +45,8 @@ def test_infer_binary_arch_profile_raw_cortex_m():
 
 def test_infer_binary_arch_profile_raw_ambiguous_does_not_force_processor():
     with tempfile.NamedTemporaryFile(delete=False) as tf:
-        tf.write(b"\x00" * 512)
+        # Weak x86-ish signal: enough for candidates, below auto-apply threshold.
+        tf.write((b"\xe8" + (b"\x00" * 63)) * 8)
         path = tf.name
     try:
         inf = infer_binary_arch_profile(path)
@@ -53,6 +54,7 @@ def test_infer_binary_arch_profile_raw_ambiguous_does_not_force_processor():
         # Ambiguous raw blobs should not be hard-forced into one processor.
         assert inf.get("processor") in (None, "",)
         assert isinstance(inf.get("candidates"), list)
+        assert len(inf.get("candidates") or []) >= 1
         assert inf.get("reason")
     finally:
         os.unlink(path)

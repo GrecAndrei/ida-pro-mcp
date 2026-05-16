@@ -6348,6 +6348,25 @@ class IDAMCPServer:
                     out["note"] = create_note
                 if arch_meta:
                     out["architecture_profile"] = arch_meta
+                    inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
+                    if isinstance(inferred, dict):
+                        candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
+                        if candidates and not arch_meta.get("inference_applied"):
+                            out["architecture_recommendations"] = [
+                                {
+                                    "tool": "analysis",
+                                    "arguments": {
+                                        "action": "set_architecture",
+                                        "processor": c.get("processor"),
+                                        "bitness": c.get("bitness"),
+                                        "endian": c.get("endian"),
+                                    },
+                                    "confidence": c.get("confidence"),
+                                    "reason": c.get("reason"),
+                                }
+                                for c in candidates[:3]
+                                if isinstance(c, dict) and c.get("processor")
+                            ]
                 return out
             if action == "discover":
                 self.session_mgr._load_orphaned_idbs()

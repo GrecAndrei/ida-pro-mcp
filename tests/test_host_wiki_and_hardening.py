@@ -320,7 +320,7 @@ class TestHostHardening(unittest.TestCase):
 
     def test_session_create_ambiguous_raw_does_not_force_architecture(self):
         with tempfile.NamedTemporaryFile(delete=False) as tf:
-            tf.write(os.urandom(1024))
+            tf.write((b"\xe8" + (b"\x00" * 63)) * 8)
             path = tf.name
         try:
             res = self.server._execute_tool(
@@ -333,6 +333,9 @@ class TestHostHardening(unittest.TestCase):
             if inferred.get("processor") in (None, ""):
                 self.assertNotIn("processor", opts)
                 self.assertFalse(arch_profile.get("inference_applied"))
+                recs = res.get("architecture_recommendations", [])
+                self.assertGreaterEqual(len(recs), 1)
+                self.assertEqual(recs[0].get("tool"), "analysis")
         finally:
             try:
                 os.unlink(path)
