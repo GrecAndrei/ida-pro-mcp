@@ -215,9 +215,21 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "structured", "summary"}
+        pattern_not_required = {"vulnerable", "constants", "summary"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
+        if action == "export" and not actual_pattern:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "export requires pattern or query",
+                hint="Example: search(action='export', pattern='Create*')",
+            )
+        if action == "structured" and not actual_pattern and not isinstance(constraints, dict):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "structured requires constraints dict or pattern/query",
+                hint="Example: search(action='structured', constraints={'behavior_tags':['crypto']})",
+            )
 
         # Resolve range
         range_start = range_end = None

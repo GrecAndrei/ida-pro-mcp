@@ -309,7 +309,9 @@ def firmware_view(
 
         def _log_ml(result: dict, act: str, details: str):
             try:
-                sug = emit_memrl_suggestion("firmware_view", act, hex(s_ea), details)
+                sug = ""
+                if callable(emit_memrl_suggestion):
+                    sug = emit_memrl_suggestion("firmware_view", act, hex(s_ea), details)
                 if sug:
                     result["memrl_suggestion_id"] = sug
             except Exception:

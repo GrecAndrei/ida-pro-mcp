@@ -44,6 +44,13 @@ def analysis(
     - reanalyze: Re-run auto-analysis over a range.
     """
     try:
+        inf = None
+        try:
+            if hasattr(idaapi, "get_inf_structure"):
+                inf = idaapi.get_inf_structure()
+        except Exception:
+            inf = None
+
         def _get_app_bitness():
             if hasattr(ida_ida, "inf_get_app_bitness"):
                 try:
