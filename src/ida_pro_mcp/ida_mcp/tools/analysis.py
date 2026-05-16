@@ -101,10 +101,10 @@ def analysis(
                 except Exception:
                     return default
 
-            procname = safe_inf_attr("procname", None) or safe_idc_attr("INF_PROCNAME", "")
-            filetype = safe_inf_attr("filetype", None) or safe_idc_attr("INF_FILETYPE", None)
-            is_64bit = _inf_is_64bit() if inf and hasattr(inf, "is_64bit") else bool(safe_idc_attr("INF_LFLAGS", 0) & 0x100)
-            is_be = _inf_is_be() if inf and hasattr(inf, "is_be") else (ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else False)
+            procname = _inf_procname()
+            filetype = _inf_filetype_id()
+            is_64bit = _inf_bitness() == 64
+            is_be = _inf_is_be()
             app_bitness = _get_app_bitness()
             loader_name = _get_loader_name()
 
@@ -112,6 +112,7 @@ def analysis(
                 "ok": True,
                 "procname": procname,
                 "filetype": filetype,
+                "filetype_name": _filetype_name(filetype),
                 "is_64bit": is_64bit,
                 "is_be": is_be,
                 "app_bitness": app_bitness,

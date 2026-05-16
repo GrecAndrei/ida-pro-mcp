@@ -225,6 +225,91 @@ def _inf_ptr_size() -> int:
     return 8 if _inf_is_64bit() else 4
 
 
+def _inf_procname() -> str:
+    """Return processor name from IDB info."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_get_procname"):
+            return str(ida_ida.inf_get_procname() or "")
+    except Exception:
+        pass
+    try:
+        v = idc.get_inf_attr(getattr(idc, "INF_PROCNAME", -1))
+        if v is not None:
+            return str(v or "")
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            return str(getattr(inf, "procname", "") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _inf_filetype_id() -> int:
+    """Return numeric IDA filetype id."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_get_filetype"):
+            return int(ida_ida.inf_get_filetype())
+    except Exception:
+        pass
+    try:
+        v = idc.get_inf_attr(getattr(idc, "INF_FILETYPE", -1))
+        if v is not None:
+            return int(v)
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            v = getattr(inf, "filetype", None)
+            if v is not None:
+                return int(v)
+    except Exception:
+        pass
+    return 0
+
+
+def _filetype_name(filetype_id: int | None = None) -> str:
+    """Map filetype id to a stable lowercase name."""
+    ft = _inf_filetype_id() if filetype_id is None else int(filetype_id)
+    names = {
+        0: "unknown",
+        1: "exe",
+        2: "obj",
+        3: "lib",
+        4: "script",
+        7: "elf",
+        8: "pe",
+        9: "coff",
+        10: "macho",
+        17: "raw",
+    }
+    return names.get(ft, f"type_{ft}")
+
+
+def _inf_bitness() -> int:
+    """Return effective IDB bitness as 16/32/64."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_is_16bit") and ida_ida.inf_is_16bit():
+            return 16
+    except Exception:
+        pass
+    if _inf_is_64bit():
+        return 64
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_is_32bit_exactly") and ida_ida.inf_is_32bit_exactly():
+            return 32
+    except Exception:
+        pass
+    return 32
+
+
 __all__ = [
     # typing
     "Annotated", "Optional", "Literal", "Union", "Any",
@@ -262,4 +347,5 @@ __all__ = [
     # Safe IDA info API helpers
     "_inf_is_64bit", "_inf_is_be", "_inf_min_ea", "_inf_max_ea",
     "_inf_start_ea", "_inf_ptr_size",
+    "_inf_procname", "_inf_filetype_id", "_filetype_name", "_inf_bitness",
 ]
