@@ -196,7 +196,7 @@ CALL_XREF_TYPES = frozenset([getattr(idaapi, "fl_CN", 17), getattr(idaapi, "fl_C
 SEARCH_ACTIONS = {
     "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
     "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
-    "find", "semantic", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
+    "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
     "type", "export", "summary", "nl", "behavior",
 }
 
@@ -217,6 +217,8 @@ SEARCH_ALIASES = {
     "datarefs": "data_ref", "coderefs": "code_ref",
     "function_signature": "func_by_sig", "signature": "func_by_sig",
     "lookup": "find", "discover": "find",
+    "smart": "smart_bundle",
+    "bundle": "smart_bundle",
     # nl/natural_language → real nl action (bge-code-v1 embeddings), NOT semantic
     "natural_language": "nl", "embedding_search": "nl", "vector_search": "nl",
     "semantic_find": "semantic",

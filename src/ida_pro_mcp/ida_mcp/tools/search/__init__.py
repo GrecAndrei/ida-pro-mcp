@@ -128,9 +128,9 @@ def search(
     action: Annotated[Literal[
         "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
-        "find", "semantic", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
+        "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang", "nl", "behavior",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior"],
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|smart_bundle|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -156,6 +156,7 @@ def search(
     QUICK ACTIONS:
     - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs)
     - semantic: Natural-language semantic ranking across symbols/imports/strings/disasm
+    - smart_bundle: Fused find+semantic view with deduplicated structured items
     - callers: Functions calling a target
     - callees: Functions called by a target
     - api: Find usages of an imported API
@@ -290,6 +291,49 @@ def search(
             response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
         elif action == "semantic":
             response = search_semantic(actual_pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms)
+        elif action == "smart_bundle":
+            find_res = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
+            sem_res = search_semantic(actual_pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms)
+            if isinstance(find_res, dict) and find_res.get("error"):
+                return find_res
+            if isinstance(sem_res, dict) and sem_res.get("error"):
+                return sem_res
+
+            find_items = list((find_res or {}).get("items") or []) if isinstance(find_res, dict) else []
+            sem_items = list((sem_res or {}).get("items") or []) if isinstance(sem_res, dict) else []
+            merged_items = []
+            seen = set()
+            for item in find_items + sem_items:
+                if not isinstance(item, dict):
+                    continue
+                key = (
+                    str(item.get("addr") or item.get("ea") or "").lower(),
+                    str(item.get("name") or item.get("text") or "").lower(),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_items.append(item)
+                if len(merged_items) >= limit:
+                    break
+
+            lines = []
+            for item in merged_items:
+                addr = item.get("addr") or item.get("ea") or "?"
+                name = item.get("name") or item.get("text") or item.get("match") or "match"
+                lines.append(f"{addr}  {name}")
+            response = {
+                "ok": True,
+                "query": actual_pattern,
+                "mode": "smart_bundle",
+                "results": "\n".join(lines),
+                "count": len(merged_items),
+                "items": merged_items,
+                "components": {
+                    "find_count": len(find_items),
+                    "semantic_count": len(sem_items),
+                },
+            }
         elif action == "callers":
             response = search_callers(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items)
         elif action == "callees":

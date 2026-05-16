@@ -8295,6 +8295,74 @@ class IDAMCPServer:
                 "context": context,
             }
 
+        if action == "recommend_bundle":
+            tool_res = self._handle_predictor(
+                {
+                    "action": "suggest_next_tool",
+                    "session_id": sid,
+                    "limit": limit,
+                    "recent_n": recent_n,
+                    "context": context,
+                }
+            )
+            if not isinstance(tool_res, dict) or tool_res.get("error"):
+                return tool_res
+            focus_res = self._handle_predictor(
+                {
+                    "action": "suggest_focus",
+                    "session_id": sid,
+                    "limit": limit,
+                    "recent_n": recent_n,
+                    "context": context,
+                }
+            )
+            if not isinstance(focus_res, dict) or focus_res.get("error"):
+                return focus_res
+            addr_res = self._handle_predictor(
+                {
+                    "action": "suggest_next_address",
+                    "session_id": sid,
+                    "limit": limit,
+                    "recent_n": recent_n,
+                    "context": context,
+                }
+            )
+            if not isinstance(addr_res, dict) or addr_res.get("error"):
+                return addr_res
+            stall_res = self._handle_predictor(
+                {
+                    "action": "risk_of_stall",
+                    "session_id": sid,
+                    "recent_n": recent_n,
+                    "context": context,
+                }
+            )
+            if not isinstance(stall_res, dict) or stall_res.get("error"):
+                return stall_res
+
+            return {
+                "ok": True,
+                "session_id": sid,
+                "action": "recommend_bundle",
+                "bundle": {
+                    "tool_suggestions": tool_res.get("suggestions", []),
+                    "strategy_suggestions": tool_res.get("strategy_suggestions", []),
+                    "focus_pivots": focus_res.get("focus_pivots", []),
+                    "address_suggestions": addr_res.get("suggestions", []),
+                    "stall_risk": {
+                        "risk_score": stall_res.get("risk_score"),
+                        "dead_end_detected": stall_res.get("dead_end_detected"),
+                        "entropy": stall_res.get("entropy"),
+                    },
+                },
+                "summary": {
+                    "tool_count": len(tool_res.get("suggestions", []) or []),
+                    "focus_count": len(focus_res.get("focus_pivots", []) or []),
+                    "address_count": len(addr_res.get("suggestions", []) or []),
+                    "stall_risk": stall_res.get("risk_score"),
+                },
+            }
+
         if action == "detect_stuck":
             dead_end = self.session_mgr._detect_dead_end(log)
             return {
