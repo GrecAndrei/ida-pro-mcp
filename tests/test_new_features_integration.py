@@ -251,6 +251,21 @@ with open(RESULT_PATH, "w") as f:
             assert "embedding_similarity" in result
             assert "behavior_overlap" in result
 
+    def test_find_clones_includes_embedding_pairs(self, runner):
+        """compare(find_clones) should include embedding_clone_pairs key."""
+        script = '''
+from compare import compare
+result = compare(action="find_clones", threshold=0.8, limit=10)
+import os
+with open(RESULT_PATH, "w") as f:
+    json.dump(result, f)
+    f.flush()
+    os.fsync(f.fileno())
+'''
+        result = runner.run_script(script, timeout=120)
+        assert result.get("ok") is True
+        assert "embedding_clone_pairs" in result
+
 
 # ─── protocol detect ─────────────────────────────────────────────────────────
 

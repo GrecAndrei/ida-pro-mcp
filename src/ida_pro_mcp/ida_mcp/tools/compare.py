@@ -470,7 +470,50 @@ def compare(
                 if len(clones) >= limit:
                     break
             clones.sort(key=lambda c: c[0], reverse=True)
-            return {"ok": True, "clone_groups": len(clones), "clones": "\n".join(c[1] for c in clones[:limit])}
+            embedding_clone_pairs = []
+            try:
+                from ida_pro_mcp.host.intelligence import get_assembler
+                asm = get_assembler()
+                candidates = []
+                for idx, ea in enumerate(idautils.Functions()):
+                    if idx >= max(40, limit * 4):
+                        break
+                    lines = _decompile_lines(ea)
+                    if not lines:
+                        continue
+                    text = "\n".join(lines)[:5000]
+                    if not text:
+                        continue
+                    vec = asm._embedder.embed(text)
+                    candidates.append((ea, vec))
+                    if len(candidates) >= max(10, limit * 2):
+                        break
+                # Pairwise similarity over sampled candidates (bounded for latency).
+                for i in range(len(candidates)):
+                    ea_i, v_i = candidates[i]
+                    for j in range(i + 1, len(candidates)):
+                        ea_j, v_j = candidates[j]
+                        sim = sum(float(a) * float(b) for a, b in zip(v_i, v_j))
+                        if sim >= max(0.78, float(threshold)):
+                            embedding_clone_pairs.append(
+                                {
+                                    "addr1": hex_ea(ea_i),
+                                    "name1": idc.get_func_name(ea_i) or hex_ea(ea_i),
+                                    "addr2": hex_ea(ea_j),
+                                    "name2": idc.get_func_name(ea_j) or hex_ea(ea_j),
+                                    "similarity": round(sim, 4),
+                                }
+                            )
+                embedding_clone_pairs.sort(key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
+                embedding_clone_pairs = embedding_clone_pairs[:limit]
+            except Exception:
+                embedding_clone_pairs = []
+            return {
+                "ok": True,
+                "clone_groups": len(clones),
+                "clones": "\n".join(c[1] for c in clones[:limit]),
+                "embedding_clone_pairs": embedding_clone_pairs,
+            }
 
         elif action == "changelog":
             ea1, err = _resolve_func(addr, "addr")
