@@ -150,17 +150,23 @@ def _score_raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
     ]
     raw.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
     best = float(raw[0]["score"]) if raw else 0.0
+    second = float(raw[1]["score"]) if len(raw) > 1 else 0.0
     if best <= 0.0:
         return []
+    # Absolute signal strength (per-sample) and separation confidence.
+    abs_strength = min(1.0, best / max(6.0, n * 0.02))
+    separation = (best - second) / max(best, 1e-6)
+    top_conf = max(0.05, min(0.95, (0.65 * abs_strength) + (0.35 * separation)))
     out = []
-    for row in raw[:4]:
-        norm = max(0.0, min(0.95, float(row["score"]) / (best + 1e-6)))
+    for idx, row in enumerate(raw[:4]):
+        rel = max(0.0, min(1.0, float(row["score"]) / (best + 1e-6)))
+        conf = top_conf if idx == 0 else max(0.01, min(0.9, top_conf * rel * 0.9))
         out.append(
             {
                 "processor": row["processor"],
                 "bitness": row["bitness"],
                 "endian": row["endian"],
-                "confidence": round(norm, 3),
+                "confidence": round(conf, 3),
                 "reason": row["reason"],
             }
         )
