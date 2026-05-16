@@ -71,9 +71,15 @@ def analysis(
             return None
 
         if action == "get_options":
+            inf = None
+            try:
+                if hasattr(idaapi, "get_inf_structure"):
+                    inf = idaapi.get_inf_structure()
+            except Exception:
+                inf = None
+
             def safe_inf_attr(attr, default=None):
                 try:
-                    inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
                     if inf is not None and hasattr(inf, attr):
                         return getattr(inf, attr)
                 except Exception:
@@ -146,9 +152,15 @@ def analysis(
             proc_flags = flags if flags is not None else getattr(
                 idaapi, "SETPROC_LOADER_NON_FATAL", idaapi.SETPROC_LOADER
             )
+            inf = None
+            try:
+                if hasattr(idaapi, "get_inf_structure"):
+                    inf = idaapi.get_inf_structure()
+            except Exception:
+                inf = None
             prev = ""
             try:
-                                prev = getattr(inf, "procname", "") if inf else ""
+                prev = getattr(inf, "procname", "") if inf else ""
             except Exception:
                 pass
             if prev == processor:
