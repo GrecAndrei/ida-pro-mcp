@@ -7,6 +7,9 @@
 
 ## 2. Orient yourself
 ```json
+{"name":"llm_helpers","arguments":{"action":"bootstrap"}}
+{"name":"llm_helpers","arguments":{"action":"cheatsheet"}}
+{"name":"blackboard","arguments":{"action":"frontier","limit":10}}
 {"name":"idb","arguments":{"action":"meta"}}
 {"name":"data","arguments":{"action":"imports"}}
 {"name":"data","arguments":{"action":"strings","count":50}}

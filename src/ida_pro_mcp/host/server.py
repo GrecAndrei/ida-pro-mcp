@@ -9755,6 +9755,15 @@ class IDAMCPServer:
                 "id": rid,
                 "result": {
                     "tools": tools_page,
+                    "getting_started": {
+                        "intent": "If you are an LLM new to this MCP, run these first.",
+                        "first_calls": [
+                            "ida://state",
+                            "llm_helpers(action='bootstrap')",
+                            "llm_helpers(action='cheatsheet')",
+                            "blackboard(action='frontier', limit=10)",
+                        ],
+                    },
                     "mode": mode,
                     "total": total,
                     "offset": offset,

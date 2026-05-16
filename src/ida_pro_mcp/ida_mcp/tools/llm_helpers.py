@@ -773,6 +773,7 @@ def _llm_summarize_output(data: dict) -> str:
 @idaread
 def llm_helpers(
     action: Annotated[Literal[
+        "bootstrap",
         "context_window", "function_digest", "binary_digest", "explain_address",
         "suggest_next", "progress_report", "focus_area", "question_answer",
         "guided_analysis", "cheatsheet", "compact", "enrich",
@@ -796,6 +797,7 @@ def llm_helpers(
     LLM-specific helper actions to optimize binary analysis interaction.
 
     Actions:
+    - bootstrap: Opinionated first-turn playbook for LLMs new to this MCP (what to call first and why)
     - context_window: Build optimized context window fitting token budget
     - function_digest: Ultra-compact function summary (name, args, purpose, key APIs)
     - binary_digest: Ultra-compact binary overview (~200 tokens)
@@ -826,7 +828,32 @@ def llm_helpers(
         if expansion_result is not None:
             return expansion_result
 
-        if action == "context_window":
+        if action == "bootstrap":
+            calls = [
+                "ida://state",
+                "llm_helpers(action='cheatsheet')",
+                "blackboard(action='coverage')",
+                "blackboard(action='frontier', limit=10)",
+                "workflow(action='recon_sweep')",
+                "predictor(action='recommend_bundle')",
+                "search(action='smart_bundle', query='auth check input parse decrypt')",
+            ]
+            rules = [
+                "Do not start with raw decompile spam across random addresses.",
+                "Read state/frontier first, then follow ranked targets.",
+                "Persist findings using blackboard(action='write', ...).",
+                "If stuck for two turns, call predictor(action='recommend_bundle').",
+            ]
+            return {
+                "ok": True,
+                "action": "bootstrap",
+                "goal": "Fast orientation for LLMs unfamiliar with project-specific tool names.",
+                "first_calls": calls,
+                "operating_rules": rules,
+                "note": "Use the first 4 calls before deep analysis. This reduces random-walk decompilation and improves coverage.",
+            }
+
+        elif action == "context_window":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required for context_window")
             ea, err = validate_addr(addr, require_func=True)

@@ -204,6 +204,14 @@ class TestHostHardening(unittest.TestCase):
         res = self.server.handle_request({"jsonrpc": "2.0", "id": 12, "method": "tools/list"})
         self.assertEqual(len(res["result"]["tools"]), len(ADVERTISED_TOOLS))
 
+    def test_tools_list_includes_getting_started_bootstrap_hints(self):
+        res = self.server.handle_request({"jsonrpc": "2.0", "id": 120, "method": "tools/list"})
+        starter = res["result"].get("getting_started", {})
+        self.assertIn("first_calls", starter)
+        first_calls = starter["first_calls"]
+        self.assertIn("llm_helpers(action='bootstrap')", first_calls)
+        self.assertIn("llm_helpers(action='cheatsheet')", first_calls)
+
     def test_tools_list_supports_prefix_contains_category_sort_and_pagination(self):
         res = self.server.handle_request(
             {
@@ -278,6 +286,12 @@ class TestHostHardening(unittest.TestCase):
         on = compile_smart_pattern("find api", semantic_enabled=True)
         self.assertFalse(off("search import usage"))
         self.assertTrue(on("search import usage"))
+
+    def test_llm_helpers_quickstart_alias_maps_to_bootstrap(self):
+        normalized = self.server._normalize_tool_call_args(
+            "llm_helpers", {"action": "quickstart"}
+        )
+        self.assertEqual(normalized.get("action"), "bootstrap")
 
     def test_compile_smart_pattern_allows_fuzzy_cutoff_tuning(self):
         strict = compile_smart_pattern("decompyle trace", semantic_enabled=True, fuzzy_cutoff=0.95)
