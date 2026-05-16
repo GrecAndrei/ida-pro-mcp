@@ -167,6 +167,35 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         if out.get("suggestions"):
             self.assertIn("blended_confidence", out["suggestions"][0])
 
+    def test_predictor_recommend_bundle(self):
+        self.server._execute_tool("session", {"action": "bootstrap_init", "session_id": self.sid})
+        self.server._execute_tool(
+            "session",
+            {
+                "action": "log_activity",
+                "session_id": self.sid,
+                "tool": "search",
+                "activity_action": "find",
+                "result": "http beacon",
+            },
+        )
+        out = self.server._execute_tool(
+            "predictor",
+            {
+                "action": "recommend_bundle",
+                "session_id": self.sid,
+                "context": "beacon triage",
+                "limit": 3,
+            },
+        )
+        self.assertTrue(out.get("ok"))
+        self.assertEqual(out.get("action"), "recommend_bundle")
+        bundle = out.get("bundle", {})
+        self.assertIn("tool_suggestions", bundle)
+        self.assertIn("focus_pivots", bundle)
+        self.assertIn("address_suggestions", bundle)
+        self.assertIn("stall_risk", bundle)
+
     def test_dispute_lifecycle(self):
         self.server._execute_tool("session", {"action": "bootstrap_init", "session_id": self.sid})
         opened = self.server._execute_tool(

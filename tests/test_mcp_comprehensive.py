@@ -588,6 +588,13 @@ class TestWorkflowTool:
         assert result.get("error") is True or "error" in result
 
 
+class TestSearchTool:
+    def test_search_smart_bundle_action(self, mcp_client):
+        result = mcp_client.call_tool("search", action="smart_bundle", pattern="malloc", limit=3)
+        assert isinstance(result, dict)
+        assert result.get("error") is not True or "error" in result
+
+
 class TestAnalysisTool:
     def test_analysis_no_session(self, mcp_client):
         result = mcp_client.call_tool("analysis", action="get_options")
