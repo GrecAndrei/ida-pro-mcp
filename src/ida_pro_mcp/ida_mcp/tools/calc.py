@@ -11,7 +11,7 @@ except ImportError:
     from semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
 
 
-_CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align"}
+_CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"}
 _CALC_ACTION_ALIASES = {
     "evaluate": "eval",
     "expression": "eval",
@@ -35,6 +35,13 @@ _CALC_ACTION_ALIASES = {
     "walk": "chain",
     "alignment": "align",
     "round": "align",
+    "bitwise": "bitops",
+    "bitop": "bitops",
+    "xor": "bitops",
+    "and": "bitops",
+    "or": "bitops",
+    "not": "bitops",
+    "shift": "bitops",
 }
 
 
@@ -76,8 +83,8 @@ def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") ->
 @tool
 @idaread
 def calc(
-    action: Annotated[Literal["eval", "offset", "convert", "resolve", "deref", "chain", "align"],
-                       "Action: eval|offset|convert|resolve|deref|chain|align"],
+    action: Annotated[Literal["eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"],
+                       "Action: eval|offset|convert|resolve|deref|chain|align|bitops"],
     expr: Annotated[Optional[str], "Expression to evaluate (e.g. '0x401000 + 0x100')"] = None,
     addr: Annotated[Optional[str], "Address for conversion/resolution"] = None,
     target: Annotated[Optional[str], "Target address for offset calculation"] = None,
@@ -125,6 +132,10 @@ def calc(
         Returns: {value, alignment, aligned_down, aligned_up}
         Example: calc(action="align", value="0x401003", size=0x10)
 
+    bitops - Bitwise operations (and/or/xor/not/shl/shr)
+        Returns: {op, lhs, rhs?, result, result_hex, result_bin}
+        Example: calc(action="bitops", value="0xff", target="0x10", bit_op="xor")
+
     EXTRA:
     - semantic_action: Optional alias/intent action override (evaluate/delta/pointer_chain/etc)
     - intent: Optional natural-language query used for semantic action/value inference
@@ -155,6 +166,9 @@ def calc(
             elif ql.startswith("deref ") or ql.startswith("read "):
                 action = "deref"
                 interpreted_action = "deref"
+            elif any(k in ql for k in (" xor ", " and ", " or ", " shift ", " bitwise ")):
+                action = "bitops"
+                interpreted_action = "bitops"
 
         def _semantic_symbol_match(text_val: object) -> int:
             """Resolve free-form symbol text to best EA using semantic scoring.
@@ -636,6 +650,70 @@ def calc(
                 "aligned_up_hex": hex(aligned_up),
                 "nearest_hex": hex(nearest),
             })
+
+        elif action == "bitops":
+            op = str(kwargs.get("bit_op") or kwargs.get("op") or "").strip().lower()
+            if not op and nl_query:
+                q = nl_query.lower()
+                if " xor " in q:
+                    op = "xor"
+                elif " and " in q:
+                    op = "and"
+                elif " or " in q:
+                    op = "or"
+                elif " not " in q:
+                    op = "not"
+                elif " shl " in q or "<<" in q:
+                    op = "shl"
+                elif " shr " in q or ">>" in q:
+                    op = "shr"
+            if op not in {"and", "or", "xor", "not", "shl", "shr"}:
+                return make_error(MCPError.INVALID_ARGS, "bit_op/op required: and|or|xor|not|shl|shr")
+
+            if value is None and addr is not None:
+                value = addr
+            if value is None:
+                return make_error(MCPError.INVALID_ARGS, "value required for bitops")
+            try:
+                lhs = resolve_int(value)
+            except ValueError as e:
+                return make_error(MCPError.INVALID_ARGS, str(e))
+
+            rhs = None
+            if op != "not":
+                if target is None:
+                    return make_error(MCPError.INVALID_ARGS, "target required for bitops op (except not)")
+                try:
+                    rhs = resolve_int(target)
+                except ValueError as e:
+                    return make_error(MCPError.INVALID_ARGS, str(e))
+
+            if op == "and":
+                out = lhs & int(rhs)
+            elif op == "or":
+                out = lhs | int(rhs)
+            elif op == "xor":
+                out = lhs ^ int(rhs)
+            elif op == "not":
+                out = ~lhs
+            elif op == "shl":
+                out = lhs << int(rhs)
+            else:  # shr
+                out = lhs >> int(rhs)
+
+            return _finalize(
+                {
+                    "ok": True,
+                    "op": op,
+                    "lhs": lhs,
+                    "rhs": rhs,
+                    "result": out,
+                    "result_hex": hex(out),
+                    "result_bin": bin(out),
+                    "result_u32": out & 0xFFFFFFFF,
+                    "result_u64": out & 0xFFFFFFFFFFFFFFFF,
+                }
+            )
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

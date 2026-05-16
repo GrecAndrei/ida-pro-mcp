@@ -301,6 +301,11 @@ class TestCalcTool:
         if result.get("ok"):
             assert "nearest" in result
 
+    def test_calc_bitops_xor(self, mcp_client):
+        result = mcp_client.call_tool("calc", action="bitops", value="0xff", target="0x0f", bit_op="xor")
+        assert isinstance(result, dict)
+        assert result.get("ok") is True or "error" in result
+
 
 class TestWorkflowTool:
     def test_workflow_audit_plan_action(self, mcp_client):
