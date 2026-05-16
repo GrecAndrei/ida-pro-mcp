@@ -30,6 +30,7 @@ Natural language search using bge-code-v1 cosine similarity on indexed function 
 ```
 
 Requires functions to be indexed (decompile some first, or run `schemaboot(action='ingest')`). Returns items with similarity scores.
+`nl` also does embedding-driven query expansion by classifying the query into likely behavior tags, re-embedding those tags, and merging high-similarity neighbors.
 
 ### behavior
 Find all functions matching a behavior tag using BehaviorClassifier.

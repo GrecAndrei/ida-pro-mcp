@@ -447,7 +447,9 @@ def test_workflow_recon_sweep_includes_broad_steps():
     assert meta.get("firmware_detected") is False
     assert meta.get("trigger") == "idb_overview"
     calls = captured.get("calls", [])
+    assert any(c.get("name") == "search" and c.get("arguments", {}).get("action") == "nl" for c in calls)
     assert any(c.get("name") == "search" and c.get("arguments", {}).get("action") == "structured" for c in calls)
+    assert any(c.get("name") == "blackboard" and c.get("arguments", {}).get("action") == "frontier" for c in calls)
     assert any(c.get("name") == "protocol" and c.get("arguments", {}).get("action") == "detect" for c in calls)
     assert any(c.get("name") == "summarize" and c.get("arguments", {}).get("action") == "security_posture" for c in calls)
     assert not any(c.get("name") == "firmware_view" for c in calls)

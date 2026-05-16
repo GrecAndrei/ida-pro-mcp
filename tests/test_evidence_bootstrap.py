@@ -196,6 +196,19 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         self.assertIn("address_suggestions", bundle)
         self.assertIn("stall_risk", bundle)
 
+    def test_predictor_suggest_focus_exposes_embedding_focus_field(self):
+        out = self.server._execute_tool(
+            "predictor",
+            {
+                "action": "suggest_focus",
+                "session_id": self.sid,
+                "context": "auth parser crypto",
+                "limit": 3,
+            },
+        )
+        self.assertTrue(out.get("ok"))
+        self.assertIn("embedding_focus", out)
+
     def test_dispute_lifecycle(self):
         self.server._execute_tool("session", {"action": "bootstrap_init", "session_id": self.sid})
         opened = self.server._execute_tool(
