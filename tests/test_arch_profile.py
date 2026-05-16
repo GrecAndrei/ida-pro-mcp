@@ -41,3 +41,18 @@ def test_infer_binary_arch_profile_raw_cortex_m():
         assert float(inf["confidence"]) >= 0.9
     finally:
         os.unlink(path)
+
+
+def test_infer_binary_arch_profile_raw_ambiguous_does_not_force_processor():
+    with tempfile.NamedTemporaryFile(delete=False) as tf:
+        tf.write(b"\x00" * 512)
+        path = tf.name
+    try:
+        inf = infer_binary_arch_profile(path)
+        assert inf["file_kind"] == "raw"
+        # Ambiguous raw blobs should not be hard-forced into one processor.
+        assert inf.get("processor") in (None, "",)
+        assert isinstance(inf.get("candidates"), list)
+        assert inf.get("reason")
+    finally:
+        os.unlink(path)

@@ -6267,19 +6267,22 @@ class IDAMCPServer:
                     # Raw-binary profile inference to avoid metapc/default dead-ends.
                     if analysis_options.get("processor") is None:
                         inferred = infer_binary_arch_profile(binary_path)
+                        arch_meta = dict(arch_meta or {})
+                        arch_meta["inferred_profile"] = inferred
                         if inferred.get("processor"):
-                            # Apply automatically only when confidence is meaningful
-                            # or when file is a raw blob.
+                            # Only auto-apply when confidence is genuinely meaningful.
                             conf = float(inferred.get("confidence") or 0.0)
-                            kind = str(inferred.get("file_kind") or "unknown")
-                            if conf >= 0.55 or kind == "raw":
+                            reason = str(inferred.get("reason") or "")
+                            should_apply = conf >= 0.55 or "vector table heuristic" in reason.lower()
+                            arch_meta["inference_applied"] = bool(should_apply)
+                            if should_apply:
                                 analysis_options["processor"] = inferred.get("processor")
                                 if inferred.get("bitness") is not None:
                                     analysis_options.setdefault("bitness", inferred.get("bitness"))
                                 if inferred.get("endian"):
                                     analysis_options.setdefault("endian", inferred.get("endian"))
-                                arch_meta = dict(arch_meta or {})
-                                arch_meta["inferred_profile"] = inferred
+                        else:
+                            arch_meta["inference_applied"] = False
 
                 if not binary_path:
                     return make_error(

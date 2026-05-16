@@ -397,7 +397,7 @@ TOOL_DESCRIPTIONS = {
     "graph": "Generate call graphs, CFGs, and xref graphs in JSON/DOT/Mermaid formats. Actions: callgraph, cfg, xref_graph, down, up, both, json, dot, mermaid.",
     "history": "Undo/redo IDB changes, create snapshots, restore, and diff states. Actions: undo, redo, list, snapshot, restore, diff.",
     "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
-    "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks. Actions: meta, summary, segments, entrypoints, bookmarks, overview.",
+    "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile.",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
     "llm_helpers": "Context-optimized helpers for LLM agents. START HERE: bootstrap gives a concrete first-turn playbook; cheatsheet returns full tool reference with concrete examples. context_window/function_digest/binary_digest/explain_address: compact analysis helpers. suggest_next/progress_report/focus_area: navigation and planning. behavioral_signature_search: find functions by behavior tag using BehaviorClassifier. function_role_classifier: entry_point/callback/dispatcher/wrapper via structural+embedding signals. dangerous_pattern_explainer: why a pattern is dangerous + exploitation path + mitigation. api_contract_extractor: infer preconditions/postconditions from call sites. global_state_influence_mapper: which globals a function reads/writes. interprocedural_data_lineage_graph: trace data flow across function boundaries. semantic_diff_explainer: embedding+BehaviorClassifier diff between two functions. decompile_disasm_consistency_search: find decompiler/disasm disagreements. argument_semantics_search: find functions by argument role. path_constrained_search: BFS from addr filtered by behavior tag. cross_artifact_correlation_search: correlate strings/names/blackboard by query.",
     "lumina": "Interface to IDA Lumina server for collaborative function metadata sharing. Actions: pull, push, status, history, search, get_metadata.",
@@ -872,6 +872,7 @@ TOOL_ACTIONS = {
         "entrypoints",
         "bookmarks",
         "overview",
+        "architecture_profile",
     ],
     "imports_deep": [
         "thunks",

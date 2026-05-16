@@ -5,6 +5,12 @@ except ImportError:
 
 import ida_entry
 import ida_ida
+import os
+
+try:
+    from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile
+except Exception:
+    infer_binary_arch_profile = None  # type: ignore
 
 def _get_path(module, names):
     for name in names:
@@ -28,8 +34,8 @@ def _safe_inf_get(attr_name, fallback=None):
 
 @tool
 def idb(
-    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks", "overview"],
-                      "Action: meta|summary|segments|entrypoints|bookmarks|overview"] = "summary",
+    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile"],
+                      "Action: meta|summary|segments|entrypoints|bookmarks|overview|architecture_profile"] = "summary",
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
     **kwargs
@@ -49,6 +55,9 @@ def idb(
     
     overview - One-shot context for LLMs: meta + summary + segments + entrypoints combined
         Returns: {meta, summary, segments, entrypoints} - everything needed to start analysis
+
+    architecture_profile - Current IDB architecture profile + raw-binary inference guidance
+        Returns: {current, inferred_from_binary, raw_binary_mode, recommendations}
     
     segments - Detailed segment information with permissions and attributes
         Params: offset, count (for pagination)
@@ -70,21 +79,17 @@ def idb(
             summary = idb_summary()
             segs = idb_segments_detailed()
             entries = idb_entrypoints_detailed()
+            arch_profile = idb_architecture_profile(meta=meta, summary=summary)
             result = {
                 "ok": True,
                 "meta": meta,
                 "summary": summary,
                 "segments": segs[:20],
                 "entrypoints": entries.get("entrypoints", [])[:30],
+                "architecture_profile": arch_profile,
             }
             # Firmware detection hint
-            file_type = meta.get("file_type", "")
-            proc = (meta.get("processor") or "").lower()
-            import_count = summary.get("import_count", 0) if isinstance(summary, dict) else 0
-            is_firmware = (
-                file_type in ("raw", "unknown", "")
-                or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and import_count == 0)
-            )
+            is_firmware = bool(arch_profile.get("raw_binary_mode"))
             if is_firmware:
                 result["firmware_detected"] = True
                 result["next_actions"] = [
@@ -113,6 +118,8 @@ def idb(
             return {"ok": True, **idb_entrypoints_detailed()}
         if action == "bookmarks":
             return {"ok": True, **idb_bookmarks()}
+        if action == "architecture_profile":
+            return {"ok": True, **idb_architecture_profile()}
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e, "idb")
@@ -342,4 +349,45 @@ def idb_summary():
         "code_coverage_pct": coverage,
         "defined_code_bytes": defined_code_bytes,
         "total_code_bytes": total_code_bytes,
+    }
+
+
+@idaread
+def idb_architecture_profile(meta=None, summary=None):
+    if meta is None:
+        meta = idb_meta()
+    if summary is None:
+        summary = idb_summary()
+
+    binary_path = str(meta.get("binary_path") or "")
+    inferred = {}
+    if callable(infer_binary_arch_profile) and binary_path and os.path.exists(binary_path):
+        try:
+            inferred = infer_binary_arch_profile(binary_path) or {}
+        except Exception:
+            inferred = {}
+
+    current = {
+        "processor": meta.get("processor"),
+        "bitness": meta.get("bitness"),
+        "endian": "big" if meta.get("is_be") else "little",
+        "file_type": meta.get("file_type"),
+    }
+    file_type = str(meta.get("file_type") or "").strip().lower()
+    import_count = int((summary or {}).get("imports", 0) or 0)
+    proc = str(meta.get("processor") or "").strip().lower()
+    raw_mode = bool(
+        file_type in ("raw", "unknown", "")
+        or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and import_count == 0)
+    )
+    recs = []
+    if raw_mode:
+        recs.append("workflow(action='triage_fast')")
+        recs.append("firmware_view(action='triage_snapshot')")
+        recs.append("analysis(action='set_architecture', processor='<candidate>', bitness=<16|32|64>, endian='<little|big>')")
+    return {
+        "current": current,
+        "inferred_from_binary": inferred,
+        "raw_binary_mode": raw_mode,
+        "recommendations": recs,
     }
