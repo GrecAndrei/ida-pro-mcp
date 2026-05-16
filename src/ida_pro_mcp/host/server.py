@@ -8721,6 +8721,36 @@ class IDAMCPServer:
 
         step_plan: list[dict] = []
         workflow_meta: dict = {"version": 1, "action": action, "profile": profile}
+
+        def _detect_firmware_mode() -> tuple[bool, str]:
+            """Best-effort firmware detection with fallback to IDB metadata."""
+            overview_failed = False
+            try:
+                overview = self._execute_tool("idb", {"action": "overview"})
+                if isinstance(overview, dict):
+                    if bool(overview.get("firmware_detected")):
+                        return True, "idb_overview"
+                    # Keep overview as the authoritative trigger unless fallback
+                    # can positively detect raw/firmware from explicit filetype metadata.
+                    overview_trigger = "idb_overview"
+                else:
+                    return False, "idb_overview_non_dict"
+            except Exception:
+                overview_failed = True
+            if overview_failed:
+                return False, "idb_overview_error"
+            try:
+                meta = self._execute_tool("idb", {"action": "meta"})
+                if isinstance(meta, dict):
+                    if "filetype" not in meta:
+                        return False, overview_trigger
+                    ft = str(meta.get("filetype") or "").strip().lower()
+                    if ft in {"raw", "unknown", "bin", "binary", ""}:
+                        return True, "idb_meta_filetype"
+                    return False, overview_trigger
+                return False, overview_trigger
+            except Exception:
+                return False, overview_trigger
         if action == "audit_plan":
             calls_in = args.get("planned_calls")
             calls_raw: list = []
@@ -9401,18 +9431,7 @@ class IDAMCPServer:
                 "supports_dry_run": True,
             }
         elif action == "triage_fast":
-            firmware_detected = False
-            firmware_detected_trigger = "default_false"
-            try:
-                overview = self._execute_tool("idb", {"action": "overview"})
-                if isinstance(overview, dict):
-                    firmware_detected = bool(overview.get("firmware_detected"))
-                    firmware_detected_trigger = "idb_overview"
-                else:
-                    firmware_detected_trigger = "idb_overview_non_dict"
-            except Exception:
-                firmware_detected = False
-                firmware_detected_trigger = "idb_overview_error"
+            firmware_detected, firmware_detected_trigger = _detect_firmware_mode()
 
             step_plan = [
                 {"name": "idb", "arguments": {"action": "overview"}},
@@ -9449,18 +9468,7 @@ class IDAMCPServer:
                 {"name": "threat_hunt", "arguments": {"action": "vuln", "limit": limit, "profile": profile}},
             ]
         elif action == "recon_sweep":
-            firmware_detected = False
-            firmware_detected_trigger = "default_false"
-            try:
-                overview = self._execute_tool("idb", {"action": "overview"})
-                if isinstance(overview, dict):
-                    firmware_detected = bool(overview.get("firmware_detected"))
-                    firmware_detected_trigger = "idb_overview"
-                else:
-                    firmware_detected_trigger = "idb_overview_non_dict"
-            except Exception:
-                firmware_detected = False
-                firmware_detected_trigger = "idb_overview_error"
+            firmware_detected, firmware_detected_trigger = _detect_firmware_mode()
 
             step_plan = [
                 {"name": "idb", "arguments": {"action": "overview"}},
@@ -9524,6 +9532,21 @@ class IDAMCPServer:
                 if str(step.get("name") or "").strip().lower() not in set(exclude_tools)
             ]
 
+        # Capability gating: prune unavailable tool/actions so workflows degrade gracefully.
+        unavailable_steps: list[str] = []
+        gated_plan: list[dict] = []
+        for step in step_plan:
+            tool_name = str(step.get("name") or "").strip().lower()
+            action_name = str((step.get("arguments") or {}).get("action") or "").strip().lower()
+            if tool_name not in TOOL_ACTIONS:
+                unavailable_steps.append(f"{tool_name}.{action_name or '*'} (tool unavailable)")
+                continue
+            if action_name and action_name not in {str(a).strip().lower() for a in TOOL_ACTIONS.get(tool_name, [])}:
+                unavailable_steps.append(f"{tool_name}.{action_name} (action unavailable)")
+                continue
+            gated_plan.append(step)
+        step_plan = gated_plan
+
         workflow_meta["dry_run"] = dry_run
         workflow_meta["available_tools"] = available_tools
         workflow_meta["include_tools"] = include_tools
@@ -9552,6 +9575,10 @@ class IDAMCPServer:
         if conflicting_tools:
             plan_diagnostics.append(
                 f"tools listed in both include_tools and exclude_tools: {', '.join(conflicting_tools)}"
+            )
+        if unavailable_steps:
+            plan_diagnostics.append(
+                f"pruned unavailable workflow steps: {', '.join(unavailable_steps[:12])}"
             )
         if not step_plan:
             plan_diagnostics.append("No workflow steps remain after filtering.")

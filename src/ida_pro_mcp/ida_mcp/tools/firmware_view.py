@@ -1298,8 +1298,13 @@ def firmware_view(
                 if aerr:
                     return aerr
                 anchor = a
-            around_start = max(idaapi.cvar._inf_min_ea(), anchor - 0x200)
-            around_end = min(idaapi.cvar._inf_max_ea(), anchor + 0x200)
+            min_ea = _inf_min_ea()
+            max_ea = _inf_max_ea()
+            if min_ea in (None, idaapi.BADADDR) or max_ea in (None, idaapi.BADADDR) or max_ea <= min_ea:
+                min_ea = max(0, anchor - 0x1000)
+                max_ea = anchor + 0x1000
+            around_start = max(int(min_ea), anchor - 0x200)
+            around_end = min(int(max_ea), anchor + 0x200)
             result = {
                 "ok": True,
                 "action": action,

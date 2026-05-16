@@ -514,6 +514,9 @@ TOOL_ACTIONS = {
         "contradict",
         "resolve",
         "next_target",
+        "frontier",
+        "coverage",
+        "propagate_labels",
         "start_crawler",
         "stop_crawler",
         "crawler_status",
@@ -888,6 +891,8 @@ TOOL_ACTIONS = {
         "progress_report",
         "focus_area",
         "question_answer",
+        "guided_analysis",
+        "cheatsheet",
         "compact",
         "enrich",
         "intent_tool_compiler",
@@ -1117,6 +1122,8 @@ TOOL_ACTIONS = {
         "data_ref",
         "export",
         "find",
+        "nl",
+        "behavior",
         "query_lang",
         "summary",
         "type",
@@ -2032,6 +2039,13 @@ _TOOL_SPECIFIC_ARG_ALIASES = {
     "code": {
         "addrs": {"addr", "address", "addresses", "ea", "eas"},
         "max_items": {"count", "max"},
+    },
+    "query": {
+        "subaction": {"sub_action", "sub-action", "sub", "action_name"},
+    },
+    "compare": {
+        "addr": {"addr_a", "address_a", "a", "lhs"},
+        "addr2": {"addr_b", "address_b", "b", "rhs"},
     },
     "data": {
         "query": {"name", "symbol", "lookup"},
