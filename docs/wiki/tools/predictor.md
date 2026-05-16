@@ -8,14 +8,15 @@ Deterministic prediction and strategy suggestions using crystallized skills and 
 - `suggest_focus` — suggest where to focus next
 - `suggest_next_address` — suggest next address to analyze
 - `risk_of_stall` — estimate risk of analysis stalling
-- `explain_decision` — explain why a suggestion was made; params: `suggestion_id`
+- `recommend_bundle` — bundle next-tool + focus + address + stall-risk recommendations in one response
+- `explain_decision` — explain why a target tool/action was suggested
 
 ## Examples
 ```json
 {"name": "predictor", "arguments": {"action": "suggest_next_tool"}}
 ```
 ```json
-{"name": "predictor", "arguments": {"action": "detect_stuck"}}
+{"name":"predictor","arguments":{"action":"recommend_bundle","context":"network beacon c2","limit":3}}
 ```
 
 ## Notes

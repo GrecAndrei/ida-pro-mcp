@@ -102,7 +102,7 @@ Function listing, global variables, strings, imports, and exports. Query pattern
 ### search
 Pattern and reference search. Supports semantic matching, case sensitivity, and context inclusion. Pattern auto-detects regex, glob, or plain substring.
 
-**Actions:** bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, callers, callees, api, vulnerable, constants, decompiled, structured, type, export, summary, query_lang
+**Actions:** bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment, data_ref, code_ref, regex, func_by_sig, find, semantic, smart_bundle, callers, callees, api, vulnerable, constants, decompiled, structured, type, export, summary, query_lang, nl, behavior
 
 ### types
 Type Library (TIL) and prototype management.
@@ -155,7 +155,7 @@ Utilities including full IDAPython access, host filesystem I/O, IDA plugin manag
 ### calc
 Mathematical and address resolution with dereference chains and alignment.
 
-**Actions:** eval, offset, convert, resolve, deref, chain, align
+**Actions:** eval, offset, convert, resolve, deref, chain, align, bitops
 
 ### nav
 Navigation and triage. Jump to addresses, query cursor position, and discover interesting locations.
@@ -336,12 +336,12 @@ Consolidated malware/vulnerability/tracing orchestration hub. Executes end-to-en
 ### predictor
 Deterministic/local-ML predictive assistant for workflow guidance. Uses activity sequence modeling and local Q-value strategy ranking (MemRL-inspired). Detects stalls, suggests next addresses, and explains decisions.
 
-**Actions:** suggest_next_tool, detect_stuck, suggest_focus, suggest_next_address, risk_of_stall, explain_decision
+**Actions:** suggest_next_tool, detect_stuck, suggest_focus, suggest_next_address, risk_of_stall, recommend_bundle, explain_decision
 
 ### workflow
 Deterministic workflow façade that expands a single call into a validated multi-step batch plan. Reduces LLM prompt complexity by hiding orchestration details behind a single canonical entry point.
 
-**Actions:** triage_fast, malware_deep, vuln_audit, patch_review
+**Actions:** catalog, plan, explain, estimate, compose, prioritize, audit_plan, execute_plan, triage_fast, malware_deep, vuln_audit, recon_sweep, patch_review
 
 ### gadgets
 ROP/JOP/COP gadget discovery for x86/x64 and ARM/AArch64. Includes semantic gadget finding.

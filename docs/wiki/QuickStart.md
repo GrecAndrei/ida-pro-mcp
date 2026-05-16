@@ -53,6 +53,13 @@ The blackboard auto-captures findings from `memory`, `calc`, `deobfuscate`, `cla
 {"name":"summarize","arguments":{"action":"report"}}
 ```
 
+## 10. Use deterministic workflow planning/execution
+```json
+{"name":"workflow","arguments":{"action":"plan","workflow_action":"triage_fast"}}
+{"name":"workflow","arguments":{"action":"audit_plan","workflow_action":"triage_fast"}}
+{"name":"workflow","arguments":{"action":"execute_plan","workflow_action":"triage_fast","continue_on_error":true}}
+```
+
 ## Key rules
 - `session(action="create")` does not accept `idb_path` or `use_existing`.
 - `idb` is optional once a session is active.

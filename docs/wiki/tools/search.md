@@ -10,6 +10,7 @@ Search the binary for bytes, strings, patterns, names, instructions, xrefs, and 
 | `behavior` | Find functions by behavior tag (BehaviorClassifier) | "find all crypto functions" |
 | `find` | Smart unified search (names/strings/imports/instructions) | General purpose |
 | `semantic` | NL search with heuristic scoring | Faster than nl, less accurate |
+| `smart_bundle` | Fused `find` + `semantic` with deduped items | Broad first-pass retrieval |
 | `api` | Find all usages of an imported API | "where is recv called?" |
 | `decompiled` | Search pseudocode across all functions | "find memcpy with no length check" |
 | `callers` / `callees` | Call graph queries | "who calls sub_401000?" |
@@ -46,6 +47,13 @@ NL search with heuristic string-level scoring (faster than `nl`, less accurate).
 
 ```json
 {"name": "search", "arguments": {"action": "semantic", "query": "packet parser", "limit": 20}}
+```
+
+### smart_bundle
+Runs `find` and `semantic` together, then merges/deduplicates results into one ranked structured list.
+
+```json
+{"name":"search","arguments":{"action":"smart_bundle","pattern":"credential decrypt", "limit":20}}
 ```
 
 ### find
