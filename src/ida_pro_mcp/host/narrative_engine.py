@@ -62,7 +62,7 @@ class NarrativeEngine:
     def _section_identity(self, meta: Dict) -> str:
         name = meta.get("filename") or meta.get("input_file") or "unknown binary"
         arch = meta.get("processor") or meta.get("arch") or "unknown arch"
-        bits = meta.get("bits") or 0
+        bits = meta.get("bitness") or meta.get("bits") or 0
         size = meta.get("file_size") or 0
         size_str = f"{size // 1024}KB" if size else "unknown size"
 
