@@ -5,7 +5,7 @@ Computes entropy metrics to detect packed, encrypted, or compressed regions in t
 ## Actions
 - `section` — Compute entropy per section/segment; params: none
 - `region` — Compute entropy for a specific address range; params: `address`, `size`
-- `packed_detect` — Heuristic detection of packed/compressed sections; params: `threshold`
+- `packed_detect` — Detection of packed/compressed sections from entropy and structure signals; params: `threshold`
 - `crypto_detect` — Identify high-entropy regions likely containing crypto material; params: `threshold`
 - `compare` — Compare entropy profiles between two regions or binaries; params: `address_a`, `address_b`, `size`
 - `window` — Sliding-window entropy computation; params: `address`, `size`, `window_size`
