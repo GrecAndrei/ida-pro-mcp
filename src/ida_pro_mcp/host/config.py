@@ -221,6 +221,11 @@ WIKI_SEMANTIC_GROUPS: tuple[tuple[str, ...], ...] = (
     ("vulnerability", "security", "exploit", "sink", "source"),
 )
 
+# Ranking/inference policy
+# Default is embedding-first to avoid brittle keyword/threshold heuristics.
+EMBEDDING_FIRST_MODE = str(os.environ.get("IDA_MCP_EMBEDDING_FIRST_MODE", "true")).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+ALLOW_HEURISTIC_FALLBACKS = str(os.environ.get("IDA_MCP_ALLOW_HEURISTIC_FALLBACKS", "false")).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
 
 _log_file_handle = None
 
