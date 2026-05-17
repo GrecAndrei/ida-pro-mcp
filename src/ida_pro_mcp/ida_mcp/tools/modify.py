@@ -450,8 +450,14 @@ def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
                     pass
                 if not callee_pseudo:
                     continue
-                similar = idx.similar(callee_pseudo, top_k=3, exclude_ea=hex(callee_ea), threshold=0.65)
+                similar = idx.similar(callee_pseudo, top_k=8, exclude_ea=hex(callee_ea), threshold=0.0)
                 named = [s for s in similar if not s["name"].startswith("sub_") and not s["name"].startswith("0x")]
+                if named:
+                    vals = sorted(float(s.get("similarity", 0.0) or 0.0) for s in named)
+                    q50 = vals[len(vals) // 2]
+                    q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+                    gate = q50 + max(0.0, q75 - q50)
+                    named = [s for s in named if float(s.get("similarity", 0.0) or 0.0) >= gate]
                 if named:
                     suggestions.append({
                         "callee_addr": hex(callee_ea),
