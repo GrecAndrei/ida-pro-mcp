@@ -2373,22 +2373,65 @@ class ContextAssembler:
         api_calls: Optional[List[str]],
         max_entries: int,
     ) -> List[Dict[str, Any]]:
-        """Adaptive candidate prefilter before semantic scoring."""
+        """Embedding-first candidate prefilter before semantic scoring."""
         if not all_entries:
             return []
-        api_set = set(api_calls or [])
+        api_calls = api_calls or []
+        q_text = " ".join(sorted(set(api_calls))).strip() or "binary reverse engineering related finding"
+        query_vec: Optional[List[float]] = None
+        try:
+            query_vec = self._embedder.embed(q_text[:400])
+        except Exception:
+            query_vec = None
+
         scored: List[Tuple[float, Dict[str, Any]]] = []
-        now = time.time()
-        for e in all_entries:
-            conf = float(e.get("confidence") or 0.0)
-            upd = float(e.get("updated_at") or 0.0)
-            recency = 1.0 / (1.0 + max(0.0, now - upd) / 86400.0)
-            tags = set(e.get("tags") or [])
-            api_overlap = 1.0 if (api_set and tags.intersection(api_set)) else 0.0
-            score = conf * 0.55 + recency * 0.25 + api_overlap * 0.2
-            scored.append((score, e))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [e for _, e in scored[:max_entries]]
+        if query_vec is not None:
+            texts: List[str] = []
+            refs: List[Dict[str, Any]] = []
+            for e in all_entries:
+                t = f"{e.get('title', '')} {e.get('content', '')} {' '.join(e.get('tags') or [])}".strip()
+                if not t:
+                    continue
+                texts.append(t[:400])
+                refs.append(e)
+            if texts:
+                try:
+                    vecs = self._embedder.embed_batch(texts)
+                    for e, ev in zip(refs, vecs):
+                        sim = BgeCodeEmbedder.cosine(query_vec, ev)
+                        scored.append((float(sim), e))
+                except Exception:
+                    scored = []
+
+        if not scored:
+            # Deterministic fallback: keep latest non-empty entries without weighted heuristics.
+            out = [e for e in all_entries if (e.get("title") or e.get("content"))]
+            out.sort(key=lambda e: float(e.get("updated_at") or 0.0), reverse=True)
+            return out[:max_entries]
+
+        # Merge: keep embedding-ranked head, then fill with strong-confidence entries
+        # that may lack rich text (to avoid coverage regressions).
+        embed_ranked = [e for _, e in sorted(scored, key=lambda x: x[0], reverse=True)]
+        seen = {str(e.get("id") or id(e)) for e in embed_ranked}
+        conf_fill = sorted(
+            [e for e in all_entries if str(e.get("id") or id(e)) not in seen],
+            key=lambda e: float(e.get("confidence") or 0.0),
+            reverse=True,
+        )
+        head_take = max(1, max_entries - 1) if conf_fill else max_entries
+        merged = embed_ranked[:head_take] + conf_fill + embed_ranked[head_take:]
+        dedup: List[Dict[str, Any]] = []
+        dedup_seen: set = set()
+        for e in merged:
+            k = str(e.get("id") or id(e))
+            if k in dedup_seen:
+                continue
+            dedup_seen.add(k)
+            dedup.append(e)
+            if len(dedup) >= max_entries:
+                break
+        return dedup[:max_entries]
+
 
     def _get_bb_semantic_vec(
         self,
@@ -3118,12 +3161,7 @@ class ContextAssembler:
     ) -> List[Dict[str, Any]]:
         """
         Recommend unanalyzed functions worth examining next, ranked by
-        interest score derived from schemaboot structural attributes:
-          - xor_count  (obfuscation / custom crypto indicator)
-          - entropy    (packed / encrypted content)
-          - cyclomatic_complexity (complex logic)
-          - api_count  (rich behaviour)
-          - unnamed    (prefer sub_XXXXX targets over already-named ones)
+        embedding similarity over structural summaries.
 
         Excludes functions already in the embedding index (already seen).
         Returns an empty list if schemaboot has not been ingested yet.
@@ -3144,19 +3182,12 @@ class ContextAssembler:
         try:
             conn = sqlite3.connect(db)
             cur = conn.cursor()
-            # Pull candidates ordered by interest score.
-            # Prefer unnamed (sub_*) functions — named ones are probably understood.
             cur.execute("""
                 SELECT ea, name,
                        xor_count, entropy, cyclomatic_complexity,
                        api_count, incoming_xrefs, string_count, has_loops
                 FROM function_attrs
                 WHERE size > 64
-                ORDER BY
-                    (xor_count * 4 +
-                     CAST(entropy * 3 AS INTEGER) +
-                     cyclomatic_complexity * 2 +
-                     api_count) DESC
                 LIMIT 200
             """)
             rows = cur.fetchall()
@@ -3184,7 +3215,7 @@ class ContextAssembler:
         seen_eas: set = set()
         results: List[Dict[str, Any]] = []
 
-        def _add(row, reason: str):
+        def _add(row, reason: str, interest_score: float):
             ea_int = row[0]
             ea = hex(ea_int)
             if ea in analyzed or ea in seen_eas:
@@ -3195,12 +3226,11 @@ class ContextAssembler:
             cc    = row[4] or 0
             apis  = row[5] or 0
             xrefs = row[6] or 0
-            score = xor * 4 + entr * 3 + cc * 2 + apis
             results.append({
                 "ea":    ea,
                 "name":  row[1] or f"sub_{ea_int:X}",
                 "reason": reason,
-                "interest_score": round(score, 1),
+                "interest_score": round(float(interest_score), 3),
                 "xor_count":  xor,
                 "entropy":    round(entr, 2),
                 "cyclomatic": cc,
@@ -3208,14 +3238,48 @@ class ContextAssembler:
                 "callers":    xrefs,
             })
 
+        # Embedding-first structural ranking
+        row_scores: Dict[int, float] = {}
+        try:
+            anchor = (
+                "high value reverse engineering target with suspicious behavior, "
+                "complex control flow, many cross references, and high analysis payoff"
+            )
+            qv = self._embedder.embed(anchor)
+            text_rows: List[str] = []
+            ea_rows: List[int] = []
+            for row in rows:
+                ea_int = int(row[0] or 0)
+                if not ea_int:
+                    continue
+                summary = (
+                    f"name={row[1] or ''} xor_count={row[2] or 0} entropy={float(row[3] or 0):.2f} "
+                    f"cyclomatic={row[4] or 0} api_count={row[5] or 0} callers={row[6] or 0} "
+                    f"strings={row[7] or 0} loops={bool(row[8])}"
+                )
+                text_rows.append(summary)
+                ea_rows.append(ea_int)
+            if text_rows:
+                vecs = self._embedder.embed_batch(text_rows)
+                for ea_int, v in zip(ea_rows, vecs):
+                    row_scores[ea_int] = float(BgeCodeEmbedder.cosine(qv, v))
+        except Exception:
+            row_scores = {}
+
         # Dangerous-API functions first (highest priority)
         for row in danger_rows:
-            _add(row, "calls dangerous API")
+            base = row_scores.get(int(row[0] or 0), 0.0)
+            _add(row, "calls dangerous API", min(1.0, base + 0.15))
             if len(results) >= limit:
                 break
 
-        # Then high-score unnamed functions
-        for row in rows:
+        # Then highest-scoring structural candidates
+        ranked_rows = sorted(
+            rows,
+            key=lambda r: row_scores.get(int(r[0] or 0), float((r[6] or 0) / 1000.0)),
+            reverse=True,
+        )
+        for row in ranked_rows:
             if len(results) >= limit:
                 break
             name = row[1] or ""
@@ -3224,7 +3288,7 @@ class ContextAssembler:
                 if (row[2] or 0) > 3 or float(row[3] or 0) > 5.5
                 else f"complexity={row[4]}, apis={row[5]}"
             )
-            _add(row, reason)
+            _add(row, reason, row_scores.get(int(row[0] or 0), 0.0))
 
         results.sort(key=lambda x: x["interest_score"], reverse=True)
         return results[:limit]
