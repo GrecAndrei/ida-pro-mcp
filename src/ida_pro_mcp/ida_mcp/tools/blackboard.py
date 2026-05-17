@@ -55,6 +55,16 @@ if "idawrite" not in globals():
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
+def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
+    if not vals:
+        return float(default)
+    s = sorted(float(v) for v in vals)
+    if len(s) == 1:
+        return s[0]
+    idx = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
+    idx = max(0, min(len(s) - 1, idx))
+    return float(s[idx])
+
 
 def _resolve_db_path(db_path: Optional[str] = None) -> str:
     if db_path:
@@ -580,39 +590,58 @@ class BlackboardStore:
         scored = []
         seen_addrs: set = set()
 
+        # Build adaptive baselines from current unresolved frontier.
+        conf_vals = [float(r[4] or 0.0) for r in rows]
+        xref_vals = [float(r[7] or 0.0) for r in rows]
+        ent_vals = [float(r[8] or 0.0) for r in rows]
+        q_conf50 = _quantile(conf_vals, 0.50, default=0.5)
+        q_conf75 = _quantile(conf_vals, 0.75, default=0.7)
+        q_xref50 = _quantile(xref_vals, 0.50, default=0.0)
+        q_xref75 = _quantile(xref_vals, 0.75, default=1.0)
+        q_ent50 = _quantile(ent_vals, 0.50, default=0.0)
+        q_ent75 = _quantile(ent_vals, 0.75, default=1.0)
+
         for row in rows:
             eid, addr, cat, title, conf, depends_on, created_at, xref_count, entropy, source_type = row
             if addr in seen_addrs:
                 continue
             seen_addrs.add(addr)
 
-            score = float(conf or 0.5)
+            # Adaptive confidence baseline around current frontier distribution.
+            score = max(1e-6, float(conf or 0.5))
 
-            # Time decay: exp(-age_days * 0.05)
+            # Time decay: smooth half-life derived from confidence spread.
             age_days = (now - (created_at or now)) / 86400
-            score *= math.exp(-age_days * 0.05)
+            conf_spread = max(1e-3, q_conf75 - q_conf50)
+            half_life_days = max(5.0, min(45.0, 14.0 + (conf_spread * 40.0)))
+            score *= math.exp(-age_days * (math.log(2.0) / half_life_days))
 
-            # Dependency factor
+            # Dependency factor (preserve hard gating semantics).
             if depends_on and depends_on in resolved_addrs:
-                score *= 1.5   # unblocked
+                score *= 1.25
             elif depends_on and depends_on not in resolved_addrs:
-                score *= 0.3   # blocked
+                score *= 0.35
 
-            # Category boost
-            if cat in ("hypothesis", "dependency", "data_flow", "vuln"):
-                score *= 1.3
-            elif cat in ("cross_session",):
-                score *= 1.2
-            elif cat in ("pointer", "string") and (conf or 0) < 0.7:
-                score *= 0.5
+            # Category prior from observed category quality in this frontier.
+            if cat:
+                cat_rows = [r for r in rows if str(r[2] or "") == str(cat)]
+                if cat_rows:
+                    cat_conf = [float(r[4] or 0.0) for r in cat_rows]
+                    cat_prior = _quantile(cat_conf, 0.50, default=score)
+                    base_prior = _quantile(conf_vals, 0.50, default=0.5)
+                    if base_prior > 0:
+                        score *= max(0.5, min(1.6, cat_prior / base_prior))
 
-            # Xref boost: +0.1 per 10 callers, capped at +0.5
-            xref_boost = min(0.5, (xref_count or 0) / 10 * 0.1)
-            score *= (1 + xref_boost)
+            # Adaptive xref/entropy multipliers from current distributions.
+            xref = float(xref_count or 0.0)
+            xref_iqr = max(1e-3, q_xref75 - q_xref50)
+            xref_sig = 1.0 / (1.0 + math.exp(-((xref - q_xref50) / xref_iqr)))
+            score *= (0.85 + 0.55 * xref_sig)
 
-            # Entropy boost for high-entropy regions (likely crypto/packed)
-            if (entropy or 0) > 6.5:
-                score *= 1.15
+            ent = float(entropy or 0.0)
+            ent_iqr = max(1e-3, q_ent75 - q_ent50)
+            ent_sig = 1.0 / (1.0 + math.exp(-((ent - q_ent50) / ent_iqr)))
+            score *= (0.9 + 0.25 * ent_sig)
 
             scored.append({
                 "addr": addr,
@@ -806,11 +835,21 @@ class BlackboardStore:
         if not rows:
             return False
         wa = set(title.lower().split())
+        sims: List[float] = []
         for (t,) in rows:
             wb = set(t.lower().split())
-            if wa and wb and len(wa & wb) / len(wa | wb) >= threshold:
-                return True
-        return False
+            if wa and wb:
+                sims.append(len(wa & wb) / len(wa | wb))
+        if not sims:
+            return False
+        adaptive_gate = threshold
+        try:
+            q50 = _quantile(sims, 0.50, default=threshold)
+            q75 = _quantile(sims, 0.75, default=threshold)
+            adaptive_gate = max(0.5, min(0.99, q75 + (q75 - q50)))
+        except Exception:
+            adaptive_gate = threshold
+        return max(sims) >= adaptive_gate
 
     def auto_merge(self, addr: str = "", category: str = "", similarity_threshold: float = 0.85) -> Dict:
         with self._conn() as conn:
@@ -833,6 +872,17 @@ class BlackboardStore:
             wa, wb = set(a.lower().split()), set(b.lower().split())
             return len(wa & wb) / len(wa | wb) if wa and wb else 0.0
 
+        pair_sims: List[float] = []
+        for i, e in enumerate(entries):
+            for o in entries[i + 1:]:
+                if e.get("addr") == o.get("addr") and e.get("category") == o.get("category"):
+                    pair_sims.append(_jaccard(str(e.get("title", "")), str(o.get("title", ""))))
+        dyn_thr = similarity_threshold
+        if pair_sims:
+            q50 = _quantile(pair_sims, 0.50, default=similarity_threshold)
+            q75 = _quantile(pair_sims, 0.75, default=similarity_threshold)
+            dyn_thr = max(0.5, min(0.99, q75 + (q75 - q50)))
+
         for i, e in enumerate(entries):
             if e["id"] in deleted:
                 continue
@@ -840,7 +890,7 @@ class BlackboardStore:
                 if o["id"] in deleted:
                     continue
                 if e.get("addr") == o.get("addr") and e.get("category") == o.get("category"):
-                    if _jaccard(str(e.get("title", "")), str(o.get("title", ""))) >= similarity_threshold:
+                    if _jaccard(str(e.get("title", "")), str(o.get("title", ""))) >= dyn_thr:
                         self.delete(o["id"])
                         deleted.add(o["id"])
         return {"merged": len(deleted), "remaining": len(entries) - len(deleted)}
