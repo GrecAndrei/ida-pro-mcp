@@ -15,7 +15,7 @@ except ImportError:
 from .core import (
     clip_text, paginate_records, build_response, resolve_target,
     iter_segments, iter_code, xref_count_limited,
-    _FIND_INSTRUCTION_CAP, _FIND_INSTRUCTION_LIMIT_MULTIPLIER, FIND_INSTRUCTION_MIN_SCORE,
+    _FIND_INSTRUCTION_CAP, _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
     SCORE_SUBSTRING, get_cached_imports, get_cached_strings, SearchTimeout,
     CALL_XREF_TYPES, safe_generate_disasm_line,
 )
@@ -112,7 +112,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             mnem = (idc.print_insn_mnem(ea) or "").lower()
             semantic_blob = f"{mnem} {line_clean}"
             sem = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), 160.0)
-            if matcher(semantic_blob) or sem >= FIND_INSTRUCTION_MIN_SCORE:
+            if matcher(semantic_blob) or sem > 0.0:
                 add_find("instructions", ea, f"{hex(ea)}  {mnem}  {clip_text(line_clean, 180)}", int(70 + sem))
                 instruction_hits += 1
 
@@ -184,11 +184,11 @@ def search_semantic(pattern, include_context, range_start, range_end, offset, li
         if not name:
             continue
         score = semantic_score(query, name, substring_bonus=SCORE_SUBSTRING)
-        if score >= 42.0:
+        if score > 0.0:
             kind = "func" if idaapi.get_func(ea) else "symbol"
             xr = xref_count_limited(ea, 64)
             line = f"{hex(ea)}  {kind}  {name}  xrefs={xr}"
-            add_hit("name", ea, line, score + min(xr, 30), "symbol_name")
+            add_hit("name", ea, line, score, "symbol_name")
 
     # Imports/API names
     for irec in get_cached_imports():
@@ -196,12 +196,12 @@ def search_semantic(pattern, include_context, range_start, range_end, offset, li
         if not name:
             continue
         score = semantic_score(query, name, substring_bonus=SCORE_SUBSTRING)
-        if score >= 40.0:
+        if score > 0.0:
             ea = irec["ea"]
             module = irec.get("module") or "unknown"
             xr = xref_count_limited(ea, 64)
             line = f"{hex(ea)}  import  {module}!{name}  xrefs={xr}"
-            add_hit("import", ea, line, score + min(xr, 36), "import_name")
+            add_hit("import", ea, line, score, "import_name")
 
     # String literals
     for srec in get_cached_strings():
@@ -209,11 +209,11 @@ def search_semantic(pattern, include_context, range_start, range_end, offset, li
         if not s:
             continue
         score = semantic_score(query, s, substring_bonus=SCORE_SUBSTRING)
-        if score >= 50.0:
+        if score > 0.0:
             ea = srec["ea"]
             xr = xref_count_limited(ea, 64)
             line = f"{hex(ea)}  string  xrefs={xr}  {clip_text(s, 180)}"
-            add_hit("string", ea, line, score + min(xr, 24), "string_literal")
+            add_hit("string", ea, line, score, "string_literal")
 
     # Disassembly semantics
     insn_hits = 0
@@ -235,7 +235,7 @@ def search_semantic(pattern, include_context, range_start, range_end, offset, li
             mnem = (idc.print_insn_mnem(ea) or "").lower()
             semantic_blob = f"{mnem} {line_clean}"
             score = semantic_score(query, semantic_blob, substring_bonus=SCORE_SUBSTRING)
-            if score >= FIND_INSTRUCTION_MIN_SCORE:
+            if score > 0.0:
                 out_line = f"{hex(ea)}  insn  {mnem}  {clip_text(line_clean, 180)}"
                 add_hit("instruction", ea, out_line, 60.0 + min(score, 120.0), "instruction_text")
                 insn_hits += 1
@@ -416,7 +416,7 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
             ea = irec["ea"]
             matched_apis.append({
                 "ea": ea, "name": name, "module": irec["module"],
-                "score": semantic_score(pattern, name) + min(xref_count_limited(ea, 64), 64),
+                "score": semantic_score(pattern, name),
             })
 
     if not matched_apis:
