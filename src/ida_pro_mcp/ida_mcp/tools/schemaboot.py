@@ -438,7 +438,15 @@ def _detect_behavior_tags(attrs: dict[str, Any]) -> list[str]:
         tags.append("init")
     if "deinit" in name or "destructor" in name or "_fini" in name:
         tags.append("cleanup")
-    if attrs.get("entropy", 0.0) > 7.0 and attrs.get("xor_count", 0) > 2:
+    entropy = float(attrs.get("entropy", 0.0) or 0.0)
+    xor_count = float(attrs.get("xor_count", 0) or 0)
+    mov_count = float(attrs.get("mov_count", 0) or 0)
+    cmp_count = float(attrs.get("cmp_count", 0) or 0)
+    loop_bias = 0.08 if int(attrs.get("has_loops", 0) or 0) else 0.0
+    xor_ratio = xor_count / max(1.0, xor_count + mov_count + cmp_count)
+    entropy_norm = max(0.0, min(1.0, entropy / 8.0))
+    signal = (entropy_norm * 0.62) + (xor_ratio * 0.30) + loop_bias
+    if signal >= 0.5:
         tags.append("obfuscation")
     return tags
 
