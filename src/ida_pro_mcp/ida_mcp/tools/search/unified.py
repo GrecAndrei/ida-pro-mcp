@@ -49,10 +49,11 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             for xref in idautils.XrefsTo(ea, 0):
                 func = idaapi.get_func(xref.frm)
                 fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
+                sem_name = semantic_score(pattern, fn_name, substring_bonus=SCORE_SUBSTRING) if fn_name else 0.0
                 if xref.iscode:
-                    add_find("code_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", 300)
+                    add_find("code_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", max(1.0, sem_name))
                 else:
-                    add_find("data_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", 260)
+                    add_find("data_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", max(1.0, sem_name))
 
     seen_eas = set()
 
@@ -63,7 +64,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         if matcher(name):
             kind = "func" if idaapi.get_func(ea) else "data"
             xref_count = xref_count_limited(ea)
-            score = 180 + min(xref_count, 64)
+            score = semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING)
             add_find("names", ea, f"{hex(ea)}  {kind}  {name}  xrefs={xref_count}", score)
             seen_eas.add(ea)
 
@@ -75,7 +76,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         s = srec["string"]
         if matcher(s):
             xref_count = xref_count_limited(ea)
-            score = 100 + min(xref_count, 64)
+            score = semantic_score(pattern, s, substring_bonus=SCORE_SUBSTRING)
             add_find("strings", ea, f"{hex(ea)}  xrefs={xref_count}  {clip_text(s, 180)}", score)
             seen_eas.add(ea)
 
@@ -88,7 +89,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         mod_name = irec["module"]
         if name and matcher(name):
             xref_count = xref_count_limited(ea)
-            score = 220 + min(xref_count, 64)
+            score = semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING)
             add_find("imports", ea, f"{hex(ea)}  {mod_name}  {name}  xrefs={xref_count}", score)
             seen_eas.add(ea)
 
@@ -113,7 +114,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             semantic_blob = f"{mnem} {line_clean}"
             sem = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), 160.0)
             if matcher(semantic_blob) or sem > 0.0:
-                add_find("instructions", ea, f"{hex(ea)}  {mnem}  {clip_text(line_clean, 180)}", int(70 + sem))
+                add_find("instructions", ea, f"{hex(ea)}  {mnem}  {clip_text(line_clean, 180)}", sem)
                 instruction_hits += 1
 
     ranked = [item[1] for item in ranked_heap]
