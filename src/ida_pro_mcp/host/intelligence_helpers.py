@@ -3,6 +3,16 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List
 
+def _q(vals: List[float], q: float, default: float = 0.0) -> float:
+    if not vals:
+        return float(default)
+    s = sorted(float(v) for v in vals)
+    if len(s) == 1:
+        return s[0]
+    i = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
+    i = max(0, min(len(s) - 1, i))
+    return float(s[i])
+
 
 def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:
     """Bound policy size by pruning low-value/high-cardinality history."""
@@ -111,8 +121,16 @@ def derive_focus_candidates(
     sem_hit = float((stats.get("semantic_linked") or {}).get("hit_rate", 0.0))
     rel_hit = float((stats.get("relation_linked") or {}).get("hit_rate", 0.0))
     api_hit = float((stats.get("api_linked") or {}).get("hit_rate", 0.0))
+    wvals = [sem_weight, rel_weight, api_weight]
+    hvals = [sem_hit, rel_hit, api_hit]
+    wq50 = _q(wvals, 0.50, default=1.0)
+    wq75 = _q(wvals, 0.75, default=1.1)
+    hq50 = _q(hvals, 0.50, default=0.3)
+    hq75 = _q(hvals, 0.75, default=0.4)
+    weight_gate = wq50 + max(0.0, wq75 - wq50)
+    hit_gate = hq50 + max(0.0, hq75 - hq50)
 
-    if related and rel_weight >= 1.1 and rel_hit >= 0.35:
+    if related and rel_weight >= weight_gate and rel_hit >= hit_gate:
         bias = bias_fn("code", "callers")
         candidates.append({
             "tool": "code", "action": "callers", "addr": addr,
@@ -123,16 +141,21 @@ def derive_focus_candidates(
     entropy = float(structural.get("entropy") or 0.0)
     xor_count = int(structural.get("xor_count") or 0)
     cyclo = int(structural.get("cyclomatic_complexity") or 0)
-    if entropy >= 6.0 or xor_count >= 4 or cyclo >= 18:
+    struct_sig = (
+        min(1.0, entropy / 8.0)
+        + min(1.0, xor_count / max(1.0, xor_count + 4.0))
+        + min(1.0, cyclo / max(1.0, cyclo + 12.0))
+    ) / 3.0
+    if struct_sig >= 0.4:
         bias = bias_fn("code", "blocks")
         candidates.append({
             "tool": "code", "action": "blocks", "addr": addr,
             "reason": "Structural complexity/obfuscation indicators are elevated",
-            "score": round(max(1.0, entropy / 6.0 + xor_count * 0.2 + cyclo * 0.03) * bias, 3),
+            "score": round((1.0 + struct_sig) * bias, 3),
             "bias": bias,
         })
 
-    if apis and api_weight >= 1.0 and api_hit >= 0.25:
+    if apis and api_weight >= wq50 and api_hit >= hq50:
         bias = bias_fn("search", "api")
         candidates.append({
             "tool": "search", "action": "api", "pattern": apis[0],
@@ -140,7 +163,9 @@ def derive_focus_candidates(
             "score": round((api_weight + api_hit) * bias, 3), "bias": bias,
         })
 
-    if sem_weight >= 0.95 or sem_hit >= 0.4:
+    sem_ready = sem_weight >= wq50 or sem_hit >= hq50
+    # Prefer structural/code pivots when no relational/API evidence exists.
+    if sem_ready and (related or apis):
         bias = bias_fn("search", "semantic")
         candidates.append({
             "tool": "search", "action": "semantic", "addr": addr,
