@@ -571,6 +571,8 @@ def _funcs_impl(
             target_size = len(target_bytes)
             target_insn_count = sum(1 for _ in idautils.FuncItems(target_fn.start_ea))
             results = []
+            raw_scores = []
+            staged = []
             max_candidates = (kwargs.get("limit") or 20) * 10
             for func_ea in idautils.Functions():
                 if func_ea == target_fn.start_ea:
@@ -598,16 +600,25 @@ def _funcs_impl(
                 matches = sum(1 for i in range(min_len) if target_bytes[i] == func_bytes[i])
                 byte_sim = matches / min_len
                 score = round((insn_sim * 0.4 + byte_sim * 0.6) * 100, 2)
-                if score >= (kwargs.get("min_score") or 60.0):
-                    results.append({
-                        "addr": hex(func_ea),
-                        "name": ida_funcs.get_func_name(func_ea),
-                        "score": score,
-                        "size": hex(size),
-                        "instructions": insn_count,
-                    })
-                    if len(results) >= max_candidates:
-                        break
+                raw_scores.append(score)
+                staged.append({
+                    "addr": hex(func_ea),
+                    "name": ida_funcs.get_func_name(func_ea),
+                    "score": score,
+                    "size": hex(size),
+                    "instructions": insn_count,
+                })
+                if len(staged) >= max_candidates:
+                    break
+            if staged:
+                if kwargs.get("min_score") is not None:
+                    gate = float(kwargs.get("min_score") or 0.0)
+                else:
+                    ss = sorted(raw_scores)
+                    q50 = ss[len(ss) // 2]
+                    q75 = ss[min(len(ss) - 1, int(round((len(ss) - 1) * 0.75)))]
+                    gate = q50 + max(0.0, q75 - q50)
+                results = [r for r in staged if float(r.get("score") or 0.0) >= gate]
             results.sort(key=lambda x: -x["score"])
             limit = kwargs.get("limit") or 20
             return {"ok": True, "target": hex(target_fn.start_ea), "similar_functions": results[:limit], "count": len(results)}
@@ -651,7 +662,7 @@ def _funcs_impl(
                         break
 
             suggestions = []
-            threshold = float(kwargs.get("threshold") or 0.65)
+            user_threshold = kwargs.get("threshold")
 
             for func_ea in target_eas:
                 fname = idc.get_func_name(func_ea) or hex(func_ea)
@@ -666,9 +677,19 @@ def _funcs_impl(
                     continue
 
                 # Find nearest named function in the index
-                similar = idx.similar(pseudo, top_k=3, exclude_ea=hex(func_ea), threshold=threshold)
+                similar = idx.similar(pseudo, top_k=8, exclude_ea=hex(func_ea), threshold=0.0)
                 # Filter to only named functions (not sub_XXXX)
                 named = [s for s in similar if not s["name"].startswith("sub_") and not s["name"].startswith("0x")]
+                if not named:
+                    continue
+                if user_threshold is not None:
+                    gate = float(user_threshold or 0.0)
+                else:
+                    ns = sorted(float(s.get("similarity") or 0.0) for s in named)
+                    q50 = ns[len(ns) // 2]
+                    q75 = ns[min(len(ns) - 1, int(round((len(ns) - 1) * 0.75)))]
+                    gate = q50 + max(0.0, q75 - q50)
+                named = [s for s in named if float(s.get("similarity") or 0.0) >= gate]
                 if not named:
                     continue
 
