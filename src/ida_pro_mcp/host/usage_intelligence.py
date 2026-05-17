@@ -216,6 +216,24 @@ class DriftDetector:
         })
         self._lock = threading.Lock()
 
+    def _analyze_without_record_threshold(self) -> int:
+        return max(6, int(round(self._window * 0.5)))
+
+    def _low_record_threshold(self) -> Tuple[int, float]:
+        return (max(12, int(round(self._window))), 0.1)
+
+    def _repeated_addr_threshold(self) -> int:
+        return max(3, int(round(self._window * 0.2)))
+
+    def _error_rate_threshold(self, total: int) -> float:
+        # Adaptive minimum error rate threshold based on sample size.
+        if total <= 10:
+            return 0.3
+        return max(0.2, min(0.4, 3.0 / max(1.0, float(total)) + 0.15))
+
+    def _loop_tail_len(self) -> int:
+        return max(4, int(round(self._window * 0.3)))
+
     def observe(self, tool: str, action: str, session_id: str,
                 latency_ms: float, error: Optional[str],
                 addr: Optional[str] = None):
@@ -249,7 +267,9 @@ class DriftDetector:
             # ANALYZE_WITHOUT_RECORD
             analysis = s["analysis_calls"]
             records = s["record_calls"]
-            if analysis >= 10 and records == 0:
+            analyze_without_record_n = self._analyze_without_record_threshold()
+            low_record_n, low_record_rate = self._low_record_threshold()
+            if analysis >= analyze_without_record_n and records == 0:
                 signals.append({
                     "type": "ANALYZE_WITHOUT_RECORD",
                     "message": f"{analysis} analysis calls, 0 blackboard writes. "
@@ -258,7 +278,7 @@ class DriftDetector:
                     "analysis_calls": analysis,
                     "record_calls": records,
                 })
-            elif analysis >= 20 and records / max(analysis, 1) < 0.1:
+            elif analysis >= low_record_n and records / max(analysis, 1) < low_record_rate:
                 signals.append({
                     "type": "LOW_RECORD_RATE",
                     "message": f"{analysis} analysis calls but only {records} recorded. "
@@ -269,8 +289,9 @@ class DriftDetector:
                 })
 
             # SAME_ADDR repeated
+            repeated_addr_n = self._repeated_addr_threshold()
             for addr, count in s["addrs_seen"].most_common(3):
-                if count >= 4:
+                if count >= repeated_addr_n:
                     signals.append({
                         "type": "REPEATED_ADDR",
                         "message": f"Address {addr} analyzed {count} times. "
@@ -282,7 +303,8 @@ class DriftDetector:
 
             # HIGH_ERROR_RATE
             errors = s["error_calls"]
-            if total >= 10 and errors / total > 0.3:
+            err_thr = self._error_rate_threshold(total)
+            if total >= max(8, self._analyze_without_record_threshold()) and errors / total > err_thr:
                 signals.append({
                     "type": "HIGH_ERROR_RATE",
                     "message": f"{errors}/{total} calls ({errors/total:.0%}) returning errors. "
@@ -293,12 +315,13 @@ class DriftDetector:
 
             # LOOP detection from recent window
             recent = list(self._recent)
-            if len(recent) >= 6:
-                tail = recent[-6:]
+            loop_tail_len = self._loop_tail_len()
+            if len(recent) >= loop_tail_len:
+                tail = recent[-loop_tail_len:]
                 if len(set(tail)) <= 2:
                     signals.append({
                         "type": "LOOP",
-                        "message": f"Repeating {set(tail)} in last 6 calls. "
+                        "message": f"Repeating {set(tail)} in last {loop_tail_len} calls. "
                                    "Try a different approach or read ida://state.",
                         "severity": "warning",
                         "states": [f"{t}.{a}" for t, a in set(tail)],
