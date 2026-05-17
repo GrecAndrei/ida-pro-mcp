@@ -21,6 +21,7 @@ def data(
     include_xrefs: Annotated[bool, "Include cross-reference counts"] = False,
     min_size: Annotated[Optional[int], "Minimum function size filter"] = None,
     named_only: Annotated[bool, "Only return named (non-sub_) items"] = False,
+    min_len: Annotated[int, "Minimum string length for strings action"] = 6,
     **kwargs
 ) -> dict:
     """
@@ -151,6 +152,13 @@ def data(
             str_lines = []
             total = 0
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
+            try:
+                min_len = max(1, int(min_len))
+            except Exception:
+                min_len = 6
+            # Raw blobs are noisy before code/data heads exist.
+            if _filetype_name(_inf_filetype_id()) in {"raw", "unknown"} and min_len < 8:
+                min_len = 8
             strings_iter = None
             try:
                 strings_iter = idautils.Strings()
@@ -165,7 +173,7 @@ def data(
                             content = content.decode("utf-8", errors="replace")
                         if not content:
                             continue
-                        if len(content) < 4:
+                        if len(content) < min_len:
                             continue
 
                         seg = idaapi.getseg(s.ea)
@@ -206,7 +214,7 @@ def data(
                                     s = content.decode("utf-8", errors="replace")
                                 else:
                                     s = content
-                                if len(s) < 4:
+                                if len(s) < min_len:
                                     continue
 
                                 seg = idaapi.getseg(sc.ea)

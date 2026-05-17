@@ -1470,14 +1470,32 @@ def firmware_view(
             ivt_addr = None
             arch_hint = ""
 
+            def _normalize_handler(raw_v: int):
+                """Map vector value to IDB EA when possible, including base-normalized raw blobs."""
+                tgt = raw_v & ~1
+                if min_ea <= tgt < max_ea:
+                    return tgt, None
+                # Derive a likely image base from upper bits and map to file offset.
+                base = raw_v & 0xFFFF0000
+                off = tgt - base
+                if 0 <= off < binary_size:
+                    return min_ea + off, base
+                return None, None
+
             # Cortex-M: read up to 256 entries from min_ea
             if "arm" in proc or not proc:
                 chunk = ida_bytes.get_bytes(min_ea, min(256 * 4, binary_size)) or b""
                 if len(chunk) >= 8:
                     sp_val = _struct.unpack_from("<I", chunk, 0)[0]
                     sp_in_ram = 0x20000000 <= sp_val <= 0x20200000
+                    thumb_like = 0
+                    for i in range(1, min(32, len(chunk) // 4)):
+                        vv = _struct.unpack_from("<I", chunk, i * 4)[0]
+                        if vv & 1:
+                            thumb_like += 1
+                    looks_like_arm_ivt = sp_in_ram or thumb_like >= 8
 
-                    if sp_in_ram:
+                    if looks_like_arm_ivt:
                         arch_hint = "ARM Cortex-M (IVT at binary start)"
                         ivt_addr = min_ea
                         # Standard Cortex-M vector names
@@ -1498,17 +1516,21 @@ def firmware_view(
                                     "note": f"Initial stack pointer = 0x{v:08x}",
                                 })
                                 continue
-                            func_addr = v & ~1
+                            func_addr, derived_base = _normalize_handler(v)
                             is_thumb = bool(v & 1)
-                            if min_ea <= func_addr < max_ea:
+                            if func_addr is not None:
                                 name = _CORTEX_M_VECTORS[i] if i < len(_CORTEX_M_VECTORS) else f"IRQ{i - 16}_Handler"
-                                vectors.append({
+                                rec = {
                                     "index": i, "addr": hex(min_ea + i * 4),
                                     "value": hex(v), "name": name,
                                     "handler": hex(func_addr),
                                     "thumb": is_thumb,
                                     "type": "exception_vector" if i < 16 else "irq_vector",
-                                })
+                                }
+                                if derived_base is not None:
+                                    rec["derived_image_base"] = hex(derived_base)
+                                    rec["mapped_from_raw"] = True
+                                vectors.append(rec)
 
             # MIPS: check for exception vectors
             if "mips" in proc:
@@ -1530,14 +1552,16 @@ def firmware_view(
                         v = _struct.unpack_from("<I", chunk, i)[0]
                     else:
                         v = _struct.unpack_from("<Q", chunk, i)[0]
-                    if min_ea <= v < max_ea:
-                        func = idaapi.get_func(v)
-                        if func or ida_bytes.is_code(ida_bytes.get_flags(v)):
+                    mapped_v, derived_base = _normalize_handler(v)
+                    if mapped_v is not None:
+                        func = idaapi.get_func(mapped_v)
+                        if func or ida_bytes.is_code(ida_bytes.get_flags(mapped_v)):
                             vectors.append({
                                 "index": i // ptr_size,
                                 "addr": hex(min_ea + i),
-                                "handler": hex(v),
-                                "name": idc.get_name(v) or f"entry_{i // ptr_size}",
+                                "handler": hex(mapped_v),
+                                "value": hex(v),
+                                "name": idc.get_name(mapped_v) or f"entry_{i // ptr_size}",
                                 "type": "function_pointer",
                             })
 

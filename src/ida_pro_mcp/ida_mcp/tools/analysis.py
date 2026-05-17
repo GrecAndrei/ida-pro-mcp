@@ -111,11 +111,14 @@ def analysis(
             return {
                 "ok": True,
                 "procname": procname,
+                "processor": procname,
                 "filetype": filetype,
+                "file_type": _filetype_name(filetype),
                 "filetype_name": _filetype_name(filetype),
                 "is_64bit": is_64bit,
                 "is_be": is_be,
                 "app_bitness": app_bitness,
+                "bitness": app_bitness,
                 "loader": loader_name,
                 "start_ea": hex(idaapi.inf_get_start_ea()) if hasattr(idaapi, "inf_get_start_ea") else None,
                 "min_ea": hex(idaapi.inf_get_min_ea()) if hasattr(idaapi, "inf_get_min_ea") else None,
@@ -357,7 +360,20 @@ def analysis(
             if hasattr(idaapi, "auto_mark_range"):
                 idaapi.auto_mark_range(s_ea, e_ea, idaapi.AU_FINAL)
                 idaapi.auto_wait()
-                return {"ok": True, "start": hex(s_ea), "end": hex(e_ea)}
+                # Raw-binary bootstrap: if no functions were discovered, seed likely entry points.
+                try:
+                    func_count = sum(1 for _ in idautils.Functions())
+                except Exception:
+                    func_count = 0
+                boot = {"seeded_entries": 0}
+                if func_count == 0:
+                    boot = _bootstrap_raw_entry_points(s_ea, e_ea)
+                    try:
+                        idaapi.auto_mark_range(s_ea, e_ea, idaapi.AU_FINAL)
+                        idaapi.auto_wait()
+                    except Exception:
+                        pass
+                return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), **boot}
             # Compatibility fallbacks for older IDA SDKs.
             import ida_auto
             if hasattr(ida_auto, "auto_mark_range"):
@@ -382,3 +398,49 @@ def analysis(
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
+
+
+def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
+    """
+    Best-effort entry seeding for raw blobs when auto-analysis finds 0 functions.
+    Uses deterministic vector-table style pointer extraction near image start.
+    """
+    seeded = 0
+    ptr_size = 4
+    scan_size = min(max(0, end_ea - start_ea), 0x800)
+    if scan_size < 8:
+        return {"seeded_entries": 0}
+    data = ida_bytes.get_bytes(start_ea, scan_size) or b""
+    if len(data) < 8:
+        return {"seeded_entries": 0}
+    import struct
+    candidates = []
+    for i in range(4, len(data) - 3, 4):
+        raw = struct.unpack_from("<I", data, i)[0]
+        # Thumb vectors usually carry LSB=1.
+        target = raw & ~1
+        if raw == 0:
+            continue
+        if start_ea <= target < end_ea:
+            candidates.append(target)
+        else:
+            # Base-normalized fallback: derive likely image base from high 16 bits.
+            base = raw & 0xFFFF0000
+            off = target - base
+            if 0 <= off < (end_ea - start_ea):
+                candidates.append(start_ea + off)
+    seen = set()
+    for ea in candidates[:64]:
+        if ea in seen:
+            continue
+        seen.add(ea)
+        try:
+            if idaapi.get_func(ea):
+                seeded += 1
+                continue
+            idc.create_insn(ea)
+            if ida_funcs.add_func(ea):
+                seeded += 1
+        except Exception:
+            continue
+    return {"seeded_entries": seeded}
