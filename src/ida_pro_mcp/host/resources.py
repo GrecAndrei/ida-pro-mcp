@@ -284,7 +284,8 @@ class ResourceResolver:
             )
             if not is_firmware:
                 # Fallback heuristic for older/partial IDB metadata payloads.
-                ft_name = str(meta.get("file_type") or meta.get("filetype") or "").strip().lower()
+                ft_info = meta.get("file_type_info") if isinstance(meta.get("file_type_info"), dict) else {}
+                ft_name = str(meta.get("file_type_effective") or ft_info.get("effective") or meta.get("file_type") or "").strip().lower()
                 ft_id = meta.get("file_type_id")
                 try:
                     ft_num = int(ft_id) if ft_id is not None else None

@@ -6305,8 +6305,37 @@ class IDAMCPServer:
                             if inferred.get("endian"):
                                 analysis_options.setdefault("endian", inferred.get("endian"))
                         else:
-                            # For raw ambiguous blobs keep ranked recommendations, do not auto-apply.
-                            arch_meta["inference_applied"] = False
+                            # For ambiguous raw blobs, auto-apply only when top-vs-next confidence
+                            # separation is strong enough to avoid preserving IDA's metapc defaults.
+                            candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
+                            top = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+                            nxt = candidates[1] if len(candidates) > 1 and isinstance(candidates[1], dict) else {}
+                            try:
+                                top_conf = float(top.get("confidence", 0.0) or 0.0)
+                            except Exception:
+                                top_conf = 0.0
+                            try:
+                                next_conf = float(nxt.get("confidence", 0.0) or 0.0)
+                            except Exception:
+                                next_conf = 0.0
+                            margin = max(0.0, top_conf - next_conf)
+                            can_apply = bool(
+                                top.get("processor")
+                                and top.get("bitness") in {16, 32, 64}
+                                and str(top.get("endian") or "").lower() in {"little", "big"}
+                                and top_conf >= 0.55
+                                and margin >= 0.20
+                            )
+                            if can_apply:
+                                analysis_options["processor"] = top.get("processor")
+                                analysis_options.setdefault("bitness", top.get("bitness"))
+                                analysis_options.setdefault("endian", top.get("endian"))
+                                arch_meta["inference_applied"] = True
+                                arch_meta["inference_apply_reason"] = "strong_top_candidate"
+                                arch_meta["inference_apply_confidence"] = round(top_conf, 3)
+                                arch_meta["inference_apply_margin"] = round(margin, 3)
+                            else:
+                                arch_meta["inference_applied"] = False
 
                 if not binary_path:
                     return make_error(
@@ -8833,10 +8862,11 @@ class IDAMCPServer:
             try:
                 meta = self._execute_tool("idb", {"action": "meta"})
                 if isinstance(meta, dict):
+                    ft_info = meta.get("file_type_info") if isinstance(meta.get("file_type_info"), dict) else {}
                     ft_name = str(
                         meta.get("file_type_effective")
+                        or ft_info.get("effective")
                         or meta.get("file_type")
-                        or meta.get("filetype")
                         or ""
                     ).strip().lower()
                     ft_id = meta.get("file_type_id")
