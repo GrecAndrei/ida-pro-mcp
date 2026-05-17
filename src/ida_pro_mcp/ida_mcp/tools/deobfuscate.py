@@ -479,8 +479,8 @@ def _decode_attempt_at(ea, key_hex, limit):
     }
 
 
-def _detect_heuristic(addr, limit):
-    """Fallback heuristic detection when BehaviorClassifier is unavailable."""
+def _detect_signal_fallback(addr, limit):
+    """Deterministic signal fallback when BehaviorClassifier is unavailable."""
     findings = []
     for func_ea in _iter_target_functions(addr):
         if len(findings) >= limit:
@@ -562,7 +562,7 @@ def deobfuscate(
     Deobfuscation analysis for binary reverse engineering.
 
     Actions:
-    - detect: Semantic obfuscation detection via BehaviorClassifier (falls back to heuristics).
+    - detect: Semantic obfuscation detection via BehaviorClassifier (falls back to deterministic signals).
     - detect_encoding: Detect string encoding/encryption methods (XOR, Base64, RC4, custom).
     - stack_strings: Find strings built character-by-character on the stack.
     - dead_code: Find dead/unreachable code blocks.
@@ -583,12 +583,12 @@ def deobfuscate(
         if action == "detect":
             result = _detect_with_classifier(addr, limit)
             if result is None:
-                # Fallback to heuristics
-                all_findings = _detect_heuristic(addr, limit)
+                # Fallback to deterministic signal detectors.
+                all_findings = _detect_signal_fallback(addr, limit)
                 return {
                     "ok": True,
                     "action": action,
-                    "classifier": "heuristic_fallback",
+                    "classifier": "deterministic_signal_fallback",
                     "findings": "\n".join(all_findings),
                     "count": len(all_findings),
                     "truncated": len(all_findings) >= limit,
