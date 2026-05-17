@@ -333,12 +333,8 @@ class TestHostHardening(unittest.TestCase):
             if inferred.get("processor") in (None, ""):
                 candidates = inferred.get("candidates", [])
                 top = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-                if float(top.get("confidence") or 0.0) >= 0.55 and top.get("processor"):
-                    self.assertEqual(opts.get("processor"), top.get("processor"))
-                    self.assertTrue(arch_profile.get("inference_applied"))
-                else:
-                    self.assertNotIn("processor", opts)
-                    self.assertFalse(arch_profile.get("inference_applied"))
+                self.assertNotIn("processor", opts)
+                self.assertFalse(arch_profile.get("inference_applied"))
                 recs = res.get("architecture_recommendations", [])
                 self.assertGreaterEqual(len(recs), 1)
                 self.assertEqual(recs[0].get("tool"), "analysis")

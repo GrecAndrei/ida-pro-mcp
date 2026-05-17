@@ -6297,33 +6297,16 @@ class IDAMCPServer:
                         arch_meta = dict(arch_meta or {})
                         arch_meta["inferred_profile"] = inferred
                         if inferred.get("processor"):
-                            # Only auto-apply when confidence is genuinely meaningful.
-                            conf = float(inferred.get("confidence") or 0.0)
-                            reason = str(inferred.get("reason") or "")
-                            should_apply = conf >= 0.55 or "vector table heuristic" in reason.lower()
-                            arch_meta["inference_applied"] = bool(should_apply)
-                            if should_apply:
-                                analysis_options["processor"] = inferred.get("processor")
-                                if inferred.get("bitness") is not None:
-                                    analysis_options.setdefault("bitness", inferred.get("bitness"))
-                                if inferred.get("endian"):
-                                    analysis_options.setdefault("endian", inferred.get("endian"))
+                            # Deterministic inference from explicit profile (e.g. known headers/vector table).
+                            arch_meta["inference_applied"] = True
+                            analysis_options["processor"] = inferred.get("processor")
+                            if inferred.get("bitness") is not None:
+                                analysis_options.setdefault("bitness", inferred.get("bitness"))
+                            if inferred.get("endian"):
+                                analysis_options.setdefault("endian", inferred.get("endian"))
                         else:
-                            # Ambiguous raw blobs can still have a strong top candidate.
-                            candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
-                            best = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-                            best_conf = float(best.get("confidence") or 0.0) if isinstance(best, dict) else 0.0
-                            best_proc = str(best.get("processor") or "").strip() if isinstance(best, dict) else ""
-                            # Guardrail against IDA defaults on raw blobs (e.g. metapc/64):
-                            # apply only if confidence is strong enough and processor is explicit.
-                            should_apply_best = bool(best_proc) and best_conf >= 0.55
-                            arch_meta["inference_applied"] = bool(should_apply_best)
-                            if should_apply_best:
-                                analysis_options["processor"] = best_proc
-                                if best.get("bitness") is not None:
-                                    analysis_options.setdefault("bitness", best.get("bitness"))
-                                if best.get("endian"):
-                                    analysis_options.setdefault("endian", best.get("endian"))
+                            # For raw ambiguous blobs keep ranked recommendations, do not auto-apply.
+                            arch_meta["inference_applied"] = False
 
                 if not binary_path:
                     return make_error(
