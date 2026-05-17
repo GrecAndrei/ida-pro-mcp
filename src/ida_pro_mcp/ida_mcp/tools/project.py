@@ -588,8 +588,17 @@ def project(
                         "score": round(score, 3),
                     }
                 )
-            high = sum(1 for x in scored if x["score"] >= 0.8)
-            low = sum(1 for x in scored if x["score"] < 0.5)
+            score_vals = sorted(float(x.get("score", 0.0) or 0.0) for x in scored)
+            if score_vals:
+                q50 = score_vals[len(score_vals) // 2]
+                q75 = score_vals[min(len(score_vals) - 1, int(round((len(score_vals) - 1) * 0.75)))]
+                high_gate = q75 + max(0.0, q75 - q50)
+                low_gate = q50
+            else:
+                high_gate = 0.8
+                low_gate = 0.5
+            high = sum(1 for x in scored if float(x.get("score", 0.0) or 0.0) >= high_gate)
+            low = sum(1 for x in scored if float(x.get("score", 0.0) or 0.0) < low_gate)
             return {"ok": True, "count": len(scored), "high_confidence": high, "low_confidence": low, "scores": scored[:200]}
 
         elif action == "replay_pipeline":

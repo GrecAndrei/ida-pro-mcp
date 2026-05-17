@@ -349,8 +349,15 @@ def taint(
                 try:
                     from blackboard import BlackboardStore  # type: ignore
                     store = BlackboardStore()
+                    conf_vals = sorted(float(s.get("confidence", 0.0) or 0.0) for s in found_sinks)
+                    if conf_vals:
+                        q50 = conf_vals[len(conf_vals) // 2]
+                        q75 = conf_vals[min(len(conf_vals) - 1, int(round((len(conf_vals) - 1) * 0.75)))]
+                        write_gate = q75 + max(0.0, q75 - q50)
+                    else:
+                        write_gate = 0.8
                     for s in found_sinks:
-                        if s["confidence"] >= 0.8:
+                        if float(s.get("confidence", 0.0) or 0.0) >= write_gate:
                             title = f"Taint: {source_name} → {s['sink']}"
                             existing = store.list(category="vuln", addr=hex_ea(source_ea))
                             if not any(s["sink"] in e.get("title", "") for e in existing):
