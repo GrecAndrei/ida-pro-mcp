@@ -2144,6 +2144,64 @@ class ContextAssembler:
         with self._circuit_breaker_lock:
             return int(self._semantic_circuit_breaker_until.get(session_id, 0)) > int(time.time())
 
+    @staticmethod
+    def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
+        """Deterministic quantile helper with sane fallback."""
+        try:
+            if not vals:
+                return float(default)
+            s = sorted(float(v) for v in vals)
+            if len(s) == 1:
+                return float(s[0])
+            qv = max(0.0, min(1.0, float(q)))
+            idx = int(round((len(s) - 1) * qv))
+            idx = max(0, min(len(s) - 1, idx))
+            return float(s[idx])
+        except Exception:
+            return float(default)
+
+    def _semantic_quality_profile(self, session_id: str) -> Dict[str, float]:
+        """
+        Build adaptive semantic-quality profile from session telemetry.
+        Avoids fixed cutoffs by deriving baselines from observed distributions.
+        """
+        stats = self._session_retrieval_stats(session_id) if session_id else {}
+        rates: List[float] = []
+        totals: List[int] = []
+        for src in ("address_linked", "relation_linked", "api_linked", "semantic_linked"):
+            bucket = stats.get(src) if isinstance(stats, dict) else None
+            if not isinstance(bucket, dict):
+                continue
+            if "hit_rate" in bucket:
+                rates.append(float(bucket.get("hit_rate") or 0.0))
+            if "total" in bucket:
+                totals.append(int(bucket.get("total") or 0))
+        q25 = self._quantile(rates, 0.25, default=0.35)
+        q50 = self._quantile(rates, 0.50, default=0.5)
+        q75 = self._quantile(rates, 0.75, default=0.65)
+        total_sum = sum(max(0, int(x)) for x in totals)
+        total_med = self._quantile([float(x) for x in totals if x > 0], 0.50, default=6.0)
+        min_total = max(4, int(round(min(total_med, max(6.0, total_sum / 4.0)))))
+        health = self._collect_intelligence_health(session_id)
+        perf = (health.get("perf") or {}) if isinstance(health, dict) else {}
+        perf_avgs = [
+            float(((perf.get(k) or {}).get("avg_ms") or 0.0))
+            for k in ("assemble", "decompile_enrich", "search_enrich")
+            if float(((perf.get(k) or {}).get("avg_ms") or 0.0)) > 0.0
+        ]
+        perf_q25 = self._quantile(perf_avgs, 0.25, default=20.0)
+        perf_q50 = self._quantile(perf_avgs, 0.50, default=45.0)
+        perf_q75 = self._quantile(perf_avgs, 0.75, default=75.0)
+        return {
+            "hit_q25": q25,
+            "hit_q50": q50,
+            "hit_q75": q75,
+            "perf_q25": perf_q25,
+            "perf_q50": perf_q50,
+            "perf_q75": perf_q75,
+            "min_total": float(min_total),
+        }
+
     def _adaptive_semantic_budget(self, session_id: str, default_max: int = 24) -> int:
         """Dynamically tune semantic candidate budget using quality/perf signals."""
         if not session_id:
@@ -2158,23 +2216,26 @@ class ContextAssembler:
             stats = self._session_retrieval_stats(session_id)
             sem = stats.get("semantic_linked") or {}
             hit = float(sem.get("hit_rate") or 0.0)
+            profile = self._semantic_quality_profile(session_id)
+            hit_iqr = max(0.05, profile["hit_q75"] - profile["hit_q25"])
+            hit_center = profile["hit_q50"]
+            hit_shift = (hit - hit_center) / hit_iqr
+            budget += int(round(hit_shift * 4.0))
+
             health = self._collect_intelligence_health(session_id)
             perf = (health.get("perf") or {}).get("decompile_enrich") or {}
             avg_ms = float(perf.get("avg_ms") or 0.0)
-
-            if hit >= 0.7:
-                budget += 8
-            elif hit <= 0.25:
-                budget -= 6
-            if avg_ms > 70.0:
-                budget -= 5
-            elif avg_ms > 0 and avg_ms < 20.0:
-                budget += 3
+            if avg_ms > 0.0:
+                perf_iqr = max(5.0, profile["perf_q75"] - profile["perf_q25"])
+                perf_shift = (avg_ms - profile["perf_q50"]) / perf_iqr
+                budget -= int(round(perf_shift * 3.0))
             if self._semantic_circuit_open(session_id):
-                budget = min(budget, 8)
+                budget = int(round(budget * 0.5))
         except Exception:
             pass
-        budget = max(8, min(48, budget))
+        floor = max(6, int(round(default_max * 0.33)))
+        ceil = max(floor + 2, int(round(default_max * 2.0)))
+        budget = max(floor, min(ceil, budget))
         with self._semantic_budget_lock:
             self._semantic_budget_cache[session_id] = (now, budget)
         return budget
@@ -2190,9 +2251,15 @@ class ContextAssembler:
             sem_hit = float(sem.get("hit_rate") or 0.0)
             health = self._collect_intelligence_health(session_id)
             cache_hit = float((health.get("bb_cache") or {}).get("hit_rate") or 0.0)
-            if sem_total >= 10 and sem_hit < 0.2 and cache_hit < 0.15:
+            profile = self._semantic_quality_profile(session_id)
+            min_total = int(profile.get("min_total") or 6)
+            expected_hit = max(profile["hit_q50"], self._get_semantic_threshold(session_id))
+            quality_gap = expected_hit - sem_hit
+            cache_gap = profile["hit_q25"] - cache_hit
+            if sem_total >= min_total and quality_gap > max(0.05, profile["hit_q75"] - profile["hit_q25"]) and cache_gap > 0:
                 with self._circuit_breaker_lock:
-                    self._semantic_circuit_breaker_until[session_id] = int(time.time()) + 120
+                    ttl = int(max(45, min(240, round(60 + (quality_gap * 180)))))
+                    self._semantic_circuit_breaker_until[session_id] = int(time.time()) + ttl
         except Exception:
             return
 
@@ -2234,15 +2301,20 @@ class ContextAssembler:
                 return
             total = int(sem.get("total") or 0)
             hit_rate = float(sem.get("hit_rate") or 0.0)
-            if total < 6:
+            profile = self._semantic_quality_profile(session_id)
+            min_total = int(profile.get("min_total") or 6)
+            if total < min_total:
                 return
             with self._semantic_threshold_lock:
                 cur = float(self._session_semantic_threshold.get(session_id, 0.5))
                 nxt = cur
-                if hit_rate < 0.35:
-                    nxt = min(0.75, cur + 0.03)
-                elif hit_rate > 0.75:
-                    nxt = max(0.35, cur - 0.03)
+                iqr = max(0.05, profile["hit_q75"] - profile["hit_q25"])
+                z = (hit_rate - profile["hit_q50"]) / iqr
+                step = max(0.01, min(0.06, abs(z) * 0.02))
+                if z < -0.25:
+                    nxt = min(0.9, cur + step)
+                elif z > 0.25:
+                    nxt = max(0.2, cur - step)
                 if abs(nxt - cur) >= 0.005:
                     self._session_semantic_threshold[session_id] = round(nxt, 3)
                     self._invalidate_session_caches(session_id)
