@@ -3184,14 +3184,35 @@ class SessionManager:
             # Local skills
             ranked = []
             ctx_lower = (context or "").lower()
+            ctx_has_text = bool((context or "").strip())
             bootstrap = data.get("bootstrap")
             bootstrap_prior = self._bootstrap_prior_confidence(bootstrap)
+            embedder = None
+            ctx_vec = None
+            if ctx_has_text:
+                try:
+                    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+                    embedder = BgeCodeEmbedder()
+                    ctx_vec = embedder.embed((context or "")[:1200])
+                except Exception:
+                    embedder = None
+                    ctx_vec = None
             for skill_id, skill in data["skills"].items():
-                score = skill.get("q_value", 0.5)
+                base_score = float(skill.get("q_value", 0.5))
                 desc = (skill.get("description", "") + " " + " ".join(skill.get("tags", []))).lower()
-                if ctx_lower and any(word in desc for word in ctx_lower.split()):
-                    score += 0.15
-                    skill["context_match"] = True
+                context_relevance = 0.0
+                if ctx_has_text:
+                    if embedder is not None and ctx_vec is not None and desc.strip():
+                        try:
+                            dvec = embedder.embed(desc[:1200])
+                            context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
+                        except Exception:
+                            context_relevance = 0.0
+                    elif ctx_lower and any(word in desc for word in ctx_lower.split()):
+                        # Deterministic fallback when embeddings unavailable.
+                        context_relevance = 0.5
+                    skill["context_match"] = bool(context_relevance > 0.0)
+                score = ((base_score + context_relevance) / 2.0) if ctx_has_text else base_score
                 samples = int(skill.get("success_count", 0)) + int(skill.get("failure_count", 0))
                 blend = self.bootstrap_compute_blend(sid, session_samples=samples)
                 weights = (blend or {}).get("weights") or {"bootstrap": 0.5, "session": 0.5}
@@ -3216,13 +3237,32 @@ class SessionManager:
             for gs in global_skills:
                 if gs["skill_id"] not in data["skills"]:
                     base_score = float(gs.get("q_value", 0.5))
-                    blended_score = (0.7 * base_score) + (0.3 * bootstrap_prior)
+                    desc = (str(gs.get("description", "")) + " " + " ".join(gs.get("tags", []))).lower()
+                    context_relevance = 0.0
+                    if ctx_has_text:
+                        if embedder is not None and ctx_vec is not None and desc.strip():
+                            try:
+                                dvec = embedder.embed(desc[:1200])
+                                context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
+                            except Exception:
+                                context_relevance = 0.0
+                        elif ctx_lower and any(word in desc for word in ctx_lower.split()):
+                            context_relevance = 0.5
+                    score = ((base_score + context_relevance) / 2.0) if ctx_has_text else base_score
+                    weights = (self.bootstrap_compute_blend(sid, session_samples=0) or {}).get("weights") or {
+                        "bootstrap": 0.5,
+                        "session": 0.5,
+                    }
+                    blended_score = (
+                        float(weights.get("session", 0.5)) * float(score)
+                        + float(weights.get("bootstrap", 0.5)) * float(bootstrap_prior)
+                    )
                     ranked.append(
                         {
                             "skill_id": gs["skill_id"],
-                            "score": round(base_score, 4),
+                            "score": round(score, 4),
                             "blended_score": round(blended_score, 4),
-                            "blend_weights": {"bootstrap": 0.3, "session": 0.7},
+                            "blend_weights": weights,
                             "bootstrap_prior": round(bootstrap_prior, 4),
                             "source": "global",
                             **gs,
