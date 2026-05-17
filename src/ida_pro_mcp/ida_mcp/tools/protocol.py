@@ -288,7 +288,7 @@ def protocol(
                             api_usage[api] = callers
 
                 try:
-                    classifier_results = classifier.classify(corpus, threshold=0.3, top_k=5)
+                    classifier_results = classifier.classify(corpus, threshold=0.0, top_k=5)
                     for r in classifier_results:
                         protocols_detected[r["behavior"]] = r["confidence"]
                 except Exception:
@@ -297,7 +297,7 @@ def protocol(
                 # Query-guided embedding hinting: map analyst intent into protocol candidates.
                 if query:
                     try:
-                        query_protocol_hints = classifier.classify(str(query)[:600], threshold=0.25, top_k=4)
+                        query_protocol_hints = classifier.classify(str(query)[:600], threshold=0.0, top_k=4)
                         for h in query_protocol_hints:
                             b = str(h.get("behavior") or "")
                             if not b:
@@ -333,6 +333,8 @@ def protocol(
                         anchor_vecs = {k: embedder.embed(v) for k, v in anchor_map.items() if v}
                         proto_scores = {k: 0.0 for k in anchor_vecs.keys()}
                         proto_hits = {k: [] for k in anchor_vecs.keys()}
+                        string_candidate_sims: List[float] = []
+                        string_candidates: List[Tuple[str, float, str, str]] = []
 
                         # Score top strings against protocol anchors.
                         for s_ea, s_val, _ in all_strings[: min(4000, max(200, limit * 100))]:
@@ -350,12 +352,23 @@ def protocol(
                                 if sim > best_sim:
                                     best_sim = sim
                                     best_proto = proto
-                            if best_proto is not None and best_sim >= 0.35:
-                                proto_scores[best_proto] += best_sim
-                                if len(proto_hits[best_proto]) < limit:
-                                    proto_hits[best_proto].append(f"{hex(s_ea)}  \"{text[:80]}\"")
+                            if best_proto is not None:
+                                string_candidate_sims.append(best_sim)
+                                string_candidates.append((best_proto, best_sim, hex(s_ea), text[:80]))
+                        if string_candidate_sims:
+                            ss = sorted(string_candidate_sims)
+                            q50 = ss[len(ss) // 2]
+                            q75 = ss[min(len(ss) - 1, int(round((len(ss) - 1) * 0.75)))]
+                            sgate = q50 + max(0.0, q75 - q50)
+                            for proto, sim, ea_hex, preview in string_candidates:
+                                if sim >= sgate:
+                                    proto_scores[proto] += sim
+                                    if len(proto_hits[proto]) < limit:
+                                        proto_hits[proto].append(f"{ea_hex}  \"{preview}\"")
 
                         # Also fold API names into the same embedding vote.
+                        api_candidate_sims: List[float] = []
+                        api_candidates: List[Tuple[str, float]] = []
                         for api_name in list(api_usage.keys())[: min(400, limit * 20)]:
                             try:
                                 av = embedder.embed(str(api_name)[:80])
@@ -368,8 +381,17 @@ def protocol(
                                 if sim > best_sim:
                                     best_sim = sim
                                     best_proto = proto
-                            if best_proto is not None and best_sim >= 0.3:
-                                proto_scores[best_proto] += (best_sim * 0.75)
+                            if best_proto is not None:
+                                api_candidate_sims.append(best_sim)
+                                api_candidates.append((best_proto, best_sim))
+                        if api_candidate_sims:
+                            asv = sorted(api_candidate_sims)
+                            aq50 = asv[len(asv) // 2]
+                            aq75 = asv[min(len(asv) - 1, int(round((len(asv) - 1) * 0.75)))]
+                            agate = aq50 + max(0.0, aq75 - aq50)
+                            for proto, sim in api_candidates:
+                                if sim >= agate:
+                                    proto_scores[proto] += sim
 
                         ranked = sorted(proto_scores.items(), key=lambda kv: kv[1], reverse=True)
                         for proto, score in ranked:
