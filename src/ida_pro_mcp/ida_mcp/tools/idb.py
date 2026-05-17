@@ -80,6 +80,23 @@ def idb(
             segs = idb_segments_detailed()
             entries = idb_entrypoints_detailed()
             arch_profile = idb_architecture_profile(meta=meta, summary=summary)
+            inferred = arch_profile.get("inferred_from_binary") if isinstance(arch_profile, dict) else {}
+            candidates = inferred.get("candidates") if isinstance(inferred, dict) and isinstance(inferred.get("candidates"), list) else []
+            arch_recommendations = []
+            for c in candidates[:3]:
+                if not isinstance(c, dict):
+                    continue
+                if not c.get("processor"):
+                    continue
+                arch_recommendations.append(
+                    {
+                        "processor": c.get("processor"),
+                        "bitness": c.get("bitness"),
+                        "endian": c.get("endian"),
+                        "confidence": c.get("confidence"),
+                        "reason": c.get("reason"),
+                    }
+                )
             result = {
                 "ok": True,
                 "meta": meta,
@@ -87,6 +104,7 @@ def idb(
                 "segments": segs[:20],
                 "entrypoints": entries.get("entrypoints", [])[:30],
                 "architecture_profile": arch_profile,
+                "architecture_recommendations": arch_recommendations,
             }
             # Firmware detection hint
             is_firmware = bool(arch_profile.get("raw_binary_mode"))
@@ -174,9 +192,17 @@ def idb_meta():
         inferred = {}
     if isinstance(inferred, dict):
         out["inferred_file_kind"] = inferred.get("file_kind")
+        effective = str(inferred.get("file_kind") or "").strip().lower()
         if out.get("file_type") == "obj" and inferred.get("file_kind") == "raw":
             out["file_type_effective"] = "raw"
             out["file_type_note"] = "IDA loader reports obj for plain binaries; effective kind is raw."
+            effective = "raw"
+        out["file_type_info"] = {
+            "loader": out.get("file_type"),
+            "loader_id": out.get("file_type_id"),
+            "effective": effective or out.get("file_type"),
+            "note": out.get("file_type_note"),
+        }
     return out
 
 @idaread
