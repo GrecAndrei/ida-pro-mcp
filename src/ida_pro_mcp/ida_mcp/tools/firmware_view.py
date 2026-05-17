@@ -1354,9 +1354,9 @@ def firmware_view(
                 reset_addr = reset_val & ~1  # clear Thumb bit
                 is_thumb = bool(reset_val & 1)
 
-                # Common Cortex-M RAM ranges: 0x20000000-0x20100000
-                # Common flash ranges: 0x08000000-0x08200000 (STM32), 0x00000000-0x00100000
-                sp_in_ram = 0x20000000 <= sp_val <= 0x20200000
+                # Cortex-M RAM spans 0x20000000-0x40080000 (SRAM through CCM/DTCM/ITCM).
+                # Common flash ranges: 0x08000000-0x08200000 (STM32), 0x00000000-0x00200000
+                sp_in_ram = 0x20000000 <= sp_val <= 0x40080000
                 reset_in_flash = (
                     (0x08000000 <= reset_addr <= 0x08200000) or
                     (0x00000000 <= reset_addr <= 0x00200000) or
@@ -1487,13 +1487,16 @@ def firmware_view(
                 chunk = ida_bytes.get_bytes(min_ea, min(256 * 4, binary_size)) or b""
                 if len(chunk) >= 8:
                     sp_val = _struct.unpack_from("<I", chunk, 0)[0]
-                    sp_in_ram = 0x20000000 <= sp_val <= 0x20200000
+                    # Cortex-M RAM spans 0x20000000-0x40080000 (SRAM/CCM/DTCM/ITCM).
+                    sp_in_ram = 0x20000000 <= sp_val <= 0x40080000
                     thumb_like = 0
                     for i in range(1, min(32, len(chunk) // 4)):
                         vv = _struct.unpack_from("<I", chunk, i * 4)[0]
                         if vv & 1:
                             thumb_like += 1
-                    looks_like_arm_ivt = sp_in_ram or thumb_like >= 8
+                    # Require both a valid SP AND dense Thumb bits; thumb-only threshold
+                    # raised to 16/32 to avoid false-positives on arbitrary LE data.
+                    looks_like_arm_ivt = sp_in_ram and thumb_like >= 4 or (not sp_in_ram and thumb_like >= 16)
 
                     if looks_like_arm_ivt:
                         arch_hint = "ARM Cortex-M (IVT at binary start)"
@@ -1646,7 +1649,35 @@ def firmware_view(
             # Scan all code for immediate values and data references outside binary range
             mmio_accesses: dict = {}  # addr → {count, from_funcs, peripheral_name}
 
-            # Scan data references from code
+            def _record_mmio(v: int, ea: int):
+                """Record a peripheral address hit."""
+                if not v or (min_ea <= v < max_ea):
+                    return
+                for pbase, pend, pname, pfamily in _KNOWN_PERIPHERALS:
+                    if pbase <= v <= pend:
+                        key = v & ~0xFFF  # group by 4KB page
+                        if key not in mmio_accesses:
+                            mmio_accesses[key] = {
+                                "base": hex(key),
+                                "count": 0,
+                                "peripheral_name": pname,
+                                "chip_family": pfamily,
+                                "example_addrs": [],
+                                "from_funcs": set(),
+                            }
+                        mmio_accesses[key]["count"] += 1
+                        if len(mmio_accesses[key]["example_addrs"]) < 5:
+                            mmio_accesses[key]["example_addrs"].append(hex(v))
+                        func = idaapi.get_func(ea)
+                        if func:
+                            mmio_accesses[key]["from_funcs"].add(
+                                idc.get_func_name(func.start_ea)
+                            )
+                        break
+
+            code_bytes_found = False
+            # Pass 1: scan decoded instruction operands (post-analysis binaries)
+            import ida_ua
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
                 if not seg:
@@ -1655,8 +1686,7 @@ def firmware_view(
                 while ea < seg.end_ea:
                     flags = ida_bytes.get_flags(ea)
                     if ida_bytes.is_code(flags):
-                        # Check instruction operands for MMIO addresses
-                        import ida_ua
+                        code_bytes_found = True
                         insn = ida_ua.insn_t()
                         if ida_ua.decode_insn(insn, ea) > 0:
                             for op in insn.ops:
@@ -1665,32 +1695,27 @@ def firmware_view(
                                     v = op.value
                                 elif op.type in (ida_ua.o_mem, ida_ua.o_displ):
                                     v = op.addr
-                                if v and not (min_ea <= v < max_ea):
-                                    # Check if it looks like a peripheral address
-                                    for pbase, pend, pname, pfamily in _KNOWN_PERIPHERALS:
-                                        if pbase <= v <= pend:
-                                            key = v & ~0xFFF  # group by 4KB page
-                                            if key not in mmio_accesses:
-                                                mmio_accesses[key] = {
-                                                    "base": hex(key),
-                                                    "count": 0,
-                                                    "peripheral_name": pname,
-                                                    "chip_family": pfamily,
-                                                    "example_addrs": [],
-                                                    "from_funcs": set(),
-                                                }
-                                            mmio_accesses[key]["count"] += 1
-                                            if len(mmio_accesses[key]["example_addrs"]) < 5:
-                                                mmio_accesses[key]["example_addrs"].append(hex(v))
-                                            func = idaapi.get_func(ea)
-                                            if func:
-                                                mmio_accesses[key]["from_funcs"].add(
-                                                    idc.get_func_name(func.start_ea)
-                                                )
-                                            break
+                                _record_mmio(v, ea)
                         ea = idc.next_head(ea, seg.end_ea)
                     else:
                         ea += 1
+
+            # Pass 2: raw 4-byte word scan when IDA hasn't run auto-analysis yet.
+            # Reads all aligned words and checks if any fall in peripheral ranges.
+            # This is intentionally coarser (no function context), but catches
+            # firmware loaded as raw blobs before code is defined.
+            if not code_bytes_found:
+                scan_limit = min(binary_size, 0x80000)  # cap at 512 KB for speed
+                chunk_size = 4096
+                offset = 0
+                while offset < scan_limit:
+                    chunk = ida_bytes.get_bytes(min_ea + offset, min(chunk_size, scan_limit - offset)) or b""
+                    for i in range(0, len(chunk) - 3, 4):
+                        v = _struct.unpack_from("<I", chunk, i)[0]
+                        _record_mmio(v, min_ea + offset + i)
+                    offset += len(chunk)
+                    if not chunk:
+                        break
 
             # Convert sets to lists for JSON serialization
             peripherals = []
