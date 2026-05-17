@@ -15,11 +15,24 @@ except ImportError:
 from .core import (
     clip_text, paginate_records, iter_segments, iter_code, build_response,
     MNEMONIC_BASE_SCORE, MNEMONIC_GROUP_SCORE, MNEMONIC_TOKEN_WEIGHT,
-    MNEMONIC_CAP, MNEMONIC_THRESHOLD, INSTRUCTION_CAP, INSTRUCTION_TOKEN_WEIGHT,
-    INSTRUCTION_BASE_SCORE, INSTRUCTION_THRESHOLD, _FIND_INSTRUCTION_CAP,
-    _FIND_INSTRUCTION_LIMIT_MULTIPLIER, FIND_INSTRUCTION_MIN_SCORE,
+    MNEMONIC_CAP, INSTRUCTION_CAP, INSTRUCTION_TOKEN_WEIGHT,
+    INSTRUCTION_BASE_SCORE, _FIND_INSTRUCTION_CAP,
+    _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
     SCORE_SUBSTRING, MNEMONIC_GROUPS, SearchTimeout, safe_generate_disasm_line,
 )
+
+
+def _adaptive_score_cutoff(scores, keep_ratio: float = 0.35) -> float:
+    """
+    Adaptive deterministic cutoff from observed score distribution.
+    Keeps top keep_ratio fraction; avoids hard-coded heuristic thresholds.
+    """
+    vals = [float(s) for s in scores if s is not None]
+    if not vals:
+        return 0.0
+    vals.sort(reverse=True)
+    idx = max(0, min(len(vals) - 1, int(len(vals) * max(0.05, min(0.95, keep_ratio))) - 1))
+    return vals[idx]
 
 
 def search_insns(pattern, range_start, range_end, include_context, offset, limit):
@@ -72,6 +85,7 @@ def search_mnemonic(pattern, case_sensitive, range_start, range_end, include_con
     semantic_prefixes = {pref for token in query_tokens for pref in MNEMONIC_GROUPS.get(token, ())}
 
     ranked_heap = []
+    all_scores = []
     ranked_cap = max(_FIND_INSTRUCTION_CAP, (offset + limit) * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
     timer = SearchTimeout(timeout_ms)
 
@@ -105,7 +119,42 @@ def search_mnemonic(pattern, case_sensitive, range_start, range_end, include_con
                 score += overlap * MNEMONIC_TOKEN_WEIGHT
             score += min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), MNEMONIC_CAP)
 
-            if matched or score >= MNEMONIC_THRESHOLD:
+            all_scores.append(score)
+            if matched:
+                record = {
+                    "address_ea": ea,
+                    "address": hex(ea),
+                    "mnemonic": mnem,
+                    "score": round(score, 2),
+                    "line": f"{hex(ea)}  {mnem}" + (f"  {clip_text(disasm)}" if include_context else ""),
+                }
+                key = (float(record["score"]), int(record["address_ea"]))
+                if len(ranked_heap) < ranked_cap:
+                    heapq.heappush(ranked_heap, (key, record))
+                elif key > ranked_heap[0][0]:
+                    heapq.heapreplace(ranked_heap, (key, record))
+
+    # Add additional semantic hits above adaptive cutoff.
+    cutoff = _adaptive_score_cutoff(all_scores, keep_ratio=0.30)
+    if cutoff > 0:
+        for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+            if timed_out:
+                break
+            for ea in iter_code(seg_start, seg_end):
+                try:
+                    timer.check()
+                except TimeoutError:
+                    timed_out = True
+                    break
+                mnem = (idc.print_insn_mnem(ea) or "").strip().lower()
+                if not mnem:
+                    continue
+                raw_disasm = safe_generate_disasm_line(ea)
+                disasm = ida_lines.tag_remove(raw_disasm) if raw_disasm else ""
+                semantic_blob = f"{mnem} {disasm}"
+                score = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), MNEMONIC_CAP)
+                if score < cutoff:
+                    continue
                 record = {
                     "address_ea": ea,
                     "address": hex(ea),
@@ -140,6 +189,7 @@ def search_instruction(pattern, case_sensitive, range_start, range_end, include_
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     query_tokens = set(semantic_tokens(pattern))
     ranked_heap = []
+    all_scores = []
     ranked_cap = max(_FIND_INSTRUCTION_CAP, (offset + limit) * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
     timer = SearchTimeout(timeout_ms)
     timed_out = False
@@ -164,7 +214,45 @@ def search_instruction(pattern, case_sensitive, range_start, range_end, include_
             score = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), INSTRUCTION_CAP) + (overlap * INSTRUCTION_TOKEN_WEIGHT)
             if matched:
                 score += INSTRUCTION_BASE_SCORE
-            if matched or score >= INSTRUCTION_THRESHOLD:
+            all_scores.append(score)
+            if matched:
+                out_line = f"{hex(ea)}  {line_clean}"
+                if include_context:
+                    func = idaapi.get_func(ea)
+                    if func:
+                        out_line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                record = {
+                    "address_ea": ea,
+                    "address": hex(ea),
+                    "score": round(score, 2),
+                    "line": clip_text(out_line, 360),
+                }
+                key = (float(record["score"]), int(record["address_ea"]))
+                if len(ranked_heap) < ranked_cap:
+                    heapq.heappush(ranked_heap, (key, record))
+                elif key > ranked_heap[0][0]:
+                    heapq.heapreplace(ranked_heap, (key, record))
+
+    cutoff = _adaptive_score_cutoff(all_scores, keep_ratio=0.30)
+    if cutoff > 0:
+        for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+            if timed_out:
+                break
+            for ea in iter_code(seg_start, seg_end):
+                try:
+                    timer.check()
+                except TimeoutError:
+                    timed_out = True
+                    break
+                line = safe_generate_disasm_line(ea)
+                if not line:
+                    continue
+                line_clean = ida_lines.tag_remove(line) if line else ""
+                mnem = (idc.print_insn_mnem(ea) or "").lower()
+                semantic_blob = f"{mnem} {line_clean}"
+                score = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), INSTRUCTION_CAP)
+                if score < cutoff:
+                    continue
                 out_line = f"{hex(ea)}  {line_clean}"
                 if include_context:
                     func = idaapi.get_func(ea)
