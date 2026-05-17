@@ -472,11 +472,18 @@ def _find_c2(strings, limit):
 
 def _entropy_rank(strings, limit, min_entropy=4.0):
     ranked = []
+    ents = []
+    for _ea, raw, _st in strings:
+        if raw and len(raw) >= 4:
+            ents.append(_shannon_entropy(raw))
+    q50 = sorted(ents)[len(ents) // 2] if ents else float(min_entropy)
+    q75 = sorted(ents)[min(len(ents) - 1, int(round((len(ents) - 1) * 0.75)))] if ents else float(min_entropy)
+    adaptive_gate = max(float(min_entropy), q50 + max(0.0, q75 - q50))
     for s_ea, raw, st in strings:
         if not raw or len(raw) < 4:
             continue
         ent = _shannon_entropy(raw)
-        if ent >= min_entropy:
+        if ent >= adaptive_gate:
             text = _text_or_repr(raw)
             ranked.append((ent, s_ea, text))
     ranked.sort(reverse=True)
@@ -685,6 +692,8 @@ def _score_strings_c2(all_strings):
     }
 
     ranked = []
+    raw_scores: List[float] = []
+    cand: List[tuple] = []
     for s_ea, raw, _st in all_strings:
         if not raw or len(raw) < 3:
             continue
@@ -702,13 +711,13 @@ def _score_strings_c2(all_strings):
                         best_cat = label
 
         # BehaviorClassifier on string text (catches novel/obfuscated patterns)
-        if classifier and best_score < 0.70 and len(text) >= 8:
+        if classifier and len(text) >= 8:
             try:
-                hits = classifier.classify(text, threshold=0.45, top_k=1, block=False)
+                hits = classifier.classify(text, threshold=0.0, top_k=1, block=False)
                 if hits:
                     beh = hits[0].get("behavior", "")
                     sc = float(hits[0].get("score", 0))
-                    if beh in _BEH_MAP and sc >= 0.45:
+                    if beh in _BEH_MAP:
                         mapped_cat, mapped_weight = _BEH_MAP[beh]
                         combined = mapped_weight * sc
                         if combined > best_score:
@@ -717,8 +726,19 @@ def _score_strings_c2(all_strings):
             except Exception:
                 pass
 
-        if best_score >= 0.60:
-            ranked.append((best_score, s_ea, text[:120], best_cat))
+        raw_scores.append(best_score)
+        cand.append((best_score, s_ea, text[:120], best_cat))
+
+    if raw_scores:
+        s = sorted(raw_scores)
+        q50 = s[len(s) // 2]
+        q75 = s[min(len(s) - 1, int(round((len(s) - 1) * 0.75)))]
+        gate = q50 + max(0.0, q75 - q50)
+    else:
+        gate = 0.0
+    for row in cand:
+        if row[0] >= gate and row[0] > 0.0:
+            ranked.append(row)
 
     ranked.sort(key=lambda x: x[0], reverse=True)
     return ranked
@@ -747,7 +767,7 @@ def _c2_family_guess(api_findings, string_scores):
 
     if classifier and evidence_text.strip():
         try:
-            hits = classifier.classify(evidence_text, threshold=0.40, top_k=4, block=False)
+            hits = classifier.classify(evidence_text, threshold=0.0, top_k=4, block=False)
             _FAMILY_MAP = {
                 "c2_communication": "C2 implant (generic)",
                 "process_injection": "Process injection malware",
@@ -760,12 +780,23 @@ def _c2_family_guess(api_findings, string_scores):
                 "lateral_movement": "Lateral movement tool",
                 "exfiltration": "Data exfiltration tool",
             }
+            hit_scores: List[float] = []
+            mapped = []
             for h in hits:
                 beh = h.get("behavior", "")
                 sc = float(h.get("score", 0))
-                if beh in _FAMILY_MAP and sc >= 0.40:
-                    families.append({"family": _FAMILY_MAP[beh], "confidence": round(sc, 3),
-                                     "behavior": beh})
+                if beh in _FAMILY_MAP:
+                    hit_scores.append(sc)
+                    mapped.append((beh, sc))
+            if hit_scores:
+                hs = sorted(hit_scores)
+                hq50 = hs[len(hs) // 2]
+                hq75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
+                hgate = hq50 + max(0.0, hq75 - hq50)
+                for beh, sc in mapped:
+                    if sc >= hgate:
+                        families.append({"family": _FAMILY_MAP[beh], "confidence": round(sc, 3),
+                                         "behavior": beh})
         except Exception:
             pass
 
