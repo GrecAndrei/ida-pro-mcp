@@ -240,15 +240,14 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
     candidates = _embed_raw_arch_candidates(sample)
     inf.candidates = candidates
     if candidates:
-        top = candidates[0]
-        top_conf = float(top.get("confidence") or 0.0)
-        if top_conf >= 0.6:
-            inf.processor = str(top.get("processor") or "")
-            inf.bitness = int(top.get("bitness") or 32)
-            inf.endian = str(top.get("endian") or "little")
-            inf.confidence = min(0.85, top_conf)
-            inf.reason = f"raw embedding-profile inference ({top.get('reason')})"
-            return inf.to_dict()
+        # Keep candidate ranking only for raw ambiguous blobs.
+        # Avoid forcing architecture from an arbitrary confidence threshold.
+        inf.processor = None
+        inf.bitness = None
+        inf.endian = None
+        inf.confidence = float(candidates[0].get("confidence") or 0.2)
+        inf.reason = "raw embedding-profile candidates available; explicit selection recommended"
+        return inf.to_dict()
 
     # Unknown raw: avoid forcing a wrong processor. Keep suggestions only.
     inf.processor = None
