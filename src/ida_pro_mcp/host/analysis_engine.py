@@ -734,9 +734,18 @@ class AnalysisEngine:
     ):
         """Scan other session embedding DBs for similar functions."""
         import sqlite3
-        best_sim = 0.85  # threshold
+        def _q(vals: List[float], q: float, default: float = 0.0) -> float:
+            if not vals:
+                return default
+            s = sorted(float(v) for v in vals)
+            i = int(round((len(s) - 1) * max(0.0, min(1.0, q))))
+            i = max(0, min(len(s) - 1, i))
+            return float(s[i])
+
+        best_sim = -1.0
         best_match = None
         best_db = None
+        all_sims: List[float] = []
 
         for db_path in other_dbs:
             try:
@@ -749,6 +758,7 @@ class AnalysisEngine:
                         continue
                     other_vec = _unpack(r[2])
                     sim = _cosine(vec, other_vec)
+                    all_sims.append(sim)
                     if sim > best_sim:
                         best_sim = sim
                         best_match = {"addr": r[0], "name": r[1], "sim": sim}
@@ -757,6 +767,14 @@ class AnalysisEngine:
                 continue
 
         if not best_match:
+            return
+        # Adaptive match confidence: require top similarity to exceed
+        # session-observed similarity distribution, not a fixed cutoff.
+        q50 = _q(all_sims, 0.50, default=0.0)
+        q90 = _q(all_sims, 0.90, default=1.0)
+        spread = max(1e-6, q90 - q50)
+        adaptive_gate = min(0.98, q90 + (0.15 * spread))
+        if best_match["sim"] < adaptive_gate:
             return
 
         match_name = best_match["name"] or f"sub_{best_match['addr']}"
@@ -1197,9 +1215,19 @@ class AnalysisEngine:
     def _kg_detect_peripherals(self, kg, store):
         """
         Detect peripherals from high-entropy region entries and IOC entries
-        that reference MMIO-like addresses (aligned, high addresses).
+        that reference MMIO-like regions.
         """
         regions = store.list(category="region", include_resolved=True, limit=100)
+        addr_vals: List[int] = []
+        for r in regions:
+            try:
+                if r.get("addr"):
+                    addr_vals.append(int(str(r.get("addr")), 16))
+            except Exception:
+                continue
+        addr_vals.sort()
+        high_addr_gate = addr_vals[int(round((len(addr_vals) - 1) * 0.85))] if addr_vals else 0
+
         for r in regions:
             addr = r.get("addr", "")
             if not addr:
@@ -1208,14 +1236,18 @@ class AnalysisEngine:
                 addr_int = int(addr, 16)
             except Exception:
                 continue
-            # MMIO heuristic: address > 0x40000000 and 4KB-aligned
-            if addr_int < 0x40000000:
-                continue
-            if addr_int % 0x1000 != 0:
-                continue
+            tags = r.get("tags", [])
+            tag_text = " ".join(str(t).lower() for t in tags)
+            is_mmio_tagged = "mmio" in tag_text or "peripheral" in tag_text or "io" in tag_text
+            # Prefer explicit tags; otherwise use distribution-aware gate for
+            # region addresses and alignment cues.
+            if not is_mmio_tagged:
+                if not high_addr_gate or addr_int < high_addr_gate:
+                    continue
+                if addr_int % 0x1000 != 0 and addr_int % 0x100 != 0:
+                    continue
             # Infer peripheral type from tags/title
             title = r.get("title", "").lower()
-            tags = r.get("tags", [])
             ptype = "unknown"
             if any(w in title for w in ("uart", "serial", "usart")):
                 ptype = "uart"
