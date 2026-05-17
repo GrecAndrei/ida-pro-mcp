@@ -154,17 +154,37 @@ class EffectivenessModel:
         scored = [(c, self.score(c[0], c[1])) for c in candidates]
         return sorted(scored, key=lambda x: -x[1])
 
-    def low_effectiveness_tools(self, threshold: float = 0.3) -> List[Dict]:
+    def _adaptive_low_eff_threshold_locked(self) -> float:
+        """Compute adaptive low-effectiveness threshold from current score distribution."""
+        if not self._scores:
+            return 0.3
+        vals = sorted(float(v) for v in self._scores.values())
+        # Lower quartile as adaptive "low effectiveness" boundary.
+        q1_idx = max(0, min(len(vals) - 1, int(round(0.25 * (len(vals) - 1)))))
+        q1 = vals[q1_idx]
+        return max(0.05, min(0.6, q1))
+
+    def _adaptive_min_samples_locked(self) -> int:
+        """Adaptive minimum sample requirement based on observed call volume."""
+        total = sum(int(c) for c in self._call_counts.values())
+        if total <= 0:
+            return 5
+        # Scale with data volume but keep bounded.
+        return max(3, min(12, int(round(math.sqrt(float(total)) / 2.0))))
+
+    def low_effectiveness_tools(self, threshold: Optional[float] = None) -> List[Dict]:
         """Return tools with consistently low effectiveness."""
         with self._lock:
-            return self._low_eff_locked(threshold)
+            thr = self._adaptive_low_eff_threshold_locked() if threshold is None else float(threshold)
+            return self._low_eff_locked(thr)
 
     def _low_eff_locked(self, threshold: float) -> List[Dict]:
         """Must be called with self._lock held."""
         results = []
+        min_samples = self._adaptive_min_samples_locked()
         for (tool, action), score in self._scores.items():
             count = self._call_counts[(tool, action)]
-            if count >= 5 and score < threshold:
+            if count >= min_samples and score < threshold:
                 results.append({
                     "tool": tool, "action": action,
                     "score": round(score, 3), "calls": count,
@@ -181,7 +201,7 @@ class EffectivenessModel:
                      "calls": self._call_counts[k]}
                     for k, v in top[:10]
                 ],
-                "low_effective": self._low_eff_locked(0.3),
+                "low_effective": self._low_eff_locked(self._adaptive_low_eff_threshold_locked()),
             }
 
 
