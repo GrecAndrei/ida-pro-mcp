@@ -173,7 +173,6 @@ def idb_meta():
         "bitness": _inf_bitness(),
         "bits": _inf_bitness(),
         "file_type": _filetype_name(file_type),
-        "filetype": file_type,
         "file_type_id": file_type,
         "compiler": compiler_names.get(comp, f"compiler_{comp}"),
         "image_base": hex(_safe_inf_get("baseaddr", 0)),
@@ -408,9 +407,14 @@ def idb_architecture_profile(meta=None, summary=None):
         "processor": meta.get("processor"),
         "bitness": meta.get("bitness"),
         "endian": "big" if meta.get("is_be") else "little",
-        "file_type": meta.get("file_type"),
+        "file_type": meta.get("file_type_effective") or meta.get("file_type"),
     }
-    file_type = str(meta.get("file_type") or "").strip().lower()
+    file_type = str(
+        meta.get("file_type_effective")
+        or ((meta.get("file_type_info") or {}).get("effective") if isinstance(meta.get("file_type_info"), dict) else None)
+        or meta.get("file_type")
+        or ""
+    ).strip().lower()
     import_count = int((summary or {}).get("imports", 0) or 0)
     proc = str(meta.get("processor") or "").strip().lower()
     raw_mode = bool(
