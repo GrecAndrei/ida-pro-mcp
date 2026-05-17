@@ -68,16 +68,29 @@ def _semantic_score(query: str, candidate: str) -> float:
 def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") -> str:
     """Normalize calc action via exact action, alias mapping, then semantic fuzzy match.
 
-    Returns *fallback* when semantic confidence remains below 32.0.
+    Uses adaptive score gating over candidate actions to avoid brittle fixed thresholds.
     """
-    return normalize_action(
-        raw_action,
-        actions=tuple(_CALC_ACTIONS),
-        aliases=_CALC_ACTION_ALIASES,
-        fallback=fallback,
-        threshold=32.0,
-        substring_bonus=55.0,
-    )
+    txt = str(raw_action or "").strip().lower()
+    if not txt:
+        return fallback
+    if txt in _CALC_ACTIONS:
+        return txt
+    if txt in _CALC_ACTION_ALIASES:
+        return _CALC_ACTION_ALIASES[txt]
+
+    scored = []
+    for act in _CALC_ACTIONS:
+        sc = _semantic_score(txt, act)
+        scored.append((sc, act))
+    if not scored:
+        return fallback
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_score, top_act = scored[0]
+    vals = sorted(float(x[0]) for x in scored)
+    q50 = vals[len(vals) // 2]
+    q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+    gate = q50 + max(0.0, q75 - q50)
+    return top_act if float(top_score) >= float(gate) else fallback
 
 
 @tool
@@ -173,23 +186,28 @@ def calc(
         def _semantic_symbol_match(text_val: object) -> int:
             """Resolve free-form symbol text to best EA using semantic scoring.
 
-            Returns a resolved EA when the best candidate score is >= 30.0;
-            otherwise returns idaapi.BADADDR.
+            Returns a resolved EA when best score clears adaptive candidate gate.
             """
             query_text = str(text_val or "").strip()
             if not query_text:
                 return idaapi.BADADDR
             matcher = compile_smart_pattern(query_text, case_sensitive=False)
-            best = (0.0, idaapi.BADADDR)
+            candidates = []
             for ea, name in idautils.Names():
                 if not name or not matcher(name):
                     continue
                 score = _semantic_score(query_text, name)
                 if name.lower() == query_text.lower():
                     score += 40.0
-                if score > best[0]:
-                    best = (score, ea)
-            return best[1] if best[1] != idaapi.BADADDR and best[0] >= 30.0 else idaapi.BADADDR
+                candidates.append((score, ea))
+            if not candidates:
+                return idaapi.BADADDR
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            vals = sorted(float(x[0]) for x in candidates)
+            q50 = vals[len(vals) // 2]
+            q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+            gate = q50 + max(0.0, q75 - q50)
+            return candidates[0][1] if float(candidates[0][0]) >= float(gate) else idaapi.BADADDR
 
         def _finalize(resp: dict):
             if interpreted_action:
