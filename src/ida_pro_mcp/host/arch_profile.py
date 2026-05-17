@@ -146,42 +146,109 @@ def _arch_prototype_embeddings() -> Dict[str, Dict[int, float]]:
     return {k: _byte_2gram_embedding(v) for k, v in proto.items()}
 
 
-def _embed_raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
-    """Embedding-similarity architecture candidates for raw blobs."""
+def _opcode_density_scores(data: bytes) -> Dict[str, float]:
+    """
+    Score likely architectures using opcode-sequence density.
+    Counts known prologues/epilogues as weighted hits.
+    Returns a dict of arch -> raw score (not normalized).
+    """
+    sample = data[: min(len(data), 8192)]
+
+    def _count(pat: bytes) -> int:
+        return sample.count(pat)
+
+    x86_score = 0.0
+    x86_score += _count(b"\x55\x8b\xec") * 2.0        # push ebp; mov ebp,esp
+    x86_score += _count(b"\x55\x48\x89\xe5") * 2.5    # x64 prologue
+    x86_score += _count(b"\xe8") * 0.02               # call rel32 density
+    x86_score += _count(b"\xc3") * 0.03               # ret density
+
+    arm_score = 0.0
+    arm_score += _count(b"\x70\x47") * 1.2            # bx lr (Thumb)
+    arm_score += _count(b"\xf0\xb5") * 1.8            # push {..., lr} (Thumb)
+    arm_score += _count(b"\x00\xf0") * 0.8            # bl prefix (Thumb-2)
+    arm_score += _count(b"\x2d\xe9") * 1.8            # stmfd sp! (A32)
+    arm_score += _count(b"\xbd\xe8") * 1.6            # ldmfd sp! (A32)
+    arm_score += _count(b"\x1e\xff\x2f\xe1") * 2.0   # bx lr (A32)
+
+    mipsl_score = 0.0
+    mipsl_score += _count(b"\xbd\x27") * 1.8          # addiu sp (LE)
+    mipsl_score += _count(b"\xbf\xaf") * 1.4          # sw ra (LE)
+    mipsl_score += _count(b"\x08\x00\xe0\x03") * 1.8  # jr ra (LE)
+
+    mipsb_score = 0.0
+    mipsb_score += _count(b"\x27\xbd") * 1.8          # addiu sp (BE)
+    mipsb_score += _count(b"\xaf\xbf") * 1.4          # sw ra (BE)
+    mipsb_score += _count(b"\x03\xe0\x00\x08") * 1.8  # jr ra (BE)
+
+    return {
+        "metapc": x86_score,
+        "arm": arm_score,
+        "mipsl": mipsl_score,
+        "mipsb": mipsb_score,
+    }
+
+
+def _raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
+    """
+    Blended architecture candidates for raw blobs.
+    Combines opcode-density (primary) with byte-embedding (secondary).
+    Opcode density carries 0.7 weight; embedding carries 0.3 weight.
+    Reports inference_method so callers can gauge reliability.
+    """
     if not data:
         return []
     sample = data[: min(len(data), 8192)]
+
+    # --- opcode-density signal ---
+    od_raw = _opcode_density_scores(sample)
+    od_best = max(od_raw.values()) if od_raw else 0.0
+
+    # --- embedding signal ---
     sample_vec = _byte_2gram_embedding(sample)
-    if not sample_vec:
-        return []
-    proto = _arch_prototype_embeddings()
-    rows = []
+    proto = _arch_prototype_embeddings() if sample_vec else {}
+    em_raw: Dict[str, float] = {}
     for arch, vec in proto.items():
-        sim = _sparse_cosine(sample_vec, vec)
-        rows.append((sim, arch))
+        em_raw[arch] = _sparse_cosine(sample_vec, vec)
+    em_best = max(em_raw.values()) if em_raw else 0.0
+
+    arch_meta: Dict[str, Dict[str, Any]] = {
+        "metapc": {"processor": "metapc", "bitness": 32, "endian": "little"},
+        "arm":    {"processor": "arm",    "bitness": 32, "endian": "little"},
+        "mipsl":  {"processor": "mipsl",  "bitness": 32, "endian": "little"},
+        "mipsb":  {"processor": "mipsb",  "bitness": 32, "endian": "big"},
+    }
+
+    OPCODE_W = 0.7
+    EMBED_W = 0.3
+
+    rows: list[tuple[float, str]] = []
+    for arch in arch_meta:
+        od_norm = (od_raw.get(arch, 0.0) / (od_best + 1e-9)) if od_best > 0 else 0.0
+        em_norm = (em_raw.get(arch, 0.0) / (em_best + 1e-9)) if em_best > 0 else 0.0
+        blended = OPCODE_W * od_norm + EMBED_W * em_norm
+        rows.append((blended, arch))
+
     rows.sort(key=lambda x: x[0], reverse=True)
     if not rows or rows[0][0] <= 0.0:
         return []
 
-    arch_meta = {
-        "metapc": {"processor": "metapc", "bitness": 32, "endian": "little"},
-        "arm": {"processor": "arm", "bitness": 32, "endian": "little"},
-        "mipsl": {"processor": "mipsl", "bitness": 32, "endian": "little"},
-        "mipsb": {"processor": "mipsb", "bitness": 32, "endian": "big"},
-    }
-    top_sim = rows[0][0]
+    top_blended = rows[0][0]
+    # Pick label: opcode-dominated when od_best > 0, otherwise embedding.
+    method = "opcode-density + embedding blend" if od_best > 0 else "byte-embedding similarity"
+
     out: list[Dict[str, Any]] = []
-    for sim, arch in rows[:4]:
-        meta = arch_meta.get(arch, {})
-        # Confidence is normalized to top similarity and bounded.
-        conf = max(0.01, min(0.95, sim if sim == top_sim else (sim / max(top_sim, 1e-9)) * top_sim))
+    for blended, arch in rows[:4]:
+        meta = arch_meta[arch]
+        conf = max(0.01, min(0.95, blended / (top_blended + 1e-9) * top_blended))
         out.append(
             {
-                "processor": meta.get("processor"),
-                "bitness": meta.get("bitness"),
-                "endian": meta.get("endian"),
+                "processor": meta["processor"],
+                "bitness": meta["bitness"],
+                "endian": meta["endian"],
                 "confidence": round(conf, 3),
-                "reason": "byte-embedding similarity",
+                "reason": f"{method}",
+                "inference_method": method,
             }
         )
     return out
@@ -237,7 +304,7 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
             inf.reason = "raw Cortex-M vector table heuristic"
             return inf.to_dict()
 
-    candidates = _embed_raw_arch_candidates(sample)
+    candidates = _raw_arch_candidates(sample)
     inf.candidates = candidates
     if candidates:
         # Keep candidate ranking only for raw ambiguous blobs.
@@ -246,7 +313,7 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
         inf.bitness = None
         inf.endian = None
         inf.confidence = float(candidates[0].get("confidence") or 0.2)
-        inf.reason = "raw embedding-profile candidates available; explicit selection recommended"
+        inf.reason = candidates[0].get("reason") or "raw candidates available; explicit selection recommended"
         return inf.to_dict()
 
     # Unknown raw: avoid forcing a wrong processor. Keep suggestions only.

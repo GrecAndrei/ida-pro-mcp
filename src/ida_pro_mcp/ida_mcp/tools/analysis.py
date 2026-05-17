@@ -11,6 +11,11 @@ import os
 import tempfile
 import time
 
+try:
+    from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile as _infer_arch
+except Exception:
+    _infer_arch = None  # type: ignore
+
 
 # ============================================================================
 # ANALYSIS - Loader/processor options and reanalysis
@@ -108,18 +113,36 @@ def analysis(
             app_bitness = _get_app_bitness()
             loader_name = _get_loader_name()
 
+            # Resolve the effective file type — same logic as idb_meta() so both tools agree.
+            ft_name = _filetype_name(filetype)
+            ft_effective = ft_name
+            ft_note = None
+            binary_path = None
+            try:
+                if hasattr(ida_nalt, "get_input_file_path"):
+                    binary_path = ida_nalt.get_input_file_path()
+                elif hasattr(idaapi, "get_input_file_path"):
+                    binary_path = idaapi.get_input_file_path()
+            except Exception:
+                pass
+            if ft_name == "obj" and binary_path and callable(_infer_arch):
+                try:
+                    inf_result = _infer_arch(binary_path) or {}
+                    if inf_result.get("file_kind") == "raw":
+                        ft_effective = "raw"
+                        ft_note = "IDA loader reports obj for plain binaries; effective kind is raw."
+                except Exception:
+                    pass
+
             return {
                 "ok": True,
                 "procname": procname,
                 "processor": procname,
-                "file_type": _filetype_name(filetype),
-                "file_type_id": filetype,
-                "file_type_effective": _filetype_name(filetype),
                 "file_type_info": {
-                    "loader": _filetype_name(filetype),
+                    "loader": ft_name,
                     "loader_id": filetype,
-                    "effective": _filetype_name(filetype),
-                    "note": None,
+                    "effective": ft_effective,
+                    "note": ft_note,
                 },
                 "is_64bit": is_64bit,
                 "is_be": is_be,

@@ -318,7 +318,9 @@ class TestHostHardening(unittest.TestCase):
             except OSError:
                 pass
 
-    def test_session_create_ambiguous_raw_applies_strong_top_candidate(self):
+    def test_session_create_ambiguous_raw_applies_top_candidate(self):
+        # Raw binary with weak x86 signal: new policy always applies top ranked candidate
+        # rather than leaving IDA's metapc/64 default in place.
         with tempfile.NamedTemporaryFile(delete=False) as tf:
             tf.write((b"\xe8" + (b"\x00" * 63)) * 8)
             path = tf.name
@@ -330,14 +332,16 @@ class TestHostHardening(unittest.TestCase):
             arch_profile = res.get("architecture_profile", {})
             inferred = arch_profile.get("inferred_profile", {})
             opts = (res.get("session") or {}).get("analysis_options", {}) or {}
-            if inferred.get("processor") in (None, ""):
-                candidates = inferred.get("candidates", [])
-                top = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-                self.assertNotIn("processor", opts)
-                self.assertFalse(arch_profile.get("inference_applied"))
-                recs = res.get("architecture_recommendations", [])
-                self.assertGreaterEqual(len(recs), 1)
-                self.assertEqual(recs[0].get("tool"), "analysis")
+            candidates = inferred.get("candidates", [])
+            if candidates:
+                # Top candidate must be applied to analysis_options for raw binaries.
+                top = candidates[0] if isinstance(candidates[0], dict) else {}
+                if top.get("processor") and inferred.get("file_kind") == "raw":
+                    self.assertIn("processor", opts)
+                    self.assertTrue(arch_profile.get("inference_applied"))
+            recs = res.get("architecture_recommendations", [])
+            self.assertGreaterEqual(len(recs), 1)
+            self.assertEqual(recs[0].get("tool"), "analysis")
         finally:
             try:
                 os.unlink(path)
