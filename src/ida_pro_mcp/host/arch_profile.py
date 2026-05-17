@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple
 import os
 import struct
+import math
 
 
 _PROC_ALIASES = {
@@ -98,76 +99,89 @@ class ArchInference:
         }
 
 
-def _score_raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
+def _byte_2gram_embedding(data: bytes) -> Dict[int, float]:
+    """Compact sparse embedding over byte 2-grams."""
+    if not data or len(data) < 2:
+        return {}
+    v: Dict[int, float] = {}
+    total = 0
+    for i in range(len(data) - 1):
+        key = (data[i] << 8) | data[i + 1]
+        v[key] = v.get(key, 0.0) + 1.0
+        total += 1
+    if total <= 0:
+        return {}
+    inv = 1.0 / float(total)
+    for k in list(v.keys()):
+        v[k] *= inv
+    return v
+
+
+def _sparse_cosine(a: Dict[int, float], b: Dict[int, float]) -> float:
+    if not a or not b:
+        return 0.0
+    dot = 0.0
+    for k, av in a.items():
+        bv = b.get(k)
+        if bv is not None:
+            dot += av * bv
+    na = math.sqrt(sum(x * x for x in a.values()))
+    nb = math.sqrt(sum(x * x for x in b.values()))
+    if na <= 1e-12 or nb <= 1e-12:
+        return 0.0
+    return max(0.0, min(1.0, dot / (na * nb)))
+
+
+def _arch_prototype_embeddings() -> Dict[str, Dict[int, float]]:
     """
-    Score likely architectures for raw blobs from lightweight opcode signatures.
-    Returns sorted candidates with normalized confidence.
+    Lightweight architecture prototype embeddings.
+    These are stable tokenized opcode bytes represented as n-gram vectors.
     """
+    proto = {
+        "metapc": b"\x55\x8b\xec\x83\xec\x08\xe8\xc3\x90\x8b\x45\xfc",
+        "arm": b"\xf0\xb5\x70\x47\x00\xf0\x2d\xe9\xbd\xe8\x1e\xff\x2f\xe1",
+        "mipsl": b"\xbd\x27\xbf\xaf\x08\x00\xe0\x03\x0c\x00\x00\x00",
+        "mipsb": b"\x27\xbd\xaf\xbf\x03\xe0\x00\x08\x00\x00\x00\x0c",
+    }
+    return {k: _byte_2gram_embedding(v) for k, v in proto.items()}
+
+
+def _embed_raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
+    """Embedding-similarity architecture candidates for raw blobs."""
     if not data:
         return []
-
     sample = data[: min(len(data), 8192)]
-    n = max(1, len(sample))
-
-    def _count(pat: bytes) -> int:
-        return sample.count(pat)
-
-    # x86/x64-ish patterns
-    x86_score = 0.0
-    x86_score += _count(b"\x55\x8b\xec") * 2.0   # push ebp; mov ebp,esp
-    x86_score += _count(b"\x55\x48\x89\xe5") * 2.5  # x64 prologue
-    x86_score += _count(b"\xe8") * 0.02           # call rel32 opcode density
-    x86_score += _count(b"\xc3") * 0.03           # ret opcode density
-
-    # ARM Thumb signatures (common in firmware)
-    arm_thumb_score = 0.0
-    arm_thumb_score += _count(b"\x70\x47") * 1.2  # bx lr
-    arm_thumb_score += _count(b"\xf0\xb5") * 1.8  # push {..., lr}
-    arm_thumb_score += _count(b"\x00\xf0") * 0.8  # bl/branch prefix
-
-    # ARM A32 signatures
-    arm_a32_score = 0.0
-    arm_a32_score += _count(b"\x2d\xe9") * 1.8    # stmfd sp!, {...}
-    arm_a32_score += _count(b"\xbd\xe8") * 1.6    # ldmfd sp!, {...}
-    arm_a32_score += _count(b"\x1e\xff\x2f\xe1") * 2.0  # bx lr
-
-    # MIPS prologues (both endian variants represented in bytes)
-    mips_le_score = 0.0
-    mips_le_score += _count(b"\xbd\x27") * 1.8    # addiu sp,sp,-imm (LE)
-    mips_le_score += _count(b"\xbf\xaf") * 1.4    # sw ra,off(sp) (LE)
-    mips_le_score += _count(b"\x0c") * 0.02       # jal opcode high byte often 0x0c in BE word view
-
-    mips_be_score = 0.0
-    mips_be_score += _count(b"\x27\xbd") * 1.8    # addiu sp,sp,-imm (BE)
-    mips_be_score += _count(b"\xaf\xbf") * 1.4    # sw ra,off(sp) (BE)
-    mips_be_score += _count(b"\x03\xe0\x00\x08") * 1.8  # jr ra
-
-    raw = [
-        {"processor": "metapc", "bitness": 32, "endian": "little", "score": x86_score, "reason": "x86/x64 opcode density"},
-        {"processor": "arm", "bitness": 32, "endian": "little", "score": arm_thumb_score + arm_a32_score, "reason": "ARM/Thumb opcode density"},
-        {"processor": "mipsl", "bitness": 32, "endian": "little", "score": mips_le_score, "reason": "MIPS little-endian opcode density"},
-        {"processor": "mipsb", "bitness": 32, "endian": "big", "score": mips_be_score, "reason": "MIPS big-endian opcode density"},
-    ]
-    raw.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
-    best = float(raw[0]["score"]) if raw else 0.0
-    second = float(raw[1]["score"]) if len(raw) > 1 else 0.0
-    if best <= 0.0:
+    sample_vec = _byte_2gram_embedding(sample)
+    if not sample_vec:
         return []
-    # Absolute signal strength (per-sample) and separation confidence.
-    abs_strength = min(1.0, best / max(6.0, n * 0.02))
-    separation = (best - second) / max(best, 1e-6)
-    top_conf = max(0.05, min(0.95, (0.65 * abs_strength) + (0.35 * separation)))
-    out = []
-    for idx, row in enumerate(raw[:4]):
-        rel = max(0.0, min(1.0, float(row["score"]) / (best + 1e-6)))
-        conf = top_conf if idx == 0 else max(0.01, min(0.9, top_conf * rel * 0.9))
+    proto = _arch_prototype_embeddings()
+    rows = []
+    for arch, vec in proto.items():
+        sim = _sparse_cosine(sample_vec, vec)
+        rows.append((sim, arch))
+    rows.sort(key=lambda x: x[0], reverse=True)
+    if not rows or rows[0][0] <= 0.0:
+        return []
+
+    arch_meta = {
+        "metapc": {"processor": "metapc", "bitness": 32, "endian": "little"},
+        "arm": {"processor": "arm", "bitness": 32, "endian": "little"},
+        "mipsl": {"processor": "mipsl", "bitness": 32, "endian": "little"},
+        "mipsb": {"processor": "mipsb", "bitness": 32, "endian": "big"},
+    }
+    top_sim = rows[0][0]
+    out: list[Dict[str, Any]] = []
+    for sim, arch in rows[:4]:
+        meta = arch_meta.get(arch, {})
+        # Confidence is normalized to top similarity and bounded.
+        conf = max(0.01, min(0.95, sim if sim == top_sim else (sim / max(top_sim, 1e-9)) * top_sim))
         out.append(
             {
-                "processor": row["processor"],
-                "bitness": row["bitness"],
-                "endian": row["endian"],
+                "processor": meta.get("processor"),
+                "bitness": meta.get("bitness"),
+                "endian": meta.get("endian"),
                 "confidence": round(conf, 3),
-                "reason": row["reason"],
+                "reason": "byte-embedding similarity",
             }
         )
     return out
@@ -223,7 +237,7 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
             inf.reason = "raw Cortex-M vector table heuristic"
             return inf.to_dict()
 
-    candidates = _score_raw_arch_candidates(sample)
+    candidates = _embed_raw_arch_candidates(sample)
     inf.candidates = candidates
     if candidates:
         top = candidates[0]
@@ -233,7 +247,7 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
             inf.bitness = int(top.get("bitness") or 32)
             inf.endian = str(top.get("endian") or "little")
             inf.confidence = min(0.85, top_conf)
-            inf.reason = f"raw opcode signature heuristic ({top.get('reason')})"
+            inf.reason = f"raw embedding-profile inference ({top.get('reason')})"
             return inf.to_dict()
 
     # Unknown raw: avoid forcing a wrong processor. Keep suggestions only.

@@ -90,6 +90,8 @@ from .config import (
     CONTEXT_DENSITY_MAX_CODE_PREVIEW,
     CONTEXT_DENSITY_MAX_HEX_PREVIEW,
     CONTEXT_DENSITY_MAX_XREF_ITEMS,
+    EMBEDDING_FIRST_MODE,
+    ALLOW_HEURISTIC_FALLBACKS,
 )
 from .context_density import ContextDensityOptimizer
 from .errors import MCPError, make_error
@@ -5349,67 +5351,61 @@ class IDAMCPServer:
         return out
 
     def _threat_hunt_score_finding(self, finding: dict, freq: int = 1) -> float:
-        """Deterministic local scoring model for threat_hunt ranking."""
+        """Embedding-first threat ranking with deterministic non-heuristic fallback."""
         if not isinstance(finding, dict):
             return 0.0
-        tool = str(finding.get("tool") or "").lower()
-        action = str(finding.get("action") or "").lower()
         text = " ".join(
             str(finding.get(k) or "")
             for k in ("summary", "name", "title", "value", "kind", "type", "indicator")
         ).lower()
         addr = str(finding.get("addr") or finding.get("address") or finding.get("ea") or "")
+        if EMBEDDING_FIRST_MODE and text:
+            try:
+                from .intelligence import BgeCodeEmbedder
+                embedder = BgeCodeEmbedder()
+                query_vec = embedder.embed(text)
+                anchors = [
+                    "malware command and control beaconing persistence injection",
+                    "memory corruption vulnerability overflow format string unsafe copy",
+                    "obfuscation evasion anti debug anti vm packed encrypted payload",
+                    "crypto misuse hardcoded key weak random insecure cipher mode",
+                    "suspicious network exfiltration downloader shellcode loader",
+                ]
+                sims = []
+                for a in anchors:
+                    av = embedder.embed(a)
+                    sims.append(BgeCodeEmbedder.cosine(query_vec, av))
+                emb_score = max(sims) if sims else 0.0
+                corroboration = min(0.2, 0.05 * max(0, freq - 1))
+                structural = 0.05 if addr else 0.0
+                return round(float(emb_score) + corroboration + structural, 4)
+            except Exception:
+                pass
 
+        # Deterministic fallback: no lexical keyword heuristics.
+        if not ALLOW_HEURISTIC_FALLBACKS:
+            base = 0.1 if text else 0.0
+            structural = 0.05 if addr else 0.0
+            corroboration = min(0.2, 0.05 * max(0, freq - 1))
+            return round(base + structural + corroboration, 4)
+
+        # Legacy fallback path can still be explicitly enabled by env.
+        tool = str(finding.get("tool") or "").lower()
+        action = str(finding.get("action") or "").lower()
         score = 0.0
-
-        # Module priors
         if tool in {"yara_hunt", "crypto_id", "deobfuscate"}:
             score += 1.4
         elif tool in {"trace_analysis", "coverage", "trace"}:
             score += 1.1
         elif tool in {"search", "string_ops", "xref_analysis"}:
             score += 0.9
-
-        # Action priors
         if action in {"identify", "find_c2", "ioc_extract", "vulnerable", "detect"}:
             score += 1.0
         if action in {"analyze_coverage", "find_loops"}:
             score += 0.6
-
-        # Keyword features
-        keyword_weights = {
-            "c2": 1.2,
-            "beacon": 1.2,
-            "ransom": 1.0,
-            "inject": 0.9,
-            "shellcode": 1.1,
-            "persistence": 0.8,
-            "registry": 0.6,
-            "suspicious": 0.7,
-            "obfusc": 0.8,
-            "crypto": 0.7,
-            "entropy": 0.5,
-            "vuln": 1.0,
-            "overflow": 1.0,
-            "format string": 1.0,
-        }
-        for kw, w in keyword_weights.items():
-            if kw in text:
-                score += w
-
-        # Structural confidence hints
         if addr:
             score += 0.35
-        if finding.get("count"):
-            try:
-                cnt = int(finding.get("count") or 0)
-                score += min(0.8, 0.1 * max(0, cnt))
-            except Exception:
-                pass
-
-        # Frequency boost from independent corroboration across steps
         score += min(1.5, 0.35 * max(0, freq - 1))
-
         return round(score, 4)
 
     def _threat_hunt_legacy_route(
@@ -6365,7 +6361,7 @@ class IDAMCPServer:
                     inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
                     if isinstance(inferred, dict):
                         candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
-                        if candidates and not arch_meta.get("inference_applied"):
+                        if candidates:
                             out["architecture_recommendations"] = [
                                 {
                                     "tool": "analysis",
@@ -6380,6 +6376,20 @@ class IDAMCPServer:
                                 }
                                 for c in candidates[:3]
                                 if isinstance(c, dict) and c.get("processor")
+                            ]
+                        elif not candidates:
+                            out["architecture_recommendations"] = [
+                                {
+                                    "tool": "analysis",
+                                    "arguments": {
+                                        "action": "set_architecture",
+                                        "processor": "arm",
+                                        "bitness": 32,
+                                        "endian": "little",
+                                    },
+                                    "confidence": 0.2,
+                                    "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
+                                }
                             ]
                 return out
             if action == "discover":
