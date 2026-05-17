@@ -484,12 +484,21 @@ class AnalysisEngine:
             if not blob:
                 continue
             vec = _unpack(blob)
+            sim_candidates: List[Tuple[float, str, tuple, List[float]]] = []
 
             for other_id, (other_row, other_vec) in all_vecs.items():
                 if other_id == eid:
                     continue
                 sim = _cosine(vec, other_vec)
-                if sim < 0.80:
+                sim_candidates.append((sim, other_id, other_row, other_vec))
+            if not sim_candidates:
+                continue
+            sim_vals = sorted(float(x[0]) for x in sim_candidates)
+            q50 = sim_vals[len(sim_vals) // 2]
+            q75 = sim_vals[min(len(sim_vals) - 1, int(round((len(sim_vals) - 1) * 0.75)))]
+            sim_gate = min(0.995, q75 + max(0.0, q75 - q50))
+            for sim, other_id, other_row, other_vec in sorted(sim_candidates, key=lambda x: x[0], reverse=True):
+                if sim < sim_gate:
                     continue
                 # High similarity but different category or conflicting title
                 other_cat = other_row[3]
@@ -509,7 +518,7 @@ class AnalysisEngine:
                     addr=addr or other_row[4],
                     content=reason,
                     tags=["contradiction", "engine", category, other_cat],
-                    confidence=round(sim * 0.8, 3),
+                    confidence=round(sim * 0.9, 3),
                     source="engine",
                 )
                 self._push_resource_updated("ida://state")
@@ -861,9 +870,16 @@ class AnalysisEngine:
 
         pending = list(crawler._pending.values())
         auto_accepted = []
+        conf_vals = sorted(float(p.get("confidence", 0.5) or 0.5) for p in pending)
+        if conf_vals:
+            q50 = conf_vals[len(conf_vals) // 2]
+            q75 = conf_vals[min(len(conf_vals) - 1, int(round((len(conf_vals) - 1) * 0.75)))]
+            auto_accept_gate = min(0.99, q75 + max(0.0, q75 - q50))
+        else:
+            auto_accept_gate = 1.0
         for p in pending:
             conf = p.get("confidence", 0.5)
-            if conf < 0.75:
+            if conf < auto_accept_gate:
                 continue  # leave for LLM review
             pid = p.get("proposal_id", "")
             addr = p.get("addr", "")
@@ -930,7 +946,30 @@ class AnalysisEngine:
             except Exception:
                 continue
 
-            if entropy < 6.5:
+            # Adaptive high-entropy gate from observed segment entropies.
+            # Collect all segment entropies once per sweep.
+            # We compute lazily and cache on first iteration.
+            if "_entropy_vals" not in locals():
+                _entropy_vals = []  # type: ignore[var-annotated]
+                try:
+                    for _s in segs:
+                        _st = int(_s.start_ea)
+                        _en = int(_s.end_ea)
+                        _blob = ida_bytes.get_bytes(_st, max(0, _en - _st))
+                        if _blob:
+                            _entropy_vals.append(self._byte_entropy(_blob))
+                except Exception:
+                    _entropy_vals = []
+                _entropy_vals = sorted(float(v) for v in _entropy_vals)
+                if _entropy_vals:
+                    _mq = len(_entropy_vals) // 2
+                    _iq = min(len(_entropy_vals) - 1, int(round((len(_entropy_vals) - 1) * 0.75)))
+                    _eq50 = _entropy_vals[_mq]
+                    _eq75 = _entropy_vals[_iq]
+                    _entropy_gate = _eq75 + max(0.0, _eq75 - _eq50)
+                else:
+                    _entropy_gate = 6.5
+            if entropy < _entropy_gate:
                 continue
 
             addr_hex = hex(start) if isinstance(start, int) else str(start)
@@ -948,11 +987,11 @@ class AnalysisEngine:
                 category="region",
                 addr=addr_hex, addr_end=addr_end_hex,
                 tags=["entropy", "engine", "crypto_candidate"],
-                confidence=min(0.95, (entropy - 6.5) / 1.5 * 0.5 + 0.5),
+                confidence=min(0.98, max(0.5, 0.5 + max(0.0, entropy - _entropy_gate) / max(1.0, 8.0 - _entropy_gate))),
                 source="engine", source_type="engine_entropy",
                 entropy=entropy,
                 evidence=[{"type": "entropy", "value": f"{entropy:.3f}",
-                           "weight": min(1.0, (entropy - 6.5) / 1.5),
+                           "weight": min(1.0, max(0.0, entropy - _entropy_gate) / max(1.0, 8.0 - _entropy_gate)),
                            "ts": time.time()}],
             )
             self._push_resource_updated("ida://state")
