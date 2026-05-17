@@ -159,7 +159,7 @@ def query(
                 }
             q_vec = embedder.embed(q)
             top_k = int(args.get("limit") or 10)
-            results = idx.similar_vec(q_vec, top_k=top_k, threshold=0.3)
+            results = idx.similar_vec(q_vec, top_k=top_k * 3, threshold=0.0)
             expansion_queries = []
             try:
                 from ida_pro_mcp.host.intelligence import BehaviorClassifier
@@ -171,7 +171,7 @@ def query(
             if "BehaviorClassifier" in locals() and BehaviorClassifier is not None:
                 try:
                     classifier = BehaviorClassifier.instance(embedder)
-                    hits = classifier.classify(str(q)[:500], threshold=0.35, top_k=3, block=False)
+                    hits = classifier.classify(str(q)[:500], threshold=0.0, top_k=3, block=False)
                     expansion_queries = [
                         str(h.get("behavior") or "").strip().replace("_", " ")
                         for h in (hits or [])
@@ -189,7 +189,7 @@ def query(
                 for eq in expansion_queries[:3]:
                     try:
                         ev = embedder.embed(eq)
-                        extras = idx.similar_vec(ev, top_k=max(3, top_k // 2), threshold=0.28)
+                        extras = idx.similar_vec(ev, top_k=max(3, top_k), threshold=0.0)
                     except Exception:
                         continue
                     for r in extras:
@@ -207,7 +207,15 @@ def query(
                             if sim > float(cur.get("similarity") or 0.0):
                                 cur["similarity"] = sim * 0.96
                                 cur["expansion_query"] = eq
-                results = sorted(by_addr.values(), key=lambda x: float(x.get("similarity") or 0.0), reverse=True)[:top_k]
+                results = sorted(by_addr.values(), key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
+            sims = [float(r.get("similarity") or 0.0) for r in results]
+            if sims:
+                ss = sorted(sims)
+                q50 = ss[len(ss) // 2]
+                q75 = ss[min(len(ss) - 1, int(round((len(ss) - 1) * 0.75)))]
+                gate = q50 + max(0.0, q75 - q50)
+                filtered = [r for r in results if float(r.get("similarity") or 0.0) >= gate]
+                results = (filtered or results)[:top_k]
             return {
                 "ok": True,
                 "query": q,
