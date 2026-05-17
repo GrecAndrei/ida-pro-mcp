@@ -291,7 +291,16 @@ def crypto_id(
                                 from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
                             embedder = BgeCodeEmbedder()
                             classifier = BehaviorClassifier.instance(embedder)
-                            behavior_tags = classifier.classify(pseudo, threshold=0.35, top_k=4)
+                            behavior_tags = classifier.classify(pseudo, threshold=0.0, top_k=6)
+                            if behavior_tags:
+                                vals = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in behavior_tags)
+                                q50 = vals[len(vals) // 2]
+                                q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+                                gate = q50 + max(0.0, q75 - q50)
+                                behavior_tags = [
+                                    h for h in behavior_tags
+                                    if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate
+                                ]
                     except Exception:
                         pass
 
