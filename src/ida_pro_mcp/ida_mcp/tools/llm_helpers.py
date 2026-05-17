@@ -10,6 +10,19 @@ import re
 import time
 
 
+def _adaptive_score_gate(vals):
+    """Adaptive gate = Q50 + IQR for score/confidence arrays."""
+    try:
+        arr = sorted(float(v) for v in vals if v is not None)
+    except Exception:
+        arr = []
+    if not arr:
+        return 0.0
+    q50 = arr[len(arr) // 2]
+    q75 = arr[min(len(arr) - 1, int(round((len(arr) - 1) * 0.75)))]
+    return float(q50 + max(0.0, q75 - q50))
+
+
 # ============================================================================
 # LLM_HELPERS - LLM-Specific Helper Actions for Optimized Interaction
 # ============================================================================
@@ -400,7 +413,8 @@ def _handle_feature_expansion_action(
         evidence_count = int(kwargs.get("evidence_count", 0) or 0)
         contradictions = int(kwargs.get("contradictions", 0) or 0)
         confidence = max(0.05, min(0.99, 0.35 + (evidence_count * 0.07) - (contradictions * 0.15)))
-        return {"ok": True, "feature": feature, "confidence": round(confidence, 3), "uncertainty": round(1.0 - confidence, 3), "needs_clarification": confidence < 0.55}
+        clarify_gate = max(0.4, min(0.8, 0.6 - 0.05 * evidence_count + 0.08 * contradictions))
+        return {"ok": True, "feature": feature, "confidence": round(confidence, 3), "uncertainty": round(1.0 - confidence, 3), "needs_clarification": confidence < clarify_gate}
     if action == "multi_granularity_retrieval_layer":
         granularity = "instruction" if any(k in q.lower() for k in ("operand", "opcode", "instruction")) else "function"
         if any(k in q.lower() for k in ("architecture", "module", "overview")):
@@ -1661,7 +1675,9 @@ def llm_helpers(
                     cfunc = ida_hexrays.decompile(func_ea)
                     if not cfunc:
                         continue
-                    hits = classifier.classify(str(cfunc)[:2000], threshold=0.40, top_k=3, block=False)
+                    hits = classifier.classify(str(cfunc)[:2000], threshold=0.0, top_k=6, block=False)
+                    gate = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits])
+                    hits = [h for h in hits if float(h.get("score", h.get("confidence", 0.0)) or 0.0) >= gate]
                     for h in hits:
                         if tag in h.get("behavior", "").lower() or tag in h.get("behavior", ""):
                             matches.append({
@@ -1720,7 +1736,9 @@ def llm_helpers(
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
                 cfunc = ida_hexrays.decompile(ea)
                 if cfunc:
-                    hits = classifier.classify(str(cfunc)[:2000], threshold=0.38, top_k=4, block=False)
+                    hits = classifier.classify(str(cfunc)[:2000], threshold=0.0, top_k=6, block=False)
+                    gate = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits])
+                    hits = [h for h in hits if float(h.get("score", h.get("confidence", 0.0)) or 0.0) >= gate]
                     for h in hits:
                         roles.append({"role": h["behavior"], "confidence": round(float(h.get("score", 0)), 3),
                                       "reason": "BehaviorClassifier"})
@@ -1774,7 +1792,9 @@ def llm_helpers(
             try:
                 from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
-                hits = classifier.classify(pseudo, threshold=0.40, top_k=3, block=False)
+                hits = classifier.classify(pseudo, threshold=0.0, top_k=6, block=False)
+                gate = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits])
+                hits = [h for h in hits if float(h.get("score", h.get("confidence", 0.0)) or 0.0) >= gate]
                 classifier_tags = [{"behavior": h["behavior"], "score": round(float(h.get("score", 0)), 3)} for h in hits]
             except Exception:
                 pass
@@ -1866,7 +1886,9 @@ def llm_helpers(
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
                 call_context = "\n".join(cs["call_line"] for cs in call_sites[:10])
                 if call_context:
-                    hits = classifier.classify(call_context, threshold=0.38, top_k=3, block=False)
+                    hits = classifier.classify(call_context, threshold=0.0, top_k=5, block=False)
+                    gate = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits])
+                    hits = [h for h in hits if float(h.get("score", h.get("confidence", 0.0)) or 0.0) >= gate]
                     contract_tags = [h["behavior"] for h in hits]
             except Exception:
                 pass
@@ -1995,9 +2017,13 @@ def llm_helpers(
                     nb = math.sqrt(sum(x*x for x in vec_b))
                     emb_sim = dot / (na * nb) if na > 0 and nb > 0 else 0.0
                 if pseudo_a:
-                    tags_a = [h["behavior"] for h in classifier.classify(pseudo_a, threshold=0.38, top_k=4, block=False)]
+                    hits_a = classifier.classify(pseudo_a, threshold=0.0, top_k=6, block=False)
+                    gate_a = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits_a])
+                    tags_a = [h["behavior"] for h in hits_a if float(h.get("score", h.get("confidence", 0.0)) or 0.0) >= gate_a]
                 if pseudo_b:
-                    tags_b = [h["behavior"] for h in classifier.classify(pseudo_b, threshold=0.38, top_k=4, block=False)]
+                    hits_b = classifier.classify(pseudo_b, threshold=0.0, top_k=6, block=False)
+                    gate_b = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits_b])
+                    tags_b = [h["behavior"] for h in hits_b if float(h.get("score", h.get("confidence", 0.0)) or 0.0) >= gate_b]
             except Exception:
                 pass
 
@@ -2100,8 +2126,9 @@ def llm_helpers(
                     # Find lines with function signature (first few lines)
                     sig_lines = pseudo.splitlines()[:5]
                     sig_text = " ".join(sig_lines)
-                    hits = classifier.classify(sig_text + " " + query, threshold=0.42, top_k=1, block=False)
-                    if hits and float(hits[0].get("score", 0)) >= 0.42:
+                    hits = classifier.classify(sig_text + " " + query, threshold=0.0, top_k=4, block=False)
+                    gate = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits])
+                    if hits and float(hits[0].get("score", 0)) >= gate:
                         matches.append({
                             "addr": hex(func_ea),
                             "name": idc.get_func_name(func_ea),
@@ -2158,7 +2185,9 @@ def llm_helpers(
                             cfunc = ida_hexrays.decompile(func_ea)
                             if not cfunc:
                                 continue
-                            hits = classifier.classify(str(cfunc)[:1500], threshold=0.40, top_k=2, block=False)
+                            hits = classifier.classify(str(cfunc)[:1500], threshold=0.0, top_k=4, block=False)
+                            gate = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits])
+                            hits = [h for h in hits if float(h.get("score", h.get("confidence", 0.0)) or 0.0) >= gate]
                             if any(behavior_filter in h.get("behavior", "").lower() for h in hits):
                                 filtered.append({"addr": hex(func_ea), "name": idc.get_func_name(func_ea),
                                                  "behavior": hits[0]["behavior"] if hits else ""})
