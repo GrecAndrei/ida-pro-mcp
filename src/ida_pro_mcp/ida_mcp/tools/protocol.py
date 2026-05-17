@@ -78,20 +78,6 @@ def _bb_write(title, content, addr=None, tags=None):
         return None
 
 
-# Fallback heuristic data
-_PROTOCOL_STRINGS = {
-    "HTTP": ["HTTP/1.", "HTTP/2", "GET ", "POST ", "PUT ", "DELETE ", "HEAD ",
-             "Content-Type:", "Content-Length:", "Host:", "User-Agent:"],
-    "DNS": ["dns", "DNS", "nameserver", "resolv", "AAAA", "CNAME", "MX "],
-    "TLS": ["TLS", "SSL", "TLSv1", "SSLv3", "certificate", "cipher",
-            "handshake", "X509", "PEM"],
-    "MQTT": ["MQTT", "CONNECT", "PUBLISH", "SUBSCRIBE", "CONNACK"],
-    "FTP": ["USER ", "PASS ", "RETR ", "STOR ", "LIST ", "QUIT", "PORT ", "PASV"],
-    "SMTP": ["EHLO ", "HELO ", "MAIL FROM:", "RCPT TO:", "DATA", "QUIT"],
-    "WebSocket": ["Upgrade: websocket", "Sec-WebSocket", "ws://", "wss://"],
-    "gRPC": ["grpc", "application/grpc", "proto", "protobuf"],
-}
-
 _NETWORK_APIS = {
     "socket": ["socket", "WSASocket", "WSASocketA", "WSASocketW"],
     "connect": ["connect", "WSAConnect"],
@@ -265,7 +251,7 @@ def protocol(
     Analyze network protocol structures, parsing code, and communication patterns.
 
     ACTIONS:
-    detect - Detect network protocol usage via BehaviorClassifier + heuristic fallback.
+    detect - Detect network protocol usage via BehaviorClassifier + embedding fallback.
     parsers - Find protocol parsing functions (buffer reads with offset arithmetic).
     serializers - Find protocol serialization functions (structured buffer writes).
     handlers - Find message/command handler dispatch tables (large switch statements).
@@ -322,22 +308,9 @@ def protocol(
                     except Exception:
                         query_protocol_hints = []
 
-            # --- Fallback heuristics when classifier unavailable or no results ---
+            # --- Fallback embedding aggregation when classifier unavailable or no results ---
             if not classifier_results:
                 all_strings = _get_all_strings()
-                for proto, patterns in _PROTOCOL_STRINGS.items():
-                    matches = []
-                    for s_ea, s_val, _ in all_strings:
-                        for pat in patterns:
-                            if pat in s_val:
-                                entry = f"{hex(s_ea)}  \"{s_val[:80]}\""
-                                if entry not in matches:
-                                    matches.append(entry)
-                                break
-                    if matches:
-                        string_evidence[proto] = matches[:limit]
-                        protocols_detected[proto] = len(matches)
-
                 if not api_usage:
                     for api_cat, apis in _NETWORK_APIS.items():
                         for api in apis:
@@ -345,6 +318,68 @@ def protocol(
                             if xrefs:
                                 callers = [f"{hex(ea)} {name}" for ea, name in xrefs[:limit]]
                                 api_usage[api] = callers
+
+                # Embedding-only fallback (no lexical protocol patterns).
+                if BgeCodeEmbedder is not None:
+                    try:
+                        embedder = BgeCodeEmbedder()
+                        anchor_map = {
+                            "HTTP": _PROTOCOL_ANCHORS.get("http_protocol", ""),
+                            "TLS": _PROTOCOL_ANCHORS.get("tls_ssl", ""),
+                            "DNS": _PROTOCOL_ANCHORS.get("dns_protocol", ""),
+                            "CustomBinary": _PROTOCOL_ANCHORS.get("custom_binary", ""),
+                            "SMTP/FTP": _PROTOCOL_ANCHORS.get("smtp_ftp", ""),
+                        }
+                        anchor_vecs = {k: embedder.embed(v) for k, v in anchor_map.items() if v}
+                        proto_scores = {k: 0.0 for k in anchor_vecs.keys()}
+                        proto_hits = {k: [] for k in anchor_vecs.keys()}
+
+                        # Score top strings against protocol anchors.
+                        for s_ea, s_val, _ in all_strings[: min(4000, max(200, limit * 100))]:
+                            text = str(s_val or "").strip()
+                            if len(text) < 4:
+                                continue
+                            try:
+                                sv = embedder.embed(text[:200])
+                            except Exception:
+                                continue
+                            best_proto = None
+                            best_sim = 0.0
+                            for proto, av in anchor_vecs.items():
+                                sim = float(BgeCodeEmbedder.cosine(sv, av))
+                                if sim > best_sim:
+                                    best_sim = sim
+                                    best_proto = proto
+                            if best_proto is not None and best_sim >= 0.35:
+                                proto_scores[best_proto] += best_sim
+                                if len(proto_hits[best_proto]) < limit:
+                                    proto_hits[best_proto].append(f"{hex(s_ea)}  \"{text[:80]}\"")
+
+                        # Also fold API names into the same embedding vote.
+                        for api_name in list(api_usage.keys())[: min(400, limit * 20)]:
+                            try:
+                                av = embedder.embed(str(api_name)[:80])
+                            except Exception:
+                                continue
+                            best_proto = None
+                            best_sim = 0.0
+                            for proto, pv in anchor_vecs.items():
+                                sim = float(BgeCodeEmbedder.cosine(av, pv))
+                                if sim > best_sim:
+                                    best_sim = sim
+                                    best_proto = proto
+                            if best_proto is not None and best_sim >= 0.3:
+                                proto_scores[best_proto] += (best_sim * 0.75)
+
+                        ranked = sorted(proto_scores.items(), key=lambda kv: kv[1], reverse=True)
+                        for proto, score in ranked:
+                            if score <= 0:
+                                continue
+                            protocols_detected[proto] = round(score, 4)
+                            if proto_hits.get(proto):
+                                string_evidence[proto] = proto_hits[proto][:limit]
+                    except Exception:
+                        pass
 
             # Auto-write to blackboard
             if protocols_detected:
