@@ -159,6 +159,32 @@ def data(
             # Raw blobs are noisy before code/data heads exist.
             if _filetype_name(_inf_filetype_id()) in {"raw", "unknown"} and min_len < 8:
                 min_len = 8
+            # Adaptive printable-ratio gate for short strings.
+            ratio_samples = []
+            try:
+                _probe = idautils.Strings()
+                _n = 0
+                for _s in _probe:
+                    if _n >= 800:
+                        break
+                    _c = str(_s)
+                    if isinstance(_c, bytes):
+                        _c = _c.decode("utf-8", errors="replace")
+                    if _c and len(_c) < 20:
+                        _a = sum(1 for _ch in _c if _ch.isalnum() or _ch in " ._-/:=()[]{}\\n\\t")
+                        ratio_samples.append(_a / max(1, len(_c)))
+                    _n += 1
+            except Exception:
+                ratio_samples = []
+            if ratio_samples:
+                ratio_samples.sort()
+                q50 = ratio_samples[len(ratio_samples) // 2]
+                q75 = ratio_samples[min(len(ratio_samples) - 1, int(round((len(ratio_samples) - 1) * 0.75)))]
+                printable_gate = q50
+                if q75 > q50:
+                    printable_gate = q50 + 0.5 * (q75 - q50)
+            else:
+                printable_gate = 0.6
             strings_iter = None
             try:
                 strings_iter = idautils.Strings()
@@ -184,7 +210,7 @@ def data(
                             alnum_count = sum(
                                 1 for c in content if c.isalnum() or c in " ._-/:=()[]{}\\n\\t"
                             )
-                            if alnum_count / len(content) < 0.6:
+                            if (alnum_count / len(content)) < printable_gate:
                                 continue
 
                         if not _matcher or _matcher(content):
@@ -225,7 +251,7 @@ def data(
                                     alnum_count = sum(
                                         1 for c in s if c.isalnum() or c in " ._-/:=()[]{}\\n\\t"
                                     )
-                                    if alnum_count / len(s) < 0.6:
+                                    if (alnum_count / len(s)) < printable_gate:
                                         continue
 
                                 if not _matcher or _matcher(s):
@@ -450,19 +476,32 @@ def data(
             sorted_cats = sorted(matrix.items(), key=lambda x: -x[1])
             top_categories = [f"{cat}:{count}" for cat, count in sorted_cats if count > 0][:10]
             
-            # Determine binary type heuristic
+            # Determine binary type from adaptive category prominence.
             binary_type = "unknown"
-            if matrix.get("network", 0) > 5 and matrix.get("crypto", 0) > 2:
+            vals = sorted(float(v or 0) for v in matrix.values())
+            if vals:
+                q50 = vals[len(vals) // 2]
+                q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+                gate = q75 + max(0.0, q75 - q50)
+            else:
+                gate = 0.0
+            network = float(matrix.get("network", 0) or 0.0)
+            crypto = float(matrix.get("crypto", 0) or 0.0)
+            ui = float(matrix.get("ui", 0) or 0.0)
+            fio = float(matrix.get("file_io", 0) or 0.0)
+            str_ops = float(matrix.get("string_ops", 0) or 0.0)
+            process = float(matrix.get("process", 0) or 0.0)
+            if network >= gate and crypto >= q50:
                 binary_type = "malware_or_security_tool"
-            elif matrix.get("network", 0) > 10:
+            elif network >= gate:
                 binary_type = "server_or_network_app"
-            elif matrix.get("ui", 0) > 10:
+            elif ui >= gate:
                 binary_type = "gui_application"
-            elif matrix.get("file_io", 0) > 10 and matrix.get("string_ops", 0) > 5:
+            elif fio >= gate and str_ops >= q50:
                 binary_type = "utility"
-            elif matrix.get("crypto", 0) > 5:
+            elif crypto >= gate:
                 binary_type = "crypto_tool"
-            elif matrix.get("process", 0) > 5:
+            elif process >= gate:
                 binary_type = "system_tool"
             
             return {
