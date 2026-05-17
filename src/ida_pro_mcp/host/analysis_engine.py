@@ -1155,7 +1155,7 @@ class AnalysisEngine:
                 continue
 
             # Check if this matches an existing struct
-            existing = kg.find_struct_by_offset_pattern(offsets, threshold=0.5)
+            existing = kg.find_struct_by_offset_pattern(offsets)
             if existing:
                 # Record new access sites
                 for e in entries:

@@ -291,20 +291,45 @@ class KnowledgeGraph:
         return result
 
     def find_struct_by_offset_pattern(self, offsets: List[int],
-                                       threshold: float = 0.6) -> Optional[Dict]:
-        """Find a struct whose known member offsets overlap significantly with given offsets."""
+                                       threshold: Optional[float] = None) -> Optional[Dict]:
+        """Find best matching struct by offset overlap using adaptive gating."""
         offsets_set = set(offsets)
+        if not offsets_set:
+            return None
         best = None
         best_score = 0.0
+        scored: List[Tuple[float, Dict]] = []
         for s in self.list_structs():
             known = {m.get("offset") for m in s.get("members", [])}
             if not known:
                 continue
             overlap = len(offsets_set & known) / max(len(offsets_set | known), 1)
-            if overlap > best_score and overlap >= threshold:
+            scored.append((overlap, s))
+            if overlap > best_score:
                 best_score = overlap
                 best = s
-        return best
+        if not best:
+            return None
+        if threshold is not None:
+            return best if best_score >= float(threshold) else None
+        overlaps = sorted(float(x[0]) for x in scored)
+        if not overlaps:
+            return None
+        # Adaptive gate: top candidate must exceed robust center + spread.
+        q50 = overlaps[len(overlaps) // 2]
+        q75 = overlaps[min(len(overlaps) - 1, int(round((len(overlaps) - 1) * 0.75)))]
+        spread = max(0.0, q75 - q50)
+        adaptive_gate = min(0.98, q75 + (0.25 * spread))
+        if len(overlaps) == 1:
+            return best if best_score > 0.0 else None
+        if best_score >= adaptive_gate:
+            return best
+        # Secondary adaptive fallback: keep weak-but-unique matches when no other
+        # candidate is close to the top score.
+        runner_up = overlaps[-2] if len(overlaps) >= 2 else 0.0
+        if best_score > runner_up:
+            return best
+        return None
 
     # ── state machines ────────────────────────────────────────────────────────
 
