@@ -1,10 +1,59 @@
-"""Shared semantic tokenization/scoring helpers for tool-side fuzzy matching."""
+"""Shared embedding-first semantic helpers for tool-side fuzzy matching."""
 
 from __future__ import annotations
 
-import difflib
 import re
 from typing import Mapping, Optional, Sequence
+
+try:
+    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+except Exception:
+    try:
+        from host.intelligence import BgeCodeEmbedder  # type: ignore
+    except Exception:
+        BgeCodeEmbedder = None  # type: ignore
+
+
+_EMBEDDER = None
+_EMB_CACHE: dict[str, list[float]] = {}
+_EMB_CACHE_MAX = 1024
+
+
+def _get_embedder():
+    global _EMBEDDER
+    if _EMBEDDER is not None:
+        return _EMBEDDER
+    if BgeCodeEmbedder is None:
+        return None
+    try:
+        _EMBEDDER = BgeCodeEmbedder()
+    except Exception:
+        _EMBEDDER = None
+    return _EMBEDDER
+
+
+def _embed_text(text: str) -> Optional[list[float]]:
+    txt = (text or "").strip().lower()
+    if not txt:
+        return None
+    key = txt[:500]
+    cached = _EMB_CACHE.get(key)
+    if cached is not None:
+        return cached
+    embedder = _get_embedder()
+    if embedder is None:
+        return None
+    try:
+        vec = embedder.embed(key)
+    except Exception:
+        return None
+    if len(_EMB_CACHE) >= _EMB_CACHE_MAX:
+        try:
+            _EMB_CACHE.pop(next(iter(_EMB_CACHE)))
+        except Exception:
+            _EMB_CACHE.clear()
+    _EMB_CACHE[key] = vec
+    return vec
 
 
 def semantic_tokens(text: str) -> list[str]:
@@ -22,7 +71,7 @@ def semantic_score(
     fuzzy_bonus: float = 20.0,
     include_fuzzy: bool = True,
 ) -> float:
-    """Compute semantic similarity score (higher is better)."""
+    """Compute semantic similarity score (higher is better, 0..120 scale)."""
     if not query or not candidate:
         return 0.0
     q = query.strip().lower()
@@ -30,20 +79,25 @@ def semantic_score(
     if not q or not c:
         return 0.0
 
-    score = 0.0
-    if q == c:
-        score += 120.0
-    if q in c:
-        score += substring_bonus
+    # Embedding-first similarity.
+    qv = _embed_text(q)
+    cv = _embed_text(c)
+    if qv is not None and cv is not None and BgeCodeEmbedder is not None:
+        try:
+            sim = float(BgeCodeEmbedder.cosine(qv, cv))
+            return max(0.0, min(120.0, sim * 120.0))
+        except Exception:
+            pass
 
+    # Deterministic fallback: token-overlap only (no fuzzy heuristics).
     qt = set(semantic_tokens(q))
     ct = set(semantic_tokens(c))
-    if qt and ct:
-        score += (len(qt.intersection(ct)) / max(1, len(qt))) * 45.0
-
-    if include_fuzzy and fuzzy_bonus > 0:
-        score += difflib.SequenceMatcher(a=q, b=c).ratio() * fuzzy_bonus
-    return score
+    if not qt or not ct:
+        return 0.0
+    inter = len(qt.intersection(ct))
+    union = len(qt.union(ct))
+    jacc = float(inter) / float(max(1, union))
+    return max(0.0, min(120.0, jacc * 120.0))
 
 
 def normalize_action(

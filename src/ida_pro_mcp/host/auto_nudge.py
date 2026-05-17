@@ -362,8 +362,8 @@ _REROUTE_MAP: Dict[Tuple[str, str], Tuple[str, str]] = {
     ("compare", "compare"): ("compare", "functions"),
 }
 
-# Heuristic reroutes: when the call signature matches one pattern but another is better
-_HEURISTIC_REROUTES = [
+# Rule-based reroutes: when the call signature matches one pattern but another is better
+_RULE_REROUTES = [
     # memory.read with explicit disasm intent -> code.disasm
     # Keep typed reads (u8/u16/u32/...) in memory.read to avoid incorrect reroutes.
     (lambda t, a, args: t == "memory" and a == "read" and args.get("addr") and str(args.get("type", "")).lower() == "bytes" and bool(args.get("as_code") or args.get("disasm") or args.get("decode")),
@@ -386,8 +386,8 @@ def get_reroute(tool: str, action: str, args: dict) -> Optional[Tuple[str, dict]
         new_args["action"] = new_action
         return (new_tool, new_args)
     
-    # Heuristic reroutes
-    for check_fn, (new_tool, new_action, template_args) in _HEURISTIC_REROUTES:
+    # Rule-based reroutes
+    for check_fn, (new_tool, new_action, template_args) in _RULE_REROUTES:
         if check_fn(tool, action, args):
             new_args = dict(args)
             new_args["action"] = new_action
@@ -404,11 +404,17 @@ def get_reroute(tool: str, action: str, args: dict) -> Optional[Tuple[str, dict]
 # Blocking Stuck Detection
 # ============================================================================
 
-_STUCK_THRESHOLDS = {
-    "decompile_repeat": 4,   # Same function 4+ times
-    "search_repeat": 5,       # Same query 5+ times
-    "tool_loop": 3,           # Same tools alternating 3+ times
-}
+def _dynamic_stuck_thresholds(total_events: int) -> Dict[str, int]:
+    """
+    Adaptive deterministic thresholds from session activity volume.
+    Avoids fixed heuristic constants while preserving safety.
+    """
+    base = max(3, min(8, int(round(max(1, total_events) ** 0.5))))
+    return {
+        "decompile_repeat": base,
+        "search_repeat": base + 1,
+        "tool_loop": max(2, base - 1),
+    }
 
 
 def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Optional[dict]:
@@ -423,12 +429,14 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
     dc_cache = _auto_nudge._decompile_cache.get(key, [])
     search_cache = _auto_nudge._search_cache.get(key, [])
     call_history = _auto_nudge._call_history.get(key, {})
+    total_events = sum(int(v or 0) for v in call_history.values())
+    thresholds = _dynamic_stuck_thresholds(total_events)
     
     # Pattern 1: Same function decompiled repeatedly
     addr = args.get("addr", "")
     if action in ("decompile", "semantic_decompile", "disasm") and addr:
         count = dc_cache.count(addr)
-        if count >= _STUCK_THRESHOLDS["decompile_repeat"]:
+        if count >= thresholds["decompile_repeat"]:
             # Find what they should look at instead
             callers_key = f"code:callers"
             callees_key = f"code:callees"
@@ -455,7 +463,7 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
     query = args.get("query") or args.get("pattern", "")
     if action in ("find", "search", "text", "string", "bytes", "name") and query:
         count = search_cache.count(str(query))
-        if count >= _STUCK_THRESHOLDS["search_repeat"]:
+        if count >= thresholds["search_repeat"]:
             return {
                 "STUCK": True,
                 "blocking": True,
@@ -476,7 +484,7 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
         
         pairs = [(recent[i], recent[i + 1]) for i in range(len(recent) - 1)]
         for pair in set(pairs):
-            if pairs.count(pair) >= _STUCK_THRESHOLDS["tool_loop"]:
+            if pairs.count(pair) >= thresholds["tool_loop"]:
                 return {
                     "STUCK": True,
                     "blocking": True,
