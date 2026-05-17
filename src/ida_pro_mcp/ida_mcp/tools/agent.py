@@ -551,7 +551,14 @@ def agent(
                         idx = FunctionEmbeddingIndex(db_path, embedder)
                         # Index the query function if not already indexed
                         idx.index_async(hex(func.start_ea), target_name or hex(func.start_ea), pseudo)
-                        results = idx.similar(pseudo, top_k=max_items, exclude_ea=hex(func.start_ea), threshold=0.5)
+                        results = idx.similar(pseudo, top_k=max(6, max_items * 3), exclude_ea=hex(func.start_ea), threshold=0.0)
+                        if results:
+                            sims = sorted(float(r.get("similarity") or 0.0) for r in results)
+                            q50 = sims[len(sims) // 2]
+                            q75 = sims[min(len(sims) - 1, int(round((len(sims) - 1) * 0.75)))]
+                            gate = q50 + max(0.0, q75 - q50)
+                            filtered = [r for r in results if float(r.get("similarity") or 0.0) >= gate]
+                            results = (filtered or results)[:max_items]
                         return {
                             "ok": True,
                             "target": target_name,
@@ -561,9 +568,9 @@ def agent(
                             "method": embedder.backend,
                         }
                 except Exception:
-                    pass  # fall through to heuristic
+                    pass  # fall through to deterministic fallback
 
-            # Heuristic fallback: API + string overlap (bounded scan)
+            # Deterministic fallback: API + string overlap (bounded scan)
             target_apis: set = set()
             target_strings: set = set()
             for item in idautils.FuncItems(func.start_ea):
@@ -636,7 +643,7 @@ def agent(
                 "target_addr": hex(func.start_ea),
                 "similar_functions": similar_funcs[:max_items],
                 "count": len(similar_funcs[:max_items]),
-                "method": "heuristic",
+                "method": "deterministic_fallback",
             }
         elif action == "bridge_query":
             if not query:
@@ -889,7 +896,13 @@ def agent(
             result_clusters = []
             for lbl, members in sorted(clusters.items(), key=lambda x: -len(x[1])):
                 centroid = centroids[lbl].tolist()
-                behavior = classifier.classify_vec(centroid, threshold=0.3, top_k=2, block=False)
+                behavior = classifier.classify_vec(centroid, threshold=0.0, top_k=4, block=False)
+                if behavior:
+                    bs = sorted(float(b.get("confidence") or b.get("score") or 0.0) for b in behavior)
+                    bq50 = bs[len(bs) // 2]
+                    bq75 = bs[min(len(bs) - 1, int(round((len(bs) - 1) * 0.75)))]
+                    bgate = bq50 + max(0.0, bq75 - bq50)
+                    behavior = [b for b in behavior if float(b.get("confidence") or b.get("score") or 0.0) >= bgate]
                 label = behavior[0]["behavior"] if behavior else f"cluster_{lbl}"
                 confidence = behavior[0]["confidence"] if behavior else 0.0
                 result_clusters.append({
