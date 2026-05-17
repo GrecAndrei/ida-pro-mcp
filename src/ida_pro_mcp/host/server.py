@@ -6319,12 +6319,37 @@ class IDAMCPServer:
                             except Exception:
                                 next_conf = 0.0
                             margin = max(0.0, top_conf - next_conf)
+                            conf_vals = []
+                            try:
+                                conf_vals = sorted(
+                                    float(c.get("confidence", 0.0) or 0.0)
+                                    for c in candidates
+                                    if isinstance(c, dict)
+                                )
+                            except Exception:
+                                conf_vals = []
+                            if conf_vals:
+                                q50 = conf_vals[len(conf_vals) // 2]
+                                q75 = conf_vals[min(len(conf_vals) - 1, int(round((len(conf_vals) - 1) * 0.75)))]
+                                conf_gate = q50 + max(0.0, q75 - q50)
+                            else:
+                                conf_gate = 0.55
+                            conf_gate = max(0.55, conf_gate)
+                            if len(conf_vals) >= 2:
+                                delta_vals = [max(0.0, conf_vals[i] - conf_vals[i + 1]) for i in range(len(conf_vals) - 1)]
+                                delta_vals = sorted(delta_vals)
+                                dq50 = delta_vals[len(delta_vals) // 2]
+                                dq75 = delta_vals[min(len(delta_vals) - 1, int(round((len(delta_vals) - 1) * 0.75)))]
+                                margin_gate = dq50 + max(0.0, dq75 - dq50)
+                            else:
+                                margin_gate = 0.20
+                            margin_gate = max(0.20, margin_gate)
                             can_apply = bool(
                                 top.get("processor")
                                 and top.get("bitness") in {16, 32, 64}
                                 and str(top.get("endian") or "").lower() in {"little", "big"}
-                                and top_conf >= 0.55
-                                and margin >= 0.20
+                                and top_conf >= conf_gate
+                                and margin >= margin_gate
                             )
                             if can_apply:
                                 analysis_options["processor"] = top.get("processor")
@@ -8521,7 +8546,13 @@ class IDAMCPServer:
                         idx = asm._get_index(idb_path)
                         if getattr(idx, "size", 0) > 0:
                             q_vec = asm._embedder.embed(context_text[:500])
-                            hits = idx.search(q_vec, top_k=min(3, max(1, limit)), threshold=0.3)
+                            hits = idx.search(q_vec, top_k=max(6, min(9, max(1, limit) * 3)), threshold=0.0)
+                            if hits:
+                                vals = sorted(float(h.get("similarity") or 0.0) for h in hits)
+                                q50 = vals[len(vals) // 2]
+                                q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+                                gate = q50 + max(0.0, q75 - q50)
+                                hits = [h for h in hits if float(h.get("similarity") or 0.0) >= gate]
                             for h in hits:
                                 ea = str(h.get("ea") or "").strip()
                                 if not ea:
@@ -8606,7 +8637,13 @@ class IDAMCPServer:
                         idx = asm._get_index(idb_path)
                         if getattr(idx, "size", 0) > 0:
                             q_vec = asm._embedder.embed(context_text[:500])
-                            hits = idx.search(q_vec, top_k=limit, threshold=0.3)
+                            hits = idx.search(q_vec, top_k=max(limit * 3, 6), threshold=0.0)
+                            if hits:
+                                vals = sorted(float(h.get("similarity") or 0.0) for h in hits)
+                                q50 = vals[len(vals) // 2]
+                                q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+                                gate = q50 + max(0.0, q75 - q50)
+                                hits = [h for h in hits if float(h.get("similarity") or 0.0) >= gate]
                             known = {str(t.get("addr") or "") for t in merged}
                             for h in hits:
                                 ea = str(h.get("ea") or "").strip()
@@ -10230,7 +10267,7 @@ def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
                 return
             new_only = []
             for ea, vec in list(new_idx._cache.items())[:200]:
-                matches = old_idx.similar_vec(vec, top_k=1, threshold=0.75)
+                matches = old_idx.similar_vec(vec, top_k=1, threshold=0.0)
                 if not matches:
                     new_only.append(ea)
             if new_only:
