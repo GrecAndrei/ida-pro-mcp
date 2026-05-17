@@ -6282,7 +6282,21 @@ class IDAMCPServer:
                                 if inferred.get("endian"):
                                     analysis_options.setdefault("endian", inferred.get("endian"))
                         else:
-                            arch_meta["inference_applied"] = False
+                            # Ambiguous raw blobs can still have a strong top candidate.
+                            candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
+                            best = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+                            best_conf = float(best.get("confidence") or 0.0) if isinstance(best, dict) else 0.0
+                            best_proc = str(best.get("processor") or "").strip() if isinstance(best, dict) else ""
+                            # Guardrail against IDA defaults on raw blobs (e.g. metapc/64):
+                            # apply only if confidence is strong enough and processor is explicit.
+                            should_apply_best = bool(best_proc) and best_conf >= 0.55
+                            arch_meta["inference_applied"] = bool(should_apply_best)
+                            if should_apply_best:
+                                analysis_options["processor"] = best_proc
+                                if best.get("bitness") is not None:
+                                    analysis_options.setdefault("bitness", best.get("bitness"))
+                                if best.get("endian"):
+                                    analysis_options.setdefault("endian", best.get("endian"))
 
                 if not binary_path:
                     return make_error(
@@ -8771,42 +8785,52 @@ class IDAMCPServer:
         step_plan: list[dict] = []
         workflow_meta: dict = {"version": 1, "action": action, "profile": profile}
 
-        def _detect_firmware_mode() -> tuple[bool, str]:
+        def _detect_firmware_mode() -> tuple[bool, str, bool]:
             """Best-effort firmware detection with fallback to IDB metadata."""
             overview_failed = False
+            raw_binary_mode = False
             try:
                 overview = self._execute_tool("idb", {"action": "overview"})
                 if isinstance(overview, dict):
+                    arch_profile = overview.get("architecture_profile") if isinstance(overview.get("architecture_profile"), dict) else {}
+                    if isinstance(arch_profile, dict):
+                        raw_binary_mode = bool(arch_profile.get("raw_binary_mode", False))
                     if bool(overview.get("firmware_detected")):
-                        return True, "idb_overview"
+                        return True, "idb_overview", raw_binary_mode
                     # Keep overview as the authoritative trigger unless fallback
                     # can positively detect raw/firmware from explicit filetype metadata.
                     overview_trigger = "idb_overview"
                 else:
-                    return False, "idb_overview_non_dict"
+                    return False, "idb_overview_non_dict", raw_binary_mode
             except Exception:
                 overview_failed = True
             if overview_failed:
-                return False, "idb_overview_error"
+                return False, "idb_overview_error", raw_binary_mode
             try:
                 meta = self._execute_tool("idb", {"action": "meta"})
                 if isinstance(meta, dict):
-                    ft_name = str(meta.get("file_type") or meta.get("filetype") or "").strip().lower()
+                    ft_name = str(
+                        meta.get("file_type_effective")
+                        or meta.get("file_type")
+                        or meta.get("filetype")
+                        or ""
+                    ).strip().lower()
                     ft_id = meta.get("file_type_id")
+                    raw_binary_mode = raw_binary_mode or ft_name in {"raw", "unknown", "bin", "binary", ""}
                     if not ft_name and ft_id is None:
-                        return False, overview_trigger
+                        return False, overview_trigger, raw_binary_mode
                     if ft_name in {"raw", "unknown", "bin", "binary", ""}:
-                        return True, "idb_meta_filetype"
+                        return True, "idb_meta_filetype", raw_binary_mode
                     try:
                         ft_num = int(ft_id) if ft_id is not None else None
                     except Exception:
                         ft_num = None
                     if ft_num in {0, 17}:
-                        return True, "idb_meta_filetype"
-                    return False, overview_trigger
-                return False, overview_trigger
+                        return True, "idb_meta_filetype", raw_binary_mode
+                    return False, overview_trigger, raw_binary_mode
+                return False, overview_trigger, raw_binary_mode
             except Exception:
-                return False, overview_trigger
+                return False, overview_trigger, raw_binary_mode
 
         def _workflow_binary_stats() -> dict:
             """Best-effort stats used to gate fragile workflow steps."""
@@ -9500,7 +9524,7 @@ class IDAMCPServer:
                 "supports_dry_run": True,
             }
         elif action == "triage_fast":
-            firmware_detected, firmware_detected_trigger = _detect_firmware_mode()
+            firmware_detected, firmware_detected_trigger, raw_binary_mode = _detect_firmware_mode()
             wf_stats = _workflow_binary_stats()
             has_functions = int(wf_stats.get("functions", 0)) > 0
 
@@ -9524,11 +9548,12 @@ class IDAMCPServer:
                 },
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
             ]
-            if firmware_detected:
+            if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
                 step_plan.append({"name": "llm_helpers", "arguments": {"action": "guided_analysis"}})
-            workflow_meta["firmware_mode"] = "enabled" if firmware_detected else "disabled"
+            workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
+            workflow_meta["raw_binary_mode"] = raw_binary_mode
             workflow_meta["trigger"] = firmware_detected_trigger
             workflow_meta["has_functions"] = has_functions
         elif action == "malware_deep":
@@ -9550,7 +9575,7 @@ class IDAMCPServer:
                 {"name": "threat_hunt", "arguments": {"action": "vuln", "limit": limit, "profile": profile}},
             ]
         elif action == "recon_sweep":
-            firmware_detected, firmware_detected_trigger = _detect_firmware_mode()
+            firmware_detected, firmware_detected_trigger, raw_binary_mode = _detect_firmware_mode()
             wf_stats = _workflow_binary_stats()
             has_functions = int(wf_stats.get("functions", 0)) > 0
 
@@ -9575,11 +9600,12 @@ class IDAMCPServer:
                     },
                 },
             ]
-            if firmware_detected:
+            if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
                 step_plan.append({"name": "llm_helpers", "arguments": {"action": "guided_analysis"}})
-            workflow_meta["firmware_mode"] = "enabled" if firmware_detected else "disabled"
+            workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
+            workflow_meta["raw_binary_mode"] = raw_binary_mode
             workflow_meta["trigger"] = firmware_detected_trigger
             workflow_meta["has_functions"] = has_functions
         elif action == "patch_review":

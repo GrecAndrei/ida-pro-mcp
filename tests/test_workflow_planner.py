@@ -328,9 +328,13 @@ def test_workflow_triage_fast_non_firmware_skips_firmware_steps():
     server = IDAMCPServer()
     captured = {}
 
-    def _fake_execute(tool, _args):
-        if tool == "idb":
-            return {"firmware_detected": False}
+    def _fake_execute(tool, args):
+        if tool == "idb" and args.get("action") == "overview":
+            return {"firmware_detected": False, "architecture_profile": {"raw_binary_mode": False}}
+        if tool == "idb" and args.get("action") == "meta":
+            return {"file_type": "pe", "file_type_id": 11}
+        if tool == "idb" and args.get("action") == "summary":
+            return {"functions": 42, "imports": 10}
         return {}
 
     server._execute_tool = _fake_execute  # type: ignore[method-assign]
@@ -358,6 +362,40 @@ def test_workflow_triage_fast_non_firmware_skips_firmware_steps():
     calls = captured.get("calls", [])
     assert not any(c.get("name") == "firmware_view" for c in calls)
     assert not any(c.get("name") == "llm_helpers" and c.get("arguments", {}).get("action") == "guided_analysis" for c in calls)
+
+
+def test_workflow_triage_fast_raw_mode_includes_firmware_fallback():
+    server = IDAMCPServer()
+    captured = {}
+
+    def _fake_execute(tool, args):
+        if tool == "idb" and args.get("action") == "overview":
+            return {
+                "firmware_detected": False,
+                "architecture_profile": {"raw_binary_mode": True},
+            }
+        if tool == "idb" and args.get("action") == "summary":
+            return {"functions": 0, "imports": 0}
+        if tool == "idb" and args.get("action") == "meta":
+            return {"file_type": "obj", "file_type_effective": "raw", "file_type_id": 2}
+        return {}
+
+    server._execute_tool = _fake_execute  # type: ignore[method-assign]
+
+    def _fake_batch(args):
+        captured["calls"] = args.get("calls", [])
+        return {"ok": True, "calls": captured["calls"]}
+
+    server._handle_batch = _fake_batch  # type: ignore[method-assign]
+    result = server._handle_workflow({"action": "triage_fast", "limit": 5})
+    assert result.get("ok") is True
+    meta = result.get("workflow_meta", {})
+    assert isinstance(meta.get("firmware_detected"), bool)
+    assert meta.get("raw_binary_mode") is True
+    assert meta.get("firmware_mode") == "enabled"
+    calls = captured.get("calls", [])
+    assert any(c.get("name") == "firmware_view" for c in calls)
+    assert any(c.get("name") == "llm_helpers" and c.get("arguments", {}).get("action") == "guided_analysis" for c in calls)
 
 
 def test_workflow_patch_review_requires_addr():
@@ -455,9 +493,13 @@ def test_workflow_recon_sweep_includes_broad_steps():
     server = IDAMCPServer()
     captured = {}
 
-    def _fake_execute(tool, _args):
-        if tool == "idb":
-            return {"firmware_detected": False}
+    def _fake_execute(tool, args):
+        if tool == "idb" and args.get("action") == "overview":
+            return {"firmware_detected": False, "architecture_profile": {"raw_binary_mode": False}}
+        if tool == "idb" and args.get("action") == "meta":
+            return {"file_type": "pe", "file_type_id": 11}
+        if tool == "idb" and args.get("action") == "summary":
+            return {"functions": 24, "imports": 7}
         return {}
 
     server._execute_tool = _fake_execute  # type: ignore[method-assign]
