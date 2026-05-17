@@ -66,6 +66,29 @@ _SMART_MATCH_MODE_DEFAULTS = {
 }
 
 
+def _adaptive_fuzzy_cutoff(pattern: str, mode_default: float) -> float:
+    """
+    Derive fuzzy cutoff from query complexity/profile instead of fixed constants.
+    Higher-specificity queries get stricter cutoffs; short/noisy queries get looser.
+    """
+    toks = _semantic_tokenize(pattern)
+    if not toks:
+        return float(mode_default)
+    uniq = len(set(toks))
+    avg_len = sum(len(t) for t in toks) / max(1, len(toks))
+    has_path_chars = bool(re.search(r"[./\\:_-]", str(pattern or "")))
+    # Specificity signal in [0,1].
+    spec = (
+        min(1.0, uniq / max(1.0, uniq + 2.0))
+        + min(1.0, avg_len / 10.0)
+        + (0.15 if has_path_chars else 0.0)
+    ) / 2.15
+    # Map specificity to dynamic cutoff band and blend with mode default.
+    dynamic = 0.74 + (spec * 0.24)
+    blended = (float(mode_default) * 0.6) + (dynamic * 0.4)
+    return max(0.6, min(0.99, blended))
+
+
 def _resolve_optional_param(provided, default):
     return default if provided is None else provided
 
@@ -229,9 +252,12 @@ def compile_smart_pattern(
     use_semantic = bool(
         _resolve_optional_param(semantic_enabled, defaults["semantic_enabled"])
     )
-    use_cutoff = float(
-        _resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"])
-    )
+    raw_cutoff = _resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"])
+    # Preserve explicit caller override; otherwise derive adaptive cutoff from pattern.
+    if fuzzy_cutoff is None:
+        use_cutoff = _adaptive_fuzzy_cutoff(str(pattern or ""), float(raw_cutoff))
+    else:
+        use_cutoff = float(raw_cutoff)
     use_cutoff = max(0.0, min(1.0, use_cutoff))
     return _compile_smart_pattern_cached(
         pattern, case_sensitive, use_semantic, use_cutoff
