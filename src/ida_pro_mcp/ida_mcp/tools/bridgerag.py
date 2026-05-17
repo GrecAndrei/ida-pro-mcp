@@ -33,6 +33,14 @@ if "idawrite" not in globals():
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
+try:
+    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+except Exception:
+    try:
+        from host.intelligence import BgeCodeEmbedder  # type: ignore
+    except Exception:
+        BgeCodeEmbedder = None  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # SchemaBoot DB helpers (reused from schemaboot to avoid import issues)
@@ -128,6 +136,18 @@ class BridgeRAGSearch:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = _resolve_schemaboot_db_path(db_path)
+        self._embedder = None
+
+    def _get_embedder(self):
+        if self._embedder is not None:
+            return self._embedder
+        if BgeCodeEmbedder is None:
+            return None
+        try:
+            self._embedder = BgeCodeEmbedder()
+        except Exception:
+            self._embedder = None
+        return self._embedder
 
     def _conn(self):
         return sqlite3.connect(self.db_path)
@@ -272,43 +292,43 @@ class BridgeRAGSearch:
 
         Returns score in [0, 1].
         """
-        import math as _math
-        idf = idf_weights or {}
+        # Embedding-first scoring over structured bridge/context summaries.
+        seed_apis = " ".join(seed_attrs.get("apis", []) or [])
+        seed_strings = " ".join(seed_attrs.get("strings", []) or [])
+        bridge_apis = " ".join(bridge_attrs.get("apis", []) or [])
+        bridge_strings = " ".join(bridge_attrs.get("strings", []) or [])
+        cand_apis = " ".join(candidate_attrs.get("apis", []) or [])
+        cand_strings = " ".join(candidate_attrs.get("strings", []) or [])
 
-        bridge_apis    = set(bridge_attrs.get("apis", []))
-        bridge_strings = set(bridge_attrs.get("strings", []))
-        cand_apis      = set(candidate_attrs.get("apis", []))
-        cand_strings   = set(candidate_attrs.get("strings", []))
+        seed_text = (
+            f"name={seed_attrs.get('name','')} segment={seed_attrs.get('segment','')} "
+            f"size={seed_attrs.get('size',0)} cc={seed_attrs.get('cyclomatic_complexity',0)} "
+            f"apis={seed_apis} strings={seed_strings} bridges={bridge_apis} {bridge_strings}"
+        )
+        cand_text = (
+            f"name={candidate_attrs.get('name','')} segment={candidate_attrs.get('segment','')} "
+            f"size={candidate_attrs.get('size',0)} cc={candidate_attrs.get('cyclomatic_complexity',0)} "
+            f"apis={cand_apis} strings={cand_strings}"
+        )
 
-        shared_apis    = bridge_apis & cand_apis
-        shared_strings = bridge_strings & cand_strings
+        embedder = self._get_embedder()
+        if embedder is not None:
+            try:
+                sv = embedder.embed(seed_text[:1200])
+                cv = embedder.embed(cand_text[:1200])
+                sim = float(BgeCodeEmbedder.cosine(sv, cv))
+                return max(0.0, min(1.0, sim))
+            except Exception:
+                pass
 
-        # IDF-weighted coverage: sum(IDF(b)) for each shared bridge entity
-        api_score    = sum(idf.get(a, 1.0) for a in shared_apis)
-        string_score = sum(idf.get(s, 1.0) for s in shared_strings) * 0.6
-
-        # Normalize by the maximum possible IDF mass for these bridges
-        max_idf = sum(idf.values()) if idf else max(len(bridge_apis) + len(bridge_strings), 1)
-        bridge_component = (api_score + string_score) / max(max_idf, 1.0)
-
-        # Structural similarity (smaller but still contributes)
-        seed_size = seed_attrs.get("size", 0)
-        cand_size = candidate_attrs.get("size", 0)
-        size_sim = 0.0
-        if seed_size > 0 and cand_size > 0:
-            size_sim = min(seed_size, cand_size) / max(seed_size, cand_size)
-
-        seed_cc = seed_attrs.get("cyclomatic_complexity", 1)
-        cand_cc = candidate_attrs.get("cyclomatic_complexity", 1)
-        cc_sim = min(seed_cc, cand_cc) / max(seed_cc, cand_cc) if seed_cc > 0 else 0.0
-
-        seg_bonus = 0.05 if seed_attrs.get("segment") == candidate_attrs.get("segment") else 0.0
-
-        structural = (size_sim + cc_sim) * 0.1 + seg_bonus
-
-        # Combine: bridge coverage dominates (0.85 weight), structure is secondary
-        score = 0.85 * bridge_component + 0.15 * structural
-        return min(score, 1.0)
+        # Deterministic fallback: Jaccard on bridge/entity tokens (no weighted heuristics).
+        s_tokens = set((seed_apis + " " + seed_strings + " " + bridge_apis + " " + bridge_strings).split())
+        c_tokens = set((cand_apis + " " + cand_strings).split())
+        if not s_tokens or not c_tokens:
+            return 0.0
+        inter = len(s_tokens.intersection(c_tokens))
+        union = len(s_tokens.union(c_tokens))
+        return float(inter) / float(max(1, union))
 
     def _pit_fusion(
         self,
@@ -449,10 +469,8 @@ class BridgeRAGSearch:
                 seed_attrs, seed_attrs, cand_attrs, idf_weights=idf_weights
             ) if seed_attrs else 0.5
             
-            # Bridge overlap score
+            # Bridge overlap count for observability (not used for ranking).
             bscore = bridge_scores.get(ea, 0.0)
-            bscore += row[7] * 0.1  # cyclomatic complexity bonus
-            bscore += row[8] * 0.05  # api count bonus
             
             candidates.append({
                 "ea": hex(ea),
