@@ -4,6 +4,35 @@ import math
 import hashlib
 from typing import Dict, List
 
+def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
+    if not vals:
+        return float(default)
+    s = sorted(float(v) for v in vals)
+    if len(s) == 1:
+        return s[0]
+    i = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
+    i = max(0, min(len(s) - 1, i))
+    return float(s[i])
+
+
+def _robust_norm(v: float, samples: List[float], default_span: float = 1.0) -> float:
+    """
+    Robustly normalize value around median / IQR.
+    Produces smooth [0,1] with no brittle fixed thresholds.
+    """
+    if not samples:
+        span = max(1e-6, float(default_span))
+        x = max(0.0, min(1.0, float(v) / span))
+        return x
+    q25 = _quantile(samples, 0.25, default=0.0)
+    q50 = _quantile(samples, 0.50, default=0.0)
+    q75 = _quantile(samples, 0.75, default=1.0)
+    iqr = max(1e-6, q75 - q25)
+    z = (float(v) - q50) / iqr
+    # Logistic squashing for stability.
+    z = max(-60.0, min(60.0, z))
+    return 1.0 / (1.0 + math.exp(-z))
+
 
 def shannon_entropy(byte_hist: List[int], total: int) -> float:
     if total <= 0:
@@ -100,14 +129,21 @@ def build_carve_plan(region_stats: Dict, ptr_count: int, table_count: int) -> Di
         "priority": "medium" if unknown_ratio > 0.2 else "low",
     })
 
+    risk_signal = (
+        min(1.0, max(0.0, entropy / 8.0))
+        + max(0.0, min(1.0, unknown_ratio))
+        + min(1.0, (ptr_count + table_count) / max(1.0, ptr_count + table_count + 6.0))
+    ) / 3.0
+    # Continuous risk score with deterministic bucketization.
     risk = "low"
-    if entropy >= 7.2:
+    if risk_signal >= 0.67:
         risk = "high"
-    elif entropy >= 6.0 or unknown_ratio >= 0.45:
+    elif risk_signal >= 0.34:
         risk = "medium"
 
     return {
         "risk": risk,
+        "risk_score": round(float(risk_signal), 4),
         "unknown_ratio": round(unknown_ratio, 3),
         "entropy": round(entropy, 3),
         "ptr_count": int(ptr_count),
@@ -122,21 +158,22 @@ def region_priority_score(profile: Dict, plan: Dict, cluster_count: int = 0) -> 
     entropy = float(profile.get("entropy") or 0.0)
     ptr_density = float(profile.get("pointer_density") or 0.0)
     ascii_runs = int(profile.get("ascii_runs") or 0)
-    risk = str(plan.get("risk") or "low")
-    risk_boost = 0.0
-    if risk == "high":
-        risk_boost = 0.35
-    elif risk == "medium":
-        risk_boost = 0.18
-    score = (
-        unknown_ratio * 0.28
-        + min(1.0, entropy / 8.0) * 0.24
-        + min(1.0, ptr_density * 3.0) * 0.22
-        + min(1.0, cluster_count / 12.0) * 0.16
-        + min(1.0, ascii_runs / 20.0) * 0.10
-        + risk_boost
-    )
-    return round(min(1.99, score), 4)
+    risk_score = float(plan.get("risk_score") or 0.0)
+    feats = [
+        max(0.0, min(1.0, unknown_ratio)),
+        max(0.0, min(1.0, entropy / 8.0)),
+        max(0.0, min(1.0, ptr_density)),
+        max(0.0, min(1.0, cluster_count / max(1.0, cluster_count + 8.0))),
+        max(0.0, min(1.0, ascii_runs / max(1.0, ascii_runs + 10.0))),
+        max(0.0, min(1.0, risk_score)),
+    ]
+    # Geometric mean discourages one-metric domination.
+    g = 1.0
+    for f in feats:
+        g *= max(1e-6, f)
+    score = g ** (1.0 / len(feats))
+    # Expand upper range slightly for ranking headroom.
+    return round(min(1.99, score * 1.99), 4)
 
 
 def rank_region_plans(items: List[Dict], limit: int = 12) -> List[Dict]:
@@ -290,14 +327,19 @@ def aggregate_fingerprint_scores(rows: List[Dict], limit: int = 24) -> List[Dict
         fail = int(v.get("failure") or 0)
         sr = succ / max(1, succ + fail) if (succ + fail) > 0 else 0.5
         v["success_rate"] = round(sr, 4)
-        v["score"] = round(
-            v["avg_priority"] * 0.62
-            + float(v["max_priority"]) * 0.18
-            + min(1.0, v["count"] / 10.0) * 0.08
-            + sr * 0.12,
-            4,
-        )
         out.append(v)
+    if not out:
+        return []
+    avg_vals = [float(x.get("avg_priority") or 0.0) for x in out]
+    max_vals = [float(x.get("max_priority") or 0.0) for x in out]
+    cnt_vals = [float(x.get("count") or 0.0) for x in out]
+    suc_vals = [float(x.get("success_rate") or 0.0) for x in out]
+    for v in out:
+        s_avg = _robust_norm(float(v.get("avg_priority") or 0.0), avg_vals, default_span=1.0)
+        s_max = _robust_norm(float(v.get("max_priority") or 0.0), max_vals, default_span=1.0)
+        s_cnt = _robust_norm(float(v.get("count") or 0.0), cnt_vals, default_span=4.0)
+        s_suc = _robust_norm(float(v.get("success_rate") or 0.0), suc_vals, default_span=1.0)
+        v["score"] = round((s_avg + s_max + s_cnt + s_suc) / 4.0, 4)
     out.sort(key=lambda x: (x["score"], x["count"]), reverse=True)
     return out[: max(1, int(limit))]
 
@@ -307,13 +349,16 @@ def apply_fingerprint_boost(regions: List[Dict], fp_rank: List[Dict], boost_cap:
     if not regions or not fp_rank:
         return list(regions)
     fp_map = {str(x.get("fingerprint")): float(x.get("score") or 0.0) for x in fp_rank if x.get("fingerprint")}
+    score_vals = list(fp_map.values())
     out = []
     for r in regions:
         nr = dict(r)
         fp = str(nr.get("fingerprint") or "")
         base = float(nr.get("priority_score") or 0.0)
         signal = fp_map.get(fp, 0.0)
-        boost = min(boost_cap, signal * 0.22)
+        signal_norm = _robust_norm(signal, score_vals, default_span=1.0)
+        dynamic_cap = max(0.0, float(boost_cap))
+        boost = dynamic_cap * signal_norm
         if boost > 0:
             nr["priority_boost"] = round(boost, 4)
             nr["priority_score"] = round(base + boost, 4)
