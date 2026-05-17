@@ -2,7 +2,7 @@
 
 VOERA Architecture:
 - Context Density Optimization: compact output, line clipping
-- Neuro-Symbolic Governance: semantic target resolution with thresholds
+- Neuro-Symbolic Governance: embedding-first semantic target resolution
 - Structured Semantic Retrieval: schema helpers
 """
 
@@ -394,7 +394,7 @@ def resolve_target(
     except Exception:
         pass
 
-    # Slow path: fuzzy matching
+    # Slow path: semantic matching
     matcher = compile_smart_pattern(target, case_sensitive=False)
     prelim = []
     max_candidates = 512
@@ -437,7 +437,6 @@ def resolve_target(
         final_score = semantic_score(target, raw_name, substring_bonus=SCORE_SUBSTRING)
         if raw_name.lower() == target.lower():
             final_score += 45.0 if kind == "import" else 40.0
-        final_score += min(xref_count_limited(cand_ea, 64), 64)
         ranked.append((final_score, cand_ea, display_name, kind, module_name))
 
     ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
