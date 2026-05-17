@@ -147,12 +147,15 @@ def idb_meta():
     # File type
     file_type = _inf_filetype_id()
     
-    return {
+    out = {
         "binary_path": binary_path,
         "idb_path": idb_path,
         "processor": _inf_procname(),
+        "procname": _inf_procname(),
         "bitness": _inf_bitness(),
+        "bits": _inf_bitness(),
         "file_type": _filetype_name(file_type),
+        "filetype": file_type,
         "file_type_id": file_type,
         "compiler": compiler_names.get(comp, f"compiler_{comp}"),
         "image_base": hex(_safe_inf_get("baseaddr", 0)),
@@ -165,6 +168,16 @@ def idb_meta():
         "is_dll": ida_ida.inf_is_dll() if hasattr(ida_ida, "inf_is_dll") else None,
         "is_be": ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else None,
     }
+    try:
+        inferred = infer_binary_arch_profile(binary_path) if callable(infer_binary_arch_profile) else {}
+    except Exception:
+        inferred = {}
+    if isinstance(inferred, dict):
+        out["inferred_file_kind"] = inferred.get("file_kind")
+        if out.get("file_type") == "obj" and inferred.get("file_kind") == "raw":
+            out["file_type_effective"] = "raw"
+            out["file_type_note"] = "IDA loader reports obj for plain binaries; effective kind is raw."
+    return out
 
 @idaread
 def idb_segments_detailed():

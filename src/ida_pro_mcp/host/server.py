@@ -8807,6 +8807,19 @@ class IDAMCPServer:
                 return False, overview_trigger
             except Exception:
                 return False, overview_trigger
+
+        def _workflow_binary_stats() -> dict:
+            """Best-effort stats used to gate fragile workflow steps."""
+            try:
+                s = self._execute_tool("idb", {"action": "summary"})
+                if isinstance(s, dict):
+                    return {
+                        "functions": int(s.get("functions", 0) or 0),
+                        "imports": int(s.get("imports", 0) or 0),
+                    }
+            except Exception:
+                pass
+            return {"functions": 0, "imports": 0}
         if action == "audit_plan":
             calls_in = args.get("planned_calls")
             calls_raw: list = []
@@ -9488,15 +9501,27 @@ class IDAMCPServer:
             }
         elif action == "triage_fast":
             firmware_detected, firmware_detected_trigger = _detect_firmware_mode()
+            wf_stats = _workflow_binary_stats()
+            has_functions = int(wf_stats.get("functions", 0)) > 0
 
             step_plan = [
                 {"name": "idb", "arguments": {"action": "overview"}},
                 {"name": "idb", "arguments": {"action": "meta"}},
                 {"name": "data", "arguments": {"action": "functions", "count": limit}},
                 {"name": "data", "arguments": {"action": "imports", "count": limit}},
-                {"name": "search", "arguments": {"action": "nl", "query": "entrypoint parser auth decode crypto", "limit": limit}},
+                {"name": "search", "arguments": {"action": "nl" if has_functions else "find", "query": "entrypoint parser auth decode crypto", "limit": limit}},
                 {"name": "string_ops", "arguments": {"action": "find_urls", "limit": limit}},
-                {"name": "threat_hunt", "arguments": {"action": "quick", "limit": limit, "profile": profile}},
+                {
+                    "name": "threat_hunt",
+                    "arguments": {
+                        "action": "run",
+                        "limit": limit,
+                        "profile": profile,
+                        "include_vuln": True,
+                        "include_malware": True,
+                        "include_tracing": True,
+                    },
+                },
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
             ]
             if firmware_detected:
@@ -9505,6 +9530,7 @@ class IDAMCPServer:
             workflow_meta["firmware_mode"] = "enabled" if firmware_detected else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
             workflow_meta["trigger"] = firmware_detected_trigger
+            workflow_meta["has_functions"] = has_functions
         elif action == "malware_deep":
             step_plan = [
                 {"name": "string_ops", "arguments": {"action": "find_c2", "limit": limit}},
@@ -9525,17 +9551,29 @@ class IDAMCPServer:
             ]
         elif action == "recon_sweep":
             firmware_detected, firmware_detected_trigger = _detect_firmware_mode()
+            wf_stats = _workflow_binary_stats()
+            has_functions = int(wf_stats.get("functions", 0)) > 0
 
             step_plan = [
                 {"name": "idb", "arguments": {"action": "overview"}},
                 {"name": "idb", "arguments": {"action": "meta"}},
                 {"name": "data", "arguments": {"action": "functions", "count": limit}},
-                {"name": "search", "arguments": {"action": "nl", "query": "dispatcher parser crypto network auth", "limit": limit}},
+                {"name": "search", "arguments": {"action": "nl" if has_functions else "find", "query": "dispatcher parser crypto network auth", "limit": limit}},
                 {"name": "search", "arguments": {"action": "structured", "limit": limit}},
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
                 {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
                 {"name": "summarize", "arguments": {"action": "security_posture", "max_items": limit}},
-                {"name": "threat_hunt", "arguments": {"action": "quick", "limit": limit, "profile": profile}},
+                {
+                    "name": "threat_hunt",
+                    "arguments": {
+                        "action": "run",
+                        "limit": limit,
+                        "profile": profile,
+                        "include_vuln": True,
+                        "include_malware": True,
+                        "include_tracing": True,
+                    },
+                },
             ]
             if firmware_detected:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
@@ -9543,6 +9581,7 @@ class IDAMCPServer:
             workflow_meta["firmware_mode"] = "enabled" if firmware_detected else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
             workflow_meta["trigger"] = firmware_detected_trigger
+            workflow_meta["has_functions"] = has_functions
         elif action == "patch_review":
             if not addr:
                 return make_error(

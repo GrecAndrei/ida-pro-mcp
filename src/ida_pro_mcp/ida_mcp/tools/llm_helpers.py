@@ -828,6 +828,9 @@ def llm_helpers(
         if expansion_result is not None:
             return expansion_result
 
+        # Compatibility shim: older guided paths referenced `info` directly.
+        info = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+
         if action == "bootstrap":
             calls = [
                 "ida://state",
