@@ -390,11 +390,11 @@ def search(
                                       "or run schemaboot(action='ingest').")
                 # Embed the query and search (with lightweight embedding-driven expansion).
                 q_vec = asm._embedder.embed(actual_pattern)
-                results_raw = idx.search(q_vec, top_k=limit, threshold=0.3)
+                results_raw = idx.search(q_vec, top_k=max(6, limit * 3), threshold=0.0)
                 expansion_queries = []
                 try:
                     classifier = asm._behavior_classifier()
-                    q_hits = classifier.classify(actual_pattern[:600], threshold=0.35, top_k=3, block=False)
+                    q_hits = classifier.classify(actual_pattern[:600], threshold=0.0, top_k=4, block=False)
                     expansion_queries = [
                         str(h.get("behavior") or "").strip().replace("_", " ")
                         for h in q_hits
@@ -413,7 +413,7 @@ def search(
                     for extra_q in expansion_queries[:3]:
                         try:
                             extra_vec = asm._embedder.embed(extra_q)
-                            extra_hits = idx.search(extra_vec, top_k=max(3, limit // 2), threshold=0.28)
+                            extra_hits = idx.search(extra_vec, top_k=max(3, limit), threshold=0.0)
                         except Exception:
                             continue
                         for h in extra_hits:
@@ -435,7 +435,15 @@ def search(
                         merged_by_ea.values(),
                         key=lambda x: float(x.get("similarity") or 0.0),
                         reverse=True,
-                    )[:limit]
+                    )
+                sims = [float(r.get("similarity") or 0.0) for r in results_raw]
+                if sims:
+                    ss = sorted(sims)
+                    q50 = ss[len(ss) // 2]
+                    q75 = ss[min(len(ss) - 1, int(round((len(ss) - 1) * 0.75)))]
+                    gate = q50 + max(0.0, q75 - q50)
+                    filtered = [r for r in results_raw if float(r.get("similarity") or 0.0) >= gate]
+                    results_raw = (filtered or results_raw)[:limit]
                 rows = []
                 for r in results_raw:
                     ea_str = r.get("ea", "")
@@ -495,7 +503,13 @@ def search(
                             if not cfunc:
                                 continue
                             pseudo = str(cfunc)[:2000]
-                            hits = classifier.classify(pseudo, threshold=0.4, top_k=3, block=False)
+                            hits = classifier.classify(pseudo, threshold=0.0, top_k=5, block=False)
+                            if hits:
+                                hs = sorted(float(h.get("score", 0.0) or 0.0) for h in hits)
+                                q50 = hs[len(hs) // 2]
+                                q75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
+                                gate = q50 + max(0.0, q75 - q50)
+                                hits = [h for h in hits if float(h.get("score", 0.0) or 0.0) >= gate]
                             if any(h.get("behavior", "").lower() == tag for h in hits):
                                 rows.append({
                                     "addr": hex(func_ea),

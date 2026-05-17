@@ -369,11 +369,17 @@ def classify(
                         from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
                     embedder = BgeCodeEmbedder()
                     classifier = BehaviorClassifier.instance(embedder)
-                    behavior_tags = classifier.classify(pseudo, threshold=0.35, top_k=4)
-                    # If classifier gives a high-confidence result, prefer it over heuristic
-                    if behavior_tags and behavior_tags[0]["confidence"] >= 0.55:
-                        cat = behavior_tags[0]["behavior"]
-                        confidence = "high"
+                    behavior_tags = classifier.classify(pseudo, threshold=0.0, top_k=6)
+                    if behavior_tags:
+                        scores = sorted(float(h.get("confidence") or h.get("score") or 0.0) for h in behavior_tags)
+                        q50 = scores[len(scores) // 2]
+                        q75 = scores[min(len(scores) - 1, int(round((len(scores) - 1) * 0.75)))]
+                        gate = q50 + max(0.0, q75 - q50)
+                        strong = [h for h in behavior_tags if float(h.get("confidence") or h.get("score") or 0.0) >= gate]
+                        if strong:
+                            behavior_tags = strong
+                            cat = behavior_tags[0]["behavior"]
+                            confidence = "high"
             except Exception:
                 pass
 
@@ -466,9 +472,15 @@ def classify(
                     try:
                         cfunc = ida_hexrays.decompile(ea)
                         if cfunc:
-                            hits = _classifier.classify(str(cfunc)[:2000], threshold=0.4, top_k=1, block=False)
-                            if hits and hits[0].get("score", 0) >= 0.4:
-                                cat = hits[0]["behavior"]
+                            hits = _classifier.classify(str(cfunc)[:2000], threshold=0.0, top_k=3, block=False)
+                            if hits:
+                                hs = sorted(float(h.get("score", 0.0) or 0.0) for h in hits)
+                                q50 = hs[len(hs) // 2]
+                                q75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
+                                gate = q50 + max(0.0, q75 - q50)
+                                filtered = [h for h in hits if float(h.get("score", 0.0) or 0.0) >= gate]
+                                if filtered:
+                                    cat = filtered[0]["behavior"]
                     except Exception:
                         pass
                 distribution[cat] = distribution.get(cat, 0) + 1
