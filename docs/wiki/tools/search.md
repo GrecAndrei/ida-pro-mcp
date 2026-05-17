@@ -9,7 +9,7 @@ Search the binary for bytes, strings, patterns, names, instructions, xrefs, and 
 | `nl` | Natural language search via bge-code-v1 embeddings | "function that parses HTTP headers" |
 | `behavior` | Find functions by behavior tag (BehaviorClassifier) | "find all crypto functions" |
 | `find` | Smart unified search (names/strings/imports/instructions) | General purpose |
-| `semantic` | NL search with heuristic scoring | Faster than nl, less accurate |
+| `semantic` | NL search with embedding-aware ranking | Faster than nl, less accurate |
 | `smart_bundle` | Fused `find` + `semantic` with deduped items | Broad first-pass retrieval |
 | `api` | Find all usages of an imported API | "where is recv called?" |
 | `decompiled` | Search pseudocode across all functions | "find memcpy with no length check" |
@@ -44,7 +44,7 @@ Primary: L1 insight index (fast). Secondary: BehaviorClassifier on unnamed funct
 Common tags: `crypto_symmetric`, `network_http`, `network_socket`, `file_io`, `memory_alloc`, `process_exec`, `anti_analysis`, `persistence`, `credential_access`.
 
 ### semantic
-NL search with heuristic string-level scoring (faster than `nl`, less accurate).
+NL search with lightweight embedding-aware ranking (faster than `nl`, less accurate).
 
 ```json
 {"name": "search", "arguments": {"action": "semantic", "query": "packet parser", "limit": 20}}

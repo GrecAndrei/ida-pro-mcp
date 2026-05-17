@@ -18,4 +18,4 @@ Navigates the IDA cursor and finds interesting locations.
 
 ## Notes
 - `semantic_goto` uses function names, strings, and comments to find the best match.
-- `interesting` returns addresses ranked by heuristic significance.
+- `interesting` returns addresses ranked by significance signals from analysis context.

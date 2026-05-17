@@ -47,7 +47,7 @@ Writes peripheral map to blackboard as IOC entries (`ioc_type='mmio_input'`). Re
 Scan a memory region for structure hints. Params: `start`, `end`.
 
 ### auto_retype
-Automatically retype a region based on heuristics. Params: `start`, `end`.
+Automatically retype a region based on deterministic region signals. Params: `start`, `end`.
 
 ### pointer_sweep
 Sweep a region for valid pointers. Params: `start`, `end`.
