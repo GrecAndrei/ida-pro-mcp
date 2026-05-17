@@ -786,13 +786,23 @@ def trace_analysis(
                             if prev_dist < 32 or next_dist < 32:
                                 t["timing_loop"] = True
 
-            confidence = "low"
             api_families = len([f for f in findings if f.get("type") == "api"])
             insn_families = len([f for f in findings if f.get("type") != "api"])
-            if api_families >= 3 or insn_families >= 5:
+            total_indicators = api_families + insn_families
+            # Adaptive confidence from observed indicator balance/intensity.
+            api_ratio = (api_families / total_indicators) if total_indicators > 0 else 0.0
+            insn_ratio = (insn_families / total_indicators) if total_indicators > 0 else 0.0
+            confidence_signal = (
+                min(1.0, total_indicators / max(1.0, total_indicators + 4.0))
+                + api_ratio
+                + insn_ratio
+            ) / 3.0
+            if confidence_signal >= 0.67:
                 confidence = "high"
-            elif api_families >= 1 or insn_families >= 2:
+            elif confidence_signal >= 0.34:
                 confidence = "medium"
+            else:
+                confidence = "low"
 
             return {
                 "ok": True,
@@ -818,15 +828,32 @@ def trace_analysis(
             if not trace_list:
                 return {"ok": True, "regions": [], "note": "No trace data loaded."}
             window = max(16, int(kwargs.get("window", 64)))
-            threshold = float(kwargs.get("threshold", 6.5))
             regions = _windowed_entropy(trace_list, window=window)
-            high_entropy = [r for r in regions if r.get("insn_entropy", 0) >= threshold or r.get("addr_entropy", 0) >= threshold]
+            insn_vals = sorted(float(r.get("insn_entropy", 0.0) or 0.0) for r in regions)
+            addr_vals = sorted(float(r.get("addr_entropy", 0.0) or 0.0) for r in regions)
+            if regions:
+                iq = int(round((len(regions) - 1) * 0.75))
+                mq = len(regions) // 2
+                insn_q50 = insn_vals[mq]
+                insn_q75 = insn_vals[min(len(insn_vals) - 1, iq)]
+                addr_q50 = addr_vals[mq]
+                addr_q75 = addr_vals[min(len(addr_vals) - 1, iq)]
+                default_gate = max(insn_q50 + max(0.0, insn_q75 - insn_q50), addr_q50 + max(0.0, addr_q75 - addr_q50))
+            else:
+                default_gate = 0.0
+            threshold = float(kwargs.get("threshold", default_gate))
+            high_entropy = [
+                r for r in regions
+                if float(r.get("insn_entropy", 0) or 0.0) >= threshold
+                or float(r.get("addr_entropy", 0) or 0.0) >= threshold
+            ]
             # Sort by combined entropy
             high_entropy.sort(key=lambda x: x.get("insn_entropy", 0) + x.get("addr_entropy", 0), reverse=True)
             return {
                 "ok": True,
                 "window": window,
                 "threshold": threshold,
+                "adaptive_threshold": round(default_gate, 3),
                 "regions": regions[:500],
                 "high_entropy_regions": high_entropy[:100],
                 "high_entropy_count": len(high_entropy),
