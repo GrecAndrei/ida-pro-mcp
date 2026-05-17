@@ -6305,8 +6305,10 @@ class IDAMCPServer:
                             if inferred.get("endian"):
                                 analysis_options.setdefault("endian", inferred.get("endian"))
                         else:
-                            # For ambiguous raw blobs, auto-apply only when top-vs-next confidence
-                            # separation is strong enough to avoid preserving IDA's metapc defaults.
+                            # For raw blobs with no deterministic header/vector-table, apply the
+                            # top-ranked candidate. Any heuristic recommendation beats IDA's
+                            # metapc/64 default on a raw binary. Gate only on the candidate
+                            # having valid processor/bitness/endian fields.
                             candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
                             top = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
                             nxt = candidates[1] if len(candidates) > 1 and isinstance(candidates[1], dict) else {}
@@ -6319,44 +6321,18 @@ class IDAMCPServer:
                             except Exception:
                                 next_conf = 0.0
                             margin = max(0.0, top_conf - next_conf)
-                            conf_vals = []
-                            try:
-                                conf_vals = sorted(
-                                    float(c.get("confidence", 0.0) or 0.0)
-                                    for c in candidates
-                                    if isinstance(c, dict)
-                                )
-                            except Exception:
-                                conf_vals = []
-                            if conf_vals:
-                                q50 = conf_vals[len(conf_vals) // 2]
-                                q75 = conf_vals[min(len(conf_vals) - 1, int(round((len(conf_vals) - 1) * 0.75)))]
-                                conf_gate = q50 + max(0.0, q75 - q50)
-                            else:
-                                conf_gate = 0.55
-                            conf_gate = max(0.55, conf_gate)
-                            if len(conf_vals) >= 2:
-                                delta_vals = [max(0.0, conf_vals[i] - conf_vals[i + 1]) for i in range(len(conf_vals) - 1)]
-                                delta_vals = sorted(delta_vals)
-                                dq50 = delta_vals[len(delta_vals) // 2]
-                                dq75 = delta_vals[min(len(delta_vals) - 1, int(round((len(delta_vals) - 1) * 0.75)))]
-                                margin_gate = dq50 + max(0.0, dq75 - dq50)
-                            else:
-                                margin_gate = 0.20
-                            margin_gate = max(0.20, margin_gate)
                             can_apply = bool(
                                 top.get("processor")
                                 and top.get("bitness") in {16, 32, 64}
                                 and str(top.get("endian") or "").lower() in {"little", "big"}
-                                and top_conf >= conf_gate
-                                and margin >= margin_gate
+                                and inferred.get("file_kind") == "raw"
                             )
                             if can_apply:
                                 analysis_options["processor"] = top.get("processor")
                                 analysis_options.setdefault("bitness", top.get("bitness"))
                                 analysis_options.setdefault("endian", top.get("endian"))
                                 arch_meta["inference_applied"] = True
-                                arch_meta["inference_apply_reason"] = "strong_top_candidate"
+                                arch_meta["inference_apply_reason"] = "raw_binary_top_candidate"
                                 arch_meta["inference_apply_confidence"] = round(top_conf, 3)
                                 arch_meta["inference_apply_margin"] = round(margin, 3)
                             else:

@@ -162,9 +162,20 @@ def idb_meta():
     compiler_names = {0: "unknown", 1: "visual_c", 2: "borland", 3: "watcom", 
                       6: "gnu", 7: "visual_cxx", 8: "bp", 9: "clang"}
     
-    # File type
-    file_type = _inf_filetype_id()
-    
+    # File type — resolve effective kind (raw vs obj discrepancy).
+    file_type_id = _inf_filetype_id()
+    ft_loader = _filetype_name(file_type_id)
+    ft_effective = ft_loader
+    ft_note = None
+    try:
+        inferred = infer_binary_arch_profile(binary_path) if callable(infer_binary_arch_profile) else {}
+    except Exception:
+        inferred = {}
+    inferred_file_kind = inferred.get("file_kind") if isinstance(inferred, dict) else None
+    if ft_loader == "obj" and inferred_file_kind == "raw":
+        ft_effective = "raw"
+        ft_note = "IDA loader reports obj for plain binaries; effective kind is raw."
+
     out = {
         "binary_path": binary_path,
         "idb_path": idb_path,
@@ -172,8 +183,12 @@ def idb_meta():
         "procname": _inf_procname(),
         "bitness": _inf_bitness(),
         "bits": _inf_bitness(),
-        "file_type": _filetype_name(file_type),
-        "file_type_id": file_type,
+        "file_type_info": {
+            "loader": ft_loader,
+            "loader_id": file_type_id,
+            "effective": ft_effective,
+            "note": ft_note,
+        },
         "compiler": compiler_names.get(comp, f"compiler_{comp}"),
         "image_base": hex(_safe_inf_get("baseaddr", 0)),
         "min_ea": hex(min_ea) if min_ea else None,
@@ -185,23 +200,6 @@ def idb_meta():
         "is_dll": ida_ida.inf_is_dll() if hasattr(ida_ida, "inf_is_dll") else None,
         "is_be": ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else None,
     }
-    try:
-        inferred = infer_binary_arch_profile(binary_path) if callable(infer_binary_arch_profile) else {}
-    except Exception:
-        inferred = {}
-    if isinstance(inferred, dict):
-        out["inferred_file_kind"] = inferred.get("file_kind")
-        effective = str(inferred.get("file_kind") or "").strip().lower()
-        if out.get("file_type") == "obj" and inferred.get("file_kind") == "raw":
-            out["file_type_effective"] = "raw"
-            out["file_type_note"] = "IDA loader reports obj for plain binaries; effective kind is raw."
-            effective = "raw"
-        out["file_type_info"] = {
-            "loader": out.get("file_type"),
-            "loader_id": out.get("file_type_id"),
-            "effective": effective or out.get("file_type"),
-            "note": out.get("file_type_note"),
-        }
     return out
 
 @idaread
@@ -403,18 +401,21 @@ def idb_architecture_profile(meta=None, summary=None):
         except Exception:
             inferred = {}
 
+    ft_info = meta.get("file_type_info") if isinstance(meta.get("file_type_info"), dict) else {}
+    # Prefer file_type_info.effective; fall back to legacy top-level fields for backward compat.
+    ft_effective = str(
+        ft_info.get("effective")
+        or meta.get("file_type_effective")
+        or meta.get("file_type")
+        or ""
+    ).strip().lower()
     current = {
         "processor": meta.get("processor"),
         "bitness": meta.get("bitness"),
         "endian": "big" if meta.get("is_be") else "little",
-        "file_type": meta.get("file_type_effective") or meta.get("file_type"),
+        "file_type": ft_effective or ft_info.get("loader"),
     }
-    file_type = str(
-        meta.get("file_type_effective")
-        or ((meta.get("file_type_info") or {}).get("effective") if isinstance(meta.get("file_type_info"), dict) else None)
-        or meta.get("file_type")
-        or ""
-    ).strip().lower()
+    file_type = ft_effective
     import_count = int((summary or {}).get("imports", 0) or 0)
     proc = str(meta.get("processor") or "").strip().lower()
     raw_mode = bool(
