@@ -974,7 +974,13 @@ def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
         classifier.clear_cache()
 
         try:
-            hits = classifier.classify(insn_text, threshold=0.3, top_k=4, block=True)
+            hits = classifier.classify(insn_text, threshold=0.0, top_k=6, block=True)
+            if hits:
+                vals = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in hits)
+                q50 = vals[len(vals) // 2]
+                q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+                gate = q50 + max(0.0, q75 - q50)
+                hits = [h for h in hits if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate]
         finally:
             # Restore original anchors
             classifier.ANCHORS.clear()
@@ -1041,7 +1047,13 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
     classifier.ANCHORS.update(_EXPLOIT_ANCHORS)
     classifier.clear_cache()
     try:
-        hits = classifier.classify(chain_text, threshold=0.25, top_k=6, block=True)
+        hits = classifier.classify(chain_text, threshold=0.0, top_k=8, block=True)
+        if hits:
+            vals = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in hits)
+            q50 = vals[len(vals) // 2]
+            q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+            gate = q50 + max(0.0, q75 - q50)
+            hits = [h for h in hits if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate]
     finally:
         classifier.ANCHORS.clear()
         classifier.ANCHORS.update(orig)

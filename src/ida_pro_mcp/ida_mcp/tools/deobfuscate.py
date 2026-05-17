@@ -64,7 +64,14 @@ def _classify_function(func_ea, clf):
         pseudocode = str(cfunc)
         if not pseudocode.strip():
             return None
-        return clf.classify(pseudocode, threshold=0.30, top_k=6, block=False)
+        hits = clf.classify(pseudocode, threshold=0.0, top_k=8, block=False)
+        if hits:
+            vals = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0 for h in hits))
+            q50 = vals[len(vals) // 2]
+            q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
+            gate = q50 + max(0.0, q75 - q50)
+            hits = [h for h in hits if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate]
+        return hits
     except Exception:
         return None
 
@@ -522,7 +529,11 @@ def _detect_with_classifier(addr, limit):
         } for t in relevant])
 
         # Auto-write high-confidence findings to blackboard
-        high_conf = [t for t in relevant if t["confidence"] >= 0.5]
+        scores = sorted(float(t.get("confidence", t.get("score", 0.0)) or 0.0) for t in relevant)
+        q50 = scores[len(scores) // 2] if scores else 0.0
+        q75 = scores[min(len(scores) - 1, int(round((len(scores) - 1) * 0.75)))] if scores else 0.0
+        gate = q50 + max(0.0, q75 - q50)
+        high_conf = [t for t in relevant if float(t.get("confidence", t.get("score", 0.0)) or 0.0) >= gate]
         if high_conf:
             _write_to_blackboard(
                 hex_ea(func_ea),
