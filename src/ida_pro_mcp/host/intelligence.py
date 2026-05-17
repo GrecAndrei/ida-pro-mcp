@@ -1883,10 +1883,9 @@ class ContextAssembler:
         }
 
     def _compile_question_tool_plan(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
-        """Deterministic question->tool first-step compiler for RE workflows."""
+        """Embedding-driven question->tool first-step compiler for RE workflows."""
         apis = set(pack.get("api_calls") or [])
-        structural = pack.get("structural") or {}
-        if {"VirtualAllocEx", "WriteProcessMemory"}.intersection(apis):
+        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
             return {
                 "intent": "malware_triage",
                 "first_calls": [
@@ -1894,7 +1893,16 @@ class ContextAssembler:
                     {"tool": "xref_analysis", "action": "call_chain", "addr": addr},
                 ],
             }
-        if float(structural.get("entropy") or 0.0) >= 6.0:
+        intent = (self._llm_query_intent(pack) or {}).get("intent", "function_understanding")
+        if intent == "malware_behavior":
+            return {
+                "intent": "malware_triage",
+                "first_calls": [
+                    {"tool": "code", "action": "callers", "addr": addr},
+                    {"tool": "xref_analysis", "action": "call_chain", "addr": addr},
+                ],
+            }
+        if intent == "obfuscation_or_packer":
             return {
                 "intent": "packed_or_obfuscated",
                 "first_calls": [
@@ -1970,18 +1978,48 @@ class ContextAssembler:
         apis = set(pack.get("api_calls") or [])
         if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
             return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "xref_analysis.call_chain"]}
-        if pack.get("structural") and float((pack.get("structural") or {}).get("entropy") or 0.0) >= 6.0:
+        intent = (self._llm_query_intent(pack) or {}).get("intent", "")
+        if intent == "malware_behavior":
+            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "xref_analysis.call_chain"]}
+        if intent == "obfuscation_or_packer":
             return {"mode": "firmware_mode", "mandatory_sequence": ["firmware_view.region_profile", "firmware_view.pointer_clusters", "firmware_view.carve_plan"]}
         return {"mode": "analysis_mode", "mandatory_sequence": ["code.decompile", "code.callers"]}
 
     # --- 10 LLM-first feature payloads ---
     def _llm_query_intent(self, pack: Dict[str, Any]) -> Dict[str, Any]:
-        apis = set(pack.get("api_calls") or [])
-        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
-            return {"intent": "malware_behavior", "confidence": 0.82}
-        if float((pack.get("structural") or {}).get("entropy") or 0.0) >= 6.0:
-            return {"intent": "obfuscation_or_packer", "confidence": 0.74}
-        return {"intent": "function_understanding", "confidence": 0.62}
+        apis = " ".join(pack.get("api_calls") or [])
+        st = pack.get("structural") or {}
+        structural = " ".join(
+            [
+                f"entropy={st.get('entropy', 0)}",
+                f"xor_count={st.get('xor_count', 0)}",
+                f"cyclomatic={st.get('cyclomatic_complexity', st.get('cyclomatic', 0))}",
+                f"api_count={st.get('api_count', 0)}",
+            ]
+        )
+        query = f"{apis} {structural}".strip() or "function reverse engineering context"
+        anchors = {
+            "malware_behavior": "process injection c2 beacon payload loader remote thread write process memory",
+            "obfuscation_or_packer": "packed obfuscated encrypted xor decoder anti debug high entropy shellcode unpacking",
+            "function_understanding": "normal business logic parser dispatcher validation computation control flow",
+        }
+        try:
+            qv = self._embedder.embed(query[:1200])
+            sims: List[Tuple[str, float]] = []
+            for k, a in anchors.items():
+                av = self._embedder.embed(a)
+                sims.append((k, float(BgeCodeEmbedder.cosine(qv, av))))
+            sims.sort(key=lambda x: x[1], reverse=True)
+            top_intent, top_score = sims[0]
+            return {"intent": top_intent, "confidence": round(max(0.0, min(1.0, top_score)), 3)}
+        except Exception:
+            # Deterministic fallback without fixed score heuristics.
+            intent = "function_understanding"
+            if pack.get("api_calls"):
+                intent = "malware_behavior"
+            elif pack.get("structural"):
+                intent = "obfuscation_or_packer"
+            return {"intent": intent, "confidence": 0.5}
 
     def _llm_required_evidence_sources(self, pack: Dict[str, Any]) -> Dict[str, Any]:
         src = set()
