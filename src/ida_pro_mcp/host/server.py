@@ -50,9 +50,6 @@ from .config import (
     SEMANTIC_INDEX_WAIT_SECONDS,
     SEMANTIC_GADGET_SOURCE_ACTIONS,
     SEMANTIC_INDEX_SOURCE_LIMIT,
-    SEMANTIC_SCORE_SUBSTRING_MATCH,
-    SEMANTIC_SCORE_PATTERN_MATCH,
-    SEMANTIC_SCORE_PER_TOKEN,
     SEMANTIC_INDEX_MAX_QUERY_WORKERS,
     _bounded_int,
     _coerce_bool,
@@ -343,6 +340,8 @@ class IDAMCPServer:
             "pages": [],
         }
         self._wiki_cache_ttl = 5.0
+        self._wiki_embed_cache: Dict[str, List[float]] = {}
+        self._wiki_embed_cache_max = 512
         self._tools_list_cache: Dict[str, tuple] = {}
         self._context_density_optimizer = ContextDensityOptimizer(
             budget_tokens=CONTEXT_DENSITY_DEFAULT_BUDGET,
@@ -3895,38 +3894,46 @@ class IDAMCPServer:
             finally:
                 conn.close()
 
+        min_similarity = max(0.0, min(1.0, float(min_score) / 1000.0))
         query_lower = query.lower()
         query_tokens = set(re.findall(r"[a-z0-9_]+", query_lower))
-        matcher = compile_smart_pattern(query, case_sensitive=False)
 
-        def _score_row(row: tuple[Any, Any, Any, Any, Any, Any]) -> int:
-            norm_text = str(row[4] or "")
-            score = 0
-            if query_lower in norm_text:
-                score += SEMANTIC_SCORE_SUBSTRING_MATCH
-            if matcher(norm_text):
-                score += SEMANTIC_SCORE_PATTERN_MATCH
-            token_blob = str(row[5] or "")
-            if token_blob:
-                score += (
-                    len(query_tokens.intersection(set(token_blob.split(","))))
-                    * SEMANTIC_SCORE_PER_TOKEN
-                )
-            return score
-
-        ranked: list[tuple[int, tuple[Any, Any, Any, Any, Any, Any]]] = []
+        ranked: list[tuple[float, tuple[Any, Any, Any, Any, Any, Any]]] = []
+        embedding_failed = False
+        query_vec: Optional[List[float]] = None
+        embedder = None
+        if EMBEDDING_FIRST_MODE:
+            try:
+                from .intelligence import BgeCodeEmbedder
+                embedder = BgeCodeEmbedder()
+                query_vec = embedder.embed(query)
+            except Exception:
+                embedding_failed = True
         for row in rows:
-            score = _score_row(row)
-            if score >= min_score:
-                ranked.append((score, row))
+            norm_text = str(row[4] or "")
+            sim = 0.0
+            if embedder is not None and query_vec is not None and norm_text:
+                try:
+                    row_vec = embedder.embed(norm_text)
+                    sim = float(embedder.cosine(query_vec, row_vec))
+                except Exception:
+                    sim = 0.0
+            elif not embedding_failed:
+                token_blob = str(row[5] or "")
+                row_tokens = set(token_blob.split(",")) if token_blob else set()
+                inter = len(query_tokens.intersection(row_tokens))
+                union = len(query_tokens.union(row_tokens)) if row_tokens else len(query_tokens)
+                sim = (float(inter) / float(max(1, union))) if union else 0.0
+            if sim >= min_similarity:
+                ranked.append((sim, row))
 
         def _rank_sort_key(
-            item: tuple[int, tuple[Any, Any, Any, Any, Any, Any]]
-        ) -> tuple[int, str, str]:
-            score, row = item
+            item: tuple[float, tuple[Any, Any, Any, Any, Any, Any]]
+        ) -> tuple[float, str, str]:
+            sim, row = item
             source_action = str(row[0] or "")
             addr = str(row[1] or "")
-            return (-score, source_action, addr)
+            return (-sim, source_action, addr)
 
         ranked.sort(key=_rank_sort_key)
         total = len(ranked)
@@ -3937,9 +3944,10 @@ class IDAMCPServer:
                 "addr": str(row[1]),
                 "insns": int(row[2]),
                 "gadget": str(row[3]),
-                "score": int(score),
+                "score": int(round(sim * 1000)),
+                "similarity": round(sim, 4),
             }
-            for score, row in page
+            for sim, row in page
         ]
         truncated = (offset + len(matches)) < total
         out = {
@@ -4024,6 +4032,29 @@ class IDAMCPServer:
                     stem += "e"
                 return stem
         return t
+
+    def _wiki_embed_text(self, text: str) -> Optional[List[float]]:
+        txt = (text or "").strip()
+        if not txt:
+            return None
+        key = txt[:2048].lower()
+        cached = self._wiki_embed_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            from .intelligence import BgeCodeEmbedder
+            embedder = BgeCodeEmbedder()
+            vec = embedder.embed(key)
+        except Exception:
+            return None
+        if len(self._wiki_embed_cache) >= self._wiki_embed_cache_max:
+            # simple FIFO-ish eviction
+            try:
+                self._wiki_embed_cache.pop(next(iter(self._wiki_embed_cache)))
+            except Exception:
+                self._wiki_embed_cache.clear()
+        self._wiki_embed_cache[key] = vec
+        return vec
 
     def _wiki_expand_semantic_terms(self, query_tokens: List[str]) -> set[str]:
         raw = {self._wiki_stem_token(t) for t in query_tokens if t}
@@ -4147,6 +4178,8 @@ class IDAMCPServer:
                             "stemmed_tokens": {
                                 self._wiki_stem_token(t) for t in raw_tokens
                             },
+                            "semantic_title_text": f"{topic} {title} {header_text}".strip(),
+                            "semantic_body_text": text[:4000],
                         }
                     )
 
@@ -4376,61 +4409,59 @@ class IDAMCPServer:
         query_tokens: List[str],
         fuzzy: bool,
     ) -> tuple[int, List[str]]:
-        topic_lower = page["topic_lower"]
-        title_lower = page["title_lower"]
-        header_text_lower = page["header_text_lower"]
-        text_lower = page["text_lower"]
-        tokens = page["tokens"]
-
-        score = 0
         reasons: List[str] = []
-        if query_lower == topic_lower:
-            score += 500
-            reasons.append("exact_topic")
-        elif (
-            topic_lower.endswith(f"/{query_lower}")
-            or query_lower == page["topic_basename"]
-        ):
-            score += 380
-            reasons.append("basename_match")
-        if query_lower in topic_lower:
-            score += 220
-            reasons.append("topic_contains")
-        if query_lower in title_lower:
-            score += 180
-            reasons.append("title_contains")
-        if query_lower in header_text_lower:
-            score += 120
-            reasons.append("header_contains")
-        if query_lower in text_lower:
-            score += 70
-            reasons.append("content_contains")
+        qvec = self._wiki_embed_text(query_lower) if EMBEDDING_FIRST_MODE else None
+        title_text = str(page.get("semantic_title_text") or "").strip()
+        body_text = str(page.get("semantic_body_text") or "").strip()
+        title_vec = self._wiki_embed_text(title_text) if qvec is not None else None
+        body_vec = self._wiki_embed_text(body_text) if qvec is not None else None
+        if qvec is not None and title_vec is not None:
+            try:
+                from .intelligence import BgeCodeEmbedder
+                s_title = float(BgeCodeEmbedder.cosine(qvec, title_vec))
+                s_body = float(BgeCodeEmbedder.cosine(qvec, body_vec)) if body_vec is not None else 0.0
+                sim = (0.7 * s_title) + (0.3 * s_body)
+                if fuzzy and len(query_lower) >= 3 and sim < 0.2:
+                    topic_lower = str(page.get("topic_lower") or "")
+                    title_lower = str(page.get("title_lower") or "")
+                    base_lower = str(page.get("topic_basename") or "")
+                    ratio = max(
+                        difflib.SequenceMatcher(None, query_lower, topic_lower).ratio(),
+                        difflib.SequenceMatcher(None, query_lower, title_lower).ratio(),
+                        difflib.SequenceMatcher(None, query_lower, base_lower).ratio(),
+                    )
+                    if ratio >= 0.7:
+                        sim = max(sim, ratio * 0.5)
+                        reasons.append("lexical_similarity")
+                if s_title > 0.25:
+                    reasons.append("embedding_title")
+                if s_body > 0.2:
+                    reasons.append("embedding_body")
+                return int(round(max(0.0, min(1.0, sim)) * 1000.0)), reasons
+            except Exception:
+                pass
 
-        for token in query_tokens:
-            if token in tokens:
-                score += 8
-            if token in topic_lower:
-                score += 20
-            if token in title_lower:
-                score += 15
-            if token in header_text_lower:
-                score += 10
-            if token in text_lower:
-                score += 3
-
-        if fuzzy and len(query_lower) >= 3:
+        # Deterministic non-heuristic fallback: token Jaccard similarity.
+        page_tokens = page.get("tokens", set())
+        q_tokens = set(query_tokens)
+        inter = len(page_tokens.intersection(q_tokens)) if isinstance(page_tokens, set) else 0
+        union = len(page_tokens.union(q_tokens)) if isinstance(page_tokens, set) else len(q_tokens)
+        sim = (float(inter) / float(max(1, union))) if union else 0.0
+        if inter > 0:
+            reasons.append("token_overlap")
+        if sim <= 0.0 and fuzzy and len(query_lower) >= 3:
+            topic_lower = str(page.get("topic_lower") or "")
+            title_lower = str(page.get("title_lower") or "")
+            base_lower = str(page.get("topic_basename") or "")
             ratio = max(
                 difflib.SequenceMatcher(None, query_lower, topic_lower).ratio(),
                 difflib.SequenceMatcher(None, query_lower, title_lower).ratio(),
-                difflib.SequenceMatcher(
-                    None, query_lower, page["topic_basename"]
-                ).ratio(),
+                difflib.SequenceMatcher(None, query_lower, base_lower).ratio(),
             )
-            if ratio >= 0.72:
-                score += int(ratio * 120)
-                reasons.append("fuzzy")
-
-        return score, reasons
+            if ratio >= 0.7:
+                sim = ratio * 0.5
+                reasons.append("lexical_similarity")
+        return int(round(sim * 1000.0)), reasons
 
     def _wiki_search_pages(
         self,
