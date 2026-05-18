@@ -71,9 +71,9 @@ def _find_pointers(data, start_ea):
 @idawrite
 def memory(
     action: Annotated[Literal[
-        "read", "write", "hexdump", "search", "compare", "pointers",
+        "read", "write", "hexdump", "search", "compare", "pointers", "find_pointers",
         "entropy", "strings", "struct_walk", "histogram"
-    ], "Action: read|write|hexdump|search|compare|pointers|entropy|strings|struct_walk|histogram"],
+    ], "Action: read|write|hexdump|search|compare|pointers|find_pointers|entropy|strings|struct_walk|histogram"],
     addr: Annotated[Optional[str], "Address (required for most actions; optional for search with start/end)"] = None,
     type: Annotated[Literal["bytes", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "ptr", "string"],
                     "Data type (for read). Default 'bytes' — returns hex dump of size bytes"] = "bytes",
@@ -231,8 +231,9 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             }
 
         elif action == "search":
-            if not data:
-                return make_error(MCPError.INVALID_ARGS, "data (pattern) required for search")
+            pattern = str(kwargs.get("pattern") or data or "").strip()
+            if not pattern:
+                return make_error(MCPError.INVALID_ARGS, "data/pattern required for search")
             if ea is None:
                 if end_addr:
                     return make_error(MCPError.INVALID_ARGS, "addr required when end_addr is provided")
@@ -247,52 +248,111 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             raw = ida_bytes.get_bytes(ea, region_size)
             if not raw:
                 return make_error(MCPError.IDA_ERROR, f"Could not read region starting at {hex(ea)}")
-            # Determine search mode
+            # Determine search mode: hex-with-wildcards, regex on ascii, or integer literal.
             pattern_bytes = None
+            wildcard_mask = None
+            regex_mode = bool(kwargs.get("regex", False))
+            int_mode = False
             try:
-                pattern_bytes = bytes.fromhex(data.replace(" ", ""))
-            except ValueError:
-                pass
-            if pattern_bytes is None:
-                pattern_bytes = data.encode("utf-8", errors="replace")
+                if re.fullmatch(r"0x[0-9a-fA-F]+|\d+", pattern):
+                    int_mode = True
+                    v = int(pattern, 0)
+                    width = int(kwargs.get("int_width", 4) or 4)
+                    endian = "big" if _is_be() else "little"
+                    pattern_bytes = int(v).to_bytes(width, endian, signed=False)
+                elif re.search(r"\?\?|[0-9a-fA-F]{2}(?:\s+[0-9a-fA-F?]{2})+", pattern):
+                    toks = pattern.split()
+                    pb = []
+                    pm = []
+                    for t in toks:
+                        if "?" in t:
+                            pb.append(0)
+                            pm.append(False)
+                        else:
+                            pb.append(int(t, 16))
+                            pm.append(True)
+                    pattern_bytes = bytes(pb)
+                    wildcard_mask = pm
+                else:
+                    pattern_bytes = pattern.encode("utf-8", errors="replace")
+            except Exception:
+                pattern_bytes = pattern.encode("utf-8", errors="replace")
             hits = []
-            idx = raw.find(pattern_bytes)
-            while idx != -1:
-                hits.append(hex(ea + idx))
-                if len(hits) >= 100:
-                    break
-                idx = raw.find(pattern_bytes, idx + 1)
-            return {"ok": True, "pattern": data, "hits": hits, "count": len(hits), "region": f"{hex(ea)}-{hex(ea + region_size)}"}
+            if regex_mode:
+                try:
+                    rgx = re.compile(pattern.encode("utf-8"), re.IGNORECASE)
+                    for m in rgx.finditer(raw):
+                        hits.append(hex(ea + m.start()))
+                        if len(hits) >= 256:
+                            break
+                except Exception:
+                    return make_error(MCPError.INVALID_ARGS, "invalid regex pattern")
+            elif wildcard_mask is not None:
+                plen = len(pattern_bytes)
+                for i in range(0, max(0, len(raw) - plen + 1)):
+                    ok = True
+                    for j in range(plen):
+                        if wildcard_mask[j] and raw[i + j] != pattern_bytes[j]:
+                            ok = False
+                            break
+                    if ok:
+                        hits.append(hex(ea + i))
+                        if len(hits) >= 256:
+                            break
+            else:
+                idx = raw.find(pattern_bytes)
+                while idx != -1:
+                    hits.append(hex(ea + idx))
+                    if len(hits) >= 256:
+                        break
+                    idx = raw.find(pattern_bytes, idx + 1)
+            return {"ok": True, "pattern": pattern, "hits": hits, "count": len(hits), "region": f"{hex(ea)}-{hex(ea + region_size)}", "mode": ("regex" if regex_mode else ("integer" if int_mode else ("hex_wildcard" if wildcard_mask is not None else "bytes")))}
 
         elif action == "compare":
-            if not end_addr:
-                return make_error(MCPError.INVALID_ARGS, "end_addr required for compare")
-            end_ea, err = validate_addr(end_addr)
-            if err:
-                return err
-            size_a = size
-            size_b = kwargs.get("size_b", size)
-            raw_a = ida_bytes.get_bytes(ea, size_a)
-            raw_b = ida_bytes.get_bytes(end_ea, size_b)
+            addr1 = str(kwargs.get("addr1") or addr or "").strip()
+            addr2 = str(kwargs.get("addr2") or end_addr or "").strip()
+            if not addr1 or not addr2:
+                return make_error(MCPError.INVALID_ARGS, "addr1/addr2 (or addr/end_addr) required for compare")
+            ea1, err1 = validate_addr(addr1)
+            if err1:
+                return err1
+            ea2, err2 = validate_addr(addr2)
+            if err2:
+                return err2
+            cmp_size = int(kwargs.get("size") or size or 16)
+            raw_a = ida_bytes.get_bytes(ea1, cmp_size)
+            raw_b = ida_bytes.get_bytes(ea2, cmp_size)
             if not raw_a or not raw_b:
                 return make_error(MCPError.IDA_ERROR, "Could not read one or both regions")
             min_len = min(len(raw_a), len(raw_b))
             diffs = []
             for i in range(min_len):
                 if raw_a[i] != raw_b[i]:
-                    diffs.append(f"offset={i}  {hex(ea+i)}={raw_a[i]:02x}  {hex(end_ea+i)}={raw_b[i]:02x}")
+                    diffs.append({"offset": i, "byte1": f"{raw_a[i]:02x}", "byte2": f"{raw_b[i]:02x}", "addr1": hex(ea1 + i), "addr2": hex(ea2 + i)})
             if len(raw_a) != len(raw_b):
-                diffs.append(f"size_diff: A={len(raw_a)} B={len(raw_b)}")
-            return {"ok": True, "diff_count": len(diffs), "diffs": diffs[:50], "same_prefix": raw_a[:min_len] == raw_b[:min_len]}
+                diffs.append({"offset": min_len, "size_diff": f"A={len(raw_a)} B={len(raw_b)}"})
+            # Levenshtein-like edit distance for bytes.
+            dp = list(range(len(raw_b) + 1))
+            for i in range(1, len(raw_a) + 1):
+                prev = dp[0]
+                dp[0] = i
+                for j in range(1, len(raw_b) + 1):
+                    cur = dp[j]
+                    cost = 0 if raw_a[i - 1] == raw_b[j - 1] else 1
+                    dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + cost)
+                    prev = cur
+            edit_distance = dp[-1]
+            similarity = round(100.0 * (1.0 - (edit_distance / max(1, max(len(raw_a), len(raw_b))))), 2)
+            return {"ok": True, "addr1": hex(ea1), "addr2": hex(ea2), "size": cmp_size, "diff_count": len(diffs), "diffs": diffs[:256], "edit_distance": int(edit_distance), "similarity_pct": similarity}
 
-        elif action == "pointers":
+        elif action in ("pointers", "find_pointers"):
             end_ea = parse_address(end_addr) if end_addr else ea + 0x10000
             region_size = min(end_ea - ea, 1024 * 1024)
             raw = ida_bytes.get_bytes(ea, region_size)
             if not raw:
                 return make_error(MCPError.IDA_ERROR, f"Could not read region starting at {hex(ea)}")
             ptrs = _find_pointers(raw, ea)
-            lines = [f"{hex(addr)} -> {target}  {name}" for addr, target, name in ptrs[:100]]
+            lines = [{"offset": int(addr - ea), "target_addr": target, "target_name": name} for addr, target, name in ptrs[:256]]
             return {"ok": True, "pointers": lines, "count": len(ptrs), "region": f"{hex(ea)}-{hex(ea + region_size)}"}
 
         elif action == "entropy":
@@ -348,7 +408,17 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             counts = Counter(raw)
             top = counts.most_common(16)
             lines = [f"0x{b:02x}={c} ({round(c/len(raw)*100,2)}%)" for b, c in top]
-            return {"ok": True, "histogram": lines, "total_bytes": len(raw)}
+            # Entropy per 256-byte block + simple sparkline.
+            blocks = []
+            spark = []
+            for i in range(0, len(raw), 256):
+                blk = raw[i:i + 256]
+                ent = _shannon_entropy(blk)
+                blocks.append({"block_index": i // 256, "addr": hex(ea + i), "entropy": ent})
+                lvl = min(7, max(0, int(round((ent / 8.0) * 7))))
+                spark.append("▁▂▃▄▅▆▇█"[lvl])
+            null_density = round(raw.count(0) / max(1, len(raw)), 4)
+            return {"ok": True, "histogram": lines, "total_bytes": len(raw), "top5": lines[:5], "entropy_blocks": blocks[:512], "entropy_sparkline": "".join(spark[:512]), "null_density": null_density}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
