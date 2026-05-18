@@ -408,6 +408,12 @@ def _find_c2(strings, limit):
         # IPs
         for m in _IPV4_PATTERN.finditer(raw):
             ip = m.group(0).decode("ascii", errors="replace")
+            try:
+                octets = [int(x) for x in ip.split(".")]
+            except Exception:
+                octets = []
+            if len(octets) != 4 or any(o < 0 or o > 255 for o in octets):
+                continue
             key = ("ip", ip)
             if key not in seen:
                 seen.add(key)
@@ -1066,7 +1072,12 @@ def string_ops(
 
         elif action in ("score_c2", "indicators", "persistence", "evasion", "ioc_extract"):
             report = _compile_c2_report(all_strings, addr)
-            return {"ok": True, "c2_risk": report, "total_apis": report["api_count"]}
+            return {
+                "ok": True,
+                "c2_risk": report,
+                "total_apis": report["api_count"],
+                "note": "Report combines deterministic IOC patterns with probabilistic classifier ranking.",
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

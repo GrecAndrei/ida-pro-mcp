@@ -46,17 +46,14 @@ def _get_func_callees_with_addr(func_ea):
     fn = ida_funcs.get_func(func_ea)
     if not fn:
         return []
-    # Call xref types: fl_CN (near call), fl_CF (far call)
-    _CALL_TYPES = frozenset([getattr(idaapi, "fl_CN", 17), getattr(idaapi, "fl_CF", 18)])
     callees = []
     for head in idautils.Heads(fn.start_ea, fn.end_ea):
-        for xref in idautils.CodeRefsFrom(head, 0):
-            if xref.type not in _CALL_TYPES:
-                continue  # skip branches/jumps
-            name = idc.get_func_name(xref.to) if hasattr(xref, 'to') else idc.get_func_name(xref)
+        mnem = (idc.print_insn_mnem(head) or "").lower()
+        if not (mnem.startswith("call") or mnem in {"bl", "blr", "jal", "jalr"}):
+            continue
+        for target in idautils.CodeRefsFrom(head, 0):
+            name = idc.get_func_name(target)
             if not name:
-                # Try getting name from the target address
-                target = xref.to if hasattr(xref, 'to') else xref
                 name = idc.get_name(target) or ""
             if name:
                 callees.append((head, name))

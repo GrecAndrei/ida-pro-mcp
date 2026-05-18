@@ -267,8 +267,12 @@ def patterns(
         elif action == "apply_sig":
             if not name: return make_error(MCPError.INVALID_ARGS, "name required")
             import ida_libfuncs
+            available = patterns(action="list_sigs", count=0)
+            sigs = set(available.get("signatures", [])) if isinstance(available, dict) else set()
+            if sigs and name not in sigs:
+                return make_error(MCPError.FILE_NOT_FOUND, f"Signature not found: {name}")
             ida_libfuncs.plan_to_apply_ldes(name)
-            return {"ok": True, "name": name, "note": "Signature application planned and awaiting auto-analysis"}
+            return {"ok": True, "name": name, "applied": False, "planned": True, "note": "Signature application planned and awaiting auto-analysis"}
         
         elif action == "create_sig":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -317,10 +321,10 @@ def patterns(
                 else:
                     unmatched_count += 1
                 
-                if len(matched_lines) >= count:
+                if count != 0 and len(matched_lines) >= count:
                     break
-            
-            page = matched_lines[offset:offset+count]
+
+            page = matched_lines[offset:] if count == 0 else matched_lines[offset:offset+count]
             return {
                 "ok": True,
                 "matched_functions": "\n".join(page),

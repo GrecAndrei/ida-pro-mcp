@@ -315,6 +315,8 @@ def _format_graph(nodes, edges, format, cycle_nodes=None):
         edges = [(src, dst) for src, dst in edges if src in keep and dst in keep]
     if format == "mermaid":
         mm = ["graph TD"]
+        def _esc_mermaid(label: str) -> str:
+            return str(label).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
         def _sid(name, ea):
             safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in str(name))
             return f"N_{ea:x}_{safe[:40]}"
@@ -323,7 +325,7 @@ def _format_graph(nodes, edges, format, cycle_nodes=None):
             v_name = nodes.get(dst, hex(dst))
             u_id = _sid(u_name, src)
             v_id = _sid(v_name, dst)
-            mm.append(f'  {u_id}["{u_name}"] --> {v_id}["{v_name}"]')
+            mm.append(f'  {u_id}["{_esc_mermaid(u_name)}"] --> {v_id}["{_esc_mermaid(v_name)}"]')
         for ea in cycle_nodes:
             if ea in nodes:
                 mm.append(f'  {_sid(nodes[ea], ea)}:::cycle')
@@ -334,21 +336,24 @@ def _format_graph(nodes, edges, format, cycle_nodes=None):
 
     elif format == "dot":
         dot = ["digraph G {", "  rankdir=TB;", '  node [shape=box, style=filled, fillcolor="#e8e8e8"];']
+        def _esc_dot(label: str) -> str:
+            return str(label).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
         for ea, name in sorted(nodes.items()):
-            dot.append(f'  "{name}" [label="{name}\\n{hex(ea)}"];')
+            en = _esc_dot(name)
+            dot.append(f'  "{en}" [label="{en}\\n{hex(ea)}"];')
         for src, dst in edges:
             u_name = nodes.get(src, hex(src))
             v_name = nodes.get(dst, hex(dst))
-            dot.append(f'  "{u_name}" -> "{v_name}";')
+            dot.append(f'  "{_esc_dot(u_name)}" -> "{_esc_dot(v_name)}";')
         dot.append("}")
         return {"ok": True, "format": "dot", "graph": "\n".join(dot),
                 "node_count": len(nodes), "edge_count": len(edges)}
 
     else:  # json
-        node_lines = [f"{hex(ea)}  {name}" + ("  cycle=true" if ea in cycle_nodes else "") for ea, name in sorted(nodes.items())]
-        edge_lines = [f"{hex(src)} -> {hex(dst)}" for src, dst in edges]
-        return {"ok": True, "format": "json", "nodes": "\n".join(node_lines),
-                "edges": "\n".join(edge_lines),
+        node_rows = [{"addr": hex(ea), "name": name, "cycle": ea in cycle_nodes} for ea, name in sorted(nodes.items())]
+        edge_rows = [{"from": hex(src), "to": hex(dst)} for src, dst in edges]
+        return {"ok": True, "format": "json", "nodes": node_rows,
+                "edges": edge_rows,
                 "node_count": len(nodes), "edge_count": len(edges)}
 
 

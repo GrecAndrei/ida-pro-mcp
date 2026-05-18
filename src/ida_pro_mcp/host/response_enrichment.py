@@ -359,8 +359,29 @@ def build_session_resume(
     decompiled = set()
     for entry in activity_log:
         if entry.get("action") in ("decompile", "semantic_decompile"):
-            addr = entry.get("result", "")
-            if addr and addr.startswith("0x"):
+            addr = ""
+            raw = entry.get("result", "")
+            if isinstance(raw, str):
+                r = raw.strip()
+                if r.startswith("0x"):
+                    addr = r
+                elif r.startswith("{"):
+                    try:
+                        parsed = json.loads(r)
+                        addrs = parsed.get("addresses") if isinstance(parsed, dict) else None
+                        if isinstance(addrs, list) and addrs:
+                            first = str(addrs[0]).strip()
+                            if first.startswith("0x"):
+                                addr = first
+                    except Exception:
+                        pass
+            elif isinstance(raw, dict):
+                addrs = raw.get("addresses")
+                if isinstance(addrs, list) and addrs:
+                    first = str(addrs[0]).strip()
+                    if first.startswith("0x"):
+                        addr = first
+            if addr:
                 decompiled.add(addr)
     
     if decompiled:

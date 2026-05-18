@@ -2103,6 +2103,7 @@ class IDAMCPServer:
         action: str,
         payload: dict,
         addr: str,
+        opts: Optional[dict] = None,
     ) -> None:
         """
         Build a context_pack via the intelligence layer (bge-code-v1) and inject
@@ -2135,8 +2136,9 @@ class IDAMCPServer:
                 bb_store=bb_store,
             )
             if pack:
+                mode = str((opts or {}).get("mode") or "").strip().lower()
                 # Only inject context_pack in full mode — it's verbose
-                if opts.get("mode") == "full":
+                if mode == "full":
                     payload["context_pack"] = pack
                 elif pack.get("top_entries"):
                     # In compact mode, only inject the top entry titles (not full content)
@@ -2705,7 +2707,7 @@ class IDAMCPServer:
             try:
                 from .response_enrichment import auto_blackboard_write
                 addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                bb_entries = auto_blackboard_write(tool_name, str(opts.get("action", "")), compacted, addr)
+                bb_entries = auto_blackboard_write(tool_name, str(action_name or ""), compacted, addr)
                 bb_written = 0
                 if bb_entries:
                     # Write to blackboard with dedup check: skip entries whose
@@ -2823,7 +2825,7 @@ class IDAMCPServer:
                     if isinstance(call_args, dict):
                         addr = str(call_args.get("addr") or call_args.get("addrs") or "")
                     self._assemble_and_inject_context(
-                        tool_name, action_name, compacted, addr
+                        tool_name, action_name, compacted, addr, opts=opts
                     )
             except Exception:
                 pass
@@ -8459,12 +8461,20 @@ class IDAMCPServer:
             norm = float(args.get("norm", 0.0))
             q_value = float(args.get("q_value", 0.5))
             call_idx = int(args.get("call_idx", 0))
+            raw_tags = args.get("tags")
+            if isinstance(raw_tags, list):
+                tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+            elif isinstance(raw_tags, str):
+                tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+            else:
+                tags = []
+
             eid = store.write(
                 title=title,
                 content=str(args.get("notes") or args.get("content") or ""),
                 category=str(args.get("category") or "general"),
                 addr=str(args.get("addr") or ""),
-                tags=[t.strip() for t in str(args.get("tags") or "").split(",") if t.strip()],
+                tags=tags,
                 confidence=float(args.get("confidence", 0.5)),
                 bridges=bridges,
                 schema=schema,

@@ -320,6 +320,11 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             if err2:
                 return err2
             cmp_size = int(kwargs.get("size") or size or 16)
+            if cmp_size <= 0:
+                return make_error(MCPError.INVALID_ARGS, "size must be > 0")
+            max_cmp = 8192
+            if cmp_size > max_cmp:
+                cmp_size = max_cmp
             raw_a = ida_bytes.get_bytes(ea1, cmp_size)
             raw_b = ida_bytes.get_bytes(ea2, cmp_size)
             if not raw_a or not raw_b:
@@ -331,19 +336,23 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     diffs.append({"offset": i, "byte1": f"{raw_a[i]:02x}", "byte2": f"{raw_b[i]:02x}", "addr1": hex(ea1 + i), "addr2": hex(ea2 + i)})
             if len(raw_a) != len(raw_b):
                 diffs.append({"offset": min_len, "size_diff": f"A={len(raw_a)} B={len(raw_b)}"})
-            # Levenshtein-like edit distance for bytes.
-            dp = list(range(len(raw_b) + 1))
-            for i in range(1, len(raw_a) + 1):
-                prev = dp[0]
-                dp[0] = i
-                for j in range(1, len(raw_b) + 1):
-                    cur = dp[j]
-                    cost = 0 if raw_a[i - 1] == raw_b[j - 1] else 1
-                    dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + cost)
-                    prev = cur
-            edit_distance = dp[-1]
+            # Bounded Levenshtein-like edit distance for bytes.
+            if len(raw_a) * len(raw_b) > 4_000_000:
+                # Fallback for large compares: approximate with positional hamming + size delta.
+                edit_distance = sum(1 for i in range(min_len) if raw_a[i] != raw_b[i]) + abs(len(raw_a) - len(raw_b))
+            else:
+                dp = list(range(len(raw_b) + 1))
+                for i in range(1, len(raw_a) + 1):
+                    prev = dp[0]
+                    dp[0] = i
+                    for j in range(1, len(raw_b) + 1):
+                        cur = dp[j]
+                        cost = 0 if raw_a[i - 1] == raw_b[j - 1] else 1
+                        dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + cost)
+                        prev = cur
+                edit_distance = dp[-1]
             similarity = round(100.0 * (1.0 - (edit_distance / max(1, max(len(raw_a), len(raw_b))))), 2)
-            return {"ok": True, "addr1": hex(ea1), "addr2": hex(ea2), "size": cmp_size, "diff_count": len(diffs), "diffs": diffs[:256], "edit_distance": int(edit_distance), "similarity_pct": similarity}
+            return {"ok": True, "addr1": hex(ea1), "addr2": hex(ea2), "size": cmp_size, "diff_count": len(diffs), "diffs": diffs[:256], "edit_distance": int(edit_distance), "similarity_pct": similarity, "size_capped": cmp_size == max_cmp}
 
         elif action in ("pointers", "find_pointers"):
             end_ea = parse_address(end_addr) if end_addr else ea + 0x10000

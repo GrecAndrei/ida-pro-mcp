@@ -552,6 +552,7 @@ def export(
                     "source": "binary_strings",
                     "redactions": redactions[:50],
                     "count": len(redactions),
+                    "redacted": redacted[:20000],
                     "note": "Redacted sensitive patterns (IPs, emails, hashes, URLs, base64). Review before sharing externally.",
                 }
         

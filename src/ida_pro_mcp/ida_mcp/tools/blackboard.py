@@ -678,8 +678,31 @@ class BlackboardStore:
         except Exception:
             return []
 
+        parsed_funcs = []
+        if isinstance(funcs, str):
+            for line in funcs.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p for p in line.split("  ") if p]
+                if len(parts) < 4:
+                    continue
+                addr = parts[0].strip()
+                xref_count = 0
+                name = parts[3].strip()
+                for p in parts:
+                    if p.startswith("xrefs="):
+                        try:
+                            xref_count = int(p.split("=", 1)[1])
+                        except Exception:
+                            xref_count = 0
+                        break
+                parsed_funcs.append({"addr": addr, "name": name, "xref_count": xref_count})
+        elif isinstance(funcs, list):
+            parsed_funcs = funcs
+
         candidates = []
-        for fn in funcs:
+        for fn in parsed_funcs:
             name = fn.get("name", "")
             if not (name.startswith("sub_") or name.startswith("j_")):
                 continue

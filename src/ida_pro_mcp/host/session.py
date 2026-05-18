@@ -275,8 +275,9 @@ class SessionManager:
                 tag_conditions = " OR ".join(["tags LIKE ?" for _ in tags])
                 query += f" AND ({tag_conditions})"
                 params.extend([f"%{t}%" for t in tags])
+            # Pull a broader candidate pool first, then rank by context.
             query += " ORDER BY q_value DESC LIMIT ?"
-            params.append(limit)
+            params.append(max(int(limit) * 4, 40))
             cur.execute(query, params)
             for row in cur.fetchall():
                 skills.append({
@@ -792,6 +793,7 @@ class SessionManager:
                     continue
                 if safe_tag not in s.tags:
                     s.tags.append(safe_tag)
+                    self._save_metadata(s)
                 results[sid] = True
             return results
 
@@ -3183,7 +3185,13 @@ class SessionManager:
             local = dict(sorted(local.items(), key=lambda x: x[1].get("q_value", 0), reverse=True))
             result = {"ok": True, "local_skills": local, "local_count": len(local)}
             if global_skills:
-                global_skills = self._find_global_skills(tags=list(local.keys()), limit=20)
+                local_tags = set()
+                for sk in local.values():
+                    for t in sk.get("tags", []) or []:
+                        t = str(t).strip()
+                        if t:
+                            local_tags.add(t)
+                global_skills = self._find_global_skills(tags=sorted(local_tags), limit=20)
                 result["global_skills"] = global_skills
                 result["global_count"] = len(global_skills)
             return result
