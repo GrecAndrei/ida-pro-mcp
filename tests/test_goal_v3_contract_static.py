@@ -286,3 +286,9 @@ def test_server_ghost_chain_is_not_code_only():
 def test_server_bridgerag_and_related_enrichment_are_addr_gated():
     src = _read("src/ida_pro_mcp/host/server.py")
     assert "if addr and tool_name in (\"code\", \"data\", \"search\"):" in src
+
+
+def test_protocol_endpoints_returns_structured_items_and_counts():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/protocol.py")
+    assert "\"endpoint_items\"" in src
+    assert "\"counts\": {k: len(v) for k, v in endpoints.items()}" in src
