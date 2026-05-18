@@ -139,10 +139,13 @@ def query(
                     return make_error(MCPError.INVALID_ARGS, "queries (list[str]) required")
                 k = int(args.get("k") or args.get("limit") or 5)
                 min_conf = float(args.get("min_confidence", 0.25) or 0.25)
+                min_conf = max(0.0, min(1.0, min_conf))
                 merged: Dict[str, Dict[str, Any]] = {}
+                failed_queries = []
                 for qitem in queries[:16]:
                     sub = query(action="nl", args={"q": str(qitem), "limit": k * 3, "min_confidence": min_conf})
                     if not isinstance(sub, dict) or not sub.get("ok"):
+                        failed_queries.append(str(qitem))
                         continue
                     for row in sub.get("results", []) or []:
                         ea = str(row.get("ea") or "")
@@ -163,7 +166,13 @@ def query(
                             if str(qitem) not in mqs:
                                 mqs.append(str(qitem))
                 out = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0)), reverse=True)[:k]
-                return {"ok": True, "results": out, "count": len(out)}
+                return {
+                    "ok": True,
+                    "results": out,
+                    "count": len(out),
+                    "failed_queries": failed_queries,
+                    "min_confidence": min_conf,
+                }
 
             q = args.get("q") or args.get("query") or ""
             if not q:
@@ -195,6 +204,7 @@ def query(
             q_vec = embedder.embed(q)
             top_k = int(args.get("limit") or 10)
             min_conf = float(args.get("min_confidence", 0.25) or 0.25)
+            min_conf = max(0.0, min(1.0, min_conf))
             results = idx.similar_vec(q_vec, top_k=top_k * 3, threshold=0.0)
             expansion_queries = []
             try:
