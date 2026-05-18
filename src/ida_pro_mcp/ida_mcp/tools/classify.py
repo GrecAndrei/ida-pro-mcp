@@ -265,7 +265,7 @@ def _induce_function_schema(func_ea: int) -> dict:
 def classify(
     action: Annotated[Literal["function", "binary", "all_functions", "library_code",
                                "wrappers", "callbacks", "initializers",
-                               "error_handlers", "hot_functions", "orphans", "induce_schema"],
+                               "error_handlers", "hot_functions", "orphans", "induce_schema", "anchor_coverage"],
                       "Classification action"],
     addr: Annotated[Optional[str], "Function address for single-function actions"] = None,
     limit: Annotated[int, "Max results"] = 50,
@@ -322,6 +322,10 @@ def classify(
         Params: addr (required)
         Returns: {schema: {behavior_tags, dangerous_apis, string_refs, vuln_class, compiler_hints, structural_features}}
         Use for structured semantic retrieval and precise filtering.
+
+    anchor_coverage - Coverage report for BehaviorClassifier anchors over current IDB.
+        Params: limit (max funcs sampled)
+        Returns: {anchors: [{label, hit_count, top_example}]}
     """
     try:
         # ----------------------------------------------------------------
@@ -717,6 +721,16 @@ def classify(
                 "schema": schema,
                 "note": "Structured schema induced from API calls, strings, and structural analysis. Use with search(action='structured', constraints=...) for precise filtering.",
             }
+
+        elif action == "anchor_coverage":
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+            except ImportError:
+                from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+            bc = BehaviorClassifier.instance(BgeCodeEmbedder())
+            rep = bc.anchor_coverage_report(min_similarity=0.4, max_funcs=max(100, int(limit)))
+            rep["ok"] = True
+            return rep
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

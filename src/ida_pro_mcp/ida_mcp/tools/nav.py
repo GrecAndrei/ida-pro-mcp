@@ -145,6 +145,45 @@ def nav(
                 
                 if score > 0:
                     candidates.append({"addr": func_ea, "name": fname, "score": score, "matched_by": matched_by})
+
+            # Embedding-based semantic candidates (merge with keyword scores).
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+            except ImportError:
+                try:
+                    from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex  # type: ignore
+                except ImportError:
+                    BgeCodeEmbedder = None  # type: ignore
+                    FunctionEmbeddingIndex = None  # type: ignore
+            if "BgeCodeEmbedder" in locals() and BgeCodeEmbedder and FunctionEmbeddingIndex:
+                try:
+                    idb_path = idc.get_idb_path() or ""
+                    if idb_path:
+                        emb = BgeCodeEmbedder()
+                        idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", emb)
+                        if idx.size > 0:
+                            qv = emb.embed(query)
+                            sem = idx.similar_vec(qv, top_k=5, threshold=0.0)
+                            by_addr = {int(c["addr"]): c for c in candidates if isinstance(c.get("addr"), int)}
+                            for row in sem:
+                                sea = parse_address(str(row.get("ea") or ""))
+                                if sea is None:
+                                    continue
+                                boost = float(row.get("similarity") or 0.0) * 100.0
+                                cur = by_addr.get(sea)
+                                if cur:
+                                    cur["score"] = float(cur.get("score", 0.0)) + boost
+                                    cur.setdefault("matched_by", []).append("embedding")
+                                else:
+                                    by_addr[sea] = {
+                                        "addr": sea,
+                                        "name": idc.get_func_name(sea) or f"sub_{sea:x}",
+                                        "score": boost,
+                                        "matched_by": ["embedding"],
+                                    }
+                            candidates = list(by_addr.values())
+                except Exception:
+                    pass
             
             if not candidates:
                 return make_error(MCPError.NOT_FOUND, f"No function matches semantic query: '{query}'", "Try a more specific query or use search(action='find', pattern=...)")

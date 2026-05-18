@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def query(
-    action: Annotated[Literal["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl"],
-                      "Action: data|search|idb|code|types|imports_deep|symbols|patterns|nl"],
+    action: Annotated[Literal["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl", "nl_batch"],
+                      "Action: data|search|idb|code|types|imports_deep|symbols|patterns|nl|nl_batch"],
     subaction: Annotated[Optional[str], "Sub-action to perform"] = None,
     args: Annotated[Optional[dict], "Arguments to pass to sub-tool"] = None,
     **kwargs
@@ -63,8 +63,11 @@ def query(
         Example: query(action="patterns", subaction="list_sigs")
 
     nl - Natural language semantic search over indexed functions
-        args: {q, limit}
+        args: {q, limit, min_confidence}
         Example: query(action="nl", args={"q": "function that decrypts data", "limit": 5})
+
+    nl_batch - Run multiple NL queries and merge/rank deduplicated hits
+        args: {queries: [str, ...], k, min_confidence}
     """
     try:
         def _nl_like(text: str) -> bool:
@@ -129,7 +132,38 @@ def query(
             sub = subaction or "list_sigs"
             return patterns_tool(action=sub, **args)
 
-        elif action == "nl":
+        elif action in ("nl", "nl_batch"):
+            if action == "nl_batch":
+                queries = args.get("queries") or []
+                if not isinstance(queries, list) or not queries:
+                    return make_error(MCPError.INVALID_ARGS, "queries (list[str]) required")
+                k = int(args.get("k") or args.get("limit") or 5)
+                min_conf = float(args.get("min_confidence", 0.25) or 0.25)
+                merged: Dict[str, Dict[str, Any]] = {}
+                for qitem in queries[:16]:
+                    sub = query(action="nl", args={"q": str(qitem), "limit": k * 3, "min_confidence": min_conf})
+                    if not isinstance(sub, dict) or not sub.get("ok"):
+                        continue
+                    for row in sub.get("results", []) or []:
+                        ea = str(row.get("ea") or "")
+                        if not ea:
+                            continue
+                        score = float(row.get("similarity") or row.get("score") or 0.0)
+                        cur = merged.get(ea)
+                        if not cur or score > float(cur.get("score", 0.0)):
+                            merged[ea] = {
+                                "addr": ea,
+                                "name": row.get("name", ""),
+                                "score": score,
+                                "matched_queries": [str(qitem)],
+                            }
+                        else:
+                            mqs = cur.setdefault("matched_queries", [])
+                            if str(qitem) not in mqs:
+                                mqs.append(str(qitem))
+                out = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0)), reverse=True)[:k]
+                return {"ok": True, "results": out, "count": len(out)}
+
             q = args.get("q") or args.get("query") or ""
             if not q:
                 return make_error(MCPError.INVALID_ARGS, "q required")
@@ -159,6 +193,7 @@ def query(
                 }
             q_vec = embedder.embed(q)
             top_k = int(args.get("limit") or 10)
+            min_conf = float(args.get("min_confidence", 0.25) or 0.25)
             results = idx.similar_vec(q_vec, top_k=top_k * 3, threshold=0.0)
             expansion_queries = []
             try:
@@ -216,6 +251,7 @@ def query(
                 gate = q50 + max(0.0, q75 - q50)
                 filtered = [r for r in results if float(r.get("similarity") or 0.0) >= gate]
                 results = (filtered or results)[:top_k]
+            results = [r for r in results if float(r.get("similarity") or 0.0) >= min_conf]
             return {
                 "ok": True,
                 "query": q,
@@ -223,6 +259,7 @@ def query(
                 "results": results,
                 "count": len(results),
                 "backend": embedder.backend,
+                "min_confidence": min_conf,
             }
 
         else:

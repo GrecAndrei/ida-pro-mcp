@@ -445,7 +445,7 @@ class TestTruncationImprovements(unittest.TestCase):
 
 class TestQueryEditActions(unittest.TestCase):
     def test_query_actions(self):
-        expected = {"data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns"}
+        expected = {"data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl", "nl_batch"}
         self.assertEqual(set(TOOL_ACTIONS["query"]), expected)
 
     def test_modify_actions(self):
