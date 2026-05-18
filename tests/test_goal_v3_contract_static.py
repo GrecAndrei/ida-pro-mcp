@@ -329,3 +329,9 @@ def test_types_propagate_uses_all_xrefs_and_returns_location_status():
     assert "for xref in idautils.XrefsTo(ea, 0):" in src
     assert "\"xref_kind\": \"code\" if is_code_xref else \"data\"" in src
     assert "\"locations\": locations[:200]" in src
+
+
+def test_compare_find_clones_no_addr_has_structured_group_details():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/compare.py")
+    assert "\"clone_groups_details\"" in src
+    assert "\"functions\": funcs_list[: min(len(funcs_list), 10)]" in src

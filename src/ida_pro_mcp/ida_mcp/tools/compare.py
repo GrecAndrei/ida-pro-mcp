@@ -520,12 +520,25 @@ def compare(
                          "size": size}
                 hash_map.setdefault(h, []).append(entry)
             clones = []
+            clone_groups_struct = []
             for h, funcs_list in hash_map.items():
                 if len(funcs_list) >= 2:
                     funcs_str = ", ".join(f["name"] for f in funcs_list[:5])
                     clones.append((len(funcs_list), f"hash={h}  count={len(funcs_list)}  {funcs_str}"))
+                    clone_groups_struct.append({
+                        "hash": h,
+                        "count": len(funcs_list),
+                        "functions": funcs_list[: min(len(funcs_list), 10)],
+                    })
             clones.sort(key=lambda c: c[0], reverse=True)
-            return {"ok": True, "clone_groups": len(clones), "clones": "\n".join(c[1] for c in clones[:limit]), "embedding_clone_pairs": []}
+            clone_groups_struct.sort(key=lambda g: int(g.get("count", 0)), reverse=True)
+            return {
+                "ok": True,
+                "clone_groups": len(clones),
+                "clones": "\n".join(c[1] for c in clones[:limit]),
+                "clone_groups_details": clone_groups_struct[:limit],
+                "embedding_clone_pairs": [],
+            }
 
         elif action == "changelog":
             ea1, err = _resolve_func(addr, "addr")
