@@ -884,6 +884,9 @@ def debug(
             if not output_file:
                 return make_error(MCPError.INVALID_ARGS, "output_file required")
             lim = int(kwargs.get("limit") or 500)
+            if lim <= 0:
+                return make_error(MCPError.INVALID_ARGS, "limit must be > 0")
+            lim = min(lim, 5000)
             try:
                 with open(output_file, "r", encoding="utf-8") as f:
                     lines = f.readlines()
@@ -923,7 +926,10 @@ def debug(
                 if len(prev) != len(cur):
                     changes.append({"offset": n, "before": f"len={len(prev)}", "after": f"len={len(cur)}"})
             _MEM_DIFF_SNAPSHOTS[key] = bytes(cur)
-            return {"ok": True, "addr": hex(ea), "size": span, "changed_offsets": changes[:1024], "change_count": len(changes)}
+            out = {"ok": True, "addr": hex(ea), "size": span, "changed_offsets": changes[:1024], "change_count": len(changes)}
+            if prev is None:
+                out["baseline_created"] = True
+            return out
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

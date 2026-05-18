@@ -184,3 +184,25 @@ def test_debug_del_bp_unhooks_conditional_hook_when_no_conditions_left():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
     assert "if not _BP_CONDITIONS and _BP_HOOK is not None" in src
     assert "_BP_HOOK.unhook()" in src
+
+
+def test_query_nl_and_nl_batch_clamp_min_confidence():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/query.py")
+    assert "min_conf = max(0.0, min(1.0, min_conf))" in src
+
+
+def test_query_nl_batch_returns_failed_queries_and_min_confidence():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/query.py")
+    assert "\"failed_queries\": failed_queries" in src
+    assert "\"min_confidence\": min_conf" in src
+
+
+def test_debug_trace_read_validates_and_caps_limit():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    assert "limit must be > 0" in src
+    assert "lim = min(lim, 5000)" in src
+
+
+def test_debug_mem_diff_reports_baseline_creation():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    assert "out[\"baseline_created\"] = True" in src
