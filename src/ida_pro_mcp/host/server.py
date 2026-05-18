@@ -5404,6 +5404,25 @@ class IDAMCPServer:
         tool = str(step.get("tool", ""))
         action = str(step.get("action", ""))
 
+        # Recursive extractor: collect any dict node that has an address and text-like field.
+        def _walk(node):
+            if isinstance(node, dict):
+                keys = set(node.keys())
+                has_addr = any(k in keys for k in ("addr", "address", "ea"))
+                has_text = any(k in keys for k in ("text", "description", "summary", "title", "name", "value"))
+                if has_addr and has_text:
+                    e = dict(node)
+                    e.setdefault("tool", tool)
+                    e.setdefault("action", action)
+                    out.append(e)
+                for v in node.values():
+                    _walk(v)
+            elif isinstance(node, list):
+                for it in node:
+                    _walk(it)
+
+        _walk(payload)
+
         for key in (
             "findings",
             "items",
@@ -5435,6 +5454,89 @@ class IDAMCPServer:
                 }
             )
         return out
+
+    def _severity_classify(self, finding: dict) -> str:
+        text = " ".join(
+            str(finding.get(k) or "")
+            for k in ("summary", "name", "title", "value", "kind", "type", "indicator", "description")
+        ).lower()
+        if ("network" in text or "http" in text or "socket" in text) and ("no auth" in text or "unauth" in text or "without auth" in text):
+            return "Critical"
+        if any(k in text for k in ("crypto misuse", "hardcoded key", "weak random", "insecure cipher", "buffer overflow", "format string", "command injection")):
+            return "High"
+        if any(k in text for k in ("anti-debug", "anti vm", "obfuscation", "packed")):
+            return "Medium"
+        return "Low"
+
+    def _correlate_findings(self, findings: list[dict]) -> tuple[list[dict], list[dict]]:
+        """Group findings by 4KB page and emit hotspots when 3+ findings hit same page."""
+        page_groups: dict[int, list[dict]] = {}
+        for f in findings:
+            try:
+                a = str(f.get("addr") or f.get("address") or f.get("ea") or "").strip()
+                if not a:
+                    continue
+                ai = int(a, 16) if a.lower().startswith("0x") else int(a)
+                pg = ai & ~0xFFF
+                page_groups.setdefault(pg, []).append(f)
+            except Exception:
+                continue
+        hotspots = []
+        for pg, rows in page_groups.items():
+            if len(rows) < 3:
+                continue
+            score = sum(float(r.get("ml_score", 0.0) or 0.0) for r in rows)
+            sev_rank = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
+            sev = max((self._severity_classify(r) for r in rows), key=lambda s: sev_rank.get(s, 1))
+            hotspots.append({
+                "page": hex(pg),
+                "finding_count": len(rows),
+                "combined_score": round(score, 4),
+                "severity": sev,
+            })
+        hotspots.sort(key=lambda x: (x["combined_score"], x["finding_count"]), reverse=True)
+        return findings, hotspots
+
+    def _synthesize_attack_paths(self, findings: list[dict]) -> list[dict]:
+        """A -> B -> C synthesis from finding call relationships when available."""
+        by_addr: dict[int, list[dict]] = {}
+        for f in findings:
+            try:
+                a = str(f.get("addr") or f.get("address") or f.get("ea") or "").strip()
+                if not a:
+                    continue
+                ai = int(a, 16) if a.lower().startswith("0x") else int(a)
+                by_addr.setdefault(ai, []).append(f)
+            except Exception:
+                continue
+        paths = []
+        for f in findings:
+            callees = f.get("callees") or f.get("calls") or []
+            if not isinstance(callees, list):
+                continue
+            a_txt = str(f.get("title") or f.get("summary") or f.get("name") or "A")
+            for c in callees[:10]:
+                c_addr_txt = ""
+                if isinstance(c, dict):
+                    c_addr_txt = str(c.get("addr") or c.get("ea") or "").strip()
+                else:
+                    c_addr_txt = str(c).split()[0]
+                if not c_addr_txt:
+                    continue
+                try:
+                    ci = int(c_addr_txt, 16) if c_addr_txt.lower().startswith("0x") else int(c_addr_txt)
+                except Exception:
+                    continue
+                linked = by_addr.get(ci, [])
+                for f2 in linked[:3]:
+                    c_txt = str(f2.get("title") or f2.get("summary") or f2.get("name") or "C")
+                    paths.append({
+                        "chain": f"{a_txt} -> {c_addr_txt} -> {c_txt}",
+                        "from": str(f.get("addr") or f.get("address") or f.get("ea") or ""),
+                        "via": c_addr_txt,
+                        "to": str(f2.get("addr") or f2.get("address") or f2.get("ea") or ""),
+                    })
+        return paths[:100]
 
     def _threat_hunt_score_finding(self, finding: dict, freq: int = 1) -> float:
         """Embedding-first threat ranking with deterministic non-heuristic fallback."""
@@ -5896,9 +5998,12 @@ class IDAMCPServer:
             row = dict(f)
             row["ml_score"] = self._threat_hunt_score_finding(row, dedup_freq.get(k, 1))
             row["support_count"] = dedup_freq.get(k, 1)
+            row["severity"] = self._severity_classify(row)
             ranked_findings.append(row)
         ranked_findings.sort(key=lambda x: (x.get("ml_score", 0.0), x.get("support_count", 1)), reverse=True)
         findings = ranked_findings[:limit]
+        findings, hotspots = self._correlate_findings(findings)
+        attack_paths = self._synthesize_attack_paths(findings)
         ok_steps = sum(1 for s in steps if s.get("ok"))
         failed_steps = len(steps) - ok_steps
         out = {
@@ -5920,6 +6025,8 @@ class IDAMCPServer:
             "count": len(findings),
             "total_raw_findings": len(raw_findings),
             "deduped": max(0, len(raw_findings) - len(findings)),
+            "hotspots": hotspots,
+            "attack_paths": attack_paths,
         }
         if legacy_meta:
             out["legacy"] = legacy_meta
