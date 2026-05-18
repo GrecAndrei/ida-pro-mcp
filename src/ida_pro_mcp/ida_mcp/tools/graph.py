@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def graph(
-    action: Annotated[Literal["callgraph", "cfg", "xref_graph"],
-                      "Action: callgraph|cfg|xref_graph"],
+    action: Annotated[Literal["callgraph", "cfg", "dominators", "xref_graph"],
+                      "Action: callgraph|cfg|dominators|xref_graph"],
     addr: Annotated[Optional[str], "Starting address (function or location)"] = None,
     depth: Annotated[int, "Max traversal depth"] = 5,
     direction: Annotated[Literal["down", "up", "both"], "Direction: down (callees), up (callers), both"] = "down",
@@ -96,19 +96,143 @@ def graph(
             
             import ida_gdl
             func = ida_funcs.get_func(ea)
-            nodes = {}
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            fc = ida_gdl.FlowChart(func)
+            id_by_start = {}
+            nodes = []
             edges = []
-            for block in ida_gdl.FlowChart(func):
-                label = f"{hex(block.start_ea)}-{hex(block.end_ea)}"
-                nodes[block.start_ea] = label
-                for succ in block.succs():
-                    edges.append((block.start_ea, succ.start_ea))
-                    if succ.start_ea not in nodes:
-                        nodes[succ.start_ea] = f"{hex(succ.start_ea)}-{hex(succ.end_ea)}"
+            mm = ["flowchart TD"]
 
-            result = _format_graph(nodes, edges, format)
-            result["function"] = idc.get_func_name(ea)
+            blocks = list(fc)
+            for i, b in enumerate(blocks):
+                bid = f"B{i}"
+                id_by_start[b.start_ea] = bid
+                insn_count = 0
+                cur = b.start_ea
+                while cur != idaapi.BADADDR and cur < b.end_ea:
+                    insn_count += 1
+                    cur = idc.next_head(cur, b.end_ea)
+                btype = "block"
+                last = idc.prev_head(b.end_ea, b.start_ea)
+                mnem = (idc.print_insn_mnem(last) or "").lower() if last != idaapi.BADADDR else ""
+                if mnem.startswith("ret"):
+                    btype = "ret"
+                elif mnem.startswith("call"):
+                    btype = "call"
+                nodes.append({
+                    "id": bid,
+                    "addr": hex(b.start_ea),
+                    "size": int(max(0, b.end_ea - b.start_ea)),
+                    "type": btype,
+                    "insn_count": insn_count,
+                })
+                mm.append(f'  {bid}["{hex(b.start_ea)}\\ninsn:{insn_count}"]')
+
+            for b in blocks:
+                src = id_by_start.get(b.start_ea)
+                succs = list(b.succs())
+                for idx, s in enumerate(succs):
+                    dst = id_by_start.get(s.start_ea)
+                    if not src or not dst:
+                        continue
+                    etype = "branch" if len(succs) > 1 else "fall_through"
+                    edges.append({"from": src, "to": dst, "type": etype})
+                    mm.append(f"  {src} --> {dst}")
+                if not succs:
+                    # terminal block
+                    edges.append({"from": src, "to": src, "type": "ret"})
+
+            result = {
+                "ok": True,
+                "action": "cfg",
+                "function": idc.get_func_name(ea),
+                "addr": hex(func.start_ea),
+                "mermaid": "\n".join(mm),
+                "adjacency": {"nodes": nodes, "edges": edges},
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+            }
             return result
+
+        elif action == "dominators":
+            if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err: return err
+            import ida_gdl
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            blocks = list(ida_gdl.FlowChart(func))
+            if not blocks:
+                return {"ok": True, "action": "dominators", "dominators": []}
+
+            preds = {b.start_ea: set() for b in blocks}
+            all_nodes = {b.start_ea for b in blocks}
+            start = blocks[0].start_ea
+            for b in blocks:
+                for s in b.succs():
+                    preds.setdefault(s.start_ea, set()).add(b.start_ea)
+
+            dom = {n: set(all_nodes) for n in all_nodes}
+            dom[start] = {start}
+            changed = True
+            while changed:
+                changed = False
+                for n in all_nodes:
+                    if n == start:
+                        continue
+                    pset = preds.get(n, set())
+                    if not pset:
+                        new_dom = {n}
+                    else:
+                        inter = None
+                        for p in pset:
+                            inter = set(dom[p]) if inter is None else inter.intersection(dom[p])
+                        new_dom = (inter if inter is not None else set()) | {n}
+                    if new_dom != dom[n]:
+                        dom[n] = new_dom
+                        changed = True
+
+            idom = {}
+            for n in all_nodes:
+                if n == start:
+                    idom[n] = None
+                    continue
+                cands = list(dom[n] - {n})
+                if not cands:
+                    idom[n] = None
+                    continue
+                # immediate dominator: dominator not dominated by any other candidate
+                imm = None
+                for c in cands:
+                    dominated_by_other = False
+                    for o in cands:
+                        if o == c:
+                            continue
+                        if c in dom.get(o, set()):
+                            dominated_by_other = True
+                            break
+                    if not dominated_by_other:
+                        imm = c
+                        break
+                idom[n] = imm
+
+            rows = []
+            for b in blocks:
+                n = b.start_ea
+                rows.append({
+                    "block_addr": hex(n),
+                    "idom_addr": hex(idom[n]) if idom.get(n) is not None else None,
+                })
+            return {
+                "ok": True,
+                "action": "dominators",
+                "function": idc.get_func_name(func.start_ea),
+                "entry": hex(start),
+                "dominators": rows,
+                "count": len(rows),
+            }
 
         elif action == "xref_graph":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
