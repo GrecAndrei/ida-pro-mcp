@@ -3123,7 +3123,12 @@ class SessionManager:
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            skill_id = f"skill_{name.lower().replace(' ', '_')}"
+            base_skill_id = f"skill_{name.lower().replace(' ', '_')}"
+            skill_id = base_skill_id
+            suffix = 2
+            while skill_id in data["skills"]:
+                skill_id = f"{base_skill_id}_{suffix}"
+                suffix += 1
             skill = {
                 "name": name,
                 "description": description,
