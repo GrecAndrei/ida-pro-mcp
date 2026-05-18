@@ -316,3 +316,9 @@ def test_taint_sanitizer_does_not_force_memcpy_as_sanitizer():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/taint.py")
     assert "def _is_sanitizer_name" in src
     assert "if sink_name == \"memcpy\"" not in src
+
+
+def test_protocol_detect_exposes_mode_and_source_provenance():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/protocol.py")
+    assert "\"mode\": \"classifier+embedding\"" in src
+    assert "\"source\": \"behavior_classifier\"" in src
