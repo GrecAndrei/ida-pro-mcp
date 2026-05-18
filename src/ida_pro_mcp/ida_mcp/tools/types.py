@@ -1090,7 +1090,3 @@ def _extract_struct_name(tif: ida_typeinf.tinfo_t) -> Optional[str]:
     if tif.is_struct() or tif.is_union():
         return tif.get_type_name()
     return None
-            struct_size = int(tif.get_size() or 0)
-            seg = idaapi.getseg(ea)
-            if not seg or (struct_size > 0 and ea + struct_size > seg.end_ea):
-                return make_error(MCPError.ADDRESS_INVALID, "Struct range exceeds mapped segment bounds")
