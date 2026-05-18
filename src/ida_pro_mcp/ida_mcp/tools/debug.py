@@ -236,6 +236,7 @@ def debug(
     - mem_map: Show memory map of the debugged process.
     - bp_context: Query blackboard for entries related to the current PC/function.
     """
+    global _TRACE_HOOK, _BP_HOOK
     try:
         import ida_dbg
         import ida_idd
@@ -808,7 +809,6 @@ def debug(
                 return make_error(MCPError.IDA_ERROR, str(e))
 
         elif action == "trace_start":
-            global _TRACE_HOOK
             output_file = str(kwargs.get("output_file") or "").strip()
             if not output_file:
                 return make_error(MCPError.INVALID_ARGS, "output_file required")
@@ -824,7 +824,6 @@ def debug(
             return {"ok": True, "trace_file": output_file, "max_insns": _TRACE_STATE["max_insns"]}
 
         elif action == "trace_stop":
-            global _TRACE_HOOK
             if _TRACE_HOOK is not None:
                 try:
                     _TRACE_HOOK.unhook()
