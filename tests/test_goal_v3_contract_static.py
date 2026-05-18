@@ -322,3 +322,10 @@ def test_protocol_detect_exposes_mode_and_source_provenance():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/protocol.py")
     assert "\"mode\": \"classifier+embedding\"" in src
     assert "\"source\": \"behavior_classifier\"" in src
+
+
+def test_types_propagate_uses_all_xrefs_and_returns_location_status():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/types.py")
+    assert "for xref in idautils.XrefsTo(ea, 0):" in src
+    assert "\"xref_kind\": \"code\" if is_code_xref else \"data\"" in src
+    assert "\"locations\": locations[:200]" in src
