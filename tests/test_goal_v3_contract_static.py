@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,3 +87,100 @@ def test_nav_semantic_goto_uses_embeddings_path():
     assert "BgeCodeEmbedder" in src
     assert "matched_by" in src
 
+
+@pytest.mark.parametrize(
+    "action,needles",
+    [
+        ("trace_start", ['elif action == "trace_start"', "output_file", "max_insns"]),
+        ("trace_stop", ['elif action == "trace_stop"', "insn_count", "trace_file"]),
+        ("trace_read", ['elif action == "trace_read"', "entries", "limit"]),
+        ("mem_diff", ['elif action == "mem_diff"', "changed_offsets", "change_count"]),
+    ],
+)
+def test_debug_new_actions_have_three_contract_markers(action, needles):
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    for n in needles:
+        assert n in src, f"{action} missing marker: {n}"
+
+
+@pytest.mark.parametrize(
+    "action,needles",
+    [
+        ("nl", ['elif action in ("nl", "nl_batch")', "min_confidence", "results"]),
+        ("nl_batch", ['if action == "nl_batch"', "matched_queries", "deduplicate"]),
+    ],
+)
+def test_query_new_actions_have_three_contract_markers(action, needles):
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/query.py")
+    for n in needles:
+        assert n in src, f"{action} missing marker: {n}"
+
+
+@pytest.mark.parametrize(
+    "action,needles",
+    [
+        ("infer", ['elif action == "infer"', '"inferred_types"', '"applied"']),
+        ("read_struct", ['elif action == "read_struct"', '"fields"', "Struct range exceeds mapped segment bounds"]),
+        ("propagate", ['elif action == "propagate"', '"propagated_to"', '"skipped"']),
+    ],
+)
+def test_types_goal_actions_have_three_contract_markers(action, needles):
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/types.py")
+    for n in needles:
+        assert n in src, f"{action} missing marker: {n}"
+
+
+@pytest.mark.parametrize(
+    "action,needles",
+    [
+        ("find_clones", ['elif action == "find_clones"', '"clones"', '"similarity"']),
+        ("changelog", ['elif action == "changelog"', '"added_apis"', '"string_delta"']),
+        ("blocks_cfg", ['elif action == "blocks"', '"cfg_edit_distance"', '"structural_match_pct"']),
+    ],
+)
+def test_compare_goal_actions_have_three_contract_markers(action, needles):
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/compare.py")
+    for n in needles:
+        assert n in src, f"{action} missing marker: {n}"
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        '"sanitized_by"',
+        '"interprocedural_findings"',
+        '"reachability_only"',
+    ],
+)
+def test_taint_goal_signals_present(signal):
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/taint.py")
+    assert signal in src
+
+
+def test_query_nl_batch_preserves_previous_matched_queries_on_score_replacement():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/query.py")
+    assert "prev_queries = list(cur.get(\"matched_queries\", []))" in src
+    assert "list(dict.fromkeys(prev_queries + [str(qitem)]))" in src
+
+
+def test_query_unknown_action_hint_lists_nl_actions():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/query.py")
+    assert "nl, nl_batch" in src
+
+
+def test_debug_trace_start_reports_active_trace_file_when_already_running():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    assert "\"already_running\": True" in src
+    assert "active_path = str(getattr(active_fh, \"name\", \"\") or \"\")" in src
+
+
+def test_debug_trace_start_creates_output_directory_and_validates_max_insns():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    assert "os.makedirs(out_dir, exist_ok=True)" in src
+    assert "max_insns must be > 0" in src
+
+
+def test_debug_del_bp_unhooks_conditional_hook_when_no_conditions_left():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    assert "if not _BP_CONDITIONS and _BP_HOOK is not None" in src
+    assert "_BP_HOOK.unhook()" in src
