@@ -7,6 +7,7 @@ except ImportError:
 import time
 from collections import OrderedDict
 import json
+import os
 
 
 # ============================================================================
@@ -21,6 +22,8 @@ _TRACE_STATE = {"file": None, "count": 0, "max_insns": 50000}
 _MEM_DIFF_SNAPSHOTS: Dict[Tuple[int, int], bytes] = {}
 _BP_CONDITIONS: Dict[int, str] = {}
 _BP_HOOK = None
+
+_BPT_COND_ALLOWED = set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_()[]=<>!&|+-*/%^~.,: \t")
 
 
 class _TraceHooks(idaapi.DBG_Hooks):
@@ -68,6 +71,14 @@ class _BreakpointHooks(idaapi.DBG_Hooks):
         except Exception:
             pass
         return 0
+
+def _is_safe_bp_condition(expr: str) -> bool:
+    if not isinstance(expr, str):
+        return False
+    txt = expr.strip()
+    if not txt or len(txt) > 256:
+        return False
+    return all(ch in _BPT_COND_ALLOWED for ch in txt)
 
 
 def _wait_for_suspend(timeout_ms: int = 3000):
@@ -422,10 +433,15 @@ def debug(
             ea, err = validate_addr(addr, require_code=True)
             if err:
                 return err
+            if condition is not None and not _is_safe_bp_condition(condition):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "condition contains unsupported characters",
+                    hint="Use a simple IDC expression (alnum/operators/whitespace only).",
+                )
             if ida_dbg.add_bpt(ea, 0, 0):
                 if condition:
                     _BP_CONDITIONS[int(ea)] = str(condition)
-                    global _BP_HOOK
                     if _BP_HOOK is None:
                         try:
                             _BP_HOOK = _BreakpointHooks()
@@ -443,6 +459,12 @@ def debug(
                 return err
             if ida_dbg.del_bpt(ea):
                 _BP_CONDITIONS.pop(int(ea), None)
+                if not _BP_CONDITIONS and _BP_HOOK is not None:
+                    try:
+                        _BP_HOOK.unhook()
+                    except Exception:
+                        pass
+                    _BP_HOOK = None
                 return {"ok": True, "addr": hex(ea)}
             return make_error(MCPError.IDA_ERROR, "Failed to delete breakpoint")
 
@@ -813,12 +835,25 @@ def debug(
             if not output_file:
                 return make_error(MCPError.INVALID_ARGS, "output_file required")
             max_insns = int(kwargs.get("max_insns") or 50000)
+            if max_insns <= 0:
+                return make_error(MCPError.INVALID_ARGS, "max_insns must be > 0")
             if _TRACE_HOOK is not None:
-                return {"ok": True, "already_running": True, "trace_file": output_file}
+                active_fh = _TRACE_STATE.get("file")
+                active_path = str(getattr(active_fh, "name", "") or "")
+                return {
+                    "ok": True,
+                    "already_running": True,
+                    "trace_file": active_path,
+                    "insn_count": int(_TRACE_STATE.get("count", 0)),
+                    "max_insns": int(_TRACE_STATE.get("max_insns", 50000)),
+                }
+            out_dir = os.path.dirname(output_file)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
             fh = open(output_file, "w", encoding="utf-8")
             _TRACE_STATE["file"] = fh
             _TRACE_STATE["count"] = 0
-            _TRACE_STATE["max_insns"] = max(1, max_insns)
+            _TRACE_STATE["max_insns"] = min(1_000_000, max_insns)
             _TRACE_HOOK = _TraceHooks()
             _TRACE_HOOK.hook()
             return {"ok": True, "trace_file": output_file, "max_insns": _TRACE_STATE["max_insns"]}

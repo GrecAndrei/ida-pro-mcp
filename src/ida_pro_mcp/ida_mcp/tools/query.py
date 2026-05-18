@@ -151,11 +151,12 @@ def query(
                         score = float(row.get("similarity") or row.get("score") or 0.0)
                         cur = merged.get(ea)
                         if not cur or score > float(cur.get("score", 0.0)):
+                            prev_queries = list(cur.get("matched_queries", [])) if isinstance(cur, dict) else []
                             merged[ea] = {
                                 "addr": ea,
                                 "name": row.get("name", ""),
                                 "score": score,
-                                "matched_queries": [str(qitem)],
+                                "matched_queries": list(dict.fromkeys(prev_queries + [str(qitem)])),
                             }
                         else:
                             mqs = cur.setdefault("matched_queries", [])
@@ -264,7 +265,7 @@ def query(
 
         else:
             return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown query action: {action}",
-                            hint="Valid actions: data, search, idb, code, types, imports_deep, symbols, patterns")
+                            hint="Valid actions: data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch")
             
     except Exception as e:
         return handle_error(e)
