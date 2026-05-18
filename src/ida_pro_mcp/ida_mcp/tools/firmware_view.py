@@ -259,7 +259,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio", "triage_snapshot", "bootstrap"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio|triage_snapshot|bootstrap"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio|rtos_scan|triage_snapshot|bootstrap"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -1772,17 +1772,95 @@ def firmware_view(
                 ),
             }
 
+        if action == "rtos_scan":
+            # Identify likely RTOS family by symbols/strings and infer task entry loops.
+            names = []
+            try:
+                for ea, nm in idautils.Names():
+                    if nm:
+                        names.append(str(nm))
+            except Exception:
+                names = []
+            svals = []
+            try:
+                for s in idautils.Strings():
+                    try:
+                        svals.append(str(s))
+                    except Exception:
+                        continue
+                    if len(svals) >= 5000:
+                        break
+            except Exception:
+                svals = []
+            blob = "\n".join(names[:5000] + svals[:5000]).lower()
+
+            score_freertos = sum(1 for k in ("xtaskcreate", "pvportmalloc", "vtaskdelay", "xqueuereceive") if k in blob)
+            score_threadx = sum(1 for k in ("tx_thread_create", "tx_queue_receive", "tx_semaphore_get", "tx_thread_sleep") if k in blob)
+            if score_freertos > score_threadx and score_freertos > 0:
+                rtos = "FreeRTOS"
+            elif score_threadx > 0:
+                rtos = "ThreadX"
+            else:
+                rtos = "unknown"
+
+            tasks = []
+            funcs_seen = 0
+            for fea in idautils.Functions():
+                funcs_seen += 1
+                if funcs_seen > 6000:
+                    break
+                fn = ida_funcs.get_func(fea)
+                if not fn:
+                    continue
+                has_loop = False
+                has_blocking = False
+                try:
+                    for ins in idautils.FuncItems(fea):
+                        for xr in idautils.XrefsFrom(ins, 0):
+                            if not xr.iscode:
+                                continue
+                            tf = ida_funcs.get_func(xr.to)
+                            if tf and tf.start_ea == fea:
+                                has_loop = True
+                            tname = (idc.get_name(xr.to) or "").lower()
+                            if any(k in tname for k in ("xqueuereceive", "vtaskdelay", "osdelay", "tx_queue_receive", "tx_thread_sleep")):
+                                has_blocking = True
+                        if has_loop and has_blocking:
+                            break
+                except Exception:
+                    pass
+                if has_loop and has_blocking:
+                    tasks.append({
+                        "name": idc.get_func_name(fea) or f"sub_{fea:x}",
+                        "entry_addr": hex(fea),
+                        "stack_size": None,
+                        "priority": None,
+                    })
+                if len(tasks) >= limit:
+                    break
+
+            conf = 0.2 + (0.3 if rtos != "unknown" else 0.0) + min(0.5, len(tasks) * 0.03)
+            return {
+                "ok": True,
+                "action": action,
+                "rtos_detected": rtos,
+                "tasks": tasks,
+                "confidence": round(min(1.0, conf), 3),
+            }
+
         if action == "triage_snapshot":
             # One-shot firmware orientation bundle so users/agents can start from
             # a compact, actionable snapshot instead of orchestrating three calls.
             load = firmware_view(action="detect_load_address", auto_blackboard=False)
             vectors = firmware_view(action="detect_vector_table", auto_blackboard=False)
             mmio = firmware_view(action="detect_mmio", auto_blackboard=False)
+            rtos_map = firmware_view(action="rtos_scan", auto_blackboard=False, limit=min(limit, 64))
 
             load_candidates = len(load.get("candidates", []) if isinstance(load, dict) else [])
             vector_entries = int(vectors.get("entry_count", 0) if isinstance(vectors, dict) else 0)
             mmio_regions = int(mmio.get("peripheral_count", 0) if isinstance(mmio, dict) else 0)
             likely_chip = (mmio.get("likely_chip_family") if isinstance(mmio, dict) else None) or "unknown"
+            rtos_name = (rtos_map.get("rtos_detected") if isinstance(rtos_map, dict) else None) or "unknown"
 
             confidence = 0.2
             if load_candidates > 0:
@@ -1792,6 +1870,8 @@ def firmware_view(
             if mmio_regions > 0:
                 confidence += 0.2
             if likely_chip != "unknown":
+                confidence += 0.1
+            if rtos_name != "unknown":
                 confidence += 0.1
             confidence = round(min(1.0, confidence), 3)
 
@@ -1804,6 +1884,8 @@ def firmware_view(
                 findings.append(f"MMIO peripheral regions found: {mmio_regions}")
             if likely_chip != "unknown":
                 findings.append(f"Likely chip family: {likely_chip}")
+            if rtos_name != "unknown":
+                findings.append(f"Likely RTOS: {rtos_name}")
             if not findings:
                 findings.append("No strong firmware fingerprints yet; likely unmapped or non-firmware image.")
 
@@ -1818,6 +1900,8 @@ def firmware_view(
                 next_actions.append("taint(action='report')")
             else:
                 next_actions.append("firmware_view(action='detect_mmio')")
+            if rtos_name == "unknown":
+                next_actions.append("firmware_view(action='rtos_scan')")
             next_actions.append("firmware_view(action='carve_plan')")
 
             result = {
@@ -1829,12 +1913,18 @@ def firmware_view(
                     "vector_entries": vector_entries,
                     "mmio_regions": mmio_regions,
                     "likely_chip_family": likely_chip,
+                    "rtos_map": {
+                        "rtos_detected": rtos_name,
+                        "tasks": (rtos_map.get("tasks", []) if isinstance(rtos_map, dict) else [])[:20],
+                        "confidence": rtos_map.get("confidence", 0.0) if isinstance(rtos_map, dict) else 0.0,
+                    },
                 },
                 "findings": findings,
                 "subresults": {
                     "load_address": load,
                     "vector_table": vectors,
                     "mmio": mmio,
+                    "rtos_scan": rtos_map,
                 },
                 "next_actions": next_actions,
             }
