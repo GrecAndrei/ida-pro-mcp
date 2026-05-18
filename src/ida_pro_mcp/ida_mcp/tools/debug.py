@@ -230,9 +230,10 @@ def debug(
     - continue: Resume execution.
     - step_into/step_over: Single step execution.
     - run_to: Execute until `addr` is reached (hardware BP).
-    - run_until: Step automatically until `addr` is hit OR `condition` is true.
+    - run_until: Step automatically until `addr` is hit OR Python `condition` is true.
     - breakpoints: List current breakpoints.
-    - add_bp/del_bp: Add or remove software breakpoints.
+    - add_bp/del_bp: Add/remove software breakpoints; use `idc_condition` kwarg
+      (or legacy `condition`) for IDC expressions.
     - enable_bp: Enable/disable an existing breakpoint.
     - add_hw_bp: Add a hardware breakpoint at `addr`.
     - add_watch: Add a memory watchpoint at `addr` with `access_type`.
@@ -253,6 +254,7 @@ def debug(
     try:
         import ida_dbg
         import ida_idd
+        idc_condition = kwargs.get("idc_condition")
 
         if action == "status":
             active, is_on, state, state_name = _debug_state()
@@ -435,22 +437,28 @@ def debug(
             ea, err = validate_addr(addr, require_code=True)
             if err:
                 return err
-            if condition is not None and not _is_safe_bp_condition(condition):
+            bp_cond = idc_condition if idc_condition is not None else condition
+            if bp_cond is not None and not _is_safe_bp_condition(str(bp_cond)):
                 return make_error(
                     MCPError.INVALID_ARGS,
-                    "condition contains unsupported characters",
+                    "idc_condition contains unsupported characters",
                     hint="Use a simple IDC expression (alnum/operators/whitespace only).",
                 )
             if ida_dbg.add_bpt(ea, 0, 0):
-                if condition:
-                    _BP_CONDITIONS[int(ea)] = str(condition)
+                if bp_cond:
+                    _BP_CONDITIONS[int(ea)] = str(bp_cond)
                     if _BP_HOOK is None:
                         try:
                             _BP_HOOK = _BreakpointHooks()
                             _BP_HOOK.hook()
                         except Exception:
                             _BP_HOOK = None
-                return {"ok": True, "addr": hex(ea), "condition": _BP_CONDITIONS.get(int(ea))}
+                return {
+                    "ok": True,
+                    "addr": hex(ea),
+                    "condition": _BP_CONDITIONS.get(int(ea)),
+                    "condition_language": "idc" if bp_cond else None,
+                }
             return make_error(MCPError.IDA_ERROR, "Failed to add breakpoint")
 
         elif action == "del_bp":
