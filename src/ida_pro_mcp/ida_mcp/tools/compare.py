@@ -220,10 +220,13 @@ def compare(
             def _block_info(ea):
                 func = ida_funcs.get_func(ea)
                 if not func:
-                    return []
+                    return [], []
                 fc = idaapi.FlowChart(func)
                 result = []
+                edges = []
+                by_start = {}
                 for block in fc:
+                    by_start[block.start_ea] = block
                     mnemonics = []
                     for head in idautils.Heads(block.start_ea, block.end_ea):
                         if idc.is_code(idc.get_full_flags(head)):
@@ -234,10 +237,13 @@ def compare(
                         "insn_count": len(mnemonics),
                         "mnemonics": " ".join(mnemonics),
                     })
-                return result
+                for block in fc:
+                    for succ in block.succs():
+                        edges.append((block.start_ea, succ.start_ea))
+                return result, edges
 
-            b1 = _block_info(ea1)
-            b2 = _block_info(ea2)
+            b1, e1 = _block_info(ea1)
+            b2, e2 = _block_info(ea2)
 
             # Match blocks by mnemonic sequence similarity
             matched = []
@@ -264,6 +270,10 @@ def compare(
                 "matched": "\n".join(str(x) for x in matched[:limit]),
                 "unmatched1": [b1[i]["start"] for i in unmatched1][:limit],
                 "unmatched2": [b2[j]["start"] for j in unmatched2][:limit],
+                "cfg_edit_distance": abs(len(b1) - len(b2)) + abs(len(e1) - len(e2)),
+                "added_blocks": max(0, len(b2) - len(b1)),
+                "removed_blocks": max(0, len(b1) - len(b2)),
+                "structural_match_pct": round(100.0 * (1.0 - (abs(len(b1)-len(b2)) + abs(len(e1)-len(e2))) / max(1, len(b1)+len(b2)+len(e1)+len(e2))), 2),
             }
 
         elif action == "apis":
@@ -464,7 +474,31 @@ def compare(
                     "results": "\n".join(r[1] for r in results[:limit])}
 
         elif action == "find_clones":
-            # Hash each function by its mnemonic sequence, group duplicates
+            if addr:
+                ea_t, err = _resolve_func(addr, "addr")
+                if err: return err
+                base_apis = _get_callees(ea_t)
+                base_strs = _get_string_refs(ea_t)
+                f0 = ida_funcs.get_func(ea_t)
+                base_size = (f0.end_ea - f0.start_ea) if f0 else 0
+                clones = []
+                for fea in idautils.Functions():
+                    if fea == ea_t:
+                        continue
+                    fn = ida_funcs.get_func(fea)
+                    if not fn:
+                        continue
+                    sz = fn.end_ea - fn.start_ea
+                    if base_size > 0 and (sz > base_size * 3 or base_size > sz * 3):
+                        continue
+                    s_api = _jaccard(base_apis, _get_callees(fea))
+                    s_str = _jaccard(base_strs, _get_string_refs(fea))
+                    sim = round((s_api + s_str) / 2.0, 4)
+                    if sim >= float(threshold):
+                        clones.append({"addr": hex_ea(fea), "name": idc.get_func_name(fea) or hex_ea(fea), "similarity": sim})
+                clones.sort(key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
+                return {"ok": True, "target": hex_ea(ea_t), "clones": clones[:10], "count": min(10, len(clones)), "embedding_clone_pairs": []}
+            # Backward-compatible no-addr mode.
             hash_map: dict[str, list] = {}
             for func_ea in idautils.Functions():
                 h = _mnemonic_hash(func_ea)
@@ -478,59 +512,13 @@ def compare(
                          "name": idc.get_func_name(func_ea) or hex_ea(func_ea),
                          "size": size}
                 hash_map.setdefault(h, []).append(entry)
-
             clones = []
             for h, funcs_list in hash_map.items():
                 if len(funcs_list) >= 2:
                     funcs_str = ", ".join(f["name"] for f in funcs_list[:5])
                     clones.append((len(funcs_list), f"hash={h}  count={len(funcs_list)}  {funcs_str}"))
-                if len(clones) >= limit:
-                    break
             clones.sort(key=lambda c: c[0], reverse=True)
-            embedding_clone_pairs = []
-            try:
-                from ida_pro_mcp.host.intelligence import get_assembler
-                asm = get_assembler()
-                candidates = []
-                for idx, ea in enumerate(idautils.Functions()):
-                    if idx >= max(40, limit * 4):
-                        break
-                    lines = _decompile_lines(ea)
-                    if not lines:
-                        continue
-                    text = "\n".join(lines)[:5000]
-                    if not text:
-                        continue
-                    vec = asm._embedder.embed(text)
-                    candidates.append((ea, vec))
-                    if len(candidates) >= max(10, limit * 2):
-                        break
-                # Pairwise similarity over sampled candidates (bounded for latency).
-                for i in range(len(candidates)):
-                    ea_i, v_i = candidates[i]
-                    for j in range(i + 1, len(candidates)):
-                        ea_j, v_j = candidates[j]
-                        sim = sum(float(a) * float(b) for a, b in zip(v_i, v_j))
-                        if sim >= max(0.78, float(threshold)):
-                            embedding_clone_pairs.append(
-                                {
-                                    "addr1": hex_ea(ea_i),
-                                    "name1": idc.get_func_name(ea_i) or hex_ea(ea_i),
-                                    "addr2": hex_ea(ea_j),
-                                    "name2": idc.get_func_name(ea_j) or hex_ea(ea_j),
-                                    "similarity": round(sim, 4),
-                                }
-                            )
-                embedding_clone_pairs.sort(key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
-                embedding_clone_pairs = embedding_clone_pairs[:limit]
-            except Exception:
-                embedding_clone_pairs = []
-            return {
-                "ok": True,
-                "clone_groups": len(clones),
-                "clones": "\n".join(c[1] for c in clones[:limit]),
-                "embedding_clone_pairs": embedding_clone_pairs,
-            }
+            return {"ok": True, "clone_groups": len(clones), "clones": "\n".join(c[1] for c in clones[:limit]), "embedding_clone_pairs": []}
 
         elif action == "changelog":
             ea1, err = _resolve_func(addr, "addr")
@@ -538,29 +526,22 @@ def compare(
             ea2, err = _resolve_func(addr2, "addr2")
             if err: return err
 
-            lines1 = _decompile_lines(ea1)
-            lines2 = _decompile_lines(ea2)
-            udiff = list(difflib.unified_diff(lines1, lines2,
-                                               fromfile=idc.get_func_name(ea1) or hex_ea(ea1),
-                                               tofile=idc.get_func_name(ea2) or hex_ea(ea2),
-                                               lineterm=""))
-
-            added = [l for l in udiff if l.startswith("+") and not l.startswith("+++")]
-            removed = [l for l in udiff if l.startswith("-") and not l.startswith("---")]
-
-            # Structural delta
-            bc1, ec1, cc1 = _flowchart_info(ea1)
-            bc2, ec2, cc2 = _flowchart_info(ea2)
-
+            a1 = _get_callees(ea1); a2 = _get_callees(ea2)
+            s1 = _get_string_refs(ea1); s2 = _get_string_refs(ea2)
+            f1 = ida_funcs.get_func(ea1); f2 = ida_funcs.get_func(ea2)
+            size1 = (f1.end_ea - f1.start_ea) if f1 else 0
+            size2 = (f2.end_ea - f2.start_ea) if f2 else 0
+            bc1, ec1, _ = _flowchart_info(ea1)
+            bc2, ec2, _ = _flowchart_info(ea2)
             return {
                 "ok": True,
                 "reference": idc.get_func_name(ea1) or hex_ea(ea1),
                 "current": idc.get_func_name(ea2) or hex_ea(ea2),
-                "added_lines": len(added),
-                "removed_lines": len(removed),
-                "complexity_delta": cc2 - cc1,
-                "block_delta": bc2 - bc1,
-                "diff": udiff[:50],
+                "added_apis": sorted(a2 - a1),
+                "removed_apis": sorted(a1 - a2),
+                "control_flow_changed": (bc1 != bc2) or (ec1 != ec2),
+                "size_delta": int(size2 - size1),
+                "string_delta": {"added": sorted(s2 - s1), "removed": sorted(s1 - s2)},
             }
 
         else:

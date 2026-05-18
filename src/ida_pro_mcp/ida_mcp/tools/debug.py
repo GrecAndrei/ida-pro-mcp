@@ -20,6 +20,7 @@ _TRACE_HOOK = None
 _TRACE_STATE = {"file": None, "count": 0, "max_insns": 50000}
 _MEM_DIFF_SNAPSHOTS: Dict[Tuple[int, int], bytes] = {}
 _BP_CONDITIONS: Dict[int, str] = {}
+_BP_HOOK = None
 
 
 class _TraceHooks(idaapi.DBG_Hooks):
@@ -45,6 +46,25 @@ class _TraceHooks(idaapi.DBG_Hooks):
             fh = _TRACE_STATE.get("file")
             fh.write(json.dumps(rec) + "\n")
             _TRACE_STATE["count"] = int(_TRACE_STATE.get("count", 0)) + 1
+        except Exception:
+            pass
+        return 0
+
+
+class _BreakpointHooks(idaapi.DBG_Hooks):
+    def dbg_bpt(self, tid, ea):
+        try:
+            cond = _BP_CONDITIONS.get(int(ea))
+            if not cond:
+                return 0
+            # Restricted eval via IDC expression evaluator as requested.
+            try:
+                ok = bool(idc.eval_idc(cond))
+            except Exception:
+                ok = False
+            if not ok:
+                import ida_dbg
+                ida_dbg.continue_process()
         except Exception:
             pass
         return 0
@@ -404,6 +424,13 @@ def debug(
             if ida_dbg.add_bpt(ea, 0, 0):
                 if condition:
                     _BP_CONDITIONS[int(ea)] = str(condition)
+                    global _BP_HOOK
+                    if _BP_HOOK is None:
+                        try:
+                            _BP_HOOK = _BreakpointHooks()
+                            _BP_HOOK.hook()
+                        except Exception:
+                            _BP_HOOK = None
                 return {"ok": True, "addr": hex(ea), "condition": _BP_CONDITIONS.get(int(ea))}
             return make_error(MCPError.IDA_ERROR, "Failed to add breakpoint")
 
