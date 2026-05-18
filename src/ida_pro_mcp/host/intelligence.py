@@ -47,6 +47,7 @@ from .intelligence_helpers import compact_policy_blob, derive_focus_candidates, 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
 _EMBED_LEASE_FILE = os.path.join("/tmp", "ida-mcp-embed-server.json")
+_MODEL_PATH_CACHE = None
 
 def _find_llama_server() -> str:
     """Locate llama-server binary from env, project dir, or PATH."""
@@ -69,8 +70,12 @@ def _find_llama_server() -> str:
 
 def _find_model() -> str:
     """Locate the embedding GGUF from env or common locations."""
+    global _MODEL_PATH_CACHE
+    if isinstance(_MODEL_PATH_CACHE, str):
+        return _MODEL_PATH_CACHE
     env = os.environ.get("IDA_MCP_EMBED_MODEL", "")
     if env and os.path.isfile(env):
+        _MODEL_PATH_CACHE = env
         return env
     candidates = [
         os.path.join(_PROJECT_ROOT, ".opencode-swarm", "bge-code-v1-q8_0.gguf"),
@@ -83,6 +88,7 @@ def _find_model() -> str:
     for c in candidates:
         p = os.path.abspath(c)
         if os.path.isfile(p):
+            _MODEL_PATH_CACHE = p
             return p
     # Glob search in ~/Downloads and ~/models
     import glob
@@ -92,7 +98,9 @@ def _find_model() -> str:
     ):
         for p in glob.glob(os.path.join(search_root, "**", "bge-code-v1*.gguf"), recursive=True):
             if os.path.isfile(p):
+                _MODEL_PATH_CACHE = p
                 return p
+    _MODEL_PATH_CACHE = ""
     return ""
 
 

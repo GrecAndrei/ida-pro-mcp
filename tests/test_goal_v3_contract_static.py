@@ -298,3 +298,9 @@ def test_nav_semantic_goto_reports_backend_and_fallback_warning():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/nav.py")
     assert "\"semantic_backend\": semantic_backend" in src
     assert "used keyword fallback" in src
+
+
+def test_intelligence_find_model_uses_path_cache():
+    src = _read("src/ida_pro_mcp/host/intelligence.py")
+    assert "_MODEL_PATH_CACHE = None" in src
+    assert "if isinstance(_MODEL_PATH_CACHE, str):" in src
