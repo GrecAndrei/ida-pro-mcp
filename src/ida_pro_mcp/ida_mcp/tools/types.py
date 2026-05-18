@@ -180,6 +180,36 @@ def types(
 
             elif tif.is_typedef():
                 result["kind"] = "typedef"
+                # Best-effort typedef chain unwrapping to a concrete type.
+                try:
+                    chain = [str(tif)]
+                    cur = ida_typeinf.tinfo_t(tif)
+                    for _ in range(8):
+                        if not cur.is_typedef():
+                            break
+                        nxt = ida_typeinf.tinfo_t()
+                        ok = False
+                        if hasattr(cur, "get_next_type_name"):
+                            try:
+                                next_name = cur.get_next_type_name()
+                                if next_name and _resolve_type_by_name(next_name, nxt):
+                                    ok = True
+                            except Exception:
+                                ok = False
+                        if not ok and hasattr(cur, "get_next_type"):
+                            try:
+                                ok = bool(cur.get_next_type(nxt))
+                            except Exception:
+                                ok = False
+                        if not ok:
+                            break
+                        chain.append(str(nxt))
+                        cur = nxt
+                    if len(chain) > 1:
+                        result["typedef_chain"] = chain
+                        result["resolved_type"] = chain[-1]
+                except Exception:
+                    pass
 
             return result
 
@@ -385,43 +415,52 @@ def types(
             if ea == idaapi.BADADDR:
                 return make_error(MCPError.INVALID_ARGS, f"Invalid address: {addr}")
 
-            tif = ida_typeinf.tinfo_t()
-            method = "none"
-            confidence = "none"
-
-            # Try Hex-Rays type inference
+            inferred_types = []
+            applied = False
+            conf = 0.0
+            # Prologue/frame-driven locals inference.
             try:
-                if ida_hexrays.init_hexrays_plugin():
-                    if hasattr(ida_hexrays, 'guess_tinfo') and ida_hexrays.guess_tinfo(tif, ea):
-                        method = "hexrays"
-                        confidence = "high"
-                    elif hasattr(ida_hexrays, 'decompile'):
-                        try:
-                            cfunc = ida_hexrays.decompile(ea)
-                            if cfunc and cfunc.type:
-                                tif = cfunc.type
-                                method = "hexrays"
-                                confidence = "high"
-                        except Exception:
-                            pass
+                frame_id = idc.get_frame_id(ea)
+                if frame_id != idaapi.BADADDR:
+                    locals_found = []
+                    off = idc.get_first_member(frame_id)
+                    while off != -1 and off != idaapi.BADADDR:
+                        nm = idc.get_member_name(frame_id, off) or ""
+                        if nm:
+                            sz = idc.get_member_size(frame_id, off)
+                            locals_found.append({"name": nm, "offset": int(off), "size": int(sz)})
+                        off = idc.get_next_member(frame_id, off)
+                    if len(locals_found) >= 3:
+                        inferred_types.append({"kind": "stack_frame", "locals": locals_found[:32], "count": len(locals_found)})
+                        conf = max(conf, 0.65)
             except Exception:
                 pass
-
-            if method == "none":
-                if ida_nalt.get_tinfo(tif, ea):
-                    method = "existing"
-                    confidence = "high"
-
-            if method == "none":
-                size = ida_bytes.get_item_size(ea)
-                if size > 0:
-                    type_guess = {1: "uint8_t", 2: "uint16_t", 4: "uint32_t", 8: "uint64_t"}.get(
-                        size, f"uint8_t[{size}]"
-                    )
-                    return {"addr": addr, "inferred_type": type_guess, "method": "size", "confidence": "low"}
-                return {"addr": addr, "inferred_type": None, "method": "none", "confidence": "none"}
-
-            return {"addr": addr, "inferred_type": str(tif), "method": method, "confidence": confidence}
+            # Object-init pattern (malloc(N) + field writes) heuristic.
+            try:
+                fn = idaapi.get_func(ea)
+                if fn:
+                    alloc_sizes = []
+                    for head in idautils.Heads(fn.start_ea, fn.end_ea):
+                        dis = (ida_lines.tag_remove(idc.generate_disasm_line(head, 0) or "")).lower()
+                        if "malloc" in dis or "calloc" in dis:
+                            v = idc.get_operand_value(head, 0)
+                            if isinstance(v, int) and v > 0:
+                                alloc_sizes.append(v)
+                    if alloc_sizes:
+                        inferred_types.append({"kind": "heap_object", "size": int(max(alloc_sizes))})
+                        conf = max(conf, 0.55)
+            except Exception:
+                pass
+            # Existing/hexrays fallback
+            if not inferred_types:
+                tif = ida_typeinf.tinfo_t()
+                try:
+                    if ida_nalt.get_tinfo(tif, ea):
+                        inferred_types.append({"kind": "existing", "type": str(tif)})
+                        conf = max(conf, 0.8)
+                except Exception:
+                    pass
+            return {"ok": True, "addr": addr, "inferred_types": inferred_types, "confidence": round(float(conf), 3), "applied": bool(applied)}
 
         # ====================================================================
         # read_struct - Read structured data from memory using a type
@@ -500,22 +539,17 @@ def types(
 
                 members.append({
                     "name": m.name,
-                    "offset_dec": field_offset,
-                    "offset": hex(field_offset),
-                    "offset_end": hex(field_offset + max(mem_size, 0)),
-                    "type": mem_type_str,
+                    "offset": int(field_offset),
                     "size": mem_size,
                     "value": val_str,
                 })
 
             return {
                 "ok": True,
-                "addr": addr,
-                "struct": name,
-                "struct_size": tif.get_size(),
-                "is_union": tif.is_union(),
-                "members": members,
-                "total_members": len(members),
+                "addr": hex(ea),
+                "type_name": name,
+                "fields": members,
+                "struct_size": struct_size,
             }
 
         # ====================================================================
@@ -726,43 +760,45 @@ def types(
         # NEW: propagate - Propagate a type from addr to all xref locations
         # ====================================================================
         elif action == "propagate":
-            if not addr:
+            seed_addr = kwargs.get("seed_addr") or addr
+            type_name = kwargs.get("type_name") or name
+            if not seed_addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required. "
                                   "Provide the address whose type should be propagated to all xref locations.")
-            if not name:
+            if not type_name:
                 return make_error(MCPError.INVALID_ARGS, "name (type name) required. "
                                   "Provide the type name to apply at all referencing locations.")
 
-            ea, err = validate_addr(addr)
+            ea, err = validate_addr(str(seed_addr))
             if err:
                 return err
 
             tif = ida_typeinf.tinfo_t()
-            if not _resolve_type_by_name(name, tif):
-                return make_error(MCPError.TYPE_ERROR, f"Type '{name}' not found. Use 'list' to see available types.")
+            if not _resolve_type_by_name(str(type_name), tif):
+                return make_error(MCPError.TYPE_ERROR, f"Type '{type_name}' not found. Use 'list' to see available types.")
 
             # Collect all xrefs TO the given address
             locations = []
             seen = set()
             MAX_XREFS = 5000
 
-            for xref in idautils.XrefsTo(ea, 0):
+            for xref in idautils.CodeRefsTo(ea, 0):
                 if len(locations) >= MAX_XREFS:
                     break
-                if xref.frm in seen:
+                frm = getattr(xref, "frm", xref)
+                if frm in seen:
                     continue
-                seen.add(xref.frm)
+                seen.add(frm)
 
                 loc_info = {
-                    "from": xref.frm,
-                    "from_hex": hex(xref.frm),
-                    "type": "code" if xref.iscode else "data",
-                    "user": xref.user,
+                    "from": frm,
+                    "from_hex": hex(frm),
+                    "type": "code",
                 }
 
                 # Attempt to apply the type at this xref origin
                 try:
-                    if ida_typeinf.apply_tinfo(xref.frm, tif, ida_typeinf.TINFO_DEFINITE):
+                    if ida_typeinf.apply_tinfo(frm, tif, ida_typeinf.TINFO_DEFINITE):
                         loc_info["applied"] = True
                     else:
                         loc_info["applied"] = False
@@ -779,13 +815,12 @@ def types(
             return {
                 "ok": True,
                 "source_addr": hex(ea),
-                "type": name,
+                "type": str(type_name),
                 "type_str": str(tif),
                 "type_size": tif.get_size(),
+                "propagated_to": [loc["from_hex"] for loc in locations if loc.get("applied")],
+                "skipped": int(failed_count),
                 "total_xrefs": len(locations),
-                "applied_count": applied_count,
-                "failed_count": failed_count,
-                "locations": locations,
             }
 
         # ====================================================================
@@ -1028,3 +1063,7 @@ def _extract_struct_name(tif: ida_typeinf.tinfo_t) -> Optional[str]:
     if tif.is_struct() or tif.is_union():
         return tif.get_type_name()
     return None
+            struct_size = int(tif.get_size() or 0)
+            seg = idaapi.getseg(ea)
+            if not seg or (struct_size > 0 and ea + struct_size > seg.end_ea):
+                return make_error(MCPError.ADDRESS_INVALID, "Struct range exceeds mapped segment bounds")

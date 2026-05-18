@@ -258,6 +258,10 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
         source_name = (idc.get_name(source_ea) or hex_ea(source_ea)).lower()
         sink_name = (idc.get_name(sink_ea) or hex_ea(sink_ea)).lower()
         m_call = getattr(ida_hexrays, "m_call", None)
+        m_icall = getattr(ida_hexrays, "m_icall", None)
+        _mop_r = getattr(ida_hexrays, "mop_r", None)
+        _mop_l = getattr(ida_hexrays, "mop_l", None)
+        _mop_S = getattr(ida_hexrays, "mop_S", None)
 
         # Seed taint from source call assignment, then propagate until stable.
         tainted_mregs: Set[int] = set()
@@ -295,10 +299,25 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
                                 changed = True
 
                     # m_call propagation: tainted arg -> tainted return def.
-                    try:
-                        is_call = (m_call is not None and int(getattr(insn, "opcode", -1)) == int(m_call)) or ("call" in low)
-                    except Exception:
+                    opv = int(getattr(insn, "opcode", -1))
+                    is_call = (m_call is not None and opv == int(m_call)) or (m_icall is not None and opv == int(m_icall))
+                    if not is_call:
                         is_call = "call" in low
+                    # operand kind check for robustness
+                    if uses_taint and (_mop_r is not None or _mop_l is not None or _mop_S is not None):
+                        try:
+                            opk = []
+                            for mop in (getattr(insn, "l", None), getattr(insn, "r", None), getattr(insn, "d", None)):
+                                if mop is not None:
+                                    opk.append(int(getattr(mop, "t", -1)))
+                            uses_taint = uses_taint and any(
+                                (t == int(_mop_r) if _mop_r is not None else False)
+                                or (t == int(_mop_l) if _mop_l is not None else False)
+                                or (t == int(_mop_S) if _mop_S is not None else False)
+                                for t in opk
+                            )
+                        except Exception:
+                            pass
                     if is_call and uses_taint and defs:
                         for d in defs:
                             if d not in tainted_mregs:
@@ -455,6 +474,26 @@ def taint(
                     dataflow_desc = flow.get("desc")
                     conf_label = str(flow.get("confidence") or "medium")
                     conf_num = {"high": 0.9, "medium": 0.6, "low": 0.45}.get(conf_label, 0.6)
+                    sanitized_by = []
+                    if path_to_sink:
+                        for p in path_to_sink:
+                            nm = (idc.get_name(int(p, 16)) or "").lower()
+                            if nm.startswith("validate_") or nm.startswith("check_") or nm.startswith("sanitize_") or nm in ("strlen", "strnlen"):
+                                sanitized_by.append(nm)
+                            if sink_name == "memcpy":
+                                sanitized_by.append("memcpy")
+                    interproc = []
+                    # one-level inter-procedural check
+                    for cea, _, cpath in _callees_of(source_ea, max_depth=1, visited={source_ea}):
+                        if cea == source_ea:
+                            continue
+                        c_reach = _callees_of(cea, max_depth=1, visited={cea})
+                        c_eas = {x for x, _, _ in c_reach}
+                        for sn, sea in sink_addrs.items():
+                            if sea in c_eas:
+                                interproc.append({"callee": hex_ea(cea), "sink": sn, "depth": 1})
+                                break
+
                     found_sinks.append({
                         "sink": sink_name,
                         "sink_addr": hex_ea(sink_ea),
@@ -467,6 +506,8 @@ def taint(
                         "analysis_method": flow.get("method"),
                         "inference_method": flow.get("method"),
                         "reachability_only": bool(flow.get("reachability_only", False)),
+                        "sanitized_by": sorted(set(sanitized_by)),
+                        "interprocedural_findings": interproc[:8],
                     })
 
             # Sort by depth (closest sinks first)
