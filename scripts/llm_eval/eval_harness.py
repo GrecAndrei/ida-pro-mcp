@@ -39,24 +39,30 @@ BASE_URL  = "https://opencode.ai/zen/go/v1"
 
 MODELS = [
     {
-        "id":    "deepseek-v4-pro",
-        "label": "DeepSeek V4 Pro",
-        "extra": {"reasoning_effort": "high"},
+        "id":          "deepseek-v4-pro",
+        "label":       "DeepSeek V4 Pro",
+        "extra":       {"reasoning_effort": "high"},
+        "tool_budget": 60,
+        "max_turns":   35,
     },
     {
-        "id":    "deepseek-v4-flash",
-        "label": "DeepSeek V4 Flash",
-        "extra": {"reasoning_effort": "max"},
+        "id":          "deepseek-v4-flash",
+        "label":       "DeepSeek V4 Flash",
+        "extra":       {"reasoning_effort": "max"},
+        "tool_budget": 40,
+        "max_turns":   30,
     },
     {
-        "id":    "qwen3.6-plus",
-        "label": "Qwen3.6 Plus",
-        "extra": {"extra_body": {"enable_thinking": True, "thinking_budget": 8192}},
+        "id":          "qwen3.6-plus",
+        "label":       "Qwen3.6 Plus",
+        "extra":       {"extra_body": {"enable_thinking": True, "thinking_budget": 8192}},
+        "tool_budget": 40,
+        "max_turns":   30,
     },
 ]
 
-MAX_TURNS       = 30    # hard cap on tool-call rounds
-TOOL_BUDGET     = 40    # max individual tool calls per model
+MAX_TURNS       = 30    # default cap (overridden per model above)
+TOOL_BUDGET     = 40    # default cap (overridden per model above)
 CONTEXT_WARN_K  = 80_000  # warn when prompt tokens approach this
 CONTEXT_TRIM_K  = 120_000 # aggressively summarise older turns above this
 
@@ -64,7 +70,7 @@ MCP_CMD = [
     sys.executable, "-u",
     str(Path(__file__).parent.parent.parent / "ida_mcp_stdio.py"),
 ]
-MCP_ENV = {
+MCP_ENV_BASE = {
     **os.environ,
     "IDADIR": os.environ.get("IDADIR", "/home/REDACTED/ida-pro-9.2"),
     "IDA_MCP_RESPONSE_MODE":    "compact",
@@ -75,6 +81,13 @@ MCP_ENV = {
     "IDA_MCP_COMPACT_CHAR_BUDGET": "30000",
     "IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS": "1",
 }
+
+def _make_mcp_env(label: str) -> dict:
+    """Each model gets its own isolated cache dir so IDB files never collide."""
+    slug = label.lower().replace(" ", "_").replace("/", "_")
+    cache_dir = str(Path(__file__).parent / "results" / f"cache_{slug}_{int(time.time())}")
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    return {**MCP_ENV_BASE, "IDA_MCP_CACHE_DIR": cache_dir}
 
 SYSTEM_PROMPT = textwrap.dedent("""\
     You are an expert reverse engineer using IDA Pro via the ida-pro-mcp tool suite.
@@ -394,6 +407,9 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str) -
     label = model_cfg["label"]
     model_id = model_cfg["id"]
     extra = model_cfg.get("extra", {})
+    # Per-model overrides take precedence over global defaults.
+    max_turns  = model_cfg.get("max_turns",   max_turns)
+    tool_budget = model_cfg.get("tool_budget", TOOL_BUDGET)
 
     print(f"\n{'='*60}")
     print(f"  {label}  —  starting")
@@ -406,8 +422,8 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str) -
     next_call_hints: list[str] = []
     all_tool_results: list[str] = []
 
-    # --- start MCP server ---
-    mcp = MCPClient(MCP_CMD, MCP_ENV)
+    # --- start MCP server with isolated cache dir per model ---
+    mcp = MCPClient(MCP_CMD, _make_mcp_env(label))
     try:
         mcp.initialize()
         mcp_tools = mcp.list_tools()
@@ -449,7 +465,7 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str) -
     turns = 0
     last_text = ""
 
-    while turns < max_turns and tool_call_count < TOOL_BUDGET:
+    while turns < max_turns and tool_call_count < tool_budget:
         turns += 1
 
         # context management
@@ -551,8 +567,8 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str) -
                 "content": result_str,
             })
 
-            if tool_call_count >= TOOL_BUDGET:
-                print(f"  [{label}] tool budget exhausted ({TOOL_BUDGET})")
+            if tool_call_count >= tool_budget:
+                print(f"  [{label}] tool budget exhausted ({tool_budget})")
                 break
 
         messages.extend(tool_result_msgs)
@@ -588,7 +604,8 @@ def run_all(binary_path: str, max_turns: int):
     api_key = _load_api_key()
     print(f"Binary: {binary_path}")
     print(f"Models: {', '.join(m['label'] for m in MODELS)}")
-    print(f"Max turns: {max_turns}, Tool budget: {TOOL_BUDGET}")
+    budgets = ", ".join(f"{m['label']}: {m.get('tool_budget', TOOL_BUDGET)} tools / {m.get('max_turns', max_turns)} turns" for m in MODELS)
+    print(f"Budgets: {budgets}")
 
     results = []
     threads = []
