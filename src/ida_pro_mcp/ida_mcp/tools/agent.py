@@ -115,13 +115,69 @@ def agent(
             code_res = code_tool(action="analyze", addrs=addr)
             logic_res = ctree_tool(action="get_logic_flow", addr=addr)
             graph_res = graph_tool(action="cfg", addr=addr, format="mermaid")
+            ctx_res = agent(action="context_pack", addr=addr, include_pseudocode=False, max_items=max_items, use_cache=use_cache)
+            callee_chain = []
+            try:
+                seen = set()
+                q = [(ea, 0)]
+                while q:
+                    cur, d = q.pop(0)
+                    if d >= 2:
+                        continue
+                    fn = idaapi.get_func(cur)
+                    if not fn:
+                        continue
+                    for item in idautils.FuncItems(fn.start_ea):
+                        for xr in idautils.XrefsFrom(item, 0):
+                            if not xr.iscode:
+                                continue
+                            tf = idaapi.get_func(xr.to)
+                            if not tf:
+                                continue
+                            k = (int(cur), int(tf.start_ea))
+                            if k in seen:
+                                continue
+                            seen.add(k)
+                            callee_chain.append({
+                                "from": hex(cur),
+                                "to": hex(tf.start_ea),
+                                "from_name": ida_funcs.get_func_name(cur),
+                                "to_name": ida_funcs.get_func_name(tf.start_ea),
+                                "depth": d + 1,
+                            })
+                            q.append((tf.start_ea, d + 1))
+                        if len(callee_chain) >= 256:
+                            break
+                    if len(callee_chain) >= 256:
+                        break
+            except Exception:
+                pass
+            behavior_tags = []
+            rename_suggestion = ""
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                pseudo = ""
+                if isinstance(ctx_res, dict):
+                    pseudo = str(ctx_res.get("pseudocode") or "")
+                if pseudo:
+                    bc = BehaviorClassifier.instance(BgeCodeEmbedder())
+                    behavior_tags = bc.classify(pseudo, threshold=0.25, top_k=4, block=False)
+                    if behavior_tags:
+                        top = behavior_tags[0].get("behavior", "analyzed")
+                        rename_suggestion = f"{top}_{ea:x}"
+            except Exception:
+                pass
             return {
                 "ok": True,
                 "addr": hex(ea),
                 "name": idc.get_func_name(ea),
                 "code_analysis": code_res,
                 "logic_skeleton": logic_res.get("logic_flow", []),
-                "control_flow_graph": graph_res.get("mermaid", "")
+                "control_flow_graph": graph_res.get("mermaid", ""),
+                "call_graph_depth2": callee_chain[:max_items * 6],
+                "strings": (ctx_res.get("summary", {}) or {}).get("strings", []) if isinstance(ctx_res, dict) else [],
+                "behavior_tags": behavior_tags,
+                "rename_suggestion": rename_suggestion,
             }
         
         elif action == "explore_address":
@@ -132,12 +188,32 @@ def agent(
             func = idaapi.get_func(ea)
             seg = idaapi.getseg(ea)
             
+            item_sz = int(idc.get_item_size(ea) or 0)
+            flags = ida_bytes.get_flags(ea)
+            kind = "unknown"
+            if func:
+                kind = "function"
+            elif ida_bytes.is_strlit(flags):
+                kind = "string"
+            elif ida_bytes.is_code(flags):
+                kind = "code"
+            elif ida_bytes.is_data(flags):
+                kind = "data"
+            # Heuristic table typing
+            if kind in ("data", "unknown") and item_sz >= 8:
+                try:
+                    ptr = ida_bytes.get_qword(ea)
+                    if idaapi.get_func(ptr):
+                        kind = "vtable_or_jump_table"
+                except Exception:
+                    pass
             return {
                 "ok": True,
                 "addr": hex(ea),
                 "name": idc.get_name(ea) or "",
-                "type": "function" if func else "data",
+                "type": kind,
                 "segment": ida_segment.get_segm_name(seg) if seg else "none",
+                "item_size": item_sz,
                 "bytes": ida_bytes.get_bytes(ea, 16).hex(" ") if ida_bytes.get_bytes(ea, 16) else "",
                 "disasm": ida_lines.tag_remove(idc.generate_disasm_line(ea, 0)),
                 "xrefs_to_count": len(list(idautils.XrefsTo(ea, 0))),
@@ -150,10 +226,37 @@ def agent(
             if err: return err
             
             from .search import search as search_tool
-            code_refs = search_tool(action="code_ref", pattern=addr, limit=20)
-            data_refs = search_tool(action="data_ref", pattern=addr, limit=20)
+            code_refs = search_tool(action="code_ref", pattern=addr, limit=200)
+            data_refs = search_tool(action="data_ref", pattern=addr, limit=200)
             code_text = code_refs.get("matches", "")
             data_text = data_refs.get("matches", "")
+            call_chain = []
+            seen = set()
+            q = [(ea, 0)]
+            while q:
+                cur, d = q.pop(0)
+                if d >= 3:
+                    continue
+                for xr in idautils.XrefsTo(cur, 0):
+                    if not xr.iscode:
+                        continue
+                    cf = idaapi.get_func(xr.frm)
+                    if not cf:
+                        continue
+                    k = (int(cf.start_ea), int(cur))
+                    if k in seen:
+                        continue
+                    seen.add(k)
+                    call_chain.append({
+                        "caller": hex(cf.start_ea),
+                        "caller_name": ida_funcs.get_func_name(cf.start_ea),
+                        "callee": hex(cur),
+                        "callee_name": ida_funcs.get_func_name(cur) or idc.get_name(cur) or hex(cur),
+                        "depth": d + 1,
+                    })
+                    q.append((cf.start_ea, d + 1))
+                if len(call_chain) >= 256:
+                    break
             return {
                 "ok": True,
                 "addr": hex(ea),
@@ -161,23 +264,48 @@ def agent(
                 "data_refs": _lines(data_text),
                 "code_refs_text": code_text,
                 "data_refs_text": data_text,
+                "call_chain_depth3": call_chain,
             }
         
         elif action == "search_all":
             if not query: return make_error(MCPError.INVALID_ARGS, "query required")
             from .data import data as data_tool
-            funcs = data_tool(action="functions", query=query, count=10)
-            strings = data_tool(action="strings", query=query, count=10)
-            names = data_tool(action="globals", query=query, count=10)
+            from .search import search as search_tool
+            funcs = data_tool(action="functions", query=query, count=25)
+            strings = data_tool(action="strings", query=query, count=25)
+            names = data_tool(action="globals", query=query, count=25)
+            comments = search_tool(action="comment", pattern=query, limit=25)
+            xrefs = search_tool(action="code_ref", pattern=query, limit=25)
+            types_res = search_tool(action="type", pattern=query, limit=25)
             funcs_text = funcs.get("functions", "")
             strings_text = strings.get("strings", "")
             names_text = names.get("globals", "")
+            comments_text = comments.get("matches", "")
+            xrefs_text = xrefs.get("matches", "")
+            types_text = types_res.get("matches", "")
+            merged = []
+            for src, txt in (
+                ("functions", funcs_text),
+                ("strings", strings_text),
+                ("names", names_text),
+                ("comments", comments_text),
+                ("xrefs", xrefs_text),
+                ("types", types_text),
+            ):
+                for ln in _lines(txt):
+                    score = 2 if query.lower() in ln.lower() else 1
+                    merged.append({"source": src, "score": score, "text": ln})
+            merged.sort(key=lambda x: x["score"], reverse=True)
             return {
                 "ok": True,
                 "query": query,
                 "functions": _lines(funcs_text),
                 "strings": _lines(strings_text),
                 "names": _lines(names_text),
+                "comments": _lines(comments_text),
+                "xrefs": _lines(xrefs_text),
+                "types": _lines(types_text),
+                "results": merged[: max_items * 4],
                 "functions_text": funcs_text,
                 "strings_text": strings_text,
                 "names_text": names_text,
@@ -185,8 +313,31 @@ def agent(
 
         elif action == "search_structs":
             if not query: return make_error(MCPError.INVALID_ARGS, "query required")
-            from .types import types as types_tool
-            return types_tool(action="search_structs", query=query)
+            query_l = query.lower()
+            out = []
+            qty = int(getattr(ida_typeinf, "get_ordinal_qty", lambda: 0)() or 0)
+            tif = ida_typeinf.tinfo_t()
+            for ord_ in range(1, qty + 1):
+                try:
+                    if not ida_typeinf.get_numbered_type(None, ord_, tif):
+                        continue
+                    if not tif.is_struct():
+                        continue
+                    sname = str(tif.get_type_name() or f"ord_{ord_}")
+                    udt = ida_typeinf.udt_type_data_t()
+                    if not tif.get_udt_details(udt):
+                        continue
+                    matched_fields = []
+                    for m in udt:
+                        mname = str(getattr(m, "name", "") or "")
+                        moff = int(getattr(m, "offset", 0) or 0)
+                        if query_l in mname.lower() or query_l == hex(moff // 8).lower():
+                            matched_fields.append({"name": mname, "offset_bits": moff, "offset_bytes": moff // 8})
+                    if matched_fields:
+                        out.append({"name": sname, "ordinal": ord_, "matched_fields": matched_fields[:8]})
+                except Exception:
+                    continue
+            return {"ok": True, "query": query, "matches": out[:max_items], "count": len(out)}
 
         elif action == "context_pack":
             if not addr:
