@@ -89,6 +89,143 @@ def _strip_api_suffix(name):
     return name
 
 
+def _is_probable_mmio(value: int) -> bool:
+    return (
+        0x40000000 <= value <= 0x5FFFFFFF
+        or 0xE0000000 <= value <= 0xE00FFFFF
+        or 0xF0000000 <= value <= 0xFFFFFFFF
+    )
+
+
+def _mmio_label(addr: int) -> str:
+    bases = (
+        (0x40000000, "PERIPH"),
+        (0x50000000, "PERIPH_HI"),
+        (0xE0000000, "SYSCTRL"),
+    )
+    for base, name in bases:
+        if addr >= base:
+            return f"{name}+0x{addr - base:x}"
+    return f"MMIO+0x{addr:x}"
+
+
+def _detect_crypto_algorithm(func_ea: int) -> str:
+    alg = "unknown"
+    try:
+        fn = ida_funcs.get_func(func_ea)
+        if not fn:
+            return alg
+        text = []
+        for head in idautils.Heads(fn.start_ea, fn.end_ea):
+            dis = ida_lines.tag_remove(idc.generate_disasm_line(head, 0) or "")
+            if dis:
+                text.append(dis.lower())
+            for dref in idautils.DataRefsFrom(head):
+                stype = idc.get_str_type(dref)
+                if stype is not None and stype >= 0:
+                    sval = idc.get_strlit_contents(dref, -1, stype)
+                    if sval:
+                        sval = sval.decode("utf-8", errors="replace") if isinstance(sval, bytes) else sval
+                        text.append(sval.lower())
+        blob = " ".join(text)
+        if "aes" in blob:
+            alg = "AES"
+        elif "sha256" in blob or "sha-256" in blob:
+            alg = "SHA-256"
+        elif "sha1" in blob or "sha-1" in blob:
+            alg = "SHA-1"
+        elif "md5" in blob:
+            alg = "MD5"
+        elif "des" in blob:
+            alg = "DES"
+        elif "rc4" in blob:
+            alg = "RC4"
+    except Exception:
+        return alg
+    return alg
+
+
+def _set_inline_comment(addr: int, comment: str, dry_run: bool) -> None:
+    if dry_run:
+        return
+    existing = idc.get_cmt(addr, 0) or ""
+    if comment in existing:
+        return
+    new_cmt = f"{existing}  {comment}" if existing else comment
+    idc.set_cmt(addr, new_cmt, 0)
+
+
+def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False) -> dict:
+    mnem = (idc.print_insn_mnem(addr_ea) or "").lower()
+    comment = ""
+    reason = ""
+
+    # Call-site annotation: calls callee(args) -> ret
+    if mnem.startswith("call") or mnem in {"bl", "blr", "jal", "jalr"}:
+        for xr in idautils.CodeRefsFrom(addr_ea, 0):
+            target = getattr(xr, "to", None)
+            if target is None:
+                target = xr
+            callee = idc.get_func_name(target) or idc.get_name(target) or f"sub_{int(target):x}"
+            arg_types = "?"
+            ret_type = "?"
+            tdecl = idc.get_type(target)
+            if tdecl:
+                if "(" in tdecl and ")" in tdecl:
+                    arg_types = tdecl[tdecl.find("(") + 1:tdecl.rfind(")")] or "void"
+                ret_type = tdecl.split("(", 1)[0].strip() or "?"
+            comment = f"{prefix}calls {callee}({arg_types}) -> {ret_type}"
+            reason = "call_site"
+            break
+
+    # String reference annotation
+    if not comment:
+        for dref in idautils.DataRefsFrom(addr_ea):
+            stype = idc.get_str_type(dref)
+            if stype is not None and stype >= 0:
+                sval = idc.get_strlit_contents(dref, -1, stype)
+                if sval:
+                    sval = sval.decode("utf-8", errors="replace") if isinstance(sval, bytes) else sval
+                    comment = f'{prefix}references: "{sval[:80]}"'
+                    reason = "string_ref"
+                    break
+
+    # MMIO access annotation
+    if not comment:
+        for op_idx in range(4):
+            val = idc.get_operand_value(addr_ea, op_idx)
+            if isinstance(val, int) and _is_probable_mmio(val):
+                comment = f"{prefix}MMIO: {_mmio_label(val)}"
+                reason = "mmio"
+                break
+
+    # Crypto behavior annotation (function-level behavior at this instruction)
+    if not comment:
+        fn = idaapi.get_func(addr_ea)
+        if fn:
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                pseudo = ""
+                try:
+                    pseudo = str(idaapi.decompile(fn.start_ea) or "")
+                except Exception:
+                    pseudo = ""
+                if pseudo:
+                    clf = BehaviorClassifier.instance(BgeCodeEmbedder())
+                    hits = clf.classify(pseudo, threshold=0.25, top_k=3, block=False)
+                    if any("crypto" in str(h.get("behavior", "")).lower() for h in hits):
+                        comment = f"{prefix}CRYPTO: {_detect_crypto_algorithm(fn.start_ea)}"
+                        reason = "crypto"
+            except Exception:
+                pass
+
+    if not comment:
+        return {"ok": True, "addr": hex(addr_ea), "applied": False, "reason": "no_interesting_signal"}
+
+    _set_inline_comment(addr_ea, comment, dry_run=dry_run)
+    return {"ok": True, "addr": hex(addr_ea), "applied": True, "reason": reason, "comment": comment}
+
+
 # ============================================================================
 # VOERA: Neuro-Symbolic Governance Layer for Annotations
 # ============================================================================
@@ -148,7 +285,7 @@ def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_
 @tool
 @idawrite
 def annotation(
-    action: Annotated[Literal["auto_comment", "label_loops", "label_branches",
+    action: Annotated[Literal["auto_comment", "auto_comment_function", "label_loops", "label_branches",
                                "mark_dangerous", "annotate_constants",
                                "tag_functions", "document_args",
                                "mark_error_paths", "propagate_names", "cleanup", "validate"],
@@ -165,9 +302,12 @@ def annotation(
 
     ACTIONS:
 
-    auto_comment - Auto-generate comments for a function based on APIs called,
-                   strings used, and code patterns.
+    auto_comment - Auto-generate a context-aware comment for one instruction address.
         Params: addr (required), prefix, dry_run
+        Returns: {annotations, count}
+
+    auto_comment_function - Batch auto-comment all interesting instructions in a function.
+        Params: addr (required), prefix, dry_run, limit
         Returns: {annotations, count}
 
     label_loops - Add comments to loop headers (back-edges in CFG).
@@ -219,63 +359,32 @@ def annotation(
         if action == "auto_comment":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=False)
+            if err:
+                return err
+            out = _auto_comment_one(ea, prefix=prefix, dry_run=dry_run)
+            return {
+                "ok": True,
+                "annotations": str(out),
+                "count": 1 if out.get("applied") else 0,
+                "dry_run": dry_run,
+            }
+
+        elif action == "auto_comment_function":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err:
                 return err
-
             fn = ida_funcs.get_func(ea)
             fname = idc.get_func_name(ea)
-            callees = _get_func_callees_with_addr(ea)
-            strings = _get_func_strings(ea)
-
             annotations = []
-
-            # Summarize API calls at call sites
-            for call_addr, callee_name in callees:
-                if len(annotations) >= limit:
-                    break
-                base = _strip_api_suffix(callee_name)
-                cmt = f"{prefix}calls {callee_name}"
-                annotations.append({"addr": hex(call_addr), "comment": cmt})
-                if not dry_run:
-                    existing = idc.get_cmt(call_addr, 0) or ""
-                    if prefix not in existing:
-                        new_cmt = f"{existing}  {cmt}" if existing else cmt
-                        idc.set_cmt(call_addr, new_cmt, 0)
-
-            # Annotate string references
             for head in idautils.Heads(fn.start_ea, fn.end_ea):
                 if len(annotations) >= limit:
                     break
-                for dref in idautils.DataRefsFrom(head):
-                    stype = idc.get_str_type(dref)
-                    if stype is not None and stype >= 0:
-                        s = idc.get_strlit_contents(dref, -1, stype)
-                        if s:
-                            s = s.decode("utf-8", errors="replace") if isinstance(s, bytes) else s
-                            cmt = f'{prefix}ref: "{s[:60]}"'
-                            annotations.append({"addr": hex(head), "comment": cmt})
-                            if not dry_run:
-                                existing = idc.get_cmt(head, 0) or ""
-                                if prefix not in existing:
-                                    new_cmt = f"{existing}  {cmt}" if existing else cmt
-                                    idc.set_cmt(head, new_cmt, 0)
-
-            # Generate function-level summary
-            api_names = [c[1] for c in callees]
-            summary_parts = []
-            if api_names:
-                summary_parts.append(f"APIs: {', '.join(api_names[:8])}")
-            if strings:
-                summary_parts.append(f"Strings: {', '.join(s[:30] for s in strings[:4])}")
-            if summary_parts:
-                func_cmt = f"{prefix}{'; '.join(summary_parts)}"
-                annotations.append({"addr": hex(ea), "comment": func_cmt, "type": "function"})
-                if not dry_run:
-                    existing = idc.get_func_cmt(ea, 1) or ""
-                    if prefix not in existing:
-                        new_cmt = f"{existing}\n{func_cmt}" if existing else func_cmt
-                        idc.set_func_cmt(ea, new_cmt, 1)
+                one = _auto_comment_one(head, prefix=prefix, dry_run=dry_run)
+                if one.get("applied"):
+                    annotations.append(one)
 
             return {"ok": True, "function": fname, "annotations": "\n".join(str(x) for x in annotations),
                     "count": len(annotations), "dry_run": dry_run}
