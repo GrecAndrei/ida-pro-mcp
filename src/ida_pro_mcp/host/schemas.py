@@ -172,6 +172,7 @@ ADVERTISED_TOOLS = [
     "governance",
     "firmware_view",
     "blackboard",
+    "knowledge",
 ]
 
 # Keep tools/list compact for LLM context windows while preserving backward-compatible calls.

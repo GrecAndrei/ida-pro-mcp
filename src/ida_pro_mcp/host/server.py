@@ -3363,6 +3363,32 @@ class IDAMCPServer:
             if res.get("error"):
                 return res
 
+        bootstrap_knowledge = {"chip_family": None, "imported_symbol_count": 0}
+        try:
+            chip_res = self._send_rpc_raw(
+                {"tool": "knowledge", "args": {"action": "chip_identify"}},
+                port,
+            )
+            if isinstance(chip_res, dict) and not chip_res.get("error"):
+                prof = chip_res.get("profile")
+                if isinstance(prof, dict) and prof.get("chip_family"):
+                    bootstrap_knowledge["chip_family"] = prof.get("chip_family")
+            import_res = self._send_rpc_raw(
+                {
+                    "tool": "knowledge",
+                    "args": {
+                        "action": "import_symbols",
+                        "min_confidence": float(opts.get("symbol_import_min_confidence", 0.8)),
+                        "limit": int(opts.get("symbol_import_limit", 200)),
+                    },
+                },
+                port,
+            )
+            if isinstance(import_res, dict) and not import_res.get("error"):
+                bootstrap_knowledge["imported_symbol_count"] = int(import_res.get("imported", 0) or 0)
+        except Exception:
+            pass
+
         if opts.get("apply_once", True):
             session.analysis_applied = True
         self.session_mgr._save_metadata(session)
@@ -3416,6 +3442,7 @@ class IDAMCPServer:
         return {
             "ok": True,
             "current_options": current_options if not current_options.get("error") else None,
+            "bootstrap_knowledge": bootstrap_knowledge,
         }
 
     def _background_index(self, session_id: str, server_port: int):
