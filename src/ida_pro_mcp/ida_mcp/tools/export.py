@@ -45,8 +45,8 @@ def _redact_content(content: str, patterns: list = None) -> tuple[str, list[str]
 @tool
 @idaread
 def export(
-    action: Annotated[Literal["listing", "html", "idc", "json", "binexport", "headers", "redact"],
-                      "Action: listing|html|idc|json|binexport|headers|redact"],
+    action: Annotated[Literal["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact"],
+                      "Action: listing|html|idc|json|sarif|binexport|headers|redact"],
     path: Annotated[Optional[str], "Output file path"] = None,
     addr: Annotated[Optional[str], "Address or range (for partial export)"] = None,
     include_decompile: Annotated[bool, "Include decompiled code"] = False,
@@ -231,33 +231,55 @@ def export(
             commands.append('#include <idc.idc>')
             commands.append("static main() {")
             
-            # Export renames
-            _IDC_RENAME_LIMIT = 50000
-            _rename_count = 0
-            for seg_ea in idautils.Segments():
-                for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
-                    name = idc.get_func_name(func_ea)
-                    if name and not name.startswith("sub_"):
-                        name_escaped = _escape_idc_string(name)
-                        commands.append(f'  MakeName({hex(func_ea)}, "{name_escaped}");')
-                        _rename_count += 1
-                        if _rename_count >= _IDC_RENAME_LIMIT:
-                            break
-                if _rename_count >= _IDC_RENAME_LIMIT:
+            # Export names for all named symbols.
+            rename_count = 0
+            for ea, nm in idautils.Names():
+                if not nm:
+                    continue
+                nm_esc = _escape_idc_string(str(nm))
+                commands.append(f'  MakeName({hex(ea)}, "{nm_esc}");')
+                rename_count += 1
+                if rename_count >= 100000:
                     break
-            
-            # Export comments (sample)
+
+            # Export function definitions.
+            func_count = 0
+            for fea in idautils.Functions():
+                fn = ida_funcs.get_func(fea)
+                if not fn:
+                    continue
+                commands.append(f'  MakeFunction({hex(fn.start_ea)}, {hex(fn.end_ea)});')
+                func_count += 1
+                if func_count >= 100000:
+                    break
+
+            # Export comments (both regular and repeatable).
             comment_count = 0
             for seg_ea in idautils.Segments():
-                for head in idautils.Heads(seg_ea, idc.get_segm_end(seg_ea)):
-                    cmt = idc.get_cmt(head, 0)
-                    if cmt:
-                        cmt_escaped = _escape_idc_string(cmt)
-                        commands.append(f'  MakeComm({hex(head)}, "{cmt_escaped}");')
+                seg_end = idc.get_segm_end(seg_ea)
+                for head in idautils.Heads(seg_ea, seg_end):
+                    c0 = idc.get_cmt(head, 0)
+                    c1 = idc.get_cmt(head, 1)
+                    if c0:
+                        commands.append(f'  MakeComm({hex(head)}, "{_escape_idc_string(str(c0))}");')
                         comment_count += 1
-                        if comment_count >= 1000:
-                            break
-                if comment_count >= 1000:
+                    if c1:
+                        commands.append(f'  MakeRptCmt({hex(head)}, "{_escape_idc_string(str(c1))}");')
+                        comment_count += 1
+                    if comment_count >= 50000:
+                        break
+                if comment_count >= 50000:
+                    break
+
+            # Export inferred types (function signatures + named item types).
+            type_count = 0
+            for ea, nm in idautils.Names():
+                t = idc.get_type(ea)
+                if not t:
+                    continue
+                commands.append(f'  SetType({hex(ea)}, "{_escape_idc_string(str(t))}");')
+                type_count += 1
+                if type_count >= 50000:
                     break
             
             commands.append("}")
@@ -265,21 +287,27 @@ def export(
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(commands))
             
-            return {"ok": True, "exported": True, "path": path, "commands": len(commands)}
+            return {"ok": True, "exported": True, "path": path, "commands": len(commands), "renames": rename_count, "functions": func_count, "comments": comment_count, "types": type_count}
         
         elif action == "json":
             if not path:
                 path = _default_export_path("_export.json")
             _ensure_parent_dir(path)
             
+            import hashlib
             data = {
-                "file": idaapi.get_input_file_path(),
-                "md5": idaapi.retrieve_input_file_md5().hex() if hasattr(idaapi, 'retrieve_input_file_md5') else None,
-                "base_address": hex(idaapi.get_imagebase()),
+                "binary_metadata": {
+                    "file": idaapi.get_input_file_path(),
+                    "md5": idaapi.retrieve_input_file_md5().hex() if hasattr(idaapi, 'retrieve_input_file_md5') else None,
+                    "imagebase": hex(idaapi.get_imagebase()),
+                    "ida_version": getattr(idaapi, "get_kernel_version", lambda: "unknown")(),
+                },
                 "functions": [],
                 "strings": [],
                 "imports": [],
-                "exports": []
+                "exports": [],
+                "types": [],
+                "comments": [],
             }
             
             # Functions
@@ -287,10 +315,12 @@ def export(
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
                     func = ida_funcs.get_func(func_ea)
+                    xref_to = len(list(idautils.XrefsTo(func_ea, 0)))
                     data["functions"].append({
                         "addr": hex(func_ea),
                         "name": idc.get_func_name(func_ea),
-                        "size": func.end_ea - func.start_ea if func else 0
+                        "size": func.end_ea - func.start_ea if func else 0,
+                        "xref_to_count": xref_to,
                     })
                     if len(data["functions"]) >= _JSON_FUNC_LIMIT:
                         break
@@ -305,11 +335,119 @@ def export(
                     "addr": hex(s.ea),
                     "value": str(s)[:200]
                 })
+
+            # Imports
+            try:
+                for i in range(idaapi.get_import_module_qty()):
+                    mod_name = idaapi.get_import_module_name(i) or f"mod_{i}"
+                    def _cb(ea, name, ord_):
+                        data["imports"].append({"module": mod_name, "addr": hex(ea), "name": name or "", "ordinal": int(ord_ or 0)})
+                        return True
+                    idaapi.enum_import_names(i, _cb)
+            except Exception:
+                pass
+
+            # Exports
+            try:
+                for idx, ord_, ea, nm in idautils.Entries():
+                    data["exports"].append({"index": int(idx), "ordinal": int(ord_), "addr": hex(ea), "name": nm or ""})
+            except Exception:
+                pass
+
+            # Types (named ordinals)
+            try:
+                qty = int(getattr(ida_typeinf, "get_ordinal_qty", lambda: 0)() or 0)
+                tif = ida_typeinf.tinfo_t()
+                for ord_ in range(1, qty + 1):
+                    try:
+                        if ida_typeinf.get_numbered_type(None, ord_, tif):
+                            n = str(tif.get_type_name() or "")
+                            if n:
+                                data["types"].append({"ordinal": ord_, "name": n, "decl": str(tif)})
+                    except Exception:
+                        continue
+                    if len(data["types"]) >= 2000:
+                        break
+            except Exception:
+                pass
+
+            # Comments
+            for seg_ea in idautils.Segments():
+                seg_end = idc.get_segm_end(seg_ea)
+                for head in idautils.Heads(seg_ea, seg_end):
+                    c = idc.get_cmt(head, 0) or idc.get_cmt(head, 1)
+                    if c:
+                        data["comments"].append({"addr": hex(head), "comment": str(c)[:500]})
+                    if len(data["comments"]) >= 5000:
+                        break
+                if len(data["comments"]) >= 5000:
+                    break
+
+            # Cap ~10MB by trimming large sections.
+            raw = json_module.dumps(data)
+            cap = 10 * 1024 * 1024
+            if len(raw.encode("utf-8")) > cap:
+                for k in ("comments", "strings", "types", "functions"):
+                    arr = data.get(k, [])
+                    if isinstance(arr, list) and len(arr) > 100:
+                        data[k] = arr[: max(100, len(arr) // 2)]
+                        raw = json_module.dumps(data)
+                        if len(raw.encode("utf-8")) <= cap:
+                            break
             
             with open(path, 'w', encoding='utf-8') as f:
                 json_module.dump(data, f, indent=2)
             
-            return {"ok": True, "exported": True, "path": path, "functions": len(data["functions"]), "strings": len(data["strings"])}
+            return {"ok": True, "exported": True, "path": path, "functions": len(data["functions"]), "strings": len(data["strings"]), "imports": len(data["imports"]), "exports": len(data["exports"]), "types": len(data["types"]), "comments": len(data["comments"])}
+
+        elif action == "sarif":
+            if not path:
+                path = _default_export_path(".sarif.json")
+            _ensure_parent_dir(path)
+            findings = []
+            try:
+                from .blackboard import BlackboardStore  # type: ignore
+                bb = BlackboardStore()
+                findings = bb.list(category="vuln", include_resolved=False, limit=2000)
+            except Exception:
+                findings = []
+            results = []
+            # Every named function as a SARIF result entry.
+            for fea in idautils.Functions():
+                nm = idc.get_func_name(fea) or f"sub_{fea:x}"
+                results.append({
+                    "ruleId": "ida.named.function",
+                    "level": "note",
+                    "message": {"text": f"Function discovered: {nm}"},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": idaapi.get_input_file_path() or ""}, "region": {"startLine": 1}, "address": {"absoluteAddress": hex(fea)}}}],
+                })
+                if len(results) >= 5000:
+                    break
+            for f in findings:
+                a = str(f.get("addr") or "")
+                msg = str(f.get("title") or f.get("content") or "vulnerability finding")
+                results.append({
+                    "ruleId": "ida.blackboard.vuln",
+                    "level": "warning",
+                    "message": {"text": msg},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": idaapi.get_input_file_path() or ""}, "region": {"startLine": 1}, "address": {"absoluteAddress": a or "0x0"}}}],
+                })
+                if len(results) >= 10000:
+                    break
+            sarif = {
+                "version": "2.1.0",
+                "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                "runs": [{
+                    "tool": {"driver": {"name": "ida-pro-mcp", "informationUri": "https://github.com", "rules": [
+                        {"id": "ida.named.function", "name": "NamedFunction", "shortDescription": {"text": "Named function entry"}},
+                        {"id": "ida.blackboard.vuln", "name": "BlackboardVulnerability", "shortDescription": {"text": "Blackboard vulnerability finding"}},
+                    ]}},
+                    "results": results,
+                }],
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json_module.dump(sarif, f, indent=2)
+            return {"ok": True, "exported": True, "path": path, "results": len(results)}
         
         elif action == "binexport":
             if not path:
