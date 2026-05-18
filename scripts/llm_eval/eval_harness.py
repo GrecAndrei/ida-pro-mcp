@@ -96,8 +96,9 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 
     MANDATORY SEQUENCE to start every session:
     1. session(action="create", binary_path="<path>")  — always first
-    2. idb(action="overview")                          — get architecture + firmware context
-    3. Follow the _next_calls and _nudge hints in every response
+    2. analysis(action="wait")                         — block until IDA auto-analysis completes
+    3. idb(action="overview")                          — get architecture + firmware context
+    4. Follow the _next_calls and _nudge hints in every response
 
     ANALYSIS BREADTH — you are expected to use tools from ALL of these categories:
     - Session management: session, idb

@@ -24,8 +24,8 @@ except Exception:
 @tool
 @idawrite
 def analysis(
-    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze"],
-                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze"],
+    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "wait"],
+                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|wait"],
     options: Annotated[Optional[dict], "Options dict for set_options"] = None,
     processor: Annotated[Optional[str], "Processor name for set_processor"] = None,
     flags: Annotated[Optional[int], "Processor flags (idaapi.SETPROC_*)"] = None,
@@ -422,6 +422,31 @@ def analysis(
                 "end": hex(e_ea),
                 "mode": "soft-fallback",
                 "note": "Reanalysis APIs unavailable in this runtime; request accepted but no direct reanalysis primitive exists.",
+            }
+
+        if action == "wait":
+            # Block until IDA's auto-analysis queue is drained.
+            # Use after session create or reanalyze to ensure functions/strings
+            # are fully defined before calling code/data tools.
+            try:
+                idaapi.auto_wait()
+            except Exception:
+                pass
+            analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+            try:
+                func_count = sum(1 for _ in idautils.Functions())
+            except Exception:
+                func_count = -1
+            try:
+                string_count = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else -1
+            except Exception:
+                string_count = -1
+            return {
+                "ok": True,
+                "analysis_complete": analysis_ok,
+                "functions": func_count,
+                "strings": string_count,
+                "note": "Auto-analysis drained. Safe to call code/data/funcs tools now." if analysis_ok else "Analysis queue may still have pending work.",
             }
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
