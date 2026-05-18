@@ -21,6 +21,7 @@ except ImportError:
         REWARD_ACCEPT = 1.0
         REWARD_PARTIAL = 0.5
         REWARD_REJECT = -0.5
+import hashlib
 
 
 # ============================================================================
@@ -105,6 +106,59 @@ def _apply_memrl_feedback(suggestion_id: str, feedback_type: str) -> dict:
 
     bank = MemRLBank()
     return bank.process_feedback(suggestion_id, reward)
+
+
+def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
+    """Persist a rename event to cross-session symbol DB."""
+    if not name or name.startswith("sub_"):
+        return
+    try:
+        from ida_pro_mcp.host.symbol_db import SymbolDB
+    except Exception:
+        try:
+            from host.symbol_db import SymbolDB  # type: ignore
+        except Exception:
+            return
+    fn = ida_funcs.get_func(func_ea)
+    if not fn:
+        return
+    callers = sorted({ida_funcs.get_func(x).start_ea for x in idautils.CodeRefsTo(fn.start_ea, 0) if ida_funcs.get_func(x)})
+    callees = set()
+    for item_ea in idautils.FuncItems(fn.start_ea):
+        for ref in idautils.CodeRefsFrom(item_ea, 0):
+            cf = ida_funcs.get_func(ref)
+            if cf and cf.start_ea != fn.start_ea:
+                callees.add(cf.start_ea)
+    strs = []
+    for item_ea in idautils.FuncItems(fn.start_ea):
+        for ref in idautils.DataRefsFrom(item_ea):
+            s = idc.get_strlit_contents(ref, -1, idc.STRTYPE_C)
+            if not s:
+                continue
+            txt = s.decode(errors="ignore").strip()
+            if txt and txt not in strs:
+                strs.append(txt[:120])
+            if len(strs) >= 24:
+                break
+        if len(strs) >= 24:
+            break
+    graph = "|".join([f"c:{hex(x)}" for x in callers[:32]] + [f"d:{hex(x)}" for x in sorted(callees)[:64]])
+    fingerprint = hashlib.sha1((graph + "||" + "|".join(sorted(strs)[:32])).encode("utf-8")).hexdigest()
+    callgraph_hash = hashlib.sha1(graph.encode("utf-8")).hexdigest()
+    try:
+        SymbolDB().upsert_symbol(
+            {
+                "symbol_name": name,
+                "source_binary": idc.get_idb_path() or "",
+                "source_addr": hex(fn.start_ea),
+                "fingerprint": fingerprint,
+                "callgraph_hash": callgraph_hash,
+                "strings": strs,
+                "confidence": 1.0,
+            }
+        )
+    except Exception:
+        return
 
 
 @tool
@@ -248,6 +302,7 @@ def modify(
                 # Decompiler feedback loop: re-embed this function and propagate
                 # semantic understanding to callees in the background.
                 _trigger_rename_propagation(ea, value)
+                _persist_symbol_knowledge(ea, value)
                 return result
             return make_error(MCPError.IDA_ERROR, "Failed to rename", "Check if name is valid C identifier and not duplicate")
 

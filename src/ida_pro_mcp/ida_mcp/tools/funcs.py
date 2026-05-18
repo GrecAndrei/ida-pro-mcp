@@ -3,6 +3,7 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+import hashlib
 
 
 # ============================================================================
@@ -50,6 +51,52 @@ def _collect_callees(func_start_ea: int, max_items=50000) -> list[int]:
         if len(callees) >= max_items:
             break
     return sorted(callees)
+
+
+def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
+    if not name or name.startswith("sub_"):
+        return
+    try:
+        from ida_pro_mcp.host.symbol_db import SymbolDB
+    except Exception:
+        try:
+            from host.symbol_db import SymbolDB  # type: ignore
+        except Exception:
+            return
+    callers = _collect_callers(func_ea)[:32]
+    callees = _collect_callees(func_ea, max_items=128)[:64]
+    strs = []
+    fn = ida_funcs.get_func(func_ea)
+    if fn:
+        for item_ea in idautils.FuncItems(fn.start_ea):
+            for ref in idautils.DataRefsFrom(item_ea):
+                s = idc.get_strlit_contents(ref, -1, idc.STRTYPE_C)
+                if not s:
+                    continue
+                txt = s.decode(errors="ignore").strip()
+                if txt and txt not in strs:
+                    strs.append(txt[:120])
+                if len(strs) >= 24:
+                    break
+            if len(strs) >= 24:
+                break
+    graph = "|".join([f"c:{hex(x)}" for x in callers] + [f"d:{hex(x)}" for x in callees])
+    fingerprint = hashlib.sha1((graph + "||" + "|".join(sorted(strs)[:32])).encode("utf-8")).hexdigest()
+    callgraph_hash = hashlib.sha1(graph.encode("utf-8")).hexdigest()
+    try:
+        SymbolDB().upsert_symbol(
+            {
+                "symbol_name": name,
+                "source_binary": idc.get_idb_path() or "",
+                "source_addr": hex(func_ea),
+                "fingerprint": fingerprint,
+                "callgraph_hash": callgraph_hash,
+                "strings": strs,
+                "confidence": 1.0,
+            }
+        )
+    except Exception:
+        return
 
 
 def _try_map_raw_runtime_addr(ea: int) -> tuple[Optional[int], Optional[str]]:
@@ -362,6 +409,7 @@ def _funcs_impl(
             target_ea = func.start_ea
             if idc.set_name(target_ea, name, ida_name.SN_FORCE):
                 result = {"ok": True, "addr": hex(target_ea), "name": name}
+                _persist_symbol_knowledge(target_ea, name)
                 if func and target_ea != ea:
                     result["note"] = f"Renamed function at start address {hex(target_ea)}"
                 return result
