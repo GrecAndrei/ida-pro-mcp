@@ -58,3 +58,37 @@ def test_infer_binary_arch_profile_raw_ambiguous_does_not_force_processor():
         assert inf.get("reason")
     finally:
         os.unlink(path)
+
+
+def test_infer_binary_arch_profile_wffw_chip_profile():
+    with tempfile.NamedTemporaryFile(delete=False) as tf:
+        blob = bytearray(b"\x00" * 256)
+        blob[0:4] = (0x20001000).to_bytes(4, "little")
+        blob[4:8] = (0x00120001).to_bytes(4, "little")
+        blob[0x20:0x24] = b"WFFW"
+        tf.write(blob)
+        path = tf.name
+    try:
+        inf = infer_binary_arch_profile(path)
+        assert inf["file_kind"] == "raw"
+        assert str(inf.get("chip_family", "")).lower() in {"aic8800d80", "aic8800d80".lower()}
+        assert inf.get("load_base") is not None
+        assert isinstance(inf.get("memory_map"), list)
+        assert isinstance(inf.get("peripheral_addresses"), list)
+    finally:
+        os.unlink(path)
+
+
+def test_infer_binary_arch_profile_cortex_assigns_chip_family():
+    with tempfile.NamedTemporaryFile(delete=False) as tf:
+        tf.write((0x20002000).to_bytes(4, "little"))
+        tf.write((0x08000101).to_bytes(4, "little"))
+        tf.write(b"\x00" * 64)
+        path = tf.name
+    try:
+        inf = infer_binary_arch_profile(path)
+        assert inf["processor"] == "arm"
+        assert inf.get("chip_family") in {"STM32", "Generic Cortex-M"}
+        assert inf.get("load_base") is not None
+    finally:
+        os.unlink(path)
