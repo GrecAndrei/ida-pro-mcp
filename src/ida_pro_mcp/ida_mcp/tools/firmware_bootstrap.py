@@ -53,19 +53,42 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
     entries = 0
     reset_addr = None
 
+    # First pass: mark all vector handler addresses as Thumb code and
+    # schedule them for analysis.
+    handler_addrs = []
     for vec in vectors:
         if not isinstance(vec, dict):
             continue
-        vtype = str(vec.get("type") or "")
-        if vtype == "stack_pointer":
+        if str(vec.get("type") or "") == "stack_pointer":
             continue
         h = _int_addr(vec.get("handler") or vec.get("value"))
-        if h is None:
+        if h is None or h < mn or h >= mx:
             continue
-        if h < mn or h >= mx:
-            continue
-        if not ida_bytes.is_code(ida_bytes.get_flags(h)):
-            idc.create_insn(h)
+        handler_addrs.append((h, vec))
+
+    if handler_addrs:
+        lo = min(h for h, _ in handler_addrs)
+        hi = max(h for h, _ in handler_addrs) + 4
+        # Thumb bootstrap for Cortex-M handlers.
+        for h, _ in handler_addrs:
+            try:
+                sr_auto = getattr(idc, "SR_auto", 2)
+                idc.split_sreg_range(h, "T", 1, sr_auto)
+            except Exception:
+                pass
+        for h, _ in handler_addrs:
+            if not ida_bytes.is_code(ida_bytes.get_flags(h)):
+                idc.create_insn(h)
+        try:
+            idaapi.plan_and_wait(lo, hi)
+        except Exception:
+            pass
+        try:
+            idaapi.auto_wait()
+        except Exception:
+            pass
+
+    for h, vec in handler_addrs:
         fn = ida_funcs.get_func(h)
         if not fn:
             if ida_funcs.add_func(h):
@@ -108,30 +131,13 @@ def _annotate_mmio(peripherals: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _define_ascii_strings(limit: int = 256) -> Dict[str, Any]:
-    mn, mx = _safe_bounds()
-    if mn <= 0 and mx <= 0:
-        return {"strings_defined": 0}
-    defined = 0
-    ea = mn
-    while ea < mx and defined < limit:
-        flags = ida_bytes.get_flags(ea)
-        if ida_bytes.is_unknown(flags):
-            run = bytearray()
-            pos = ea
-            while pos < mx and len(run) < 256:
-                b = ida_bytes.get_byte(pos)
-                if b == 0:
-                    if len(run) >= 6:
-                        if ida_bytes.create_strlit(ea, pos + 1):
-                            defined += 1
-                    break
-                if 32 <= b <= 126:
-                    run.append(b)
-                    pos += 1
-                    continue
-                break
-        ea += 1
-    return {"strings_defined": defined}
+    # Use IDA's built-in string scanner rather than a byte-by-byte loop.
+    try:
+        idaapi.build_strlist()
+    except Exception:
+        pass
+    defined = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else 0
+    return {"strings_defined": min(defined, limit)}
 
 
 def run_firmware_bootstrap(

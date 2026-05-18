@@ -15,10 +15,10 @@ def graph(
     action: Annotated[Literal["callgraph", "cfg", "xref_graph"],
                       "Action: callgraph|cfg|xref_graph"],
     addr: Annotated[Optional[str], "Starting address (function or location)"] = None,
-    depth: Annotated[int, "Max traversal depth"] = 3,
+    depth: Annotated[int, "Max traversal depth"] = 5,
     direction: Annotated[Literal["down", "up", "both"], "Direction: down (callees), up (callers), both"] = "down",
     format: Annotated[Literal["json", "dot", "mermaid"], "Output format: json, dot (Graphviz), or mermaid"] = "json",
-    max_items: Annotated[int, "Max nodes/edges to collect (prevents hangs on large binaries)"] = 5000,
+    max_items: Annotated[int, "Max nodes/edges to collect (prevents hangs on large binaries)"] = 500,
     **kwargs
 ) -> dict:
     """
@@ -50,19 +50,23 @@ def graph(
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
             
+            depth = max(0, int(depth))
+            max_items = min(max(1, int(max_items)), 500)
             nodes, edges, visited = {}, [], set()
             edge_set = set()
+            cycle_nodes = set()
             item_count = 0
             def add_node(f_ea):
                 if f_ea not in nodes:
                     nodes[f_ea] = idc.get_func_name(f_ea) or f"sub_{f_ea:x}"
             
-            def traverse(f_ea, d):
+            def traverse(f_ea, d, stack):
                 nonlocal item_count
                 if d > depth or f_ea in visited: return
                 if item_count >= max_items: return
                 visited.add(f_ea)
                 add_node(f_ea)
+                stack.add(f_ea)
                 for item in idautils.FuncItems(f_ea):
                     if item_count >= max_items: break
                     for xref in idautils.CodeRefsFrom(item, 0):
@@ -75,11 +79,15 @@ def graph(
                                 edge_set.add(edge)
                                 edges.append(edge)
                                 item_count += 1
-                            traverse(target.start_ea, d + 1)
+                            if target.start_ea in stack:
+                                cycle_nodes.add(target.start_ea)
+                            else:
+                                traverse(target.start_ea, d + 1, stack)
+                stack.discard(f_ea)
             
-            traverse(ea, 0)
+            traverse(ea, 0, set())
             
-            return _format_graph(nodes, edges, format)
+            return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes)
         
         elif action == "cfg":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -107,17 +115,21 @@ def graph(
             ea, err = validate_addr(addr)
             if err: return err
 
+            depth = max(0, int(depth))
+            max_items = min(max(1, int(max_items)), 500)
             nodes, edges, visited = {}, [], set()
             edge_set = set()
+            cycle_nodes = set()
             item_count = 0
             name = idc.get_name(ea) or hex(ea)
             nodes[ea] = name
 
-            def traverse_xrefs(target_ea, d):
+            def traverse_xrefs(target_ea, d, stack):
                 nonlocal item_count
                 if d > depth or target_ea in visited: return
                 if item_count >= max_items: return
                 visited.add(target_ea)
+                stack.add(target_ea)
                 # Traverse callers (xrefs TO this address)
                 if direction in ("up", "both"):
                     for xref in idautils.XrefsTo(target_ea):
@@ -132,7 +144,10 @@ def graph(
                             edge_set.add(edge)
                             edges.append(edge)
                             item_count += 1
-                        traverse_xrefs(src_ea, d + 1)
+                        if src_ea in stack:
+                            cycle_nodes.add(src_ea)
+                        else:
+                            traverse_xrefs(src_ea, d + 1, stack)
                 # Traverse callees (xrefs FROM this address)
                 if direction in ("down", "both"):
                     func = ida_funcs.get_func(target_ea)
@@ -152,10 +167,14 @@ def graph(
                                     edge_set.add(edge)
                                     edges.append(edge)
                                     item_count += 1
-                                traverse_xrefs(dst_ea, d + 1)
+                                if dst_ea in stack:
+                                    cycle_nodes.add(dst_ea)
+                                else:
+                                    traverse_xrefs(dst_ea, d + 1, stack)
+                stack.discard(target_ea)
 
-            traverse_xrefs(ea, 0)
-            return _format_graph(nodes, edges, format)
+            traverse_xrefs(ea, 0, set())
+            return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes)
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
@@ -163,17 +182,29 @@ def graph(
         return handle_error(e)
 
 
-def _format_graph(nodes, edges, format):
+def _format_graph(nodes, edges, format, cycle_nodes=None):
     """Format graph nodes/edges into the requested output format."""
+    cycle_nodes = cycle_nodes or set()
+    if len(nodes) > 500:
+        keep = set(sorted(nodes.keys())[:500])
+        nodes = {ea: name for ea, name in nodes.items() if ea in keep}
+        edges = [(src, dst) for src, dst in edges if src in keep and dst in keep]
     if format == "mermaid":
         mm = ["graph TD"]
+        def _sid(name, ea):
+            safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in str(name))
+            return f"N_{ea:x}_{safe[:40]}"
         for src, dst in edges:
             u_name = nodes.get(src, hex(src))
             v_name = nodes.get(dst, hex(dst))
-            # Sanitize names for mermaid (replace special chars)
-            u_id = u_name.replace(" ", "_").replace("-", "_")
-            v_id = v_name.replace(" ", "_").replace("-", "_")
+            u_id = _sid(u_name, src)
+            v_id = _sid(v_name, dst)
             mm.append(f'  {u_id}["{u_name}"] --> {v_id}["{v_name}"]')
+        for ea in cycle_nodes:
+            if ea in nodes:
+                mm.append(f'  {_sid(nodes[ea], ea)}:::cycle')
+        if cycle_nodes:
+            mm.append("  classDef cycle fill:#ffd6d6,stroke:#d00,stroke-width:2px;")
         return {"ok": True, "format": "mermaid", "graph": "\n".join(mm),
                 "node_count": len(nodes), "edge_count": len(edges)}
 
@@ -190,7 +221,7 @@ def _format_graph(nodes, edges, format):
                 "node_count": len(nodes), "edge_count": len(edges)}
 
     else:  # json
-        node_lines = [f"{hex(ea)}  {name}" for ea, name in sorted(nodes.items())]
+        node_lines = [f"{hex(ea)}  {name}" + ("  cycle=true" if ea in cycle_nodes else "") for ea, name in sorted(nodes.items())]
         edge_lines = [f"{hex(src)} -> {hex(dst)}" for src, dst in edges]
         return {"ok": True, "format": "json", "nodes": "\n".join(node_lines),
                 "edges": "\n".join(edge_lines),
