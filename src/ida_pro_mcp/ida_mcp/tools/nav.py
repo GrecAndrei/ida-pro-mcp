@@ -72,6 +72,8 @@ def nav(
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr (natural language query) required for semantic_goto")
             query = str(addr).lower().strip()
+            semantic_backend = "keywords_only"
+            semantic_warning = None
             
             # Score candidates by semantic relevance
             candidates = []
@@ -162,6 +164,7 @@ def nav(
                         emb = BgeCodeEmbedder()
                         idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", emb)
                         if idx.size > 0:
+                            semantic_backend = "embedding+keywords"
                             qv = emb.embed(query)
                             sem = idx.similar_vec(qv, top_k=5, threshold=0.0)
                             by_addr = {int(c["addr"]): c for c in candidates if isinstance(c.get("addr"), int)}
@@ -182,8 +185,14 @@ def nav(
                                         "matched_by": ["embedding"],
                                     }
                             candidates = list(by_addr.values())
+                        else:
+                            semantic_warning = "Embedding index is empty; used keyword fallback."
+                    else:
+                        semantic_warning = "No IDB path available for embedding index; used keyword fallback."
                 except Exception:
-                    pass
+                    semantic_warning = "Embedding backend unavailable; used keyword fallback."
+            else:
+                semantic_warning = "Embedding backend not installed; used keyword fallback."
             
             if not candidates:
                 return make_error(MCPError.NOT_FOUND, f"No function matches semantic query: '{query}'", "Try a more specific query or use search(action='find', pattern=...)")
@@ -199,6 +208,8 @@ def nav(
                 "name": top["name"],
                 "score": top["score"],
                 "matched_by": top["matched_by"],
+                "semantic_backend": semantic_backend,
+                "warning": semantic_warning,
                 "alternatives": [{"addr": hex(c["addr"]), "name": c["name"], "score": c["score"]} for c in candidates[1:5]],
                 "note": "Semantic navigation resolved the query to the best-matching function. Use alternatives if this is not the intended target.",
             }
