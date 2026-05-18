@@ -408,6 +408,7 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
             return cached
 
         schema = {
+            "addr": hex(func_ea),
             "behavior_tags": set(),
             "dangerous_apis": set(),
             "string_refs": set(),
@@ -487,8 +488,32 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         _cache_set(cache_key, schema)
         return schema
 
+    def _norm_hex(v):
+        try:
+            s = str(v).strip().lower()
+            if not s:
+                return None
+            if s.startswith("0x"):
+                return s
+            return hex(int(s, 0)).lower()
+        except Exception:
+            return None
+
     def schema_matches(schema, constraints):
+        allow_addrs = constraints.get("addrs")
+        if allow_addrs:
+            allowed = set()
+            seq = allow_addrs if isinstance(allow_addrs, (list, tuple, set)) else [allow_addrs]
+            for a in seq:
+                na = _norm_hex(a)
+                if na:
+                    allowed.add(na)
+            fn_addr = _norm_hex(schema.get("addr", ""))
+            if allowed and fn_addr not in allowed:
+                return False
         for key, val in constraints.items():
+            if key == "addrs":
+                continue
             if key == "behavior_tags":
                 vals = val if isinstance(val, (list, set, tuple)) else [val]
                 if not any(v in schema["behavior_tags"] for v in vals):
@@ -566,9 +591,6 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         if not schema_matches(schema, schema_constraints if schema_constraints else constraints):
             continue
 
-        matches_seen += 1
-        if matches_seen <= offset:
-            continue
         fname = idc.get_func_name(func_ea) or f"sub_{func_ea:x}"
         tags = ", ".join(sorted(schema["behavior_tags"]))
         dangerous = ", ".join(sorted(schema["dangerous_apis"]))
@@ -576,6 +598,9 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         if dangerous:
             line += f"  dangerous=[{dangerous}]"
         if pattern and not matcher(line):
+            continue
+        matches_seen += 1
+        if matches_seen <= offset:
             continue
         results.append(line)
         schema_hits[hex(func_ea)] = {

@@ -264,10 +264,6 @@ def search(
             tags = _extract_tags_from_pattern(actual_pattern)
             if tags:
                 l1_pre_filtered_addrs = _query_insight_by_tags(tags, mode="or")
-                if l1_pre_filtered_addrs:
-                    # Narrow range to tagged function addresses if possible
-                    kwargs = dict(kwargs)
-                    kwargs["_l1_addrs"] = l1_pre_filtered_addrs
 
         # Route
         response = None
@@ -558,6 +554,32 @@ def search(
                                                     for e in entries]
                     if bb_by_addr:
                         response["blackboard_context"] = bb_by_addr
+            except Exception:
+                pass
+
+        # Add interpretation metadata
+        if l1_pre_filtered_addrs and isinstance(response, dict):
+            try:
+                allowed = {str(a).lower() for a in l1_pre_filtered_addrs}
+                items = response.get("items")
+                if isinstance(items, list):
+                    filtered = []
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        a = str(it.get("addr") or it.get("address") or it.get("ea") or "").lower()
+                        if a in allowed:
+                            filtered.append(it)
+                    if filtered and len(filtered) != len(items):
+                        response["items"] = filtered
+                        response["count"] = len(filtered)
+                        if "results" in response:
+                            lines = []
+                            for it in filtered:
+                                a = str(it.get("addr") or it.get("address") or it.get("ea") or "")
+                                n = str(it.get("name") or "")
+                                lines.append(f"{a}  {n}".rstrip())
+                            response["results"] = "\n".join(lines)
             except Exception:
                 pass
 

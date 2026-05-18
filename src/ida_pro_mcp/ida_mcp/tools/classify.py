@@ -351,6 +351,11 @@ def classify(
                                     str_refs.append(s)
             total_matched = sum(len(v) for v in matched.values())
             confidence = "high" if total_matched >= 3 else ("medium" if total_matched >= 1 else "low")
+            schema = _induce_function_schema(ea)
+            schema_tags = list(schema.get("behavior_tags", [])) if isinstance(schema, dict) else []
+            if cat == "unknown" and schema_tags:
+                cat = schema_tags[0]
+                confidence = "medium"
 
             # Augment with BehaviorClassifier (embedding-based, zero-shot)
             behavior_tags = []
@@ -395,6 +400,7 @@ def classify(
                 "instruction_count": insn_count,
                 "incoming_xrefs": xref_count,
                 "behavior_tags": behavior_tags,
+                "schema": schema,
             }
 
         # ----------------------------------------------------------------

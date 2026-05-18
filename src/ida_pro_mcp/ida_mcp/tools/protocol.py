@@ -532,7 +532,7 @@ def protocol(
                         endpoints["ports"].append(e)
 
             total = sum(len(v) for v in endpoints.values())
-            return {"ok": True, "endpoints": "\n".join(str(x) for x in endpoints), "total": total}
+            return {"ok": True, "endpoints": endpoints, "total": total}
 
         elif action == "tls_config":
             tls_apis = []
