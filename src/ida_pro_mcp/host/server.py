@@ -8054,7 +8054,7 @@ class IDAMCPServer:
     def _predict_next_tool_from_activity(
         self, activity_log: list[dict], limit: int = 5
     ) -> list[dict]:
-        """Simple local sequence model: Markov transition + global frequency prior."""
+        """2nd-order Markov predictor with recency weighting and phase/exploration priors."""
         if not activity_log:
             return []
 
@@ -8068,33 +8068,62 @@ class IDAMCPServer:
             return []
 
         global_counts = Counter(seq)
-        transition_counts: dict[str, Counter] = {}
-        for i in range(len(seq) - 1):
+        first_order: dict[str, Counter] = {}
+        second_order: dict[tuple[str, str], Counter] = {}
+        n = len(seq)
+        for i in range(n - 1):
             src = seq[i]
             dst = seq[i + 1]
-            transition_counts.setdefault(src, Counter())[dst] += 1
+            # Recency decay: last 5 transitions get 2x, next 5 get 1.5x, older 1x.
+            dist_from_tail = (n - 2) - i
+            w = 2.0 if dist_from_tail < 5 else (1.5 if dist_from_tail < 10 else 1.0)
+            first_order.setdefault(src, Counter())[dst] += w
+            if i >= 1:
+                key2 = (seq[i - 1], src)
+                second_order.setdefault(key2, Counter())[dst] += w
 
         current = seq[-1]
-        local_next = transition_counts.get(current, Counter())
-        total_global = max(1, sum(global_counts.values()))
-        total_local = max(1, sum(local_next.values()))
+        prev = seq[-2] if len(seq) > 1 else ""
+        local_first = first_order.get(current, Counter())
+        local_second = second_order.get((prev, current), Counter()) if prev else Counter()
+        total_global = max(1.0, float(sum(global_counts.values())))
+        total_first = max(1.0, float(sum(local_first.values())))
+        total_second = max(1.0, float(sum(local_second.values())))
 
-        candidates = set(global_counts.keys()) | set(local_next.keys())
+        candidates = set(global_counts.keys()) | set(local_first.keys()) | set(local_second.keys())
         scored: list[dict] = []
+        seen_tools = {s.split(".", 1)[0] for s in seq if "." in s}
+        phase = str(getattr(self.current_session, "phase", "") or "").strip().lower()
         for cand in candidates:
-            p_local = local_next.get(cand, 0) / total_local
+            p_second = float(local_second.get(cand, 0.0)) / total_second
+            p_first = float(local_first.get(cand, 0.0)) / total_first
             p_global = global_counts.get(cand, 0) / total_global
-            score = (0.75 * p_local) + (0.25 * p_global)
+            has_second = sum(local_second.values()) > 0
+            # 2nd-order primary; fallback to 1st-order if cold start.
+            base_score = (0.65 * p_second + 0.20 * p_first + 0.15 * p_global) if has_second else (0.75 * p_first + 0.25 * p_global)
             tool, action = cand.split(".", 1) if "." in cand else (cand, "")
+            exploration_bonus = 0.15 if tool and tool not in seen_tools else 0.0
+            phase_bonus = 0.0
+            if phase == "triage" and tool in {"firmware_view", "workflow"}:
+                phase_bonus = 0.10
+            elif phase == "deep_analysis" and tool in {"code", "types", "taint"}:
+                phase_bonus = 0.10
+            score = base_score + exploration_bonus + phase_bonus
             scored.append(
                 {
                     "tool": tool,
                     "action": action,
                     "score": round(score, 4),
                     "evidence": {
-                        "transition_hits": int(local_next.get(cand, 0)),
+                        "transition_hits_first_order": float(local_first.get(cand, 0.0)),
+                        "transition_hits_second_order": float(local_second.get(cand, 0.0)),
                         "global_hits": int(global_counts.get(cand, 0)),
                         "current": current,
+                        "prev": prev,
+                        "has_second_order": bool(has_second),
+                        "exploration_bonus": exploration_bonus,
+                        "phase_bonus": phase_bonus,
+                        "phase": phase or None,
                     },
                 }
             )
