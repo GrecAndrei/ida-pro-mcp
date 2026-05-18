@@ -12,6 +12,7 @@ from typing import Any, Dict, Tuple
 import os
 import struct
 import math
+from .chip_db import identify_chip_from_bytes, find_chip_profile
 
 
 _PROC_ALIASES = {
@@ -86,9 +87,13 @@ class ArchInference:
     confidence: float = 0.0
     reason: str = ""
     candidates: list[Dict[str, Any]] = field(default_factory=list)
+    load_base: int | None = None         # confirmed load base address (e.g. from WFFW header)
+    chip_family: str | None = None       # e.g. "aic8800d80", "stm32", "esp32"
+    memory_map: list[Dict[str, Any]] = field(default_factory=list)
+    peripheral_addresses: list[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "processor": self.processor,
             "bitness": self.bitness,
             "endian": self.endian,
@@ -97,6 +102,15 @@ class ArchInference:
             "reason": self.reason,
             "candidates": self.candidates,
         }
+        if self.load_base is not None:
+            d["load_base"] = self.load_base
+        if self.chip_family is not None:
+            d["chip_family"] = self.chip_family
+        if self.memory_map:
+            d["memory_map"] = self.memory_map
+        if self.peripheral_addresses:
+            d["peripheral_addresses"] = self.peripheral_addresses
+        return d
 
 
 def _byte_2gram_embedding(data: bytes) -> Dict[int, float]:
@@ -292,7 +306,20 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
         return inf.to_dict()
 
     inf.file_kind = "raw"
-    # Cortex-M vector-table heuristic (little-endian default in the wild).
+    chip = identify_chip_from_bytes(sample)
+    if chip:
+        inf.processor = chip.get("processor")
+        inf.bitness = chip.get("bitness")
+        inf.endian = chip.get("endian")
+        inf.confidence = float(chip.get("confidence") or 0.95)
+        inf.reason = f"chip profile match: {chip.get('chip_family', 'unknown')}"
+        inf.chip_family = str(chip.get("chip_family") or "unknown")
+        inf.load_base = chip.get("load_base")
+        inf.memory_map = chip.get("memory_map") or []
+        inf.peripheral_addresses = chip.get("peripheral_addresses") or []
+        return inf.to_dict()
+
+    # --- Standard Cortex-M vector-table heuristic (little-endian) ---
     if len(head) >= 8:
         sp_le, rv_le = struct.unpack_from("<II", head, 0)
         # Typical RAM ranges + Thumb reset vector.
@@ -302,6 +329,16 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
             inf.endian = "little"
             inf.confidence = 0.92
             inf.reason = "raw Cortex-M vector table heuristic"
+            rv_even = rv_le & ~1
+            if 0x08000000 <= rv_even <= 0x08FFFFFF:
+                prof = find_chip_profile("STM32") or {}
+                inf.chip_family = "STM32"
+            else:
+                prof = find_chip_profile("Generic Cortex-M") or {}
+                inf.chip_family = "Generic Cortex-M"
+            inf.load_base = prof.get("load_base")
+            inf.memory_map = prof.get("memory_map") or []
+            inf.peripheral_addresses = prof.get("peripheral_addresses") or []
             return inf.to_dict()
 
     candidates = _raw_arch_candidates(sample)

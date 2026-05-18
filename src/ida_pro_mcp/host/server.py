@@ -120,6 +120,7 @@ from .schemas import (
     sanitize_schema_for_vertex,
 )
 from .arch_profile import normalize_arch_options, infer_binary_arch_profile
+from .symbol_db import SymbolDB
 
 # Import truncation middleware
 try:
@@ -2872,6 +2873,13 @@ class IDAMCPServer:
                 cmd.append(f"-p{opts['processor']}")
             if opts.get("loader") and "-T" not in ida_prefixes:
                 cmd.append(f"-T{opts['loader']}")
+            # Apply inferred load base so IDA maps the binary at the correct
+            # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
+            if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
+                try:
+                    cmd.append(f"-b{int(opts['baseaddr']):#x}")
+                except (TypeError, ValueError):
+                    pass
             # skip_analysis=true: pass -c to create IDB without running auto-analysis.
             # Use for large/raw binaries where analysis blocks indefinitely.
             # After session create, call analysis(action='run') to trigger manually.
@@ -6296,6 +6304,10 @@ class IDAMCPServer:
                         inferred = infer_binary_arch_profile(binary_path)
                         arch_meta = dict(arch_meta or {})
                         arch_meta["inferred_profile"] = inferred
+                        if inferred.get("memory_map"):
+                            arch_meta["memory_map"] = inferred.get("memory_map")
+                        if inferred.get("peripheral_addresses"):
+                            arch_meta["peripheral_addresses"] = inferred.get("peripheral_addresses")
                         if inferred.get("processor"):
                             # Deterministic inference from explicit profile (e.g. known headers/vector table).
                             arch_meta["inference_applied"] = True
@@ -6304,6 +6316,13 @@ class IDAMCPServer:
                                 analysis_options.setdefault("bitness", inferred.get("bitness"))
                             if inferred.get("endian"):
                                 analysis_options.setdefault("endian", inferred.get("endian"))
+                            # Apply load base for chip-specific formats (e.g. AIC WFFW at 0x120000).
+                            if inferred.get("load_base") is not None:
+                                analysis_options.setdefault("baseaddr", inferred["load_base"])
+                                arch_meta["load_base_applied"] = True
+                                arch_meta["load_base"] = hex(inferred["load_base"])
+                            if inferred.get("chip_family"):
+                                arch_meta["chip_family"] = inferred["chip_family"]
                         else:
                             # For raw blobs with no deterministic header/vector-table, apply the
                             # top-ranked candidate. Any heuristic recommendation beats IDA's
@@ -6398,10 +6417,26 @@ class IDAMCPServer:
                     notes=notes,
                 )
                 out = {"ok": True, "session": self.current_session.to_dict()}
+                imported_symbol_count = 0
+                try:
+                    inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else {}
+                    chip = str((inferred or {}).get("chip_family") or (arch_meta or {}).get("chip_family") or "").strip()
+                    if chip:
+                        sdb = SymbolDB()
+                        imported_symbol_count = sum(
+                            int(row.get("symbol_count") or 0)
+                            for row in sdb.stats_by_chip()
+                            if str(row.get("chip_family") or "").strip().lower() == chip.lower()
+                        )
+                except Exception:
+                    imported_symbol_count = 0
                 if create_note:
                     out["note"] = create_note
                 if arch_meta:
                     out["architecture_profile"] = arch_meta
+                    chip_family = arch_meta.get("chip_family")
+                    if chip_family:
+                        out["chip_family"] = chip_family
                     inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
                     if isinstance(inferred, dict):
                         candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
@@ -6435,6 +6470,7 @@ class IDAMCPServer:
                                     "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
                                 }
                             ]
+                out["imported_symbol_count"] = int(imported_symbol_count)
                 return out
             if action == "discover":
                 self.session_mgr._load_orphaned_idbs()
