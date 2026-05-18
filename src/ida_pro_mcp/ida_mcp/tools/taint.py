@@ -92,6 +92,16 @@ DANGEROUS_SINKS = {
 }
 
 
+def _is_sanitizer_name(name: str) -> bool:
+    n = str(name or "").lower()
+    return (
+        n.startswith("validate_")
+        or n.startswith("check_")
+        or n.startswith("sanitize_")
+        or n in ("strlen", "strnlen")
+    )
+
+
 def _get_import_addrs(name_set: set) -> Dict[str, int]:
     """Return {name: ea} for all imports matching name_set."""
     result = {}
@@ -483,11 +493,8 @@ def taint(
                     if path_to_sink:
                         for p in path_to_sink:
                             nm = (idc.get_name(int(p, 16)) or "").lower()
-                            if nm.startswith("validate_") or nm.startswith("check_") or nm.startswith("sanitize_") or nm in ("strlen", "strnlen"):
+                            if _is_sanitizer_name(nm):
                                 sanitized_by.append(nm)
-                            if sink_name == "memcpy":
-                                # memcpy can sanitize when destination is independent of tainted source.
-                                sanitized_by.append("memcpy")
                     interproc = []
                     # one-level inter-procedural check
                     for cea, _, cpath in _callees_of(source_ea, max_depth=1, visited={source_ea}):
