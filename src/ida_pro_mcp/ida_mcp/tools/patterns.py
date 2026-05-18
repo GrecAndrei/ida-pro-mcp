@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def patterns(
-    action: Annotated[Literal["generate", "match", "list_sigs", "apply_sig", "create_sig", "matched"],
-                      "Action: generate|match|list_sigs|apply_sig|create_sig|matched"],
+    action: Annotated[Literal["generate", "match", "list_sigs", "apply_sig", "create_sig", "matched", "yara_from_func", "flirt_generate", "match_yara"],
+                      "Action: generate|match|list_sigs|apply_sig|create_sig|matched|yara_from_func|flirt_generate|match_yara"],
     addr: Annotated[Optional[str], "Function address for pattern operations"] = None,
     pattern: Annotated[Optional[str], "Pattern to match (hex with ?? wildcards)"] = None,
     name: Annotated[Optional[str], "Signature name"] = None,
@@ -23,7 +23,7 @@ def patterns(
     **kwargs
 ) -> dict:
     """
-    Generate and match function signatures (FLIRT-like patterns).
+    Generate and match function signatures (FLIRT-like patterns) and YARA rules.
     
     Actions:
     - generate: Create a hex pattern with wildcards for relocations.
@@ -31,9 +31,34 @@ def patterns(
     - list_sigs: List available FLIRT .sig files.
     - apply_sig: Apply a named signature file.
     - create_sig: Generate metadata for a single function signature.
+    - yara_from_func: Build a YARA rule from non-relocatable function bytes.
+    - flirt_generate: Build FLIRT-like signature metadata (CRC16 + masked prefix).
+    - match_yara: Run YARA rule over input binary (or fallback byte-pattern search).
     """
     try:
+        import hashlib
+        import zlib
         import ida_fixup
+
+        def _func_bytes_and_mask(ea: int, max_len: int) -> tuple[bytes, list[int], list[str]]:
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return b"", [], []
+            n = min(max_len, int(func.end_ea - func.start_ea))
+            fb = ida_bytes.get_bytes(func.start_ea, n) or b""
+            mask: list[int] = []
+            parts: list[str] = []
+            for i, b in enumerate(fb):
+                curr = func.start_ea + i
+                fix = ida_fixup.fixup_data_t()
+                reloc = bool(ida_fixup.get_fixup(fix, curr))
+                if reloc:
+                    mask.append(0)
+                    parts.append("??")
+                else:
+                    mask.append(1)
+                    parts.append(f"{b:02X}")
+            return fb, mask, parts
         
         if action == "generate":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -61,6 +86,116 @@ def patterns(
             
             return {"ok": True, "addr": hex(func.start_ea), "name": idc.get_func_name(ea),
                     "pattern": " ".join(p_parts), "mask": "".join(m_parts), "length": func_size}
+
+        elif action == "yara_from_func":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            fb, mask, parts = _func_bytes_and_mask(func.start_ea, max(32, min(length, 256)))
+            if not fb:
+                return make_error(MCPError.ADDRESS_INVALID, "Could not read function bytes")
+            clean_bytes = [p for p, m in zip(parts, mask) if m == 1]
+            seq = " ".join(clean_bytes[:48]) if clean_bytes else "00"
+            fname = idc.get_func_name(func.start_ea) or f"sub_{func.start_ea:x}"
+            file_sha = ""
+            try:
+                in_path = idc.get_input_file_path() or ""
+                if in_path and os.path.exists(in_path):
+                    with open(in_path, "rb") as fh:
+                        file_sha = hashlib.sha256(fh.read()).hexdigest()
+            except Exception:
+                pass
+            rule_name = (name or fname).replace(" ", "_").replace("-", "_")
+            yara_rule = (
+                f"rule {rule_name} {{\n"
+                f"  meta:\n"
+                f"    function = \"{fname}\"\n"
+                f"    binary_sha256 = \"{file_sha}\"\n"
+                f"    ida_version = \"{getattr(idaapi, 'get_kernel_version', lambda: 'unknown')()}\"\n"
+                f"  strings:\n"
+                f"    $a = {{ {seq} }}\n"
+                f"  condition:\n"
+                f"    $a\n"
+                f"}}"
+            )
+            return {"ok": True, "addr": hex(func.start_ea), "name": fname, "rule": yara_rule}
+
+        elif action == "flirt_generate":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            fb, mask, parts = _func_bytes_and_mask(func.start_ea, max(32, min(length, 256)))
+            if not fb:
+                return make_error(MCPError.ADDRESS_INVALID, "Could not read function bytes")
+            crc16 = zlib.crc32(fb) & 0xFFFF
+            cref_mask = "".join("1" if m else "0" for m in mask[:64])
+            return {
+                "ok": True,
+                "signature": {
+                    "name": name or (idc.get_func_name(func.start_ea) or f"sub_{func.start_ea:x}"),
+                    "addr": hex(func.start_ea),
+                    "length": len(fb),
+                    "crc16": hex(crc16),
+                    "leading_bytes": " ".join(parts[:64]),
+                    "cref_mask": cref_mask,
+                },
+                "note": "FLIRT-like metadata generated from bytes and relocation mask.",
+            }
+
+        elif action == "match_yara":
+            rule = str(kwargs.get("rule") or pattern or "").strip()
+            if not rule:
+                return make_error(MCPError.INVALID_ARGS, "rule required")
+            in_path = ""
+            try:
+                in_path = idc.get_input_file_path() or ""
+            except Exception:
+                in_path = ""
+            matches = []
+            yara_err = None
+            if in_path and os.path.exists(in_path):
+                try:
+                    import yara  # type: ignore
+                    yr = yara.compile(source=rule)
+                    for m in yr.match(in_path):
+                        for s in getattr(m, "strings", []) or []:
+                            off = getattr(s, "offset", None)
+                            if off is not None:
+                                matches.append({"offset": int(off), "addr": hex(int(off)), "rule": m.rule})
+                    return {"ok": True, "engine": "yara-python", "matches": matches, "count": len(matches)}
+                except Exception as e:
+                    yara_err = str(e)
+            # Fallback: parse first hex-string and run byte scan.
+            import re
+            hex_blocks = re.findall(r"\{([^}]+)\}", rule)
+            if not hex_blocks:
+                return {"ok": True, "engine": "fallback", "matches": [], "count": 0, "warning": yara_err or "No hex pattern block found"}
+            pat = " ".join(hex_blocks[0].split())
+            p_bytes, p_mask = [], []
+            for part in pat.split():
+                if "?" in part:
+                    p_bytes.append(0); p_mask.append(False)
+                else:
+                    p_bytes.append(int(part, 16)); p_mask.append(True)
+            if not in_path or not os.path.exists(in_path):
+                return {"ok": True, "engine": "fallback", "matches": [], "count": 0, "warning": yara_err or "input file unavailable"}
+            data = open(in_path, "rb").read()
+            for i in range(0, max(0, len(data) - len(p_bytes) + 1)):
+                if all(data[i + j] == p_bytes[j] for j in range(len(p_bytes)) if p_mask[j]):
+                    matches.append({"offset": i, "addr": hex(i)})
+                    if len(matches) >= max(1, count):
+                        break
+            return {"ok": True, "engine": "fallback", "matches": matches, "count": len(matches), "warning": yara_err}
         
         elif action == "match":
             if not pattern: return make_error(MCPError.INVALID_ARGS, "pattern required")
