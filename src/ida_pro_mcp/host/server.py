@@ -2528,15 +2528,13 @@ class IDAMCPServer:
                 try:
                     addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
                     ghost_action = action_name
-                    if tool_name == "code" and addr and ghost_action in ("decompile", "semantic_decompile"):
-                        from .response_enrichment import GHOST_CHAINS
-                    else:
-                        GHOST_CHAINS = {}
+                    from .response_enrichment import GHOST_CHAINS
                     ghost_results = {}
                     ghost_key = (tool_name, ghost_action)
+                    chain = GHOST_CHAINS.get(ghost_key, [])
                     
                     # Phase 1: Basic companions (callers, callees, strings)
-                    for ghost_tool, ghost_args_template in GHOST_CHAINS.get(ghost_key, []):
+                    for ghost_tool, ghost_args_template in chain:
                         ghost_args = dict(ghost_args_template)
                         for k, v in ghost_args.items():
                             if isinstance(v, str):
@@ -2564,66 +2562,69 @@ class IDAMCPServer:
                             pass
                     
                     # Phase 2: BridgeRAG multi-hop relation discovery
-                    try:
-                        bridge_res = self._execute_tool("bridgerag", {
-                            "action": "bridges",
-                            "func_ea": addr,
-                            "bridge_types": ["apis", "strings"],
-                        })
-                        if isinstance(bridge_res, dict) and bridge_res.get("ok"):
-                            bridges = bridge_res.get("bridges", {})
-                            if bridges:
-                                ghost_results["bridge_entities"] = {
-                                    "apis": bridges.get("apis", [])[:5],
-                                    "strings": bridges.get("strings", [])[:5],
-                                    "note": "Shared APIs/strings with other functions. Use bridgerag.search for full discovery."
-                                }
-                    except Exception:
-                        pass
+                    if addr and tool_name in ("code", "data", "search"):
+                        try:
+                            bridge_res = self._execute_tool("bridgerag", {
+                                "action": "bridges",
+                                "func_ea": addr,
+                                "bridge_types": ["apis", "strings"],
+                            })
+                            if isinstance(bridge_res, dict) and bridge_res.get("ok"):
+                                bridges = bridge_res.get("bridges", {})
+                                if bridges:
+                                    ghost_results["bridge_entities"] = {
+                                        "apis": bridges.get("apis", [])[:5],
+                                        "strings": bridges.get("strings", [])[:5],
+                                        "note": "Shared APIs/strings with other functions. Use bridgerag.search for full discovery."
+                                    }
+                        except Exception:
+                            pass
                     
                     # Phase 3: MbaGCN structural similarity
-                    try:
-                        mbagcn_res = self._execute_tool("mbagcn", {
-                            "action": "similar",
-                            "addr": addr,
-                            "top_k": 3,
-                        })
-                        if isinstance(mbagcn_res, dict) and mbagcn_res.get("ok"):
-                            similar = mbagcn_res.get("results", [])
-                            if similar:
-                                ghost_results["structurally_similar"] = [
-                                    {"addr": s.get("ea", ""), "name": s.get("name", ""),
-                                     "similarity": s.get("similarity", 0)}
-                                    for s in similar[:3]
-                                ]
-                                ghost_results["structurally_similar_note"] = (
-                                    "These functions have similar CFG structure. They may share behavior. "
-                                    "Use code.decompile on them to investigate."
-                                )
-                    except Exception:
-                        pass
+                    if addr and tool_name in ("code", "data", "search"):
+                        try:
+                            mbagcn_res = self._execute_tool("mbagcn", {
+                                "action": "similar",
+                                "addr": addr,
+                                "top_k": 3,
+                            })
+                            if isinstance(mbagcn_res, dict) and mbagcn_res.get("ok"):
+                                similar = mbagcn_res.get("results", [])
+                                if similar:
+                                    ghost_results["structurally_similar"] = [
+                                        {"addr": s.get("ea", ""), "name": s.get("name", ""),
+                                         "similarity": s.get("similarity", 0)}
+                                        for s in similar[:3]
+                                    ]
+                                    ghost_results["structurally_similar_note"] = (
+                                        "These functions have similar CFG structure. They may share behavior. "
+                                        "Use code.decompile on them to investigate."
+                                    )
+                        except Exception:
+                            pass
                     
                     # Phase 4: InsightIndex behavior-tag discovery
-                    try:
-                        idx = getattr(self, '_insight_index', None)
-                        if idx and hasattr(idx, 'query_by_tags'):
-                            # Try to get tags for this function
-                            func_attrs = idx.get_function(addr) if hasattr(idx, 'get_function') else None
-                            tags = func_attrs.get("behavior_tags", []) if func_attrs else []
-                            if not tags:
-                                # Fall back to L2 global facts
-                                if hasattr(self, '_global_facts'):
-                                    tags = []
-                            if tags:
-                                related = idx.query_by_tags(tags[:3], mode="or") if hasattr(idx, 'query_by_tags') else []
-                                if related:
-                                    ghost_results["same_behavior_tags"] = {
-                                        "tags": tags,
-                                        "functions": [str(r)[:80] for r in related[:5]],
-                                        "note": "Other functions with the same behavior tags. May be part of the same component."
-                                    }
-                    except Exception:
-                        pass
+                    if addr and tool_name in ("code", "data", "search"):
+                        try:
+                            idx = getattr(self, '_insight_index', None)
+                            if idx and hasattr(idx, 'query_by_tags'):
+                                # Try to get tags for this function
+                                func_attrs = idx.get_function(addr) if hasattr(idx, 'get_function') else None
+                                tags = func_attrs.get("behavior_tags", []) if func_attrs else []
+                                if not tags:
+                                    # Fall back to L2 global facts
+                                    if hasattr(self, '_global_facts'):
+                                        tags = []
+                                if tags:
+                                    related = idx.query_by_tags(tags[:3], mode="or") if hasattr(idx, 'query_by_tags') else []
+                                    if related:
+                                        ghost_results["same_behavior_tags"] = {
+                                            "tags": tags,
+                                            "functions": [str(r)[:80] for r in related[:5]],
+                                            "note": "Other functions with the same behavior tags. May be part of the same component."
+                                        }
+                        except Exception:
+                            pass
                     
                     # Phase 5: L2 GlobalFactsDatabase compiler/API pattern lookup
                     try:
