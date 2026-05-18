@@ -940,6 +940,8 @@ class _BackgroundCrawler:
         self._stop_event = threading.Event()
         self._pending: Dict[str, Dict] = {}  # proposal_id -> proposal
         self._visited: set = set()
+        self._work_queue: List[str] = []
+        self._parents: Dict[str, str] = {}
         self._visited_count: int = 0
         self._notify_fn = None  # injected by server to send MCP notifications
 
@@ -1027,6 +1029,21 @@ class _BackgroundCrawler:
     def _crawl_step(self) -> None:
         store = BlackboardStore(self._db_path)
         try:
+            # Restore queue/visited snapshot when resuming.
+            st = store.list(category="crawler_state", include_resolved=True, include_contradicted=True, limit=1)
+            if st:
+                import json as _json
+                meta = _json.loads(str(st[0].get("content") or "{}"))
+                if isinstance(meta, dict):
+                    if not self._visited and isinstance(meta.get("visited"), list):
+                        self._visited = set(str(x) for x in meta.get("visited", []))
+                    if not self._work_queue and isinstance(meta.get("queue"), list):
+                        self._work_queue = [str(x) for x in meta.get("queue", []) if str(x)]
+                    if not self._parents and isinstance(meta.get("parents"), dict):
+                        self._parents = {str(k): str(v) for k, v in meta.get("parents", {}).items()}
+        except Exception:
+            pass
+        try:
             f_res = blackboard(action="frontier", db_path=self._db_path or "", limit=25)
             frontier = f_res.get("results", []) if isinstance(f_res, dict) else []
             if frontier and isinstance(frontier[0], dict) and "addr" not in frontier[0]:
@@ -1038,17 +1055,34 @@ class _BackgroundCrawler:
                 frontier = store.next_target(limit=25)
             except Exception:
                 frontier = []
-        next_target = None
-        for t in frontier:
-            addr = str(t.get("addr") or "").strip()
-            if not addr or addr in self._visited:
-                continue
-            next_target = t
-            break
-        if not next_target:
-            return
+        addr_str = ""
+        discovery_path = []
+        # Prefer in-session queue expansion first.
+        while self._work_queue and not addr_str:
+            cand = self._work_queue.pop(0)
+            if cand and cand not in self._visited:
+                addr_str = cand
+        if not addr_str:
+            next_target = None
+            for t in frontier:
+                addr = str(t.get("addr") or "").strip()
+                if not addr or addr in self._visited:
+                    continue
+                next_target = t
+                break
+            if not next_target:
+                return
+            addr_str = str(next_target.get("addr") or "").strip()
 
-        addr_str = str(next_target.get("addr") or "").strip()
+        # Reconstruct caller -> callee chain.
+        cur = addr_str
+        hop = 0
+        while cur and hop < 8:
+            discovery_path.append(cur)
+            cur = self._parents.get(cur, "")
+            hop += 1
+        discovery_path = list(reversed(discovery_path))
+
         self._visited.add(addr_str)
         self._visited_count += 1
         findings = []
@@ -1061,8 +1095,42 @@ class _BackgroundCrawler:
                 findings = []
         except Exception:
             findings = []
+        # Expand graph traversal from discovered callees.
+        try:
+            for c in (quick.get("callees") or []):
+                c_addr = ""
+                if isinstance(c, dict):
+                    c_addr = str(c.get("addr") or c.get("ea") or "").strip()
+                else:
+                    c_addr = str(c).strip().split()[0]
+                if not c_addr or c_addr in self._visited or c_addr in self._work_queue:
+                    continue
+                self._parents[c_addr] = addr_str
+                self._work_queue.append(c_addr)
+                if len(self._work_queue) >= 50:
+                    break
+            if len(self._work_queue) > 50:
+                self._work_queue = self._work_queue[:50]
+        except Exception:
+            pass
 
         if not findings:
+            try:
+                import json as _json
+                store.write(
+                    title="crawler_state",
+                    content=_json.dumps({
+                        "visited": sorted(list(self._visited))[:400],
+                        "queue": self._work_queue[:50],
+                        "parents": self._parents,
+                    }),
+                    category="crawler_state",
+                    tags=["crawler"],
+                    confidence=1.0,
+                    source="crawler.state",
+                )
+            except Exception:
+                pass
             return
         summary = str(findings[0])[:220]
         pid = str(uuid.uuid4())[:8]
@@ -1076,6 +1144,7 @@ class _BackgroundCrawler:
             "confidence": 0.65,
             "source_addr": addr_str,
             "behavior_tags": quick.get("labels", []) if isinstance(quick, dict) else [],
+            "discovery_path": discovery_path,
         }
         self._pending[pid] = proposal
         try:
@@ -1088,6 +1157,19 @@ class _BackgroundCrawler:
                 confidence=float(proposal["confidence"]),
                 source="crawler.auto",
                 source_type="crawler",
+            )
+            import json as _json
+            store.write(
+                title="crawler_state",
+                content=_json.dumps({
+                    "visited": sorted(list(self._visited))[:400],
+                    "queue": self._work_queue[:50],
+                    "parents": self._parents,
+                }),
+                category="crawler_state",
+                tags=["crawler"],
+                confidence=1.0,
+                source="crawler.state",
             )
         except Exception:
             pass
