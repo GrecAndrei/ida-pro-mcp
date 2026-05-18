@@ -146,7 +146,7 @@ def static_trace(
             if expr:
                 try:
                     val = idc.eval_idc(expr)
-                    return {"ok": True, "expr": expr, "value": val}
+                    return {"ok": True, "expr": expr, "value": val, "language": "idc"}
                 except Exception as e:
                     return make_error(MCPError.IDA_ERROR, f"Expression eval failed: {e}")
 

@@ -238,3 +238,14 @@ def test_debug_mem_diff_has_size_cap_and_snapshot_eviction():
     assert "_MAX_MEM_DIFF_SNAPSHOTS = 128" in src
     assert "size too large (max" in src
     assert "if len(_MEM_DIFF_SNAPSHOTS) > _MAX_MEM_DIFF_SNAPSHOTS" in src
+
+
+def test_debug_add_bp_exposes_idc_condition_language():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    assert "idc_condition = kwargs.get(\"idc_condition\")" in src
+    assert "\"condition_language\": \"idc\" if bp_cond else None" in src
+
+
+def test_static_trace_eval_expr_marks_idc_language():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/static_trace.py")
+    assert "\"language\": \"idc\"" in src
