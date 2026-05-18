@@ -1705,7 +1705,7 @@ def firmware_view(
             # This is intentionally coarser (no function context), but catches
             # firmware loaded as raw blobs before code is defined.
             if not code_bytes_found:
-                scan_limit = min(binary_size, 0x80000)  # cap at 512 KB for speed
+                scan_limit = binary_size
                 chunk_size = 4096
                 offset = 0
                 while offset < scan_limit:
@@ -1749,7 +1749,7 @@ def firmware_view(
                             content=f"Accessed {p['access_count']} times from: {', '.join(p['accessed_from'][:3])}",
                             tags=["mmio", "peripheral", p["chip_family"], "auto"],
                             confidence=0.75,
-                            ioc_type="mmio_input",
+                            ioc_type="mmio_observed",
                             ioc_value=p["peripheral_name"],
                             source="firmware_view",
                             source_type="engine_firmware",
@@ -1762,6 +1762,11 @@ def firmware_view(
                 "ok": True,
                 "likely_chip_family": likely_chip,
                 "peripheral_count": len(peripherals),
+                "scan_coverage": {
+                    "bytes_scanned": int(scan_limit if not code_bytes_found else binary_size),
+                    "bytes_total": int(binary_size),
+                    "mode": "raw_word_scan" if not code_bytes_found else "decoded_operands",
+                },
                 "peripherals": peripherals[:20],
                 "note": (
                     f"Found {len(peripherals)} MMIO peripheral regions. "

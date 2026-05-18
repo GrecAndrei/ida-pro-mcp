@@ -64,7 +64,7 @@ DANGEROUS_SINKS = {
     "strncat": "buffer_overflow",
     "sprintf": "format_string",
     "vsprintf": "format_string",
-    "snprintf": "format_string",
+    "snprintf": "format_string_candidate",
     "gets": "buffer_overflow",
     "scanf": "buffer_overflow",
     # Command execution
@@ -320,11 +320,11 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
 def _dataflow_signal(source_ea: int, sink_ea: int) -> Dict[str, Any]:
     mc = _check_microcode_dataflow(source_ea, sink_ea)
     if mc:
-        return {"desc": mc, "confidence": "high", "method": "microcode_ssa"}
+        return {"desc": mc, "confidence": "high", "method": "microcode_ssa", "reachability_only": False}
     rx = _check_decompiler_dataflow_regex(source_ea, sink_ea)
     if rx:
-        return {"desc": rx, "confidence": "low", "method": "regex"}
-    return {"desc": None, "confidence": "medium", "method": "callgraph"}
+        return {"desc": rx, "confidence": "low", "method": "regex", "reachability_only": False}
+    return {"desc": None, "confidence": "low", "method": "callgraph", "reachability_only": True}
 
 
 @tool
@@ -374,7 +374,11 @@ def taint(
                 iocs = store.list(category="ioc", include_resolved=False, limit=50)
                 for ioc in iocs:
                     ioc_type = ioc.get("ioc_type", "")
-                    if ioc_type in ("ip_port", "url", "domain", "mmio_input", "dma_buffer", "uart_rx"):
+                    include_ioc = ioc_type in ("ip_port", "url", "domain", "dma_buffer", "uart_rx")
+                    if ioc_type == "mmio_input":
+                        text = f"{ioc.get('title', '')} {ioc.get('ioc_value', '')}".lower()
+                        include_ioc = any(k in text for k in ("rx", "read", "input"))
+                    if include_ioc:
                         result.append({
                             "name": ioc.get("title", ""),
                             "addr": ioc.get("addr", ""),
@@ -462,6 +466,7 @@ def taint(
                         "confidence_level": conf_label,
                         "analysis_method": flow.get("method"),
                         "inference_method": flow.get("method"),
+                        "reachability_only": bool(flow.get("reachability_only", False)),
                     })
 
             # Sort by depth (closest sinks first)
@@ -488,7 +493,7 @@ def taint(
                     else:
                         write_gate = 0.8
                     for s in found_sinks:
-                        if float(s.get("confidence", 0.0) or 0.0) >= write_gate:
+                        if (not s.get("reachability_only")) and float(s.get("confidence", 0.0) or 0.0) >= write_gate:
                             title = f"Taint: {source_name} → {s['sink']}"
                             existing = store.list(category="vuln", addr=hex_ea(source_ea))
                             if not any(s["sink"] in e.get("title", "") for e in existing):
