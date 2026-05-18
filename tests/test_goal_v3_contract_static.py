@@ -292,3 +292,9 @@ def test_protocol_endpoints_returns_structured_items_and_counts():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/protocol.py")
     assert "\"endpoint_items\"" in src
     assert "\"counts\": {k: len(v) for k, v in endpoints.items()}" in src
+
+
+def test_nav_semantic_goto_reports_backend_and_fallback_warning():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/nav.py")
+    assert "\"semantic_backend\": semantic_backend" in src
+    assert "used keyword fallback" in src
