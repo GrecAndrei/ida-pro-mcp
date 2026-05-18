@@ -269,3 +269,9 @@ def test_cfg_idom_uses_deepest_strict_dominator_rule():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/cfg_analysis.py")
     assert "other in dom.get(candidate, set())" in src
     assert "candidate in dom[other]" not in src
+
+
+def test_session_crystallize_skill_avoids_local_id_collisions():
+    src = _read("src/ida_pro_mcp/host/session.py")
+    assert "while skill_id in data[\"skills\"]:" in src
+    assert "skill_id = f\"{base_skill_id}_{suffix}\"" in src
