@@ -416,6 +416,8 @@ def protocol(
                 "protocols_detected": protocols_detected,
                 "api_usage": api_usage,
                 "string_evidence": string_evidence,
+                "mode": "classifier+embedding" if classifier_results and protocols_detected else ("classifier" if classifier_results else "embedding_fallback"),
+                "source": "behavior_classifier" if classifier_results else "embedding_fallback",
             }
             if classifier_results:
                 result["classifier_hits"] = classifier_results
