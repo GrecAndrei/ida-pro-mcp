@@ -202,10 +202,45 @@ def _check_decompiler_dataflow_regex(source_ea: int, sink_ea: int) -> Optional[s
         return None
 
 
+def _collect_mop_mregs(mop, out: Set[int]) -> None:
+    """Best-effort recursive extraction of micro-register ids from a mop_t tree."""
+    if mop is None:
+        return
+    try:
+        if hasattr(mop, "r"):
+            r = int(getattr(mop, "r"))
+            if r >= 0:
+                out.add(r)
+    except Exception:
+        pass
+    # Common nested operand containers in Hex-Rays mop_t shapes.
+    for child_attr in ("l", "r", "d", "a", "f", "g", "pair", "obj"):
+        child = getattr(mop, child_attr, None)
+        if child is None:
+            continue
+        if isinstance(child, (list, tuple)):
+            for c in child:
+                _collect_mop_mregs(c, out)
+        else:
+            _collect_mop_mregs(child, out)
+
+
+def _insn_uses_taint(insn, tainted_mregs: Set[int]) -> bool:
+    used: Set[int] = set()
+    _collect_mop_mregs(getattr(insn, "l", None), used)
+    _collect_mop_mregs(getattr(insn, "r", None), used)
+    return any(r in tainted_mregs for r in used)
+
+
+def _insn_defs(insn) -> Set[int]:
+    defs: Set[int] = set()
+    _collect_mop_mregs(getattr(insn, "d", None), defs)
+    return defs
+
+
 def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
     """
-    Best-effort SSA-like microcode walk.
-    Returns a concise path description when sink references values derived from source.
+    Real microcode def-use walk using a fixpoint over tainted mregs.
     """
     try:
         if not hasattr(ida_hexrays, "init_hexrays_plugin") or not ida_hexrays.init_hexrays_plugin():
@@ -220,64 +255,63 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
         if mba is None:
             return None
 
-        source_name = idc.get_name(source_ea) or hex_ea(source_ea)
-        sink_name = idc.get_name(sink_ea) or hex_ea(sink_ea)
-        sink_lower = sink_name.lower()
+        source_name = (idc.get_name(source_ea) or hex_ea(source_ea)).lower()
+        sink_name = (idc.get_name(sink_ea) or hex_ea(sink_ea)).lower()
+        m_call = getattr(ida_hexrays, "m_call", None)
 
-        tainted_regs: Set[int] = set()
-        store_aliases: Set[int] = set()
-        seen_source_call = False
-        seen_sink_use = False
+        # Seed taint from source call assignment, then propagate until stable.
+        tainted_mregs: Set[int] = set()
+        seen_source = False
+        seen_sink = False
 
-        qty = int(getattr(mba, "qty", 0) or 0)
-        for bi in range(qty):
-            blk = mba.get_mblock(bi)
-            insn = getattr(blk, "head", None)
-            while insn:
-                op_txt = str(insn)
-                lower = op_txt.lower()
+        changed = True
+        iterations = 0
+        max_iter = max(4, int(getattr(mba, "qty", 0) or 0) * 2)
+        while changed and iterations < max_iter:
+            changed = False
+            iterations += 1
+            for bi in range(int(getattr(mba, "qty", 0) or 0)):
+                blk = mba.get_mblock(bi)
+                insn = getattr(blk, "head", None)
+                while insn:
+                    txt = str(insn)
+                    low = txt.lower()
 
-                if source_name and source_name.lower() in lower and "call" in lower:
-                    seen_source_call = True
-                    if hasattr(insn, "d") and hasattr(insn.d, "r"):
-                        try:
-                            tainted_regs.add(int(insn.d.r))
-                        except Exception:
-                            pass
+                    # Seed from source call occurrences.
+                    if source_name and source_name in low and "call" in low:
+                        seen_source = True
+                        defs = _insn_defs(insn)
+                        for d in defs:
+                            if d not in tainted_mregs:
+                                tainted_mregs.add(d)
+                                changed = True
 
-                if hasattr(insn, "l") and hasattr(insn.l, "r"):
+                    uses_taint = _insn_uses_taint(insn, tainted_mregs)
+                    defs = _insn_defs(insn)
+                    if uses_taint and defs:
+                        for d in defs:
+                            if d not in tainted_mregs:
+                                tainted_mregs.add(d)
+                                changed = True
+
+                    # m_call propagation: tainted arg -> tainted return def.
                     try:
-                        if int(insn.l.r) in tainted_regs and hasattr(insn, "d") and hasattr(insn.d, "r"):
-                            tainted_regs.add(int(insn.d.r))
+                        is_call = (m_call is not None and int(getattr(insn, "opcode", -1)) == int(m_call)) or ("call" in low)
                     except Exception:
-                        pass
+                        is_call = "call" in low
+                    if is_call and uses_taint and defs:
+                        for d in defs:
+                            if d not in tainted_mregs:
+                                tainted_mregs.add(d)
+                                changed = True
 
-                if "stx" in lower or "str" in lower:
-                    if any(f"r{r}" in lower for r in tainted_regs):
-                        try:
-                            if hasattr(insn, "d") and hasattr(insn.d, "g"):
-                                store_aliases.add(int(insn.d.g))
-                        except Exception:
-                            pass
+                    if sink_name and sink_name in low and uses_taint:
+                        seen_sink = True
 
-                if ("ldx" in lower or "ldr" in lower) and store_aliases:
-                    try:
-                        if hasattr(insn, "l") and hasattr(insn.l, "g") and int(insn.l.g) in store_aliases:
-                            if hasattr(insn, "d") and hasattr(insn.d, "r"):
-                                tainted_regs.add(int(insn.d.r))
-                    except Exception:
-                        pass
+                    insn = getattr(insn, "next", None)
 
-                if "ret" in lower and any(f"r{r}" in lower for r in tainted_regs):
-                    seen_sink_use = seen_sink_use or (sink_lower in lower)
-
-                if sink_lower and sink_lower in lower and any(f"r{r}" in lower for r in tainted_regs):
-                    seen_sink_use = True
-
-                insn = getattr(insn, "next", None)
-
-        if seen_source_call and seen_sink_use:
-            return f"microcode def-use: {source_name} -> tainted SSA regs/memory aliases -> {sink_name}"
+        if seen_source and seen_sink:
+            return f"microcode_ssa def-use: {source_name} -> tainted mregs -> {sink_name}"
         return None
     except Exception:
         return None
@@ -286,7 +320,7 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
 def _dataflow_signal(source_ea: int, sink_ea: int) -> Dict[str, Any]:
     mc = _check_microcode_dataflow(source_ea, sink_ea)
     if mc:
-        return {"desc": mc, "confidence": "high", "method": "microcode"}
+        return {"desc": mc, "confidence": "high", "method": "microcode_ssa"}
     rx = _check_decompiler_dataflow_regex(source_ea, sink_ea)
     if rx:
         return {"desc": rx, "confidence": "low", "method": "regex"}
@@ -427,6 +461,7 @@ def taint(
                         "confidence": conf_num,
                         "confidence_level": conf_label,
                         "analysis_method": flow.get("method"),
+                        "inference_method": flow.get("method"),
                     })
 
             # Sort by depth (closest sinks first)
