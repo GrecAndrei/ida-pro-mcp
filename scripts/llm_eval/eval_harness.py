@@ -560,7 +560,7 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str) -
 
             print(f"  [{label}]   tool[{tool_call_count}] {tname}({targs.get('action','')}) …")
             _score_tool_call(tname, targs, score, tool_call_count, prev_calls, next_call_hints)
-            prev_calls.append(f"{tname}:{targs.get('action','')}")
+            prev_calls.append(f"{tname}:{json.dumps(targs, sort_keys=True)}")
 
             try:
                 result = mcp.call_tool(tname, targs)
