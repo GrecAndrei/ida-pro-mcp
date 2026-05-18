@@ -67,10 +67,15 @@ def _compute_idom(dom, entry):
         if n == entry:
             continue
         strict = dom[n] - {n}
+        # Immediate dominator = strict dominator that is dominated by every
+        # other strict dominator of n (the deepest strict dominator).
+        best = None
         for candidate in strict:
-            if all(candidate in dom[other] for other in strict if other != candidate):
-                idom[n] = candidate
+            if all(other in dom.get(candidate, set()) for other in strict if other != candidate):
+                best = candidate
                 break
+        if best is not None:
+            idom[n] = best
     return idom
 
 

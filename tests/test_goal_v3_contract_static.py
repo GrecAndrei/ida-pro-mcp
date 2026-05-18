@@ -263,3 +263,9 @@ def test_server_run_loop_surfaces_parse_and_internal_errors():
     assert "Parse error:" in src
     assert "\"code\": -32000" in src
     assert "Internal server error:" in src
+
+
+def test_cfg_idom_uses_deepest_strict_dominator_rule():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/cfg_analysis.py")
+    assert "other in dom.get(candidate, set())" in src
+    assert "candidate in dom[other]" not in src
