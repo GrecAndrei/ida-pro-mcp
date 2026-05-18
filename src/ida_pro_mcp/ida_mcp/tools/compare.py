@@ -388,6 +388,8 @@ def compare(
             data_jaccard = _jaccard(dr1, dr2)
             embedding_similarity = None
             behavior_overlap = []
+            warning = None
+            method_used = "embedding+structural"
             try:
                 from ida_pro_mcp.host.intelligence import get_assembler
                 asm = get_assembler()
@@ -409,8 +411,18 @@ def compare(
                         behavior_overlap = []
             except Exception:
                 embedding_similarity = None
+                method_used = "structural_fallback"
+                warning = "Embedding pipeline unavailable; fell back to structural semantics."
 
-            return {
+            overall_struct = round((call_sim + data_jaccard) / 2, 3)
+            overall = overall_struct
+            if embedding_similarity is not None:
+                try:
+                    overall = round((overall_struct + float(embedding_similarity)) / 2.0, 3)
+                except Exception:
+                    overall = overall_struct
+
+            out = {
                 "ok": True,
                 "call_seq1": cs1[:limit],
                 "call_seq2": cs2[:limit],
@@ -418,10 +430,15 @@ def compare(
                 "data_refs1": len(dr1),
                 "data_refs2": len(dr2),
                 "data_jaccard": data_jaccard,
-                "overall_similarity": round((call_sim + data_jaccard) / 2, 3),
+                "overall_similarity": overall,
+                "structural_similarity": overall_struct,
                 "embedding_similarity": embedding_similarity,
                 "behavior_overlap": behavior_overlap,
+                "method_used": method_used,
             }
+            if warning:
+                out["warning"] = warning
+            return out
 
         elif action == "batch_compare":
             ea1, err = _resolve_func(addr, "addr")

@@ -153,7 +153,8 @@ class Score:
         "used_code_decompile":      (5,  "Decompiled at least one function"),
         "used_data_strings":        (4,  "Called data(action=strings)"),
         "used_data_imports":        (3,  "Called data(action=imports)"),
-        "used_graph":               (3,  "Called graph tool"),
+        "used_graph":               (5,  "Called xref/graph tool"),
+        "used_xref_analysis":       (3,  "Called xref analysis tool"),
         "used_search":              (3,  "Called search tool"),
         "used_patterns":            (3,  "Called patterns tool"),
         "used_blackboard":          (3,  "Used blackboard to track findings"),
@@ -163,6 +164,8 @@ class Score:
         "final_report":             (8,  "Produced a coherent final report"),
         "identified_rtos":          (5,  "Identified or hypothesized the RTOS"),
         "identified_version":       (4,  "Found version/build string"),
+        "found_rivierawaves_stack": (10, "Found RivieraWaves/LMAC/KE stack artifacts"),
+        "wrote_annotation":         (5,  "Wrote annotation or comment"),
     }
 
     def award(self, key: str, note: str = ""):
@@ -286,7 +289,7 @@ def _trim_context(messages: list[dict], keep_system: bool = True) -> list[dict]:
 
 def _score_tool_call(tool_name: str, args: dict, score: Score,
                      call_count: int, prev_calls: list[str], next_call_hints: list[str]):
-    full = f"{tool_name}:{args.get('action','')}"
+    full = f"{tool_name}:{json.dumps(args or {}, sort_keys=True)}"
 
     if call_count == 1 and tool_name == "session" and args.get("action") == "create":
         score.award("session_create_first")
@@ -314,6 +317,10 @@ def _score_tool_call(tool_name: str, args: dict, score: Score,
             score.award("used_data_imports")
     if tool_name == "graph":
         score.award("used_graph")
+        if args.get("action") == "xref_graph":
+            score.award("used_xref_analysis")
+    if tool_name == "xref_analysis":
+        score.award("used_xref_analysis")
     if tool_name == "search":
         score.award("used_search")
     if tool_name == "patterns":
@@ -324,10 +331,16 @@ def _score_tool_call(tool_name: str, args: dict, score: Score,
         score.award("used_workflow")
     if tool_name == "binary_info":
         score.award("used_binary_info")
+    if tool_name in ("annotation", "comment_mgr"):
+        score.award("wrote_annotation")
+    if tool_name == "modify" and args.get("action") == "comment":
+        score.award("wrote_annotation")
 
     # Penalty: repeated identical call
-    if prev_calls.count(full) >= 2:
-        score.penalize(f"repeated identical call: {full}", pts=2)
+    if prev_calls.count(full) >= 2 and score.penalties < 20:
+        delta = min(2, 20 - score.penalties)
+        if delta > 0:
+            score.penalize(f"repeated identical call: {full}", pts=delta)
 
 
 def _score_tool_result(tool_name: str, args: dict, result_text: str, score: Score):
@@ -349,6 +362,10 @@ def _score_tool_result(tool_name: str, args: dict, result_text: str, score: Scor
     for pat in ("version", "build", "v1.", "v2.", "v3.", "sdk", "release", "fw_ver"):
         if pat in low:
             score.award("identified_version", f"hint: {pat}")
+            break
+    for pat in ("rivierawaves", "lmac", "ke_task", "ke_msg", "ke_evt", "rwip"):
+        if pat in low:
+            score.award("found_rivierawaves_stack", f"hint: {pat}")
             break
 
 

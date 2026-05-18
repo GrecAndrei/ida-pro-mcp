@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 from typing import Mapping, Optional, Sequence
+from collections import Counter
+import math
 
 try:
     from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
@@ -70,14 +72,15 @@ def semantic_score(
     substring_bonus: float = 60.0,
     fuzzy_bonus: float = 20.0,
     include_fuzzy: bool = True,
+    return_detail: bool = False,
 ) -> float:
     """Compute semantic similarity score (higher is better, 0..120 scale)."""
     if not query or not candidate:
-        return 0.0
+        return {"score": 0.0, "method": "exact"} if return_detail else 0.0
     q = query.strip().lower()
     c = candidate.strip().lower()
     if not q or not c:
-        return 0.0
+        return {"score": 0.0, "method": "exact"} if return_detail else 0.0
 
     # Embedding-first similarity.
     qv = _embed_text(q)
@@ -85,19 +88,58 @@ def semantic_score(
     if qv is not None and cv is not None and BgeCodeEmbedder is not None:
         try:
             sim = float(BgeCodeEmbedder.cosine(qv, cv))
-            return max(0.0, min(120.0, sim * 120.0))
+            score = max(0.0, min(120.0, sim * 120.0))
+            return {"score": score, "method": "embedding"} if return_detail else score
         except Exception:
             pass
 
-    # Deterministic fallback: token-overlap only (no fuzzy heuristics).
+    if q == c:
+        return {"score": 120.0, "method": "exact"} if return_detail else 120.0
+
+    # TF-IDF-like fallback over word n-grams.
+    q_tokens = _ngram_tokens(q)
+    c_tokens = _ngram_tokens(c)
+    if q_tokens and c_tokens:
+        score = _tfidf_cosine_score(q_tokens, c_tokens)
+        return {"score": score, "method": "tfidf_fallback"} if return_detail else score
+
+    # Deterministic fallback: token-overlap only.
     qt = set(semantic_tokens(q))
     ct = set(semantic_tokens(c))
     if not qt or not ct:
-        return 0.0
+        return {"score": 0.0, "method": "exact"} if return_detail else 0.0
     inter = len(qt.intersection(ct))
     union = len(qt.union(ct))
     jacc = float(inter) / float(max(1, union))
-    return max(0.0, min(120.0, jacc * 120.0))
+    score = max(0.0, min(120.0, jacc * 120.0))
+    return {"score": score, "method": "exact"} if return_detail else score
+
+
+def _ngram_tokens(text: str) -> list[str]:
+    words = [w for w in re.findall(r"[A-Za-z0-9_]+", text.lower()) if len(w) >= 2]
+    toks = list(words)
+    toks.extend([" ".join(words[i:i + 2]) for i in range(max(0, len(words) - 1))])
+    return toks
+
+
+def _tfidf_cosine_score(qt: list[str], ct: list[str]) -> float:
+    qcnt = Counter(qt)
+    ccnt = Counter(ct)
+    all_terms = set(qcnt) | set(ccnt)
+    qv = {}
+    cv = {}
+    for t in all_terms:
+        df = int(t in qcnt) + int(t in ccnt)
+        idf = math.log((2.0 + 1.0) / (df + 1.0)) + 1.0
+        qv[t] = qcnt.get(t, 0) * idf
+        cv[t] = ccnt.get(t, 0) * idf
+    dot = sum(qv[t] * cv[t] for t in all_terms)
+    qn = math.sqrt(sum(v * v for v in qv.values()))
+    cn = math.sqrt(sum(v * v for v in cv.values()))
+    if qn <= 1e-12 or cn <= 1e-12:
+        return 0.0
+    sim = dot / (qn * cn)
+    return max(0.0, min(120.0, sim * 120.0))
 
 
 def normalize_action(
