@@ -73,6 +73,7 @@ __all__ = [
     "governance",
     "mbagcn",
     "knowledge",
+    "firmware_bootstrap",
 ]
 
 # Mapping from tool name to module name (when they differ)
