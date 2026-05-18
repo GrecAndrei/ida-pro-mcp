@@ -501,17 +501,17 @@ def search(
                             pseudo = str(cfunc)[:2000]
                             hits = classifier.classify(pseudo, threshold=0.0, top_k=5, block=False)
                             if hits:
-                                hs = sorted(float(h.get("score", 0.0) or 0.0) for h in hits)
+                                hs = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in hits)
                                 q50 = hs[len(hs) // 2]
                                 q75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
                                 gate = q50 + max(0.0, q75 - q50)
-                                hits = [h for h in hits if float(h.get("score", 0.0) or 0.0) >= gate]
+                                hits = [h for h in hits if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate]
                             if any(h.get("behavior", "").lower() == tag for h in hits):
                                 rows.append({
                                     "addr": hex(func_ea),
                                     "name": fname,
                                     "source": "classifier",
-                                    "confidence": max((h.get("score", 0) for h in hits
+                                    "confidence": max((float(h.get("confidence", h.get("score", 0)) or 0) for h in hits
                                                        if h.get("behavior", "").lower() == tag), default=0),
                                 })
                         except Exception:
