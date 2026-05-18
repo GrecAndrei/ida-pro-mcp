@@ -275,3 +275,14 @@ def test_session_crystallize_skill_avoids_local_id_collisions():
     src = _read("src/ida_pro_mcp/host/session.py")
     assert "while skill_id in data[\"skills\"]:" in src
     assert "skill_id = f\"{base_skill_id}_{suffix}\"" in src
+
+
+def test_server_ghost_chain_is_not_code_only():
+    src = _read("src/ida_pro_mcp/host/server.py")
+    assert "chain = GHOST_CHAINS.get(ghost_key, [])" in src
+    assert "if tool_name == \"code\" and addr and ghost_action in (\"decompile\", \"semantic_decompile\")" not in src
+
+
+def test_server_bridgerag_and_related_enrichment_are_addr_gated():
+    src = _read("src/ida_pro_mcp/host/server.py")
+    assert "if addr and tool_name in (\"code\", \"data\", \"search\"):" in src
