@@ -804,34 +804,41 @@ def types(
             if not _resolve_type_by_name(str(type_name), tif):
                 return make_error(MCPError.TYPE_ERROR, f"Type '{type_name}' not found. Use 'list' to see available types.")
 
-            # Collect all xrefs TO the given address
+            # Collect code + data xrefs TO the given address.
             locations = []
             seen = set()
             MAX_XREFS = 5000
 
-            for xref in idautils.CodeRefsTo(ea, 0):
+            for xref in idautils.XrefsTo(ea, 0):
                 if len(locations) >= MAX_XREFS:
                     break
-                frm = getattr(xref, "frm", xref)
-                if frm in seen:
+                frm = int(getattr(xref, "frm", xref))
+                xref_type = int(getattr(xref, "type", 0) or 0)
+                key = (frm, xref_type)
+                if key in seen:
                     continue
-                seen.add(frm)
+                seen.add(key)
+                is_code_xref = bool(getattr(xref, "iscode", False))
 
                 loc_info = {
                     "from": frm,
                     "from_hex": hex(frm),
-                    "type": "code",
+                    "xref_kind": "code" if is_code_xref else "data",
+                    "xref_type": xref_type,
                 }
 
-                # Attempt to apply the type at this xref origin
+                # Best-effort type propagation at the xref origin.
                 try:
                     if ida_typeinf.apply_tinfo(frm, tif, ida_typeinf.TINFO_DEFINITE):
                         loc_info["applied"] = True
+                        loc_info["status"] = "applied"
                     else:
                         loc_info["applied"] = False
+                        loc_info["status"] = "skipped"
                         loc_info["reason"] = "apply_tinfo failed (incompatible type or address not writable)"
                 except Exception as e:
                     loc_info["applied"] = False
+                    loc_info["status"] = "error"
                     loc_info["reason"] = str(e)
 
                 locations.append(loc_info)
@@ -848,6 +855,7 @@ def types(
                 "propagated_to": [loc["from_hex"] for loc in locations if loc.get("applied")],
                 "skipped": int(failed_count),
                 "total_xrefs": len(locations),
+                "locations": locations[:200],
             }
 
         # ====================================================================
