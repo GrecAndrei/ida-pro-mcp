@@ -7,7 +7,6 @@ AIC_FW = os.environ.get(
 )
 
 
-@pytest.mark.integration
 def test_firmware_bootstrap_aic8800d80(ida_runner, ida_available):
     if not ida_available:
         pytest.skip("IDA integration unavailable")
