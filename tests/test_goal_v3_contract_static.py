@@ -342,3 +342,8 @@ def test_compare_blocks_cfg_edit_uses_node_edge_symmetric_diffs():
     assert "edge_add = len(e2s - e1s)" in src
     assert "edge_del = len(e1s - e2s)" in src
     assert "cfg_edit_distance = node_add + node_del + edge_add + edge_del" in src
+
+
+def test_classify_schema_uses_explicit_category_map_not_implicit_global():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/classify.py")
+    assert "for tag, apis in _CATEGORY_APIS.items():" in src

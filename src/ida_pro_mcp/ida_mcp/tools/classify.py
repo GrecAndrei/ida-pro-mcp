@@ -185,7 +185,7 @@ def _induce_function_schema(func_ea: int) -> dict:
     # Broader semantic tags used by structured search should be available here
     # too so classify() and search(action="structured") stay aligned.
     try:
-        for tag, apis in TAG_CATEGORIES.items():
+        for tag, apis in _CATEGORY_APIS.items():
             for api in apis:
                 api_base = _normalize_api_name(api).lower()
                 if any(_normalize_api_name(callee).lower() == api_base for callee in callees):
