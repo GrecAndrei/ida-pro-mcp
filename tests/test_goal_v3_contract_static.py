@@ -335,3 +335,10 @@ def test_compare_find_clones_no_addr_has_structured_group_details():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/compare.py")
     assert "\"clone_groups_details\"" in src
     assert "\"functions\": funcs_list[: min(len(funcs_list), 10)]" in src
+
+
+def test_compare_blocks_cfg_edit_uses_node_edge_symmetric_diffs():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/compare.py")
+    assert "edge_add = len(e2s - e1s)" in src
+    assert "edge_del = len(e1s - e2s)" in src
+    assert "cfg_edit_distance = node_add + node_del + edge_add + edge_del" in src

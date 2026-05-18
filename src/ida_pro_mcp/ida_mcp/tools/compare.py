@@ -251,6 +251,15 @@ def compare(
 
             b1, e1 = _block_info(ea1)
             b2, e2 = _block_info(ea2)
+            n1 = {blk["start"] for blk in b1}
+            n2 = {blk["start"] for blk in b2}
+            e1s = {(hex_ea(a), hex_ea(b)) for a, b in e1}
+            e2s = {(hex_ea(a), hex_ea(b)) for a, b in e2}
+            node_add = len(n2 - n1)
+            node_del = len(n1 - n2)
+            edge_add = len(e2s - e1s)
+            edge_del = len(e1s - e2s)
+            cfg_edit_distance = node_add + node_del + edge_add + edge_del
 
             # Match blocks by mnemonic sequence similarity
             matched = []
@@ -277,10 +286,10 @@ def compare(
                 "matched": "\n".join(str(x) for x in matched[:limit]),
                 "unmatched1": [b1[i]["start"] for i in unmatched1][:limit],
                 "unmatched2": [b2[j]["start"] for j in unmatched2][:limit],
-                "cfg_edit_distance": abs(len(b1) - len(b2)) + abs(len(e1) - len(e2)),
-                "added_blocks": max(0, len(b2) - len(b1)),
-                "removed_blocks": max(0, len(b1) - len(b2)),
-                "structural_match_pct": round(100.0 * (1.0 - (abs(len(b1)-len(b2)) + abs(len(e1)-len(e2))) / max(1, len(b1)+len(b2)+len(e1)+len(e2))), 2),
+                "cfg_edit_distance": cfg_edit_distance,
+                "added_blocks": node_add,
+                "removed_blocks": node_del,
+                "structural_match_pct": round(100.0 * (1.0 - cfg_edit_distance / max(1, len(n1) + len(n2) + len(e1s) + len(e2s))), 2),
             }
 
         elif action == "apis":
