@@ -8161,6 +8161,15 @@ class IDAMCPServer:
                 return 0
             bin_hash = self._binary_sha256(str(getattr(sess, "binary_path", "") or ""))
             chip = str((getattr(sess, "analysis_options", {}) or {}).get("chip_family") or "").strip()
+            baseaddr = 0
+            try:
+                raw_base = (getattr(sess, "analysis_options", {}) or {}).get("baseaddr")
+                if isinstance(raw_base, str):
+                    baseaddr = int(raw_base, 0)
+                elif raw_base is not None:
+                    baseaddr = int(raw_base)
+            except Exception:
+                baseaddr = 0
             sdb = SymbolDB()
             count = 0
             for h in hyps:
@@ -8174,11 +8183,12 @@ class IDAMCPServer:
                     addr = int(m.group(0), 16)
                 except Exception:
                     continue
+                addr_offset = addr - baseaddr if baseaddr and addr >= baseaddr else addr
                 conf = float(h.get("confidence", 0.8) or 0.8)
                 rid = sdb.upsert_hypothesis(
                     binary_hash=bin_hash,
                     chip_family=chip,
-                    addr_offset=int(addr),
+                    addr_offset=int(addr_offset),
                     hypothesis_text=text,
                     confidence=conf,
                     source_session=sid,
@@ -8200,6 +8210,15 @@ class IDAMCPServer:
             hits = sdb.query_hypotheses(binary_hash=bin_hash, chip_family=chip, limit=200)
             if not hits:
                 return 0
+            baseaddr = 0
+            try:
+                raw_base = (getattr(session_obj, "analysis_options", {}) or {}).get("baseaddr")
+                if isinstance(raw_base, str):
+                    baseaddr = int(raw_base, 0)
+                elif raw_base is not None:
+                    baseaddr = int(raw_base)
+            except Exception:
+                baseaddr = 0
             bb_path = str(getattr(session_obj, "idb_path", "") or "") + ".blackboard.db"
             store = IDAMCPServer._blackboard_module.BlackboardStore(db_path=bb_path) if IDAMCPServer._blackboard_module else self._get_blackboard_store()
             if store is None:
@@ -8209,7 +8228,8 @@ class IDAMCPServer:
                 title = str(row.get("hypothesis_text") or "").strip()
                 if not title:
                     continue
-                addr = hex(int(row.get("addr_offset", 0) or 0))
+                off = int(row.get("addr_offset", 0) or 0)
+                addr = hex((baseaddr + off) if baseaddr else off)
                 if store.exists_similar(addr, "hypothesis", title):
                     continue
                 store.write(

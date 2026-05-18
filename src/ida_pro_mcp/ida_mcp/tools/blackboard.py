@@ -1001,8 +1001,19 @@ class _BackgroundCrawler:
         p = self._pending.pop(proposal_id, None)
         if not p:
             return False
-        # Demote confidence on rejection without persisting noise into blackboard.
-        p["confidence"] = max(0.0, float(p.get("confidence", 0.6) or 0.6) - 0.2)
+        # Demote confidence for existing hypothesis entries at this address.
+        try:
+            store = BlackboardStore(self._db_path)
+            addr = str(p.get("addr") or "").strip()
+            if addr:
+                rows = store.list(category="hypothesis", addr=addr, include_resolved=True, include_contradicted=True, limit=20)
+                for e in rows:
+                    eid = str(e.get("id") or e.get("entry_id") or "").strip()
+                    old = float(e.get("confidence", 0.5) or 0.5)
+                    if eid:
+                        store.update(eid, confidence=max(0.0, old - 0.15))
+        except Exception:
+            pass
         return True
 
     def _crawl_loop(self) -> None:
