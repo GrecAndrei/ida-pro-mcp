@@ -6,6 +6,7 @@ except ImportError:
 
 import time
 from collections import OrderedDict
+import json
 
 
 # ============================================================================
@@ -14,7 +15,39 @@ from collections import OrderedDict
 
 # Cache for register snapshots (used by reg_diff)
 _REG_SNAPSHOTS: OrderedDict[str, dict] = OrderedDict()
-_MAX_REG_SNAPSHOTS = 8
+_MAX_REG_SNAPSHOTS = 50
+_TRACE_HOOK = None
+_TRACE_STATE = {"file": None, "count": 0, "max_insns": 50000}
+_MEM_DIFF_SNAPSHOTS: Dict[Tuple[int, int], bytes] = {}
+_BP_CONDITIONS: Dict[int, str] = {}
+
+
+class _TraceHooks(idaapi.DBG_Hooks):
+    def dbg_trace(self, tid, ea):
+        try:
+            if not _TRACE_STATE.get("file"):
+                return 0
+            if int(_TRACE_STATE.get("count", 0)) >= int(_TRACE_STATE.get("max_insns", 50000)):
+                return 0
+            line = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0) or "").strip()
+            rec = {"ea": hex(int(ea)), "insn": line, "regs": {}}
+            try:
+                import ida_dbg
+                for rname in ("RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RSP", "RBP", "RIP", "EAX", "EBX", "ECX", "EDX", "ESP", "EBP", "EIP"):
+                    try:
+                        rv = ida_dbg.get_reg_val(rname)
+                        if rv is not None:
+                            rec["regs"][rname.lower()] = int(rv)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            fh = _TRACE_STATE.get("file")
+            fh.write(json.dumps(rec) + "\n")
+            _TRACE_STATE["count"] = int(_TRACE_STATE.get("count", 0)) + 1
+        except Exception:
+            pass
+        return 0
 
 
 def _wait_for_suspend(timeout_ms: int = 3000):
@@ -140,7 +173,8 @@ def debug(
         "status", "start", "stop", "continue", "step_into", "step_over", "run_to", "run_until",
         "breakpoints", "add_bp", "del_bp", "enable_bp", "add_hw_bp", "add_watch",
         "regs", "set_reg", "reg_diff", "snapshot_regs", "threads", "modules", "callstack",
-        "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map", "bp_context"
+        "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map", "bp_context",
+        "trace_start", "trace_stop", "trace_read", "mem_diff"
     ], "Action"],
     addr: Annotated[Optional[str], "Address (for run_to/run_until/bp/watch)"] = None,
     condition: Annotated[Optional[str], "Python expression for run_until (e.g. 'cpu.rax == 5')"] = None,
@@ -368,7 +402,9 @@ def debug(
             if err:
                 return err
             if ida_dbg.add_bpt(ea, 0, 0):
-                return {"ok": True, "addr": hex(ea)}
+                if condition:
+                    _BP_CONDITIONS[int(ea)] = str(condition)
+                return {"ok": True, "addr": hex(ea), "condition": _BP_CONDITIONS.get(int(ea))}
             return make_error(MCPError.IDA_ERROR, "Failed to add breakpoint")
 
         elif action == "del_bp":
@@ -378,6 +414,7 @@ def debug(
             if err:
                 return err
             if ida_dbg.del_bpt(ea):
+                _BP_CONDITIONS.pop(int(ea), None)
                 return {"ok": True, "addr": hex(ea)}
             return make_error(MCPError.IDA_ERROR, "Failed to delete breakpoint")
 
@@ -742,6 +779,90 @@ def debug(
                 }
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, str(e))
+
+        elif action == "trace_start":
+            global _TRACE_HOOK
+            output_file = str(kwargs.get("output_file") or "").strip()
+            if not output_file:
+                return make_error(MCPError.INVALID_ARGS, "output_file required")
+            max_insns = int(kwargs.get("max_insns") or 50000)
+            if _TRACE_HOOK is not None:
+                return {"ok": True, "already_running": True, "trace_file": output_file}
+            fh = open(output_file, "w", encoding="utf-8")
+            _TRACE_STATE["file"] = fh
+            _TRACE_STATE["count"] = 0
+            _TRACE_STATE["max_insns"] = max(1, max_insns)
+            _TRACE_HOOK = _TraceHooks()
+            _TRACE_HOOK.hook()
+            return {"ok": True, "trace_file": output_file, "max_insns": _TRACE_STATE["max_insns"]}
+
+        elif action == "trace_stop":
+            global _TRACE_HOOK
+            if _TRACE_HOOK is not None:
+                try:
+                    _TRACE_HOOK.unhook()
+                except Exception:
+                    pass
+                _TRACE_HOOK = None
+            fh = _TRACE_STATE.get("file")
+            path = ""
+            if fh:
+                try:
+                    fh.flush()
+                    path = str(getattr(fh, "name", "") or "")
+                    fh.close()
+                except Exception:
+                    path = ""
+            count = int(_TRACE_STATE.get("count", 0))
+            _TRACE_STATE["file"] = None
+            _TRACE_STATE["count"] = 0
+            return {"ok": True, "trace_file": path, "insn_count": count}
+
+        elif action == "trace_read":
+            output_file = str(kwargs.get("output_file") or "").strip()
+            if not output_file:
+                return make_error(MCPError.INVALID_ARGS, "output_file required")
+            lim = int(kwargs.get("limit") or 500)
+            try:
+                with open(output_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                rows = []
+                for ln in lines[-max(1, lim):]:
+                    try:
+                        rows.append(json.loads(ln))
+                    except Exception:
+                        continue
+                return {"ok": True, "trace_file": output_file, "entries": rows, "count": len(rows)}
+            except Exception as e:
+                return make_error(MCPError.FILE_NOT_FOUND, str(e))
+
+        elif action == "mem_diff":
+            err = check_debugger(require_active=True)
+            if err:
+                return err
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            span = int(size or 16)
+            if span <= 0:
+                return make_error(MCPError.INVALID_ARGS, "size must be > 0")
+            cur = ida_dbg.read_dbg_memory(ea, span)
+            if not cur:
+                return make_error(MCPError.IDA_ERROR, "Failed to read memory")
+            key = (int(ea), int(span))
+            prev = _MEM_DIFF_SNAPSHOTS.get(key)
+            changes = []
+            if prev:
+                n = min(len(prev), len(cur))
+                for i in range(n):
+                    if prev[i] != cur[i]:
+                        changes.append({"offset": i, "before": f"{prev[i]:02x}", "after": f"{cur[i]:02x}"})
+                if len(prev) != len(cur):
+                    changes.append({"offset": n, "before": f"len={len(prev)}", "after": f"len={len(cur)}"})
+            _MEM_DIFF_SNAPSHOTS[key] = bytes(cur)
+            return {"ok": True, "addr": hex(ea), "size": span, "changed_offsets": changes[:1024], "change_count": len(changes)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

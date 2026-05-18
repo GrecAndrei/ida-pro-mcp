@@ -682,6 +682,13 @@ class BehaviorClassifier:
         "integer_overflow": "count = read_u32(pkt + 4); size = count * elem_size; buf = malloc(size); if (size < count) overflow = 1; for (i = 0; i < count; ++i) copy_elem(buf + i * elem_size, src); truncation or wraparound in arithmetic before allocation/copy;",
         "path_traversal": "snprintf(path, sizeof(path), \"%s/%s\", base_dir, user_name); if (strstr(user_name, \"..\")) warn_only(); fopen(path, \"wb\"); extract_archive(entry_name, base_dir); insufficient canonicalization allows writes outside intended root;",
     }
+    ANCHOR_MIN_CONFIDENCE: Dict[str, float] = {
+        "buffer_overflow": 0.35,
+        "use_after_free": 0.35,
+        "format_string_vuln": 0.35,
+        "integer_overflow": 0.35,
+        "path_traversal": 0.35,
+    }
 
     # Module-level singleton so anchors are loaded exactly once per process.
     _shared: Optional["BehaviorClassifier"] = None
@@ -793,7 +800,8 @@ class BehaviorClassifier:
                 if anchor is None:
                     continue
             sim = BgeCodeEmbedder.cosine(query_vec, anchor)
-            if sim >= threshold:
+            min_thr = max(float(threshold or 0.0), float(self.ANCHOR_MIN_CONFIDENCE.get(behavior, 0.30)))
+            if sim >= min_thr:
                 results.append({"behavior": behavior, "confidence": round(sim, 4)})
 
         results.sort(key=lambda x: x["confidence"], reverse=True)
@@ -850,6 +858,44 @@ class BehaviorClassifier:
     ) -> List[Dict[str, Any]]:
         """Internal compatibility wrapper for older call sites."""
         return self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
+
+    def anchor_coverage_report(self, min_similarity: float = 0.4, max_funcs: int = 5000) -> Dict[str, Any]:
+        """Report how many functions match each anchor above min_similarity."""
+        rows = []
+        try:
+            funcs = list(idautils.Functions())[:max(1, int(max_funcs))]
+        except Exception:
+            funcs = []
+        cache: List[Tuple[int, List[float]]] = []
+        for ea in funcs:
+            try:
+                cfunc = ida_hexrays.decompile(ea)
+                if not cfunc:
+                    continue
+                sig = _extract_signature(str(cfunc)[:3000]) or str(cfunc)[:1200]
+                vec = self._embedder.embed(sig)
+                cache.append((ea, vec))
+            except Exception:
+                continue
+        for label in self.ANCHORS:
+            anc = self._get_anchor(label)
+            if anc is None:
+                rows.append({"label": label, "hit_count": 0, "top_example": None})
+                continue
+            best = (0.0, None)
+            hits = 0
+            for ea, qv in cache:
+                sim = BgeCodeEmbedder.cosine(qv, anc)
+                if sim >= float(min_similarity):
+                    hits += 1
+                    if sim > best[0]:
+                        best = (sim, ea)
+            rows.append({
+                "label": label,
+                "hit_count": hits,
+                "top_example": hex(best[1]) if best[1] is not None else None,
+            })
+        return {"anchors": rows, "min_similarity": float(min_similarity), "function_count": len(cache)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
