@@ -2881,7 +2881,9 @@ class IDAMCPServer:
             # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
             if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
                 try:
-                    cmd.append(f"-b{int(opts['baseaddr']):#x}")
+                    # IDA -b flag is in 16-byte paragraphs, not bytes.
+                    paragraphs = int(opts["baseaddr"]) // 16
+                    cmd.append(f"-b{paragraphs:#x}")
                 except (TypeError, ValueError):
                     pass
             # skip_analysis=true: pass -c to create IDB without running auto-analysis.
@@ -10739,8 +10741,33 @@ class IDAMCPServer:
                     line = line.strip()
                     if not line:
                         continue
-                    req = json.loads(line.decode("utf-8"))
-                    resp = self.handle_request(req)
+                    req_obj = None
+                    req_id = None
+                    try:
+                        req_obj = json.loads(line.decode("utf-8"))
+                        if isinstance(req_obj, dict):
+                            req_id = req_obj.get("id")
+                    except Exception as e:
+                        err = {
+                            "jsonrpc": "2.0",
+                            "id": None,
+                            "error": {"code": -32700, "message": f"Parse error: {e}"},
+                        }
+                        output = (
+                            json.dumps(err, ensure_ascii=False, separators=(",", ":"))
+                            + "\n"
+                        ).encode("utf-8")
+                        rs.write(output)
+                        rs.flush()
+                        continue
+                    try:
+                        resp = self.handle_request(req_obj)
+                    except Exception as e:
+                        resp = {
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": {"code": -32000, "message": f"Internal server error: {e}"},
+                        }
                     if resp:
                         output = (
                             json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
@@ -10748,9 +10775,23 @@ class IDAMCPServer:
                         ).encode("utf-8")
                         rs.write(output)
                         rs.flush()
-                except Exception:
+                except Exception as e:
                     if self._shutdown_requested:
                         break
+                    err = {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32000, "message": f"Unhandled server loop error: {e}"},
+                    }
+                    try:
+                        output = (
+                            json.dumps(err, ensure_ascii=False, separators=(",", ":"))
+                            + "\n"
+                        ).encode("utf-8")
+                        rs.write(output)
+                        rs.flush()
+                    except Exception:
+                        pass
                     continue
         finally:
             self.shutdown()

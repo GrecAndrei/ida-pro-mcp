@@ -255,3 +255,11 @@ def test_calc_eval_uses_ast_whitelist_not_eval_builtin():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/calc.py")
     assert "tree = ast.parse(expression, mode=\"eval\")" in src
     assert "Unsupported expression node" in src
+
+
+def test_server_run_loop_surfaces_parse_and_internal_errors():
+    src = _read("src/ida_pro_mcp/host/server.py")
+    assert "\"code\": -32700" in src
+    assert "Parse error:" in src
+    assert "\"code\": -32000" in src
+    assert "Internal server error:" in src
