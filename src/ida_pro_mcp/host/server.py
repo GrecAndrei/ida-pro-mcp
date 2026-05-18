@@ -6473,6 +6473,7 @@ class IDAMCPServer:
                 )
                 out = {"ok": True, "session": self.current_session.to_dict()}
                 imported_symbol_count = 0
+                cross_session_imported = 0
                 try:
                     inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else {}
                     chip = str((inferred or {}).get("chip_family") or (arch_meta or {}).get("chip_family") or "").strip()
@@ -6485,6 +6486,10 @@ class IDAMCPServer:
                         )
                 except Exception:
                     imported_symbol_count = 0
+                try:
+                    cross_session_imported = self._import_cross_session_hypotheses(self.current_session)
+                except Exception:
+                    cross_session_imported = 0
                 if create_note:
                     out["note"] = create_note
                 if arch_meta:
@@ -6533,6 +6538,7 @@ class IDAMCPServer:
                                 }
                             ]
                 out["imported_symbol_count"] = int(imported_symbol_count)
+                out["cross_session_imported"] = int(cross_session_imported)
                 return out
             if action == "discover":
                 self.session_mgr._load_orphaned_idbs()
@@ -6655,6 +6661,7 @@ class IDAMCPServer:
                         "session_id required (or have an active session)",
                         hint="Provide session_id or create/switch to a session first.",
                     )
+                self._export_session_hypotheses_to_symbol_db(sid)
                 self._cleanup_runtime(sid)
                 closed = self.session_mgr.delete_session(sid)
                 if (
@@ -6830,12 +6837,13 @@ class IDAMCPServer:
                     return sid_err
                 if not sid:
                     return make_error(MCPError.INVALID_ARGS, "session_id required")
+                exported_hypotheses = self._export_session_hypotheses_to_symbol_db(sid)
                 result = self.session_mgr.export_session(sid)
                 if result is None:
                     return make_error(
                         MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
                     )
-                return {"ok": True, "exported": result}
+                return {"ok": True, "exported": result, "exported_hypotheses": int(exported_hypotheses)}
             if action == "import_session":
                 data = args.get("data")
                 if not data or not isinstance(data, dict):
@@ -8128,6 +8136,97 @@ class IDAMCPServer:
                     return None
             return IDAMCPServer._blackboard_store
 
+    def _binary_sha256(self, binary_path: str) -> str:
+        try:
+            if not binary_path or not os.path.exists(binary_path):
+                return ""
+            h = hashlib.sha256()
+            with open(binary_path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            return h.hexdigest()
+        except Exception:
+            return ""
+
+    def _export_session_hypotheses_to_symbol_db(self, sid: str, session_obj=None) -> int:
+        try:
+            sess = session_obj or self.session_mgr.get_session(sid)
+            if not sess:
+                return 0
+            hyps = self.session_mgr.get_high_confidence_hypotheses(sid, min_confidence=0.8)
+            if not hyps:
+                return 0
+            bin_hash = self._binary_sha256(str(getattr(sess, "binary_path", "") or ""))
+            chip = str((getattr(sess, "analysis_options", {}) or {}).get("chip_family") or "").strip()
+            sdb = SymbolDB()
+            count = 0
+            for h in hyps:
+                text = str(h.get("statement") or h.get("title") or "").strip()
+                if not text:
+                    continue
+                m = re.search(r"0x[0-9a-fA-F]+", text)
+                if not m:
+                    continue
+                try:
+                    addr = int(m.group(0), 16)
+                except Exception:
+                    continue
+                conf = float(h.get("confidence", 0.8) or 0.8)
+                rid = sdb.upsert_hypothesis(
+                    binary_hash=bin_hash,
+                    chip_family=chip,
+                    addr_offset=int(addr),
+                    hypothesis_text=text,
+                    confidence=conf,
+                    source_session=sid,
+                    source_binary=str(getattr(sess, "binary_path", "") or ""),
+                )
+                if rid:
+                    count += 1
+            return int(count)
+        except Exception:
+            return 0
+
+    def _import_cross_session_hypotheses(self, session_obj) -> int:
+        try:
+            if not session_obj:
+                return 0
+            bin_hash = self._binary_sha256(str(getattr(session_obj, "binary_path", "") or ""))
+            chip = str((getattr(session_obj, "analysis_options", {}) or {}).get("chip_family") or "").strip()
+            sdb = SymbolDB()
+            hits = sdb.query_hypotheses(binary_hash=bin_hash, chip_family=chip, limit=200)
+            if not hits:
+                return 0
+            bb_path = str(getattr(session_obj, "idb_path", "") or "") + ".blackboard.db"
+            store = IDAMCPServer._blackboard_module.BlackboardStore(db_path=bb_path) if IDAMCPServer._blackboard_module else self._get_blackboard_store()
+            if store is None:
+                return 0
+            imported = 0
+            for row in hits:
+                title = str(row.get("hypothesis_text") or "").strip()
+                if not title:
+                    continue
+                addr = hex(int(row.get("addr_offset", 0) or 0))
+                if store.exists_similar(addr, "hypothesis", title):
+                    continue
+                store.write(
+                    title=title,
+                    content=f"Imported from prior session ({row.get('source_session', '')})",
+                    category="hypothesis",
+                    addr=addr,
+                    tags=["cross_session", "symboldb"],
+                    confidence=float(row.get("confidence", 0.8) or 0.8),
+                    source="symbol_db.import",
+                    source_type="cross_session",
+                )
+                imported += 1
+            return int(imported)
+        except Exception:
+            return 0
+
     def _handle_blackboard(self, args: dict) -> dict:
         """Host-side blackboard handler so it works without IDA runtime."""
         store = self._get_blackboard_store()
@@ -8294,14 +8393,15 @@ class IDAMCPServer:
             if action == "start_crawler":
                 crawler.start(notify_fn=self._send_notification)
                 return {"ok": True, "running": crawler.is_running(),
-                        "note": "Crawler follows xrefs from known blackboard addresses every 30s."}
+                        "note": "Crawler uses frontier targets and runs agent(action='quick') every 0.5s."}
             elif action == "stop_crawler":
                 crawler.stop()
                 return {"ok": True, "running": False}
             elif action == "crawler_status":
                 proposals = crawler.pending_proposals()
                 return {"ok": True, "running": crawler.is_running(),
-                        "pending_proposals": len(proposals), "proposals": proposals[:10]}
+                        "pending_proposals": len(proposals), "proposals_pending": len(proposals),
+                        "addresses_visited": crawler.visited_count(), "proposals": proposals[:10]}
             elif action == "accept":
                 pid = str(args.get("proposal_id") or "").strip()
                 if not pid:
