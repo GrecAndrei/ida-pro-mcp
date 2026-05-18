@@ -304,3 +304,9 @@ def test_intelligence_find_model_uses_path_cache():
     src = _read("src/ida_pro_mcp/host/intelligence.py")
     assert "_MODEL_PATH_CACHE = None" in src
     assert "if isinstance(_MODEL_PATH_CACHE, str):" in src
+
+
+def test_session_global_skill_tag_filter_uses_exact_set_membership():
+    src = _read("src/ida_pro_mcp/host/session.py")
+    assert "tag_set.issubset(loaded_norm)" in src
+    assert "tags LIKE" not in src
