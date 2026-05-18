@@ -51,6 +51,23 @@ class SymbolDB:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(symbol_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_fp ON symbols(fingerprint)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_chip ON symbols(chip_family)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hypotheses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    binary_hash TEXT NOT NULL,
+                    chip_family TEXT,
+                    addr_offset INTEGER NOT NULL,
+                    hypothesis_text TEXT NOT NULL,
+                    confidence REAL DEFAULT 0.8,
+                    source_session TEXT,
+                    source_binary TEXT,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_hyp_hash ON hypotheses(binary_hash)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_hyp_chip ON hypotheses(chip_family)")
             conn.commit()
 
     def upsert_symbol(self, row: Dict[str, Any]) -> int:
@@ -185,3 +202,93 @@ class SymbolDB:
                 "SELECT chip_family, COUNT(*) FROM symbols GROUP BY chip_family ORDER BY COUNT(*) DESC"
             ).fetchall()
         return [{"chip_family": r[0] or "unknown", "symbol_count": int(r[1])} for r in rows]
+
+    def upsert_hypothesis(
+        self,
+        *,
+        binary_hash: str,
+        addr_offset: int,
+        hypothesis_text: str,
+        confidence: float = 0.8,
+        chip_family: str = "",
+        source_session: str = "",
+        source_binary: str = "",
+    ) -> int:
+        if not binary_hash or not hypothesis_text:
+            return 0
+        now = time.time()
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT id FROM hypotheses WHERE binary_hash=? AND addr_offset=? AND hypothesis_text=?",
+                (str(binary_hash), int(addr_offset), str(hypothesis_text)),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE hypotheses
+                    SET confidence=?, chip_family=?, source_session=?, source_binary=?, created_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        float(confidence or 0.8),
+                        str(chip_family or ""),
+                        str(source_session or ""),
+                        str(source_binary or ""),
+                        now,
+                        int(existing[0]),
+                    ),
+                )
+                conn.commit()
+                return int(existing[0])
+            cur = conn.execute(
+                """
+                INSERT INTO hypotheses(binary_hash, chip_family, addr_offset, hypothesis_text, confidence, source_session, source_binary, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(binary_hash),
+                    str(chip_family or ""),
+                    int(addr_offset),
+                    str(hypothesis_text),
+                    float(confidence or 0.8),
+                    str(source_session or ""),
+                    str(source_binary or ""),
+                    now,
+                ),
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def query_hypotheses(self, *, binary_hash: str = "", chip_family: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+        where = []
+        params: List[Any] = []
+        if binary_hash:
+            where.append("binary_hash=?")
+            params.append(str(binary_hash))
+        if chip_family:
+            where.append("LOWER(chip_family)=LOWER(?)")
+            params.append(str(chip_family))
+        if not where:
+            return []
+        params.append(int(limit))
+        sql = (
+            "SELECT binary_hash, chip_family, addr_offset, hypothesis_text, confidence, source_session, source_binary, created_at "
+            f"FROM hypotheses WHERE {' OR '.join(where)} ORDER BY confidence DESC, created_at DESC LIMIT ?"
+        )
+        with self._conn() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append(
+                {
+                    "binary_hash": r[0],
+                    "chip_family": r[1] or "",
+                    "addr_offset": int(r[2] or 0),
+                    "hypothesis_text": r[3] or "",
+                    "confidence": float(r[4] or 0.0),
+                    "source_session": r[5] or "",
+                    "source_binary": r[6] or "",
+                    "created_at": float(r[7] or 0.0),
+                }
+            )
+        return out

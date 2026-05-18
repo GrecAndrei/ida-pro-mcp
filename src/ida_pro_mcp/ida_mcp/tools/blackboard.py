@@ -931,6 +931,7 @@ class _BackgroundCrawler:
     """
 
     _instance: Optional["_BackgroundCrawler"] = None
+    _instances_by_key: Dict[str, "_BackgroundCrawler"] = {}
     _lock = threading.Lock()
 
     def __init__(self, db_path: Optional[str] = None):
@@ -939,11 +940,20 @@ class _BackgroundCrawler:
         self._stop_event = threading.Event()
         self._pending: Dict[str, Dict] = {}  # proposal_id -> proposal
         self._visited: set = set()
+        self._visited_count: int = 0
         self._notify_fn = None  # injected by server to send MCP notifications
 
     @classmethod
     def instance(cls, db_path: Optional[str] = None) -> "_BackgroundCrawler":
         with cls._lock:
+            key = str(db_path or "").strip().lower()
+            if key:
+                inst = cls._instances_by_key.get(key)
+                if inst is None:
+                    inst = cls(db_path)
+                    cls._instances_by_key[key] = inst
+                cls._instance = inst
+                return inst
             if cls._instance is None:
                 cls._instance = cls(db_path)
             return cls._instance
@@ -968,27 +978,36 @@ class _BackgroundCrawler:
     def pending_proposals(self) -> List[Dict]:
         return list(self._pending.values())
 
+    def visited_count(self) -> int:
+        return int(self._visited_count)
+
     def accept(self, proposal_id: str) -> Optional[str]:
         p = self._pending.pop(proposal_id, None)
         if not p:
             return None
         store = BlackboardStore(self._db_path)
+        conf = float(p.get("confidence", 0.6) or 0.6)
         return store.write(
             title=p["title"],
             content=p.get("content", ""),
-            category=p.get("category", "general"),
+            category=p.get("category", "hypothesis"),
             addr=p.get("addr", ""),
             tags=p.get("tags", []),
-            confidence=p.get("confidence", 0.6),
+            confidence=min(1.0, conf + 0.1),
             source="crawler.accepted",
         )
 
     def reject(self, proposal_id: str) -> bool:
-        return bool(self._pending.pop(proposal_id, None))
+        p = self._pending.pop(proposal_id, None)
+        if not p:
+            return False
+        # Demote confidence on rejection without persisting noise into blackboard.
+        p["confidence"] = max(0.0, float(p.get("confidence", 0.6) or 0.6) - 0.2)
+        return True
 
     def _crawl_loop(self) -> None:
-        """Main crawler loop: runs every 30s, follows xrefs from known addresses."""
-        while not self._stop_event.wait(30):
+        """Main crawler loop: frontier -> agent quick -> hypothesis proposal every 0.5s."""
+        while not self._stop_event.wait(0.5):
             try:
                 self._crawl_step()
             except Exception:
@@ -996,87 +1015,74 @@ class _BackgroundCrawler:
 
     def _crawl_step(self) -> None:
         store = BlackboardStore(self._db_path)
-        # Get all known addresses from the blackboard
-        entries = store.list(limit=500, include_resolved=False)
-        known_addrs = {e["addr"] for e in entries if e.get("addr")}
-
         try:
-            import idautils
-            import idaapi
-            import idc
-            import ida_funcs
-        except ImportError:
-            return  # Not running inside IDA
-
-        new_proposals = []
-
-        for addr_str in list(known_addrs)[:50]:  # cap per cycle
-            if self._stop_event.is_set():
-                break
+            f_res = blackboard(action="frontier", db_path=self._db_path or "", limit=25)
+            frontier = f_res.get("results", []) if isinstance(f_res, dict) else []
+            if frontier and isinstance(frontier[0], dict) and "addr" not in frontier[0]:
+                frontier = []
+        except Exception:
+            frontier = []
+        if not frontier:
             try:
-                ea = int(addr_str, 16) if addr_str.startswith("0x") else int(addr_str)
-            except (ValueError, TypeError):
-                continue
-
-            if ea in self._visited:
-                continue
-            self._visited.add(ea)
-
-            # Follow xrefs FROM this address
-            try:
-                for xref in idautils.XrefsFrom(ea, 0):
-                    target = xref.to
-                    target_hex = hex(target)
-                    if target_hex in known_addrs or target in self._visited:
-                        continue
-                    fn = ida_funcs.get_func(target)
-                    if not fn:
-                        continue
-                    fname = idc.get_func_name(fn.start_ea) or target_hex
-                    # Skip already-named library functions
-                    if not fname.startswith("sub_") and not fname.startswith("0x"):
-                        continue
-
-                    # Classify the target function
-                    behavior_tags = []
-                    try:
-                        import ida_hexrays
-                        cfunc = ida_hexrays.decompile(fn.start_ea)
-                        if cfunc:
-                            pseudo = str(cfunc)
-                            try:
-                                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
-                            except ImportError:
-                                from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
-                            embedder = BgeCodeEmbedder()
-                            classifier = BehaviorClassifier.instance(embedder)
-                            hits = classifier.classify(pseudo, threshold=0.4, top_k=2, block=False)
-                            behavior_tags = [h["behavior"] for h in hits]
-                    except Exception:
-                        pass
-
-                    if not behavior_tags:
-                        continue  # Only propose if we have something interesting to say
-
-                    pid = str(uuid.uuid4())[:8]
-                    proposal = {
-                        "proposal_id": pid,
-                        "addr": hex(fn.start_ea),
-                        "title": f"Discovered via xref from {addr_str}: {fname} [{', '.join(behavior_tags)}]",
-                        "content": f"Reachable from {addr_str}. Behavior: {', '.join(behavior_tags)}",
-                        "category": behavior_tags[0] if behavior_tags else "general",
-                        "tags": ["crawler", "xref"] + behavior_tags,
-                        "confidence": 0.65,
-                        "source_addr": addr_str,
-                        "behavior_tags": behavior_tags,
-                    }
-                    self._pending[pid] = proposal
-                    new_proposals.append(proposal)
+                frontier = store.next_target(limit=25)
             except Exception:
+                frontier = []
+        next_target = None
+        for t in frontier:
+            addr = str(t.get("addr") or "").strip()
+            if not addr or addr in self._visited:
                 continue
+            next_target = t
+            break
+        if not next_target:
+            return
+
+        addr_str = str(next_target.get("addr") or "").strip()
+        self._visited.add(addr_str)
+        self._visited_count += 1
+        findings = []
+        quick = {}
+        try:
+            from .agent import agent as _agent_tool  # type: ignore
+            quick = _agent_tool(action="quick", addr=addr_str)
+            findings = quick.get("findings") if isinstance(quick, dict) else []
+            if not isinstance(findings, list):
+                findings = []
+        except Exception:
+            findings = []
+
+        if not findings:
+            return
+        summary = str(findings[0])[:220]
+        pid = str(uuid.uuid4())[:8]
+        proposal = {
+            "proposal_id": pid,
+            "addr": addr_str,
+            "title": f"Crawler quick analysis @ {addr_str}",
+            "content": summary,
+            "category": "hypothesis",
+            "tags": ["crawler", "quick"],
+            "confidence": 0.65,
+            "source_addr": addr_str,
+            "behavior_tags": quick.get("labels", []) if isinstance(quick, dict) else [],
+        }
+        self._pending[pid] = proposal
+        try:
+            store.write(
+                title=proposal["title"],
+                content=proposal["content"],
+                category="hypothesis",
+                addr=proposal["addr"],
+                tags=proposal["tags"],
+                confidence=float(proposal["confidence"]),
+                source="crawler.auto",
+                source_type="crawler",
+            )
+        except Exception:
+            pass
 
         # Send MCP notification for new proposals
-        if new_proposals and self._notify_fn:
+        if self._notify_fn:
             try:
                 self._notify_fn({
                     "jsonrpc": "2.0",
@@ -1085,16 +1091,8 @@ class _BackgroundCrawler:
                         "level": "info",
                         "logger": "blackboard.crawler",
                         "data": {
-                            "message": f"Crawler found {len(new_proposals)} new interesting functions",
-                            "proposals": [
-                                {
-                                    "proposal_id": p["proposal_id"],
-                                    "addr": p["addr"],
-                                    "title": p["title"],
-                                    "behavior_tags": p["behavior_tags"],
-                                }
-                                for p in new_proposals[:5]
-                            ],
+                            "message": "Crawler generated 1 quick-analysis proposal",
+                            "proposals": [{"proposal_id": proposal["proposal_id"], "addr": proposal["addr"], "title": proposal["title"], "behavior_tags": proposal.get("behavior_tags", [])}],
                             "action": "Use blackboard(action='accept', proposal_id=...) or blackboard(action='reject', proposal_id=...) for each proposal.",
                         },
                     },
@@ -1476,7 +1474,7 @@ def blackboard(
         crawler = _BackgroundCrawler.instance(db_path=db_path or None)
         crawler.start()
         return {"ok": True, "running": crawler.is_running(),
-                "note": "Crawler follows xrefs from known blackboard addresses every 30s. Use crawler_status to see proposals."}
+                "note": "Crawler uses frontier targets and runs agent(action='quick') every 0.5s. Use crawler_status to see proposals."}
 
     elif action == "stop_crawler":
         crawler = _BackgroundCrawler.instance()
@@ -1490,6 +1488,8 @@ def blackboard(
             "ok": True,
             "running": crawler.is_running(),
             "pending_proposals": len(proposals),
+            "proposals_pending": len(proposals),
+            "addresses_visited": crawler.visited_count(),
             "proposals": proposals[:10],
             "note": "Use blackboard(action='accept', proposal_id=...) or blackboard(action='reject', proposal_id=...) for each proposal.",
         }

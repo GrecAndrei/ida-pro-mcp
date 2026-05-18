@@ -567,6 +567,21 @@ class SessionManager:
                 data["_hypotheses"] = skills_data.get("hypotheses", [])
             return data
 
+    def get_high_confidence_hypotheses(self, sid: str, min_confidence: float = 0.8) -> List[dict]:
+        with self._lock:
+            if sid not in self.sessions:
+                return []
+            data = self._load_skills(sid)
+            out: List[dict] = []
+            for h in data.get("hypotheses", []) or []:
+                try:
+                    conf = float(h.get("confidence", 0.0) or 0.0)
+                except Exception:
+                    conf = 0.0
+                if conf >= float(min_confidence):
+                    out.append(h)
+            return out
+
     def import_session(self, data: dict) -> Session:
         with self._lock:
             new_sid = self._new_session_id()

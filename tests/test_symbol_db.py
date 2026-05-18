@@ -54,3 +54,23 @@ def test_symbol_db_upsert_and_lookup():
 
         stats = db.stats_by_chip()
         assert any(s.get("chip_family") == "AIC8800D80" for s in stats)
+
+
+def test_symbol_db_hypothesis_roundtrip():
+    with tempfile.TemporaryDirectory() as td:
+        db_path = os.path.join(td, "symbols.db")
+        db = SymbolDB(db_path)
+        rid = db.upsert_hypothesis(
+            binary_hash="abcd" * 16,
+            chip_family="AIC8800D80",
+            addr_offset=0x1234,
+            hypothesis_text="0x1234 handles packet decrypt",
+            confidence=0.9,
+            source_session="SID12345",
+            source_binary="/tmp/fw.bin",
+        )
+        assert rid > 0
+        hits = db.query_hypotheses(binary_hash="abcd" * 16)
+        assert hits
+        assert hits[0]["addr_offset"] == 0x1234
+        assert "packet decrypt" in hits[0]["hypothesis_text"]
