@@ -259,6 +259,7 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
         sink_name = (idc.get_name(sink_ea) or hex_ea(sink_ea)).lower()
         m_call = getattr(ida_hexrays, "m_call", None)
         m_icall = getattr(ida_hexrays, "m_icall", None)
+        m_ret = getattr(ida_hexrays, "m_ret", None)
         _mop_r = getattr(ida_hexrays, "mop_r", None)
         _mop_l = getattr(ida_hexrays, "mop_l", None)
         _mop_S = getattr(ida_hexrays, "mop_S", None)
@@ -301,6 +302,7 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
                     # m_call propagation: tainted arg -> tainted return def.
                     opv = int(getattr(insn, "opcode", -1))
                     is_call = (m_call is not None and opv == int(m_call)) or (m_icall is not None and opv == int(m_icall))
+                    is_ret = (m_ret is not None and opv == int(m_ret))
                     if not is_call:
                         is_call = "call" in low
                     # operand kind check for robustness
@@ -323,6 +325,9 @@ def _check_microcode_dataflow(source_ea: int, sink_ea: int) -> Optional[str]:
                             if d not in tainted_mregs:
                                 tainted_mregs.add(d)
                                 changed = True
+                    # Return op carries taint to caller boundary (mark sink-visible)
+                    if is_ret and uses_taint:
+                        seen_sink = seen_sink or bool(sink_name)
 
                     if sink_name and sink_name in low and uses_taint:
                         seen_sink = True
@@ -481,6 +486,7 @@ def taint(
                             if nm.startswith("validate_") or nm.startswith("check_") or nm.startswith("sanitize_") or nm in ("strlen", "strnlen"):
                                 sanitized_by.append(nm)
                             if sink_name == "memcpy":
+                                # memcpy can sanitize when destination is independent of tainted source.
                                 sanitized_by.append("memcpy")
                     interproc = []
                     # one-level inter-procedural check

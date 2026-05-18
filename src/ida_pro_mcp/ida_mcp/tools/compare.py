@@ -21,6 +21,7 @@ def compare(
     addrs: Annotated[Optional[str], "Comma-separated addresses for batch_compare"] = None,
     threshold: Annotated[float, "Similarity threshold (0.0-1.0)"] = 0.7,
     limit: Annotated[int, "Max results"] = 30,
+    **kwargs
 ) -> dict:
     """
     Compare functions for similarity, structural differences, and clone detection.
@@ -68,6 +69,12 @@ def compare(
         Returns: {added, removed, changed, diff}
     """
     try:
+        # Backward/goal-compatible aliases
+        if kwargs.get("addr_a") and not addr:
+            addr = kwargs.get("addr_a")
+        if kwargs.get("addr_b") and not addr2:
+            addr2 = kwargs.get("addr_b")
+
         import difflib
         import hashlib
 
