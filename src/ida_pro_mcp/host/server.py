@@ -9451,7 +9451,7 @@ class IDAMCPServer:
                     completed += 1
 
             return {
-                "ok": not had_error,
+                "ok": True,
                 "action": "execute_plan",
                 "source": source_desc,
                 "calls": calls_out,
