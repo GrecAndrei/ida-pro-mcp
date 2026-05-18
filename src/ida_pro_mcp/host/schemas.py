@@ -131,6 +131,7 @@ TOOLS = [
     "governance",
     # --- Cross-session firmware KB ---
     "knowledge",
+    "firmware_bootstrap",
 ]
 
 ADVERTISED_TOOLS = [
@@ -392,7 +393,8 @@ TOOL_DESCRIPTIONS = {
     "entropy": "Compute entropy over regions to detect packing, encryption, or compressed data. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
     "export": "Export IDB content in various formats for external tooling. Actions: listing, html, idc, json, binexport, headers, redact.",
     "filter": "Apply structured predicate filters to tool result sets for focused output. Actions: filter.",
-    "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, and multi-region campaigns. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, campaign_checkpoint, campaign_resume, campaign_feedback, fingerprint_index_sync, fingerprint_index_query, detect_load_address, detect_vector_table, detect_mmio, triage_snapshot.",
+    "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, campaign_checkpoint, campaign_resume, campaign_feedback, fingerprint_index_sync, fingerprint_index_query, detect_load_address, detect_vector_table, detect_mmio, triage_snapshot, bootstrap.",
+    "firmware_bootstrap": "Chip-aware post-load bootstrap pipeline for firmware binaries. Defines vector-table functions (Reset_Handler and IRQ handlers), annotates known MMIO peripherals, runs auto-analysis, and returns a bootstrap report.",
     "fixups": "Manage relocation fixup entries in the IDB. Actions: list, get, add, delete.",
     "funcs": "Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, set_name/rename, add_comment, list, info, metrics, find_similar, suggest_names.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
@@ -806,6 +808,10 @@ TOOL_ACTIONS = {
         "detect_vector_table",
         "detect_mmio",
         "triage_snapshot",
+        "bootstrap",
+    ],
+    "firmware_bootstrap": [
+        "(call with chip_family/load_base/memory_map/peripheral_addresses)",
     ],
     "fixups": [
         "list",
@@ -1982,6 +1988,13 @@ TOOL_ARG_SCHEMAS = {
         "db_path": {"type": "string", "description": "Override path to symbol knowledge SQLite DB"},
         "chip_family": {"type": "string", "description": "Optional chip family tag for export_session"},
         "session_id": {"type": "string", "description": "Optional source session identifier for export_session"},
+    },
+    "firmware_bootstrap": {
+        "chip_family": {"type": "string"},
+        "load_base": {"type": ["integer", "string"]},
+        "memory_map": {"type": "array", "items": {"type": "object"}},
+        "peripheral_addresses": {"type": "array", "items": {"type": "object"}},
+        "post_load_actions": {"type": "array", "items": {"type": "string"}},
     },
 }
 

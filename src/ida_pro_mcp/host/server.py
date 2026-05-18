@@ -120,6 +120,7 @@ from .schemas import (
     sanitize_schema_for_vertex,
 )
 from .arch_profile import normalize_arch_options, infer_binary_arch_profile
+from .chip_db import find_chip_profile
 from .symbol_db import SymbolDB
 
 # Import truncation middleware
@@ -3109,6 +3110,7 @@ class IDAMCPServer:
                         "ok": True,
                         "idb_path": session.idb_path,
                         "current_options": apply_res.get("current_options"),
+                        "bootstrap_report": apply_res.get("bootstrap_report"),
                         "analysis_in_progress": True,
                         "hint": "IDA is auto-analyzing the binary. Poll session(action='status') to check readiness, or start querying once analysis completes.",
                     }
@@ -3364,6 +3366,7 @@ class IDAMCPServer:
                 return res
 
         bootstrap_knowledge = {"chip_family": None, "imported_symbol_count": 0}
+        bootstrap_report = None
         try:
             chip_res = self._send_rpc_raw(
                 {"tool": "knowledge", "args": {"action": "chip_identify"}},
@@ -3388,6 +3391,22 @@ class IDAMCPServer:
                 bootstrap_knowledge["imported_symbol_count"] = int(import_res.get("imported", 0) or 0)
         except Exception:
             pass
+
+        try:
+            chip_family = str(opts.get("chip_family") or bootstrap_knowledge.get("chip_family") or "").strip()
+            if chip_family:
+                fw_args = {
+                    "chip_family": chip_family,
+                    "load_base": opts.get("baseaddr"),
+                    "memory_map": opts.get("memory_map") or [],
+                    "peripheral_addresses": opts.get("peripheral_addresses") or [],
+                    "post_load_actions": opts.get("post_load_actions") or [],
+                }
+                fw_res = self._send_rpc_raw({"tool": "firmware_bootstrap", "args": fw_args}, port)
+                if isinstance(fw_res, dict) and not fw_res.get("error"):
+                    bootstrap_report = fw_res
+        except Exception:
+            bootstrap_report = None
 
         if opts.get("apply_once", True):
             session.analysis_applied = True
@@ -3443,6 +3462,7 @@ class IDAMCPServer:
             "ok": True,
             "current_options": current_options if not current_options.get("error") else None,
             "bootstrap_knowledge": bootstrap_knowledge,
+            "bootstrap_report": bootstrap_report,
         }
 
     def _background_index(self, session_id: str, server_port: int):
@@ -6350,6 +6370,14 @@ class IDAMCPServer:
                                 arch_meta["load_base"] = hex(inferred["load_base"])
                             if inferred.get("chip_family"):
                                 arch_meta["chip_family"] = inferred["chip_family"]
+                                analysis_options.setdefault("chip_family", inferred.get("chip_family"))
+                                if inferred.get("memory_map"):
+                                    analysis_options.setdefault("memory_map", inferred.get("memory_map"))
+                                if inferred.get("peripheral_addresses"):
+                                    analysis_options.setdefault("peripheral_addresses", inferred.get("peripheral_addresses"))
+                                prof = find_chip_profile(str(inferred.get("chip_family") or "")) or {}
+                                if prof.get("post_load_actions"):
+                                    analysis_options.setdefault("post_load_actions", prof.get("post_load_actions"))
                         else:
                             # For raw blobs with no deterministic header/vector-table, apply the
                             # top-ranked candidate. Any heuristic recommendation beats IDA's
@@ -6464,6 +6492,13 @@ class IDAMCPServer:
                     chip_family = arch_meta.get("chip_family")
                     if chip_family:
                         out["chip_family"] = chip_family
+                        prof = find_chip_profile(str(chip_family)) or {}
+                        out["bootstrap_report"] = {
+                            "status": "scheduled",
+                            "chip_family": chip_family,
+                            "post_load_actions": prof.get("post_load_actions", []),
+                            "note": "Bootstrap runs automatically when the IDA session runtime is started.",
+                        }
                     inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
                     if isinstance(inferred, dict):
                         candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
@@ -6732,6 +6767,7 @@ class IDAMCPServer:
                     "session": session.to_dict(),
                     "idb_path": session.idb_path,
                     "current_options": start_res.get("current_options"),
+                    "bootstrap_report": start_res.get("bootstrap_report"),
                 }
             if action == "update":
                 sid, sid_err = _sid_arg()

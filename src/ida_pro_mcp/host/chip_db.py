@@ -24,6 +24,7 @@ class ChipProfile:
     header_parser: str
     memory_map: List[Dict[str, Any]]
     peripheral_addresses: List[Dict[str, Any]]
+    post_load_actions: List[str]
 
 
 def _profile_dict(p: ChipProfile) -> Dict[str, Any]:
@@ -40,6 +41,7 @@ def _profile_dict(p: ChipProfile) -> Dict[str, Any]:
         "header_parser": p.header_parser,
         "memory_map": p.memory_map,
         "peripheral_addresses": p.peripheral_addresses,
+        "post_load_actions": p.post_load_actions,
     }
 
 
@@ -60,6 +62,7 @@ CHIP_PROFILES: List[ChipProfile] = [
             {"name": "wifi_mac", "addr": "0x40010000"},
             {"name": "bt_base", "addr": "0x40020000"},
         ],
+        post_load_actions=["define_vector_table", "annotate_mmio", "reanalyze", "define_strings"],
     ),
     ChipProfile(
         chip_family="ESP32",
@@ -79,6 +82,7 @@ CHIP_PROFILES: List[ChipProfile] = [
             {"name": "uart0", "addr": "0x3FF40000"},
             {"name": "spi0", "addr": "0x3FF42000"},
         ],
+        post_load_actions=["annotate_mmio", "reanalyze", "define_strings"],
     ),
     ChipProfile(
         chip_family="STM32",
@@ -96,6 +100,7 @@ CHIP_PROFILES: List[ChipProfile] = [
             {"name": "rcc", "addr": "0x40023800"},
             {"name": "gpioa", "addr": "0x40020000"},
         ],
+        post_load_actions=["define_vector_table", "annotate_mmio", "reanalyze", "define_strings"],
     ),
     ChipProfile(
         chip_family="Generic Cortex-M",
@@ -112,6 +117,7 @@ CHIP_PROFILES: List[ChipProfile] = [
         peripheral_addresses=[
             {"name": "periph", "addr": "0x40000000"},
         ],
+        post_load_actions=["define_vector_table", "annotate_mmio", "reanalyze", "define_strings"],
     ),
 ]
 
@@ -131,14 +137,6 @@ def identify_chip_from_bytes(head: bytes) -> Optional[Dict[str, Any]]:
             out["confidence"] = 0.98
             out["match_reason"] = "magic_signature"
             return out
-    return None
-
-
-def find_chip_profile(chip_family: str) -> Optional[Dict[str, Any]]:
-    key = chip_family.lower()
-    for profile in CHIP_PROFILES:
-        if profile.chip_family.lower() == key:
-            return _profile_dict(profile)
     return None
 
 

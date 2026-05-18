@@ -259,7 +259,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio", "triage_snapshot"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio|triage_snapshot"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio", "triage_snapshot", "bootstrap"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio|triage_snapshot|bootstrap"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
@@ -1839,6 +1839,52 @@ def firmware_view(
                 "next_actions": next_actions,
             }
             return _log_ml(result, action, f"triage_confidence={confidence}; vectors={vector_entries}; mmio={mmio_regions}")
+
+        if action == "bootstrap":
+            # Explicit bootstrap entrypoint for already-loaded binaries.
+            try:
+                from .firmware_bootstrap import run_firmware_bootstrap
+            except Exception:
+                from firmware_bootstrap import run_firmware_bootstrap  # type: ignore
+            try:
+                from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile
+            except Exception:
+                try:
+                    from host.arch_profile import infer_binary_arch_profile  # type: ignore
+                except Exception:
+                    infer_binary_arch_profile = None  # type: ignore
+
+            chip = str(kwargs.get("chip_family") or "").strip()
+            load_base = kwargs.get("load_base")
+            memory_map = kwargs.get("memory_map")
+            periph = kwargs.get("peripheral_addresses")
+            actions = kwargs.get("post_load_actions")
+            if not chip and infer_binary_arch_profile is not None:
+                try:
+                    idb_path = idc.get_idb_path() or ""
+                    bpath = idb_path[:-4] if idb_path.lower().endswith(".i64") else idb_path
+                    if bpath:
+                        prof = infer_binary_arch_profile(bpath)
+                        chip = str(prof.get("chip_family") or "").strip() or chip
+                        load_base = load_base if load_base is not None else prof.get("load_base")
+                        memory_map = memory_map if memory_map is not None else prof.get("memory_map")
+                        periph = periph if periph is not None else prof.get("peripheral_addresses")
+                        actions = actions if actions is not None else prof.get("post_load_actions")
+                except Exception:
+                    pass
+
+            report = run_firmware_bootstrap(
+                chip_family=chip or "unknown",
+                load_base=load_base if isinstance(load_base, int) else None,
+                memory_map=memory_map if isinstance(memory_map, list) else None,
+                peripheral_addresses=periph if isinstance(periph, list) else None,
+                post_load_actions=actions if isinstance(actions, list) else None,
+            )
+            return _log_ml(
+                {"ok": True, "bootstrap_report": report},
+                action,
+                f"chip={report.get('chip_family')} funcs={report.get('functions_created', 0)}",
+            )
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
