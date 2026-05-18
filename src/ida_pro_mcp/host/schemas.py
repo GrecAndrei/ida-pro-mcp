@@ -1061,6 +1061,8 @@ TOOL_ACTIONS = {
         "suggest_next_address",
         "risk_of_stall",
         "recommend_bundle",
+        "explain_decision",
+        "feedback",
     ],
     "project": [
         "save",
@@ -1710,6 +1712,15 @@ TOOL_ARG_SCHEMAS = {
         "target_action": {
             "type": "string",
             "description": "Target action for explain_decision action.",
+        },
+        "tool": {
+            "type": "string",
+            "description": "Tool name for predictor feedback action.",
+        },
+        "outcome": {
+            "type": "string",
+            "enum": ["helpful", "not_helpful"],
+            "description": "Feedback outcome for predictor(action='feedback').",
         },
     },
     "workflow": {

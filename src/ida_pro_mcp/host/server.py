@@ -8805,10 +8805,17 @@ class IDAMCPServer:
             ta_key = f"{target_tool}.{target_action}"
 
             explanations = []
+            weights = {
+                "markov_transition_probability": 0.0,
+                "usage_pattern": 0.0,
+                "strategy_weight": 0.0,
+                "blackboard_coverage_gap": 0.0,
+            }
             # 1. How often has this tool:action appeared in recent history?
             freq = tool_freq.get(ta_key, 0)
             total = max(1, len(recent_tools))
             if freq > 0:
+                weights["usage_pattern"] = min(1.0, float(freq) / float(total))
                 explanations.append({
                     "feature": "recent_frequency",
                     "count": freq,
@@ -8826,6 +8833,7 @@ class IDAMCPServer:
                     "code.callers": ["code.decompile", "xref_analysis.call_chain"],
                 }
                 if ta_key in NATURAL_NEXT.get(last, []):
+                    weights["markov_transition_probability"] = 0.8
                     explanations.append({
                         "feature": "natural_next_step",
                         "after": last,
@@ -8840,6 +8848,7 @@ class IDAMCPServer:
                     targets = asm.suggest_next_targets(idb_path, limit=5)
                     if targets and target_tool == "code" and target_action == "decompile":
                         top = targets[0]
+                        weights["blackboard_coverage_gap"] = 0.7
                         explanations.append({
                             "feature": "schemaboot_interest",
                             "top_target": top.get("ea"),
@@ -8847,6 +8856,18 @@ class IDAMCPServer:
                         })
                 except Exception:
                     pass
+            try:
+                strategy = self.session_mgr.suggest_strategy(str(sid), context=f"{target_tool}:{target_action}")
+                if isinstance(strategy, dict) and not strategy.get("error"):
+                    suggs = strategy.get("suggestions") or []
+                    if suggs:
+                        weights["strategy_weight"] = max(
+                            float(s.get("blended_score", s.get("score", 0.0)) or 0.0)
+                            for s in suggs[:5]
+                            if isinstance(s, dict)
+                        )
+            except Exception:
+                pass
 
             if not explanations:
                 explanations.append({
@@ -8861,6 +8882,43 @@ class IDAMCPServer:
                 "target_action": target_action,
                 "activity_window": len(log),
                 "explanations": explanations,
+                "signal_weights": {k: round(float(v), 4) for k, v in weights.items()},
+            }
+
+        if action == "feedback":
+            target_tool = str(args.get("tool") or args.get("target_tool") or "").strip().lower()
+            target_action = str(args.get("target_action") or "").strip().lower()
+            outcome = str(args.get("outcome") or "").strip().lower()
+            if not target_tool or not target_action:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "feedback requires tool and target_action",
+                    hint="Example: predictor(action='feedback', tool='search', target_action='find', outcome='helpful')",
+                )
+            if outcome not in {"helpful", "not_helpful"}:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "outcome must be 'helpful' or 'not_helpful'",
+                )
+            delta = 0.05 if outcome == "helpful" else -0.05
+            meta = self.session_mgr.macro_get(str(sid), "__predictor_feedback") or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            key = f"{target_tool}.{target_action}"
+            row = meta.get(key) if isinstance(meta.get(key), dict) else {"weight": 0.5, "count": 0}
+            row["weight"] = max(0.0, min(1.0, float(row.get("weight", 0.5)) + delta))
+            row["count"] = int(row.get("count", 0)) + 1
+            row["last_outcome"] = outcome
+            meta[key] = row
+            self.session_mgr.macro_set(str(sid), "__predictor_feedback", meta)
+            return {
+                "ok": True,
+                "session_id": sid,
+                "tool": target_tool,
+                "target_action": target_action,
+                "outcome": outcome,
+                "updated_weight": round(float(row["weight"]), 4),
+                "feedback_count": int(row["count"]),
             }
 
         return make_error(
@@ -9066,6 +9124,7 @@ class IDAMCPServer:
 
             normalized_calls: list[dict] = []
             invalid_calls: list[int] = []
+            missing_calls: list[str] = []
             duplicate_keys: dict[str, int] = {}
             risk_hints: list[str] = []
             tool_counts: dict[str, int] = {}
@@ -9077,6 +9136,14 @@ class IDAMCPServer:
                     continue
                 n = name.strip()
                 a = str(call_args.get("action") or "").strip()
+                if n not in TOOL_ACTIONS:
+                    invalid_calls.append(idx)
+                    missing_calls.append(f"{n}.{a}" if a else n)
+                    continue
+                if a and a not in {str(x).strip() for x in TOOL_ACTIONS.get(n, [])}:
+                    invalid_calls.append(idx)
+                    missing_calls.append(f"{n}.{a}")
+                    continue
                 key = (n, a)
                 normalized_calls.append({"name": n, "arguments": call_args})
                 tool_counts[n] = int(tool_counts.get(n, 0)) + 1
@@ -9091,6 +9158,8 @@ class IDAMCPServer:
             warnings: list[str] = []
             if invalid_calls:
                 warnings.append(f"invalid_call_entries={len(invalid_calls)} at indexes {invalid_calls[:10]}")
+            if missing_calls:
+                warnings.append(f"unknown_tool_or_action: {missing_calls[:10]}")
             if duplicate_keys:
                 dup = ", ".join(f"{k}x{v}" for k, v in sorted(duplicate_keys.items())[:8])
                 warnings.append(f"duplicate_steps_detected: {dup}")
@@ -9209,24 +9278,82 @@ class IDAMCPServer:
                     hint="Provide planned_calls with valid tool/action entries, or use workflow_action/workflow_actions.",
                 )
 
-            batch_result = self._handle_batch(
-                {"calls": normalized_calls, "continue_on_error": continue_on_error}
-            )
-            if isinstance(batch_result, dict):
-                batch_result.setdefault(
-                    "execution_meta",
+            step_results: list[dict] = []
+            calls_out: list[dict] = []
+            completed = 0
+            had_error = False
+            blocked = False
+            for idx, step in enumerate(normalized_calls):
+                name = str(step.get("name") or "").strip()
+                call_args = step.get("arguments") if isinstance(step.get("arguments"), dict) else {}
+                if blocked:
+                    step_results.append(
+                        {
+                            "index": idx,
+                            "tool": name,
+                            "args": call_args,
+                            "outcome": "skipped",
+                            "elapsed_ms": 0,
+                            "recovery_hint": "Previous dependency-like step failed; rerun after fixing earlier error.",
+                        }
+                    )
+                    continue
+                t0 = time.time()
+                try:
+                    res = self._execute_tool(name, dict(call_args))
+                except Exception as e:
+                    res = {"error": True, "message": str(e)}
+                elapsed_ms = int((time.time() - t0) * 1000)
+                is_err = isinstance(res, dict) and bool(res.get("error"))
+                calls_out.append({"name": name, "arguments": call_args, "result": res})
+                step_results.append(
                     {
-                        "action": "execute_plan",
-                        "source": source_desc,
-                        "requested_steps": requested_steps,
-                        "executed_steps": len(normalized_calls),
-                        "truncated": truncated,
-                        "continue_on_error": continue_on_error,
-                    },
+                        "index": idx,
+                        "tool": name,
+                        "args": call_args,
+                        "outcome": "error" if is_err else "ok",
+                        "elapsed_ms": elapsed_ms,
+                        "recovery_hint": (
+                            "Check address/args and retry this step manually."
+                            if is_err
+                            else ""
+                        ),
+                    }
                 )
-                if isinstance(batch_result.get("summary"), dict):
-                    batch_result["summary"].setdefault("execution_meta", batch_result.get("execution_meta"))
-            return batch_result
+                if is_err:
+                    had_error = True
+                    # Conservative dependency gate for clearly chained operations.
+                    if name in {"query", "batch"}:
+                        blocked = True
+                    if not continue_on_error:
+                        break
+                else:
+                    completed += 1
+
+            return {
+                "ok": not had_error,
+                "action": "execute_plan",
+                "source": source_desc,
+                "calls": calls_out,
+                "step_results": step_results,
+                "summary": {
+                    "requested_steps": requested_steps,
+                    "executed_steps": len(step_results),
+                    "completed_steps": completed,
+                    "error_steps": len([s for s in step_results if s.get("outcome") == "error"]),
+                    "skipped_steps": len([s for s in step_results if s.get("outcome") == "skipped"]),
+                    "truncated": truncated,
+                    "continue_on_error": continue_on_error,
+                },
+                "execution_meta": {
+                    "action": "execute_plan",
+                    "source": source_desc,
+                    "requested_steps": requested_steps,
+                    "executed_steps": len(step_results),
+                    "truncated": truncated,
+                    "continue_on_error": continue_on_error,
+                },
+            }
         elif action == "prioritize":
             mode = str(args.get("priority_mode") or "coverage").strip().lower()
             if mode not in {"original", "coverage", "risk_first"}:
