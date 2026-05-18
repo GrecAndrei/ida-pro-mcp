@@ -266,24 +266,26 @@ class SessionManager:
     def _find_global_skills(self, context: str = "", tags: Optional[List[str]] = None, limit: int = 10) -> List[dict]:
         import sqlite3
         skills = []
+        tag_set = {str(t).strip().lower() for t in (tags or []) if str(t).strip()}
         try:
             conn = sqlite3.connect(self._global_skills_db)
             cur = conn.cursor()
             query = "SELECT * FROM global_skills WHERE 1=1"
             params: List[Any] = []
-            if tags:
-                tag_conditions = " OR ".join(["tags LIKE ?" for _ in tags])
-                query += f" AND ({tag_conditions})"
-                params.extend([f"%{t}%" for t in tags])
             # Pull a broader candidate pool first, then rank by context.
             query += " ORDER BY q_value DESC LIMIT ?"
             params.append(max(int(limit) * 4, 40))
             cur.execute(query, params)
             for row in cur.fetchall():
+                tags_loaded = json.loads(row[4])
+                if tag_set:
+                    loaded_norm = {str(t).strip().lower() for t in (tags_loaded or []) if str(t).strip()}
+                    if not tag_set.issubset(loaded_norm):
+                        continue
                 skills.append({
                     "skill_id": row[0], "name": row[1], "description": row[2],
                     "steps": json.loads(row[3]),
-                    "tags": json.loads(row[4]), "source_sid": row[5],
+                    "tags": tags_loaded, "source_sid": row[5],
                     "q_value": row[6], "success_count": row[7], "failure_count": row[8],
                     "created_at": row[9], "last_used": row[10],
                 })
