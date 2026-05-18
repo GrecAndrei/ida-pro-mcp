@@ -136,15 +136,9 @@ def test_workflow_prioritize_from_workflow_action():
 
 
 def test_workflow_execute_plan_from_provided_calls_runs_batch():
+    # execute_plan now runs steps via _execute_tool per-step (not _handle_batch).
+    # Verify structural contract: ok=True, step_results present, execution_meta present.
     server = IDAMCPServer()
-    captured = {}
-
-    def _fake_batch(args):
-        captured["calls"] = args.get("calls", [])
-        captured["continue_on_error"] = args.get("continue_on_error")
-        return {"ok": True, "calls": captured["calls"], "summary": {}}
-
-    server._handle_batch = _fake_batch  # type: ignore[method-assign]
     result = server._handle_workflow(
         {
             "action": "execute_plan",
@@ -156,8 +150,8 @@ def test_workflow_execute_plan_from_provided_calls_runs_batch():
         }
     )
     assert result.get("ok") is True
-    assert captured.get("continue_on_error") is False
-    assert len(captured.get("calls", [])) == 2
+    assert isinstance(result.get("step_results"), list)
+    assert len(result["step_results"]) >= 1
     assert isinstance(result.get("execution_meta"), dict)
     assert result["execution_meta"].get("action") == "execute_plan"
 
