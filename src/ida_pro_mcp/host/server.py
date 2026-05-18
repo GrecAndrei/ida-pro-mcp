@@ -122,6 +122,7 @@ from .schemas import (
 from .arch_profile import normalize_arch_options, infer_binary_arch_profile
 from .chip_db import find_chip_profile
 from .symbol_db import SymbolDB
+from .vuln_db import VULN_PATTERNS
 
 # Import truncation middleware
 try:
@@ -5455,6 +5456,51 @@ class IDAMCPServer:
             )
         return out
 
+    def _threat_hunt_vuln_db_pass(self, ip: str, limit: int = 120) -> list[dict]:
+        """
+        Deterministic first-pass scan using structured vulnerability pattern DB.
+        Uses existing search surfaces to avoid IDA-runtime coupling in host process.
+        """
+        findings: list[dict] = []
+        # Query broad signals once, then score against pattern indicators.
+        s_vuln = self._threat_hunt_step(ip, "search", "vulnerable", {"limit": min(200, limit)})
+        s_const = self._threat_hunt_step(ip, "search", "constants", {"limit": min(200, limit)})
+        s_api = self._threat_hunt_step(ip, "search", "api", {"pattern": "*", "limit": min(200, limit)})
+        corpus = []
+        for st in (s_vuln, s_const, s_api):
+            for row in self._threat_hunt_extract_findings(st):
+                corpus.append(row)
+        for row in corpus:
+            text = " ".join(str(row.get(k) or "") for k in ("summary", "name", "title", "value", "kind", "type", "indicator", "description")).lower()
+            if not text:
+                continue
+            for pat in VULN_PATTERNS:
+                hit = 0
+                for fn in pat.indicator_functions:
+                    if fn.lower() in text:
+                        hit += 1
+                for s in pat.indicator_strings:
+                    if s.lower() in text:
+                        hit += 1
+                for p in pat.indicator_patterns:
+                    if p.lower() in text:
+                        hit += 1
+                if hit <= 0:
+                    continue
+                finding = dict(row)
+                finding["tool"] = "vuln_db"
+                finding["action"] = "pattern_match"
+                finding["type"] = "vuln_pattern"
+                finding["pattern_id"] = pat.id
+                finding["pattern_name"] = pat.name
+                finding["cwe_id"] = pat.cwe_id
+                finding["severity"] = pat.severity
+                finding["remediation"] = pat.remediation
+                finding["support_count"] = max(int(finding.get("support_count", 1) or 1), hit)
+                findings.append(finding)
+        findings.sort(key=lambda x: (str(x.get("severity", "")), int(x.get("support_count", 1))), reverse=True)
+        return findings[:limit]
+
     def _severity_classify(self, finding: dict) -> str:
         text = " ".join(
             str(finding.get(k) or "")
@@ -5948,6 +5994,10 @@ class IDAMCPServer:
         step_plan = step_plan[:max_steps]
         steps: list[dict] = []
         raw_findings: list[dict] = []
+        # First-pass vuln DB signal injection before orchestrated modules.
+        vuln_seed = self._threat_hunt_vuln_db_pass(idb_path, limit=max(20, min(limit, 200)))
+        if vuln_seed:
+            raw_findings.extend(vuln_seed)
         for tool, step_action, step_args in step_plan:
             st = self._threat_hunt_step(idb_path, tool, step_action, step_args)
             steps.append(
