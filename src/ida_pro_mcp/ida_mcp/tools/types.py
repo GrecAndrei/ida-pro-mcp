@@ -14,6 +14,25 @@ except ImportError:
         pass
 
 
+def _is_fully_mapped(ea: int, size: int) -> bool:
+    """True iff [ea, ea+size) lies within a mapped segment."""
+    if size < 0:
+        return False
+    if size == 0:
+        return True
+    try:
+        start = int(ea)
+        end = int(ea) + int(size) - 1
+        if end < start:
+            return False
+        if not ida_bytes.is_loaded(start) or not ida_bytes.is_loaded(end):
+            return False
+        seg = idaapi.getseg(start)
+        return bool(seg) and int(end) < int(seg.end_ea)
+    except Exception:
+        return False
+
+
 # ============================================================================
 # 5. TYPES - Type operations (structs, enums, prototypes)
 # ============================================================================
@@ -435,19 +454,18 @@ def types(
                         conf = max(conf, 0.65)
             except Exception:
                 pass
-            # Object-init pattern (malloc(N) + field writes) heuristic.
+            # Object-init pattern heuristic: detect allocator usage without
+            # guessing sizes from call operands (often callee addresses).
             try:
                 fn = idaapi.get_func(ea)
                 if fn:
-                    alloc_sizes = []
+                    alloc_hits = 0
                     for head in idautils.Heads(fn.start_ea, fn.end_ea):
                         dis = (ida_lines.tag_remove(idc.generate_disasm_line(head, 0) or "")).lower()
                         if "malloc" in dis or "calloc" in dis:
-                            v = idc.get_operand_value(head, 0)
-                            if isinstance(v, int) and v > 0:
-                                alloc_sizes.append(v)
-                    if alloc_sizes:
-                        inferred_types.append({"kind": "heap_object", "size": int(max(alloc_sizes))})
+                            alloc_hits += 1
+                    if alloc_hits:
+                        inferred_types.append({"kind": "heap_object", "allocator_calls": int(alloc_hits)})
                         conf = max(conf, 0.55)
             except Exception:
                 pass
@@ -491,6 +509,15 @@ def types(
             if not tif.get_udt_details(udt):
                 return make_error(MCPError.TYPE_ERROR, f"'{name}' is not a struct/union type. "
                                   "Use 'get' action to inspect the type or choose a different name.")
+            struct_size = int(tif.get_size())
+            if struct_size < 0:
+                return make_error(MCPError.TYPE_ERROR, f"Failed to determine size for '{name}'.")
+            if not _is_fully_mapped(ea, struct_size):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "Struct range exceeds mapped segment bounds",
+                    hint=f"Requested {name} ({struct_size} bytes) at {hex(ea)} is partially unmapped.",
+                )
 
             # Determine pointer size from the database
             is_64 = hasattr(idaapi, 'inf_is_64bit') and _inf_is_64bit()

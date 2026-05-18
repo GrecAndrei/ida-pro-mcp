@@ -133,13 +133,19 @@ def query(
             return patterns_tool(action=sub, **args)
 
         elif action in ("nl", "nl_batch"):
+            def _normalize_conf(raw, default=0.25):
+                try:
+                    val = default if raw is None else float(raw)
+                except Exception:
+                    val = default
+                return max(0.0, min(1.0, float(val)))
+
             if action == "nl_batch":
                 queries = args.get("queries") or []
                 if not isinstance(queries, list) or not queries:
                     return make_error(MCPError.INVALID_ARGS, "queries (list[str]) required")
                 k = int(args.get("k") or args.get("limit") or 5)
-                min_conf = float(args.get("min_confidence", 0.25) or 0.25)
-                min_conf = max(0.0, min(1.0, min_conf))
+                min_conf = _normalize_conf(args.get("min_confidence"), default=0.25)
                 merged: Dict[str, Dict[str, Any]] = {}
                 failed_queries = []
                 for qitem in queries[:16]:
@@ -203,8 +209,7 @@ def query(
                 }
             q_vec = embedder.embed(q)
             top_k = int(args.get("limit") or 10)
-            min_conf = float(args.get("min_confidence", 0.25) or 0.25)
-            min_conf = max(0.0, min(1.0, min_conf))
+            min_conf = _normalize_conf(args.get("min_confidence"), default=0.25)
             results = idx.similar_vec(q_vec, top_k=top_k * 3, threshold=0.0)
             expansion_queries = []
             try:

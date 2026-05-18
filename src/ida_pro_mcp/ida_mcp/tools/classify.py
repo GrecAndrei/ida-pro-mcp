@@ -728,7 +728,8 @@ def classify(
             except ImportError:
                 from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
             bc = BehaviorClassifier.instance(BgeCodeEmbedder())
-            rep = bc.anchor_coverage_report(min_similarity=0.4, max_funcs=max(100, int(limit)))
+            max_funcs = max(1, int(limit))
+            rep = bc.anchor_coverage_report(min_similarity=0.4, max_funcs=max_funcs)
             rep["ok"] = True
             return rep
 
