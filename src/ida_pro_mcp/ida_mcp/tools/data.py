@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def data(
-    action: Annotated[Literal["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix"],
-                      "Action: functions|globals|strings|imports|exports|lookup|bulk_query|capability_matrix"],
+    action: Annotated[Literal["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs"],
+                      "Action: functions|globals|strings|imports|exports|lookup|bulk_query|capability_matrix|string_xrefs"],
     query: Annotated[Optional[str], "Filter pattern or name/address for lookup (regex/glob/substring/semantic auto-detected)"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
@@ -63,6 +63,9 @@ def data(
     capability_matrix - Build a binary capability matrix from imports and function classifications.
         Returns: {matrix: {category: count}, top_categories, risk_indicators, note}
         Use for: Quick triage and malware capability assessment.
+
+    string_xrefs - Build a string->referencing-function map with ranking and module clustering.
+        Returns: {top_strings, module_map, total_strings_scanned}
     """
     try:
         if action == "functions":
@@ -512,6 +515,111 @@ def data(
                 "risk_indicators": sorted(set(risk_indicators))[:20],
                 "total_imports": len(imports),
                 "note": "Capability matrix derived from import analysis and function API call patterns. Use for quick triage.",
+            }
+
+        elif action == "string_xrefs":
+            def _score_string(text: str, ref_count: int) -> float:
+                low = text.lower()
+                score = float(ref_count)
+                signals = (
+                    "version", "copyright", "error", "assert",
+                    "module", "fatal", "panic", "exception", "fail",
+                    "wifi_", "bt_", "ble_", "eth_", "usb_", "uart_",
+                )
+                for token in signals:
+                    if token in low:
+                        score += 2.0
+                if "%" in text:
+                    score += 1.0
+                if len(text) <= 120:
+                    score += 0.5
+                return score
+
+            def _module_key(text: str) -> str:
+                s = text.strip()
+                for sep in ("::", "_", ".", ":", "/", "-"):
+                    if sep in s:
+                        part = s.split(sep, 1)[0].strip()
+                        if part:
+                            return part.lower()[:32]
+                chunks = s.split()
+                if chunks:
+                    return chunks[0].lower()[:32]
+                return "misc"
+
+            entries = []
+            total_scanned = 0
+            strings_iter = idautils.Strings()
+            for s in strings_iter:
+                try:
+                    content = str(s)
+                    if isinstance(content, bytes):
+                        content = content.decode("utf-8", errors="replace")
+                    if not content:
+                        continue
+                    if len(content) < max(4, int(min_len)):
+                        continue
+                    total_scanned += 1
+                    refs = []
+                    seen_funcs = set()
+                    for xr in idautils.XrefsTo(s.ea):
+                        frm = getattr(xr, "frm", None)
+                        if frm is None:
+                            continue
+                        fn = idaapi.get_func(frm)
+                        if not fn:
+                            continue
+                        fstart = fn.start_ea
+                        if fstart in seen_funcs:
+                            continue
+                        seen_funcs.add(fstart)
+                        refs.append({
+                            "addr": hex_ea(fstart),
+                            "name": ida_funcs.get_func_name(fstart) or f"sub_{fstart:x}",
+                        })
+                    if not refs:
+                        continue
+                    ref_count = len(refs)
+                    entries.append({
+                        "string_addr": hex_ea(s.ea),
+                        "string": content[:300],
+                        "ref_count": ref_count,
+                        "interesting_score": round(_score_string(content, ref_count), 3),
+                        "referencing_functions": refs[:50],
+                        "_module_key": _module_key(content),
+                    })
+                except Exception:
+                    continue
+
+            entries.sort(key=lambda x: (x["interesting_score"], x["ref_count"]), reverse=True)
+            top_entries = entries[:50]
+
+            module_map = {}
+            for ent in top_entries:
+                mk = ent.get("_module_key", "misc")
+                rec = module_map.setdefault(mk, {"strings": 0, "functions": set()})
+                rec["strings"] += 1
+                for f in ent.get("referencing_functions", []):
+                    rec["functions"].add(f.get("name", ""))
+
+            module_map_out = {}
+            for mk, rec in module_map.items():
+                funcs = sorted(x for x in rec["functions"] if x)
+                module_map_out[mk] = {
+                    "strings": rec["strings"],
+                    "function_count": len(funcs),
+                    "functions": funcs[:30],
+                }
+
+            for ent in top_entries:
+                ent.pop("_module_key", None)
+
+            return {
+                "ok": True,
+                "top_strings": top_entries,
+                "module_map": module_map_out,
+                "total_strings_scanned": total_scanned,
+                "count": len(top_entries),
             }
         
         else:
