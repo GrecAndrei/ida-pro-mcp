@@ -188,7 +188,8 @@ def test_debug_del_bp_unhooks_conditional_hook_when_no_conditions_left():
 
 def test_query_nl_and_nl_batch_clamp_min_confidence():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/query.py")
-    assert "min_conf = max(0.0, min(1.0, min_conf))" in src
+    assert "def _normalize_conf(raw, default=0.25):" in src
+    assert "return max(0.0, min(1.0, float(val)))" in src
 
 
 def test_query_nl_batch_returns_failed_queries_and_min_confidence():
@@ -206,3 +207,34 @@ def test_debug_trace_read_validates_and_caps_limit():
 def test_debug_mem_diff_reports_baseline_creation():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
     assert "out[\"baseline_created\"] = True" in src
+
+
+def test_types_read_struct_defines_struct_size_and_full_range_check():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/types.py")
+    assert "struct_size = int(tif.get_size())" in src
+    assert "if not _is_fully_mapped(ea, struct_size):" in src
+
+
+def test_types_infer_heap_object_uses_allocator_calls_not_operand_size():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/types.py")
+    assert "\"allocator_calls\"" in src
+    assert "idc.get_operand_value(head, 0)" not in src
+
+
+def test_query_min_confidence_normalization_preserves_zero():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/query.py")
+    assert "def _normalize_conf(raw, default=0.25):" in src
+    assert "val = default if raw is None else float(raw)" in src
+
+
+def test_classify_anchor_coverage_honors_small_limits():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/classify.py")
+    assert "max_funcs = max(1, int(limit))" in src
+
+
+def test_debug_mem_diff_has_size_cap_and_snapshot_eviction():
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/debug.py")
+    assert "_MAX_MEM_DIFF_SPAN = 0x10000" in src
+    assert "_MAX_MEM_DIFF_SNAPSHOTS = 128" in src
+    assert "size too large (max" in src
+    assert "if len(_MEM_DIFF_SNAPSHOTS) > _MAX_MEM_DIFF_SNAPSHOTS" in src

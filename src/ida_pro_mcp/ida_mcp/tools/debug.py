@@ -20,6 +20,8 @@ _MAX_REG_SNAPSHOTS = 50
 _TRACE_HOOK = None
 _TRACE_STATE = {"file": None, "count": 0, "max_insns": 50000}
 _MEM_DIFF_SNAPSHOTS: Dict[Tuple[int, int], bytes] = {}
+_MAX_MEM_DIFF_SNAPSHOTS = 128
+_MAX_MEM_DIFF_SPAN = 0x10000
 _BP_CONDITIONS: Dict[int, str] = {}
 _BP_HOOK = None
 
@@ -912,6 +914,8 @@ def debug(
             span = int(size or 16)
             if span <= 0:
                 return make_error(MCPError.INVALID_ARGS, "size must be > 0")
+            if span > _MAX_MEM_DIFF_SPAN:
+                return make_error(MCPError.INVALID_ARGS, f"size too large (max {_MAX_MEM_DIFF_SPAN})")
             cur = ida_dbg.read_dbg_memory(ea, span)
             if not cur:
                 return make_error(MCPError.IDA_ERROR, "Failed to read memory")
@@ -926,6 +930,12 @@ def debug(
                 if len(prev) != len(cur):
                     changes.append({"offset": n, "before": f"len={len(prev)}", "after": f"len={len(cur)}"})
             _MEM_DIFF_SNAPSHOTS[key] = bytes(cur)
+            if len(_MEM_DIFF_SNAPSHOTS) > _MAX_MEM_DIFF_SNAPSHOTS:
+                try:
+                    oldest_key = next(iter(_MEM_DIFF_SNAPSHOTS.keys()))
+                    _MEM_DIFF_SNAPSHOTS.pop(oldest_key, None)
+                except Exception:
+                    pass
             out = {"ok": True, "addr": hex(ea), "size": span, "changed_offsets": changes[:1024], "change_count": len(changes)}
             if prev is None:
                 out["baseline_created"] = True
