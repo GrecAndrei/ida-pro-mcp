@@ -351,10 +351,11 @@ def calc(
 
         def eval_expr(expression):
             import re
+            import ast
             # Safety: limit expression length
             if len(expression) > 1024:
                 raise ValueError("Expression too long (max 1024 chars)")
-            # Safety: reject dangerous patterns
+            # Safety: reject dangerous text patterns early.
             _forbidden = re.compile(r'__\w+__|import\s*\(|exec\s*\(|eval\s*\(|compile\s*\(|open\s*\(|getattr\s*\(|setattr\s*\(')
             if _forbidden.search(expression):
                 raise ValueError("Expression contains forbidden constructs")
@@ -381,7 +382,87 @@ def calc(
                     ea = idc.get_name_ea_simple(name)
                     if ea != idaapi.BADADDR:
                         namespace[name] = ea
-            return eval(expression, {"__builtins__": {}}, namespace)  # noqa: S307
+
+            tree = ast.parse(expression, mode="eval")
+            allowed_binops = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.BitOr, ast.BitAnd, ast.BitXor, ast.LShift, ast.RShift)
+            allowed_unary = (ast.UAdd, ast.USub, ast.Invert)
+            allowed_cmps = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+            allowed_bools = (ast.And, ast.Or)
+
+            def _eval_node(node):
+                if isinstance(node, ast.Expression):
+                    return _eval_node(node.body)
+                if isinstance(node, ast.Constant):
+                    if isinstance(node.value, (int, float, bool)):
+                        return node.value
+                    raise ValueError("Only numeric/bool constants are allowed")
+                if isinstance(node, ast.Name):
+                    if node.id in namespace:
+                        return namespace[node.id]
+                    raise ValueError(f"Unknown name: {node.id}")
+                if isinstance(node, ast.BinOp):
+                    if not isinstance(node.op, allowed_binops):
+                        raise ValueError("Operator not allowed")
+                    lhs = _eval_node(node.left)
+                    rhs = _eval_node(node.right)
+                    op = node.op
+                    if isinstance(op, ast.Add): return lhs + rhs
+                    if isinstance(op, ast.Sub): return lhs - rhs
+                    if isinstance(op, ast.Mult): return lhs * rhs
+                    if isinstance(op, ast.Div): return lhs / rhs
+                    if isinstance(op, ast.FloorDiv): return lhs // rhs
+                    if isinstance(op, ast.Mod): return lhs % rhs
+                    if isinstance(op, ast.BitOr): return lhs | rhs
+                    if isinstance(op, ast.BitAnd): return lhs & rhs
+                    if isinstance(op, ast.BitXor): return lhs ^ rhs
+                    if isinstance(op, ast.LShift): return lhs << rhs
+                    if isinstance(op, ast.RShift): return lhs >> rhs
+                    raise ValueError("Unsupported binary operation")
+                if isinstance(node, ast.UnaryOp):
+                    if not isinstance(node.op, allowed_unary):
+                        raise ValueError("Unary operator not allowed")
+                    val = _eval_node(node.operand)
+                    if isinstance(node.op, ast.UAdd): return +val
+                    if isinstance(node.op, ast.USub): return -val
+                    if isinstance(node.op, ast.Invert): return ~val
+                    raise ValueError("Unsupported unary operation")
+                if isinstance(node, ast.BoolOp):
+                    if not isinstance(node.op, allowed_bools):
+                        raise ValueError("Boolean operator not allowed")
+                    vals = [_eval_node(v) for v in node.values]
+                    return all(vals) if isinstance(node.op, ast.And) else any(vals)
+                if isinstance(node, ast.Compare):
+                    lhs = _eval_node(node.left)
+                    for op, comp in zip(node.ops, node.comparators):
+                        if not isinstance(op, allowed_cmps):
+                            raise ValueError("Comparison operator not allowed")
+                        rhs = _eval_node(comp)
+                        ok = (
+                            (isinstance(op, ast.Eq) and lhs == rhs) or
+                            (isinstance(op, ast.NotEq) and lhs != rhs) or
+                            (isinstance(op, ast.Lt) and lhs < rhs) or
+                            (isinstance(op, ast.LtE) and lhs <= rhs) or
+                            (isinstance(op, ast.Gt) and lhs > rhs) or
+                            (isinstance(op, ast.GtE) and lhs >= rhs)
+                        )
+                        if not ok:
+                            return False
+                        lhs = rhs
+                    return True
+                if isinstance(node, ast.Call):
+                    if not isinstance(node.func, ast.Name):
+                        raise ValueError("Only direct function calls are allowed")
+                    fname = node.func.id
+                    if fname not in namespace:
+                        raise ValueError(f"Function not allowed: {fname}")
+                    fn = namespace[fname]
+                    args = [_eval_node(a) for a in node.args]
+                    if any(not isinstance(a, (int, float, bool)) for a in args):
+                        raise ValueError("Only numeric/bool arguments are allowed")
+                    return fn(*args)
+                raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+            return _eval_node(tree)
 
         if action == "eval":
             if not expr and nl_query:
