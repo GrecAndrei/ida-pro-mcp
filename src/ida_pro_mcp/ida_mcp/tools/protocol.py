@@ -532,7 +532,17 @@ def protocol(
                         endpoints["ports"].append(e)
 
             total = sum(len(v) for v in endpoints.values())
-            return {"ok": True, "endpoints": endpoints, "total": total}
+            endpoint_items = []
+            for kind in ("urls", "ips", "hostnames", "ports"):
+                for row in endpoints.get(kind, []):
+                    endpoint_items.append({"kind": kind, "value": row})
+            return {
+                "ok": True,
+                "endpoints": endpoints,
+                "endpoint_items": endpoint_items,
+                "counts": {k: len(v) for k, v in endpoints.items()},
+                "total": total,
+            }
 
         elif action == "tls_config":
             tls_apis = []
