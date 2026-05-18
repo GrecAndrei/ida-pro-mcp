@@ -448,6 +448,16 @@ class TestQueryEditActions(unittest.TestCase):
         expected = {"data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl", "nl_batch"}
         self.assertEqual(set(TOOL_ACTIONS["query"]), expected)
 
+    def test_debug_actions_include_trace_and_memdiff(self):
+        actions = set(TOOL_ACTIONS["debug"])
+        self.assertIn("trace_start", actions)
+        self.assertIn("trace_stop", actions)
+        self.assertIn("trace_read", actions)
+        self.assertIn("mem_diff", actions)
+
+    def test_classify_actions_include_anchor_coverage(self):
+        self.assertIn("anchor_coverage", set(TOOL_ACTIONS["classify"]))
+
     def test_modify_actions(self):
         expected = {"rename", "comment", "set_type", "patch_asm"}
         self.assertEqual(set(TOOL_ACTIONS["modify"]), expected)
