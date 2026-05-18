@@ -659,65 +659,28 @@ class BehaviorClassifier:
     # bge-code-v1 (code-specialized, last-token pooling) embeds them in the
     # same space as actual decompiled pseudocode.
     ANCHORS: Dict[str, str] = {
-        # Short code-signature anchors — 15-30 tokens each.
-        # Long code blocks were taking 1-9s per anchor to embed.
-        # These are dense enough to give 0.6-0.8 cosine similarity
-        # on matching decompiled pseudocode.
-        "crypto_symmetric":
-            "sub_bytes shift_rows mix_columns add_round_key key_schedule "
-            "sbox[256] round_keys[44] AES_encrypt AES_decrypt xor_block rotate",
-
-        "crypto_hash":
-            "MD5_update SHA1_compress SHA256_round h0 h1 h2 h3 "
-            "hash_block digest_final HMAC_init 0x67452301 0xEFCDAB89",
-
-        "network_http":
-            "send_http_request recv_response HTTP_GET HTTP_POST "
-            "User_Agent Content_Type url_encode http_connect 443 80",
-
-        "network_raw":
-            "socket AF_INET SOCK_STREAM connect send recv bind listen "
-            "inet_addr htons IPPROTO_TCP WSASocket WSAConnect",
-
-        "process_injection":
-            "VirtualAllocEx WriteProcessMemory CreateRemoteThread "
-            "OpenProcess PROCESS_ALL_ACCESS shellcode inject PAGE_EXECUTE_READWRITE",
-
-        "file_operations":
-            "CreateFileW ReadFile WriteFile CloseHandle fopen fread fwrite "
-            "GetTempPath FindFirstFile FindNextFile DeleteFile MoveFile",
-
-        "anti_debug":
-            "IsDebuggerPresent CheckRemoteDebuggerPresent NtQueryInformationProcess "
-            "OutputDebugString RDTSC timing_check heap_flag int3 exception_filter",
-
-        "anti_vm":
-            "CPUID hypervisor_bit VMware VirtualBox cpuid_vendor_check "
-            "mac_address disk_size registry_vm_key sandbox_detect",
-
-        "persistence":
-            "RegSetValueEx HKLM Run CreateService SERVICE_AUTO_START "
-            "schtasks AddToStartup InstallService StartService bootkit",
-
-        "evasion":
-            "Sleep NtDelayExecution VirtualProtect PAGE_EXECUTE_READWRITE "
-            "xor_decode memset pe_header junk_nop packed_stub reflective_load",
-
-        "string_decrypt":
-            "xor_decrypt decode_loop rolling_key encrypted_string "
-            "stack_string deobfuscate cleartext_buffer decrypt_stub",
-
-        "c2_communication":
-            "c2_beacon send_beacon http_post gate_php hardcoded_ip "
-            "base64_encode heartbeat_interval parse_command execute_cmd",
-
-        "privilege_escalation":
-            "AdjustTokenPrivileges SeDebugPrivilege LookupPrivilegeValue "
-            "ImpersonateLoggedOnUser UAC_bypass token_elevation SYSTEM",
-
-        "memory_manipulation":
-            "VirtualAlloc VirtualProtect mprotect PAGE_EXECUTE_READWRITE "
-            "shellcode_exec memcpy mmap rwx_allocation heap_spray",
+        "crypto_symmetric": "state = load_block(input); round = 0; while (round < nr) { state ^= round_keys[round]; sub_bytes(state, sbox); shift_rows(state); if (round != nr - 1) mix_columns(state, gf_mul); round++; } store_block(out, state ^ round_keys[nr]); key_schedule(key, round_keys);",
+        "crypto_hash": "ctx->h0 = 0x67452301; ctx->h1 = 0xefcdab89; while (len >= 64) { compress_block(ctx, block); block += 64; len -= 64; } pad_and_finalize(ctx); digest[0] = bswap32(ctx->h0); digest[1] = bswap32(ctx->h1); if (hmac) inner_outer_hash(ctx, key_block);",
+        "network_http": "sock = connect_tcp(host, port); req = format(\"POST %s HTTP/1.1\", path); add_header(req, \"Host\", host); add_header(req, \"User-Agent\", ua); send(sock, req, strlen(req), 0); recv_until_headers(sock, buf); parse_status_line(buf); if (chunked) decode_chunked(sock, body); close_socket(sock);",
+        "network_raw": "s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); addr.sin_port = htons(port); addr.sin_addr.s_addr = inet_addr(ip); if (connect(s, &addr, sizeof(addr)) == 0) { n = recv(s, rx, sizeof(rx), 0); if (n > 0) send(s, tx, tx_len, 0); } closesocket(s);",
+        "process_injection": "h = OpenProcess(PROCESS_ALL_ACCESS, 0, pid); remote = VirtualAllocEx(h, 0, sz, MEM_COMMIT, PAGE_EXECUTE_READWRITE); WriteProcessMemory(h, remote, payload, sz, &written); th = CreateRemoteThread(h, 0, 0, remote, 0, 0, 0); WaitForSingleObject(th, INFINITE); CloseHandle(th); CloseHandle(h);",
+        "file_operations": "fd = CreateFileW(path, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0); ReadFile(fd, buf, size, &n, 0); parse_record(buf, n); WriteFile(fd, out, out_len, &m, 0); MoveFileW(tmp, path); DeleteFileW(backup); CloseHandle(fd);",
+        "anti_debug": "if (IsDebuggerPresent()) return 0; CheckRemoteDebuggerPresent(GetCurrentProcess(), &dbg); t0 = __rdtsc(); suspicious_loop(); t1 = __rdtsc(); if (t1 - t0 > limit) flag_debugger(); NtQueryInformationProcess(proc, ProcessDebugPort, &port, sizeof(port), 0);",
+        "anti_vm": "cpuid(1, &eax, &ebx, &ecx, &edx); if (ecx & HYPERVISOR_BIT) vm = 1; cpuid(0x40000000, &vendor); if (strstr(vendor, \"VMware\") || strstr(vendor, \"VBox\")) vm = 1; if (mac_oui_matches_vm(nic_mac) || registry_has_vm_keys()) vm = 1;",
+        "persistence": "RegCreateKeyExW(HKCU, \"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run\", ...); RegSetValueExW(run_key, \"Updater\", 0, REG_SZ, exe_path, len); CreateServiceW(scm, name, name, SERVICE_AUTO_START, SERVICE_WIN32_OWN_PROCESS, ...); StartServiceW(svc, 0, 0);",
+        "evasion": "for (i = 0; i < blob_len; ++i) blob[i] ^= key[i & 0xf]; Sleep(delay_ms); VirtualProtect(code, len, PAGE_EXECUTE_READWRITE, &old); memset(headers, 0, 0x200); if (sandbox_signals()) return; jump_to_decrypted_payload(blob);",
+        "string_decrypt": "for (i = 0; i < enc_len; ++i) { out[i] = enc[i] ^ rolling_key; rolling_key = rotl8(rolling_key + i, 1); } out[enc_len] = 0; if (looks_printable(out)) cache_string(id, out); else wipe_buffer(out, enc_len);",
+        "c2_communication": "beacon = json_build(host_id, pid, uptime, version); body = base64_encode(beacon); http_post(c2_url, body, headers); cmd = parse_response(resp); if (cmd.type == EXEC) exec_command(cmd.arg); else if (cmd.type == DOWNLOAD) fetch_payload(cmd.url);",
+        "privilege_escalation": "OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY, &tok); LookupPrivilegeValueW(0, SeDebugPrivilege, &luid); AdjustTokenPrivileges(tok, 0, &tp, sizeof(tp), 0, 0); if (token_is_elevated(tok)) spawn_as_system(command);",
+        "memory_manipulation": "ptr = VirtualAlloc(0, sz, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE); memcpy(ptr, src, sz); VirtualProtect(ptr, sz, PAGE_EXECUTE_READ, &old); fn = (void(*)())ptr; fn(); mmap_region = mmap(0, sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);",
+        "rop_gadget": "for (ea = text_start; ea < text_end; ++ea) { if (is_ret(insn[ea])) { collect_gadget(ea - 6, ea); if (matches(\"pop reg; pop reg; ret\")) score++; } } chain = build_rop_chain(stack_pivot, gadgets, syscall_stub);",
+        "heap_spray": "for (i = 0; i < 0x2000; ++i) { buf = malloc(chunk); memset(buf, 0x41, chunk); memcpy(buf + nop_len, shellcode, sc_len); array[i] = buf; } trigger_uaf_or_oob(array);",
+        "use_after_free": "obj = alloc_obj(sz); init_obj(obj); free(obj); if (condition) { obj->vtable->dispatch(obj, arg); memcpy(obj->buf, input, len); } dangling pointer dereference after free indicates temporal memory bug;",
+        "buffer_overflow": "char tmp[128]; len = read_input(src, 0x400); memcpy(tmp, src, len); if (len > sizeof(tmp)) stack_corruption = 1; strcpy(dst, user); strcat(dst, suffix); missing bounds checks around copy operations and fixed-size local buffers;",
+        "format_string_vuln": "fmt = recv_user_string(sock); if (fmt) { printf(fmt); syslog(LOG_ERR, fmt); snprintf(out, 256, fmt, user1, user2); } user-controlled format string reaches variadic sink without literal format guard;",
+        "race_condition": "if (!global_lock) init_lock(); if (shared_flag) update_shared_state(); pthread_create(&t1, 0, worker, ctx); pthread_create(&t2, 0, worker, ctx); check_then_use(file_path); open(file_path); rename(file_path, backup); state mutation happens without synchronized critical section;",
+        "integer_overflow": "count = read_u32(pkt + 4); size = count * elem_size; buf = malloc(size); if (size < count) overflow = 1; for (i = 0; i < count; ++i) copy_elem(buf + i * elem_size, src); truncation or wraparound in arithmetic before allocation/copy;",
+        "path_traversal": "snprintf(path, sizeof(path), \"%s/%s\", base_dir, user_name); if (strstr(user_name, \"..\")) warn_only(); fopen(path, \"wb\"); extract_archive(entry_name, base_dir); insufficient canonicalization allows writes outside intended root;",
     }
 
     # Module-level singleton so anchors are loaded exactly once per process.
@@ -803,7 +766,7 @@ class BehaviorClassifier:
     def classify_vec(
         self,
         query_vec: List[float],
-        threshold: float = 0.35,
+        threshold: float = 0.25,
         top_k: int = 4,
         block: bool = False,
     ) -> List[Dict[str, Any]]:
@@ -836,10 +799,28 @@ class BehaviorClassifier:
         results.sort(key=lambda x: x["confidence"], reverse=True)
         return results[:top_k]
 
+    @staticmethod
+    def _anchor_explain(anchor_text: str, query_text: str) -> List[str]:
+        phrases = [p.strip() for p in anchor_text.split(";") if p.strip()]
+        q_tokens = set(re.findall(r"[A-Za-z0-9_]+", (query_text or "").lower()))
+        scored: List[tuple[int, str]] = []
+        for ph in phrases:
+            p_tokens = set(re.findall(r"[A-Za-z0-9_]+", ph.lower()))
+            scored.append((len(q_tokens.intersection(p_tokens)), ph))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = [ph for ov, ph in scored if ov > 0][:3]
+        if len(top) < 3:
+            for _, ph in scored:
+                if ph not in top:
+                    top.append(ph)
+                if len(top) >= 3:
+                    break
+        return top[:3]
+
     def classify(
         self,
         text: str,
-        threshold: float = 0.35,
+        threshold: float = 0.25,
         max_tokens: int = 3000,
         top_k: int = 4,
         block: bool = False,
@@ -854,12 +835,16 @@ class BehaviorClassifier:
         # queries live in the same code-signature space.
         query = _extract_signature(text[:max_tokens]) or text[:max_tokens]
         q = self._embedder.embed(query)
-        return self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
+        rows = self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
+        for row in rows:
+            b = str(row.get("behavior") or "")
+            row["explain"] = self._anchor_explain(self.ANCHORS.get(b, ""), query)
+        return rows
 
     def _classify_impl(
         self,
         q: List[float],
-        threshold: float = 0.35,
+        threshold: float = 0.25,
         top_k: int = 4,
         block: bool = True,
     ) -> List[Dict[str, Any]]:
@@ -2961,7 +2946,7 @@ class ContextAssembler:
             try:
                 behavior_hits = self._behavior_classifier().classify(
                     pseudocode,
-                    threshold=0.35,
+                    threshold=0.25,
                     top_k=4,
                     block=True,
                 )
