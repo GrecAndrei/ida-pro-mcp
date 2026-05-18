@@ -129,6 +129,8 @@ TOOLS = [
     "filter",
     # --- Governance ---
     "governance",
+    # --- Cross-session firmware KB ---
+    "knowledge",
 ]
 
 ADVERTISED_TOOLS = [
@@ -394,6 +396,7 @@ TOOL_DESCRIPTIONS = {
     "funcs": "Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, set_name/rename, add_comment, list, info, metrics, find_similar, suggest_names.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
+    "knowledge": "Cross-session firmware knowledge base: chip family identification, persistent symbol memory, and symbol transfer across binaries. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
     "graph": "Generate call graphs, CFGs, and xref graphs in JSON/DOT/Mermaid formats. Actions: callgraph, cfg, xref_graph, down, up, both, json, dot, mermaid.",
     "history": "Undo/redo IDB changes, create snapshots, restore, and diff states. Actions: undo, redo, list, snapshot, restore, diff.",
     "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
@@ -542,6 +545,8 @@ TOOL_ACTIONS = {
         "kg_state_machines",
         "kg_attack_surface",
         "kg_peripherals",
+        "export_symbols",
+        "import_symbols",
     ],
     "bookmarks": [
         "add",
@@ -838,6 +843,13 @@ TOOL_ACTIONS = {
         "redact",
         "list_rules",
         "stats",
+    ],
+    "knowledge": [
+        "chip_identify",
+        "symbol_lookup",
+        "import_symbols",
+        "export_session",
+        "chip_families",
     ],
     "graph": [
         "callgraph",
@@ -1960,6 +1972,15 @@ TOOL_ARG_SCHEMAS = {
         "proposed_value": {"type": "string", "description": "The proposed value to check or redact"},
         "context": {"type": "object", "description": "Optional context dict for governance check"},
         "metadata": {"type": "object", "description": "Optional metadata dict for governance check"},
+    },
+    "knowledge": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["knowledge"]},
+        "query": {"type": "string", "description": "Fuzzy text query for symbol lookup"},
+        "min_confidence": {"type": "number", "description": "Minimum confidence threshold for symbol import"},
+        "limit": {"type": "integer", "description": "Result limit"},
+        "db_path": {"type": "string", "description": "Override path to symbol knowledge SQLite DB"},
+        "chip_family": {"type": "string", "description": "Optional chip family tag for export_session"},
+        "session_id": {"type": "string", "description": "Optional source session identifier for export_session"},
     },
 }
 

@@ -1264,6 +1264,8 @@ def blackboard(
       crawler_status - Show crawler state and pending proposals.
       accept         - Accept a crawler proposal (writes to blackboard).
       reject         - Reject a crawler proposal.
+      export_symbols - Export named functions into persistent symbol knowledge DB.
+      import_symbols - Import high-confidence symbol matches from knowledge DB.
 
     Firmware RE examples:
       # Annotate a memory region
@@ -1741,6 +1743,18 @@ def blackboard(
                 "Use blackboard(action='list', source_type='propagated') to review."
             ),
         }
+    elif action == "export_symbols":
+        try:
+            from .knowledge import knowledge
+        except Exception:
+            from knowledge import knowledge  # type: ignore
+        return knowledge(action="export_session", min_confidence=min_confidence, **kwargs)
+    elif action == "import_symbols":
+        try:
+            from .knowledge import knowledge
+        except Exception:
+            from knowledge import knowledge  # type: ignore
+        return knowledge(action="import_symbols", min_confidence=min_confidence, limit=limit, **kwargs)
 
     else:
         return {"ok": False, "error": f"Unknown action: {action}"}
