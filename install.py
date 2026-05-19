@@ -644,7 +644,14 @@ def get_mcp_server_config(
     env["IDA_MCP_TRUNCATE_TOKENS"] = "2000"
     env["IDA_MCP_WIKI_DEFAULT_LIMIT"] = "140"
 
-    if global_vertex_compat or client_name in ("Gemini CLI", "OpenCode", "opencode"):
+    if global_vertex_compat or client_name in (
+        "Gemini CLI",
+        "OpenCode",
+        "opencode",
+        "Antigravity",
+        "Antigravity CLI",
+        "Antigravity IDE",
+    ):
         env["IDA_MCP_VERTEX_COMPAT"] = "1"
 
     # ── Embedding model detection ──────────────────────────────────────────
@@ -1126,7 +1133,7 @@ def do_install(skills_mode: str = "router"):
         f"     {C.DIM}This optimizes the schema specifically for Google Gemini/Vertex API endpoints.{C.RESET}"
     )
     print(
-        f"     {C.DIM}It is normally only enabled automatically for OpenCode and Gemini CLI.{C.RESET}"
+        f"     {C.DIM}It is normally only enabled automatically for OpenCode, Gemini CLI, and Antigravity.{C.RESET}"
     )
     vertex_choice = input(f"   Enable globally? [y/N]: ").strip().lower()
     global_vertex_compat = vertex_choice in ("y", "yes")
@@ -1213,6 +1220,8 @@ def do_install(skills_mode: str = "router"):
     priority_clients = [
         "Gemini CLI",
         "Antigravity",
+        "Antigravity CLI",
+        "Antigravity IDE",
         "Claude Code",
         "Codex",
         "Claude Desktop",

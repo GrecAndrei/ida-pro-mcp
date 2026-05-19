@@ -78,6 +78,9 @@ class TestInstallLinuxConfigPaths(unittest.TestCase):
         home = Path.home()
         self.assertEqual(cfg["Codex"], home / ".codex" / "config.toml")
         self.assertEqual(cfg["Gemini CLI"], home / ".gemini" / "settings.json")
+        self.assertEqual(cfg["Antigravity"], home / ".gemini" / "antigravity" / "mcp_config.json")
+        self.assertEqual(cfg["Antigravity IDE"], home / ".gemini" / "antigravity" / "mcp_config.json")
+        self.assertEqual(cfg["Antigravity CLI"], home / ".gemini" / "antigravity" / "mcp_config.json")
         self.assertEqual(cfg["Claude Code"], home / ".claude.json")
         self.assertEqual(cfg["Copilot CLI"], home / ".copilot" / "mcp-config.json")
         self.assertEqual(cfg["OpenCode"], home / ".config" / "opencode" / "opencode.json")
@@ -112,6 +115,15 @@ class TestInstallerRepairBehavior(unittest.TestCase):
             repaired = json.loads(cfg.read_text(encoding="utf-8"))
             self.assertIn("ida-pro-mcp", repaired.get("mcpServers", {}))
             self.assertNotIn("github.com/mrexodia/ida-pro-mcp", repaired.get("mcpServers", {}))
+
+    def test_antigravity_enables_vertex_compat(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td) / "mcp_config.json"
+            ok = install.update_json_config(cfg, client_name="Antigravity IDE", install_path=Path(td))
+            self.assertTrue(ok)
+            repaired = json.loads(cfg.read_text(encoding="utf-8"))
+            server = repaired.get("mcpServers", {}).get("ida-pro-mcp", {})
+            self.assertEqual(server.get("env", {}).get("IDA_MCP_VERTEX_COMPAT"), "1")
 
     def test_update_opencode_replaces_legacy_mcp_entry(self):
         with tempfile.TemporaryDirectory() as td:

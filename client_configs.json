@@ -9,6 +9,14 @@
       "paths": ["{home}/.gemini/antigravity/mcp_config.json"],
       "pick_existing": true
     },
+    "Antigravity IDE": {
+      "paths": ["{home}/.gemini/antigravity/mcp_config.json"],
+      "pick_existing": true
+    },
+    "Antigravity CLI": {
+      "paths": ["{home}/.gemini/antigravity/mcp_config.json"],
+      "pick_existing": true
+    },
     "Claude Code": {
       "paths": ["{home}/.claude.json"],
       "pick_existing": true
