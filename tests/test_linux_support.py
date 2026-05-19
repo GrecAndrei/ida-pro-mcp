@@ -80,7 +80,7 @@ class TestInstallLinuxConfigPaths(unittest.TestCase):
         self.assertEqual(cfg["Gemini CLI"], home / ".gemini" / "settings.json")
         self.assertEqual(cfg["Antigravity"], home / ".gemini" / "antigravity" / "mcp_config.json")
         self.assertEqual(cfg["Antigravity IDE"], home / ".gemini" / "antigravity" / "mcp_config.json")
-        self.assertEqual(cfg["Antigravity CLI"], home / ".gemini" / "antigravity" / "mcp_config.json")
+        self.assertEqual(cfg["Antigravity CLI"], home / ".gemini" / "settings.json")
         self.assertEqual(cfg["Claude Code"], home / ".claude.json")
         self.assertEqual(cfg["Copilot CLI"], home / ".copilot" / "mcp-config.json")
         self.assertEqual(cfg["OpenCode"], home / ".config" / "opencode" / "opencode.json")
