@@ -928,6 +928,15 @@ def update_json_config(
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Antigravity CLI discovers MCP servers via plugin directories, not just
+        # the raw mcp_config.json file. Keep the plugin manifest in sync so the
+        # CLI can actually surface the server after installation.
+        if client_name == "Antigravity CLI":
+            plugin_json = config_path.parent / "plugin.json"
+            if not plugin_json.exists():
+                with open(plugin_json, "w", encoding="utf-8") as f:
+                    json.dump({"name": server_name}, f, indent=2)
+
         source_path = config_path
         if (
             client_name == "Copilot CLI"
@@ -1133,7 +1142,7 @@ def do_install(skills_mode: str = "router"):
         f"     {C.DIM}This optimizes the schema specifically for Google Gemini/Vertex API endpoints.{C.RESET}"
     )
     print(
-        f"     {C.DIM}It is normally only enabled automatically for OpenCode, Gemini CLI, and Antigravity.{C.RESET}"
+        f"     {C.DIM}It is normally only enabled automatically for OpenCode, Gemini CLI, Antigravity, and Antigravity CLI.{C.RESET}"
     )
     vertex_choice = input(f"   Enable globally? [y/N]: ").strip().lower()
     global_vertex_compat = vertex_choice in ("y", "yes")
