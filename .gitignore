@@ -49,9 +49,13 @@ htmlcov/
 .opencode-swarm/
 .codex/
 ida_mcp_cache/
+.claude/
 
 # Local probe/report artifacts
 reports/*.json
+scripts/llm_eval/results/
+scripts/tool_description_occupancy.json
+scripts/tools_list_occupancy.json
 
 # Planning artifacts
 GAP_ANALYSIS.md
