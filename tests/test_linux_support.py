@@ -80,7 +80,10 @@ class TestInstallLinuxConfigPaths(unittest.TestCase):
         self.assertEqual(cfg["Gemini CLI"], home / ".gemini" / "settings.json")
         self.assertEqual(cfg["Antigravity"], home / ".gemini" / "antigravity" / "mcp_config.json")
         self.assertEqual(cfg["Antigravity IDE"], home / ".gemini" / "antigravity" / "mcp_config.json")
-        self.assertEqual(cfg["Antigravity CLI"], home / ".gemini" / "settings.json")
+        self.assertEqual(
+            cfg["Antigravity CLI"],
+            home / ".gemini" / "antigravity-cli" / "plugins" / "ida-pro-mcp" / "mcp_config.json",
+        )
         self.assertEqual(cfg["Claude Code"], home / ".claude.json")
         self.assertEqual(cfg["Copilot CLI"], home / ".copilot" / "mcp-config.json")
         self.assertEqual(cfg["OpenCode"], home / ".config" / "opencode" / "opencode.json")
@@ -118,12 +121,22 @@ class TestInstallerRepairBehavior(unittest.TestCase):
 
     def test_antigravity_enables_vertex_compat(self):
         with tempfile.TemporaryDirectory() as td:
-            cfg = Path(td) / "mcp_config.json"
+            cfg = Path(td) / "plugins" / "ida-pro-mcp" / "mcp_config.json"
             ok = install.update_json_config(cfg, client_name="Antigravity IDE", install_path=Path(td))
             self.assertTrue(ok)
             repaired = json.loads(cfg.read_text(encoding="utf-8"))
             server = repaired.get("mcpServers", {}).get("ida-pro-mcp", {})
             self.assertEqual(server.get("env", {}).get("IDA_MCP_VERTEX_COMPAT"), "1")
+
+    def test_antigravity_cli_writes_plugin_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td) / "plugins" / "ida-pro-mcp" / "mcp_config.json"
+            ok = install.update_json_config(cfg, client_name="Antigravity CLI", install_path=Path(td))
+            self.assertTrue(ok)
+            plugin_json = cfg.parent / "plugin.json"
+            self.assertTrue(plugin_json.exists())
+            manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
+            self.assertEqual(manifest.get("name"), "ida-pro-mcp")
 
     def test_update_opencode_replaces_legacy_mcp_entry(self):
         with tempfile.TemporaryDirectory() as td:
