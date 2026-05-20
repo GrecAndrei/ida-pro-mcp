@@ -611,8 +611,15 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 ida_prefixes = {str(a)[:2] for a in (session.ida_args or [])}
                 if opts.get("processor") and "-p" not in ida_prefixes:
                     cmd.append(f"-p{opts['processor']}")
-                if opts.get("loader") and "-T" not in ida_prefixes:
-                    cmd.append(f"-T{opts['loader']}")
+                loader = opts.get("loader")
+                if loader and "-T" not in ida_prefixes:
+                    cmd.append(f"-T{loader}")
+                elif not loader and "-T" not in ida_prefixes:
+                    # Default to raw binary loader for firmware-like architectures
+                    # to avoid IDA's OBJ/metapc defaults (wrong bitness, BSS segments)
+                    proc = str(opts.get("processor") or "").lower()
+                    if proc in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8"):
+                        cmd.append("-Tbin")
                 # Apply inferred load base so IDA maps the binary at the correct
                 # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
                 if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
