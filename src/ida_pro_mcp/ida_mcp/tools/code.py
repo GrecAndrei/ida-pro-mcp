@@ -360,10 +360,33 @@ def _decompile_with_diagnostics(func_ea: int):
             cfunc = ida_hexrays.decompile_func(func_ea, failure, flags)
             if cfunc:
                 return cfunc, None
+            # On newly created functions, Hex-Rays may fail because the CFG
+            # isn't fully analyzed yet (e.g. opcode error 50735). Nudge
+            # auto-analysis and retry once.
+            failure_code = getattr(failure, "code", None)
+            if failure_code is not None:
+                try:
+                    fn = ida_funcs.get_func(func_ea)
+                    if fn:
+                        import ida_auto as _ida_auto
+                        if hasattr(_ida_auto, "plan_range"):
+                            _ida_auto.plan_range(fn.start_ea, fn.end_ea)
+                        elif hasattr(_ida_auto, "auto_mark_range"):
+                            _ida_auto.auto_mark_range(fn.start_ea, fn.end_ea, _ida_auto.AU_FINAL)
+                        time.sleep(0.5)
+                        failure2 = ida_hexrays.hexrays_failure_t()
+                        cfunc = ida_hexrays.decompile_func(func_ea, failure2, flags)
+                        if cfunc:
+                            return cfunc, None
+                        code2 = getattr(failure2, "code", None)
+                        if code2 is not None:
+                            failure = failure2
+                            failure_code = code2
+                except Exception:
+                    pass
             details = {"addr": hex(func_ea)}
-            code = getattr(failure, "code", None)
-            if code is not None:
-                details["failure_code"] = code
+            if failure_code is not None:
+                details["failure_code"] = failure_code
             errea = getattr(failure, "errea", idaapi.BADADDR)
             if errea != idaapi.BADADDR:
                 details["failure_ea"] = hex(errea)
