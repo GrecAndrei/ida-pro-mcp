@@ -615,11 +615,18 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if loader and "-T" not in ida_prefixes:
                     cmd.append(f"-T{loader}")
                 elif not loader and "-T" not in ida_prefixes:
-                    # Default to raw binary loader for firmware-like architectures
-                    # to avoid IDA's OBJ/metapc defaults (wrong bitness, BSS segments)
+                    # Default to raw binary loader for any non-PE/ELF/Mach-O binary.
+                    # Without explicit loader, IDA picks OBJ which creates BSS/DATA
+                    # segments with wrong bitness, blocking code analysis entirely.
+                    # Firmware archs (arm/mips/ppc/tricore/etc.) always get -Tbin.
                     proc = str(opts.get("processor") or "").lower()
                     if proc in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8"):
                         cmd.append("-Tbin")
+                    elif str(opts.get("loader") or "") == "bin":
+                        cmd.append("-Tbin")
+                    # For unknown processors with no explicit loader, let IDA's
+                    # auto-detection handle it — but the pre-analysis hook will
+                    # fix segment class/type/perm if needed.
                 # Apply inferred load base so IDA maps the binary at the correct
                 # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
                 if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
