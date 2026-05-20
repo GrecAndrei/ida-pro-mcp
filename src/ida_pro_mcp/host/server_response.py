@@ -869,6 +869,9 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 pass
 
             # ---- State Contract Enforcement ----
+            # Suppress after first reminder per session to avoid token bloat.
+            # The check_state_contract window (16 calls) is sufficient to detect
+            # missing persistence — we only flag it once, not every batch.
             try:
                 if (
                     hasattr(self, "session_mgr")
@@ -876,17 +879,22 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     and tool_name not in {"session", "blackboard", "batch", "predictor", "workflow"}
                 ):
                     sid = self.current_session.session_id
-                    contract = self.session_mgr.check_state_contract(sid, window=16)
+                    contract = self.session_mgr.check_state_contract(sid, window=32)
                     if isinstance(contract, dict) and contract.get("ok") and not contract.get("contract_met"):
-                        # Only show reminder every 16 calls to reduce bloat
-                        compacted.setdefault(
-                            "llm_state_contract_reminder",
-                            {
-                                "message": f"No blackboard write in last {contract.get('window_size', 16)} calls. Persist findings to maintain state.",
-                                "recommended_action": contract.get("recommended_action"),
-                                "contract_met": False,
-                            },
-                        )
+                        blackboard_gap = int(contract.get("blackboard_writes_in_window", 0) or 0)
+                        # Only alert when gap exceeds 32 calls without a write AND
+                        # we haven't already alerted in this session.
+                        contract_alerted = getattr(self, f"_contract_alerted_{sid}", False)
+                        if blackboard_gap == 0 and not contract_alerted:
+                            setattr(self, f"_contract_alerted_{sid}", True)
+                            compacted.setdefault(
+                                "llm_state_contract_reminder",
+                                {
+                                    "message": f"No blackboard write in last {contract.get('window_size', 32)} calls. Persist findings to maintain state.",
+                                    "recommended_action": contract.get("recommended_action"),
+                                    "contract_met": False,
+                                },
+                            )
             except Exception:
                 pass
 

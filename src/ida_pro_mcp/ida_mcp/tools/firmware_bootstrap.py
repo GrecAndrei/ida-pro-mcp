@@ -52,10 +52,21 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
     created = 0
     entries = 0
     reset_addr = None
+    code_failures = []
+    func_failures = []
 
-    # First pass: mark all vector handler addresses as Thumb code and
-    # schedule them for analysis.
+    # Fix segment class: ensure segments are CODE not DATA for firmware
+    try:
+        seg = idaapi.getseg(mn)
+        if seg:
+            cur_class = ida_segment.get_segm_class(seg)
+            if cur_class != "CODE" or not ida_segment.is_spec_segm(mn):
+                ida_segment.set_segm_class(seg, "CODE")
+    except Exception:
+        pass
+
     handler_addrs = []
+    skipped_oob = []
     for vec in vectors:
         if not isinstance(vec, dict):
             continue
@@ -63,37 +74,81 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
             continue
         h = _int_addr(vec.get("handler") or vec.get("value"))
         if h is None or h < mn or h >= mx:
+            skipped_oob.append(hex(vec.get("handler") or vec.get("value") or 0))
             continue
         handler_addrs.append((h, vec))
 
     if handler_addrs:
-        lo = min(h for h, _ in handler_addrs)
-        hi = max(h for h, _ in handler_addrs) + 4
-        # Thumb bootstrap for Cortex-M handlers.
-        for h, _ in handler_addrs:
+        # Thumb bootstrap for Cortex-M handlers — set T=1 segment register
+        # for all address space so create_insn uses Thumb decoding.
+        try:
+            proc = (_inf_procname() or "").lower()
+        except Exception:
+            proc = ""
+        if "arm" in proc:
             try:
                 sr_auto = getattr(idc, "SR_auto", 2)
-                idc.split_sreg_range(h, "T", 1, sr_auto)
+                idc.split_sreg_range(mn, "T", 1, sr_auto)
             except Exception:
-                pass
+                try:
+                    import ida_segregs
+                    ida_segregs.split_sreg_range(mn, "T", 1, 2)
+                except Exception:
+                    pass
+        for h, _ in handler_addrs:
+            if "arm" in proc:
+                try:
+                    sr_auto = getattr(idc, "SR_auto", 2)
+                    idc.split_sreg_range(h, "T", 1, sr_auto)
+                except Exception:
+                    try:
+                        import ida_segregs
+                        ida_segregs.split_sreg_range(h, "T", 1, 2)
+                    except Exception:
+                        pass
         for h, _ in handler_addrs:
             if not ida_bytes.is_code(ida_bytes.get_flags(h)):
-                idc.create_insn(h)
-        try:
-            idaapi.plan_and_wait(lo, hi)
-        except Exception:
-            pass
-        try:
-            idaapi.auto_wait()
-        except Exception:
-            pass
+                created_insn = False
+                try:
+                    import ida_ua
+                    insn_len = ida_ua.create_insn(h)
+                    created_insn = insn_len > 0
+                except Exception:
+                    pass
+                if not created_insn:
+                    try:
+                        insn_len = idc.create_insn(h)
+                        created_insn = insn_len > 0
+                    except Exception:
+                        pass
+                if not created_insn:
+                    code_failures.append(hex(h))
+                # Undefine bytes then retry for stubborn addresses
+                if not created_insn:
+                    try:
+                        ida_bytes.del_items(h, ida_bytes.DELIT_SIMPLE, 16)
+                        if hasattr(ida_auto, "auto_make_code"):
+                            ida_auto.auto_make_code(h)
+                    except Exception:
+                        pass
+                    try:
+                        import ida_ua
+                        insn_len = ida_ua.create_insn(h)
+                        created_insn = insn_len > 0
+                    except Exception:
+                        created_insn = idc.create_insn(h) > 0
 
+    add_func_results = []
     for h, vec in handler_addrs:
         fn = ida_funcs.get_func(h)
         if not fn:
-            if ida_funcs.add_func(h):
+            ok = ida_funcs.add_func(h)
+            add_func_results.append({"addr": hex(h), "ok": bool(ok), "is_code": ida_bytes.is_code(ida_bytes.get_flags(h))})
+            if ok:
                 created += 1
                 fn = ida_funcs.get_func(h)
+            else:
+                func_failures.append(hex(h))
         if fn:
             entries += 1
             idx = int(vec.get("index", -1) or -1)
@@ -104,12 +159,22 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
                 nm = str(vec.get("name") or "")
                 if nm and nm.endswith("_Handler"):
                     idc.set_name(fn.start_ea, nm, ida_name.SN_FORCE)
-    return {
+    result = {
         "vectors_detected": len(vectors),
         "entry_points_defined": entries,
         "functions_created": created,
         "reset_handler": (hex(reset_addr) if reset_addr is not None else None),
     }
+    if code_failures or func_failures or skipped_oob:
+        result["_debug"] = {
+            "handler_count": len(handler_addrs),
+            "skipped_oob": skipped_oob[:10],
+            "add_func_sample": add_func_results[:10],
+            "code_failures": code_failures[:10],
+            "func_failures": func_failures[:10],
+        }
+        result["_status"] = "partial" if (created > 0 or entries > 0) else "failed"
+    return result
 
 
 def _annotate_mmio(peripherals: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -149,6 +214,7 @@ def run_firmware_bootstrap(
 ) -> Dict[str, Any]:
     actions = list(post_load_actions or ["define_vector_table", "annotate_mmio", "reanalyze", "define_strings"])
     report: Dict[str, Any] = _base_bootstrap_report(chip_family, load_base, actions)
+    report["processor"] = str(_inf_procname() or "")
 
     for action in actions:
         if action == "define_vector_table":
@@ -162,9 +228,19 @@ def run_firmware_bootstrap(
             report["details"][action] = r
             report["peripherals_annotated"] += int(r.get("peripherals_annotated", 0) or 0)
         elif action == "reanalyze":
+            # Schedule a non-blocking re-analysis pass. Do NOT call auto_wait()
+            # here — it blocks the main thread in the socket-server context and
+            # crashes IDA. Use plan_range (fire-and-forget) so IDA's idle loop
+            # picks it up after this RPC call returns.
             try:
-                idc.auto_wait()
-                report["details"][action] = {"ok": True}
+                import ida_auto as _ida_auto
+                mn, mx = _safe_bounds()
+                if mn < mx:
+                    if hasattr(_ida_auto, "plan_range"):
+                        _ida_auto.plan_range(mn, mx)
+                    elif hasattr(_ida_auto, "auto_mark_range"):
+                        _ida_auto.auto_mark_range(mn, mx, _ida_auto.AU_FINAL)
+                report["details"][action] = {"ok": True, "note": "scheduled (non-blocking)"}
             except Exception as e:
                 report["details"][action] = {"ok": False, "error": str(e)}
         elif action == "define_strings":
