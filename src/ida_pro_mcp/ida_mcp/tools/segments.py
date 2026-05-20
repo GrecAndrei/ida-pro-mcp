@@ -228,6 +228,18 @@ def segments(
         Returns: {segments: [...], totals: {total_size, avg_entropy, ...}}
     """
     try:
+        # Normalize common direct-call aliases even before the MCP server's
+        # argument mapper runs. This keeps the tool usable in unit tests and
+        # from ad-hoc IDAPython calls.
+        if start is None:
+            start = kwargs.get("address") or kwargs.get("addr") or kwargs.get("ea") or kwargs.get("segment")
+        if end is None:
+            end = kwargs.get("address2") or kwargs.get("addr2") or kwargs.get("ea2") or kwargs.get("segment2")
+        if name is None:
+            name = kwargs.get("segment_name")
+        if name2 is None:
+            name2 = kwargs.get("segment_name2")
+
         # ------------------------------------------------------------------
         # LIST
         # ------------------------------------------------------------------
@@ -241,7 +253,9 @@ def segments(
                     if total > offset and (count == 0 or len(results) < count):
                         results.append({
                             "name": ida_segment.get_segm_name(seg),
+                            "address": hex(seg.start_ea),
                             "start": hex(seg.start_ea),
+                            "end_address": hex(seg.end_ea),
                             "end": hex(seg.end_ea),
                             "size": hex(seg.end_ea - seg.start_ea),
                             "perms": _perms_string(seg),
@@ -271,7 +285,9 @@ def segments(
                 "ok": True,
                 "segment": {
                     "name": ida_segment.get_segm_name(seg),
+                    "address": hex(seg.start_ea),
                     "start": hex(seg.start_ea),
+                    "end_address": hex(seg.end_ea),
                     "end": hex(seg.end_ea),
                     "size": hex(seg.end_ea - seg.start_ea),
                     "size_bytes": seg.end_ea - seg.start_ea,
@@ -519,7 +535,9 @@ def segments(
                 "ok": True,
                 "segment": {
                     "name": ida_segment.get_segm_name(seg),
+                    "address": hex(seg.start_ea),
                     "start": hex(seg.start_ea),
+                    "end_address": hex(seg.end_ea),
                     "end": hex(seg.end_ea),
                 },
                 "functions": functions,
@@ -570,7 +588,9 @@ def segments(
                 "ok": True,
                 "segment": {
                     "name": ida_segment.get_segm_name(seg),
+                    "address": hex(seg.start_ea),
                     "start": hex(seg.start_ea),
+                    "end_address": hex(seg.end_ea),
                     "end": hex(seg.end_ea),
                 },
                 "data_items": data_items,

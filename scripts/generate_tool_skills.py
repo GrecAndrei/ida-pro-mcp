@@ -241,7 +241,6 @@ def _render_router_skill(tools: list[str]) -> str:
     lines.append("## Resolution Rules")
     lines.append("- Default doc filename: `ida-tool-<tool>.md`")
     lines.append("- Example: tool `search` -> `.agents/tool-docs/ida-tool-search.md`")
-    lines.append("- Alias: `xfer_analysis` -> `ida-tool-xfer_analysis.md`")
     lines.append("- If unsure, list docs under `.agents/tool-docs/` and pick exact match.")
     lines.append("")
     lines.append("## Available Tool Count")

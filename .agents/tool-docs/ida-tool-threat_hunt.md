@@ -45,7 +45,7 @@ Consolidated malware/vulnerability/tracing/search-finding orchestration hub. Act
 - `max_steps`: `integer` - Safety cap for total orchestrated tool calls.
 - `profile`: `string` - allowed: `quick, balanced, deep` - Pipeline depth profile.
 - `query`: `string` - Optional focus query for post-filtering and relevance scoring.
-- `scan_profile`: `string` - allowed: `quick, balanced, deep` - Forwarded depth profile to vuln_scan.
+- `scan_profile`: `string` - allowed: `quick, balanced, deep` - Forwarded depth profile to threat_hunt.
 - `severity`: `string` - allowed: `critical, high, medium, low` - Optional severity filter for vulnerability findings.
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 

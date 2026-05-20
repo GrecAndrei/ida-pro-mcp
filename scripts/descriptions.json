@@ -66,7 +66,6 @@
   "truncation": "Continues a previously truncated tool response to retrieve remaining output. Actions: continue.",
   "turboquant": "4-bit quantized embedding store for fast semantic similarity queries over binary artifacts. Actions: ingest, query, stats, delete.",
   "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph.",
-  "vuln_scan": "Scans for common vulnerability patterns in decompiled code. Actions: scan, buffer_overflows, format_strings, integer_overflows, use_after_free, race_conditions, report.",
   "wiki": "Accesses built-in documentation and tool usage guides within MCP context. Actions: list_topics, read, search, semantic_search, index, sections, suggest.",
   "workflow": "Executes predefined multi-step analysis workflows for common RE tasks. Actions: triage_fast, malware_deep, vuln_audit, patch_review.",
   "xref_analysis": "Performs cross-reference graph analysis: call chains, dominators, hubs, dead code, and dependency graphs. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions, forward, backward, both.",

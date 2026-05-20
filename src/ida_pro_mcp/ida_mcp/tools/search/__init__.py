@@ -160,7 +160,7 @@ def search(
     - callers: Functions calling a target
     - callees: Functions called by a target
     - api: Find usages of an imported API
-    - vulnerable: Delegate to vuln_scan for dynamic vulnerability discovery
+    - vulnerable: Scan for dangerous API patterns (buffer overflows, format strings, etc.)
     - constants: Find crypto/magic constants in instruction immediates
     - decompiled: Search pseudocode across all functions (with caching)
     - structured: Schema-based pre-filtered semantic retrieval

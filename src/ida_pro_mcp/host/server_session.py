@@ -213,6 +213,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                             analysis_options.setdefault("bitness", inferred.get("bitness"))
                         if inferred.get("endian"):
                             analysis_options.setdefault("endian", inferred.get("endian"))
+                        if inferred.get("loader"):
+                            analysis_options.setdefault("loader", inferred.get("loader"))
                         # Apply load base for chip-specific formats (e.g. AIC WFFW at 0x120000).
                         if inferred.get("load_base") is not None:
                             analysis_options.setdefault("baseaddr", inferred["load_base"])

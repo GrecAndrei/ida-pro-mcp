@@ -576,6 +576,7 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
     """
     Best-effort entry seeding for raw blobs when auto-analysis finds 0 functions.
     Uses deterministic vector-table style pointer extraction near image start.
+    Sets Thumb mode and uses ida_ua.create_insn for IDA 9.x compatibility.
     """
     seeded = 0
     ptr_size = 4
@@ -585,18 +586,31 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
     data = ida_bytes.get_bytes(start_ea, scan_size) or b""
     if len(data) < 8:
         return {"seeded_entries": 0}
+    # Set Thumb mode for ARM targets before attempting instruction creation
+    try:
+        proc = (_inf_procname() or "").lower()
+    except Exception:
+        proc = ""
+    if "arm" in proc:
+        try:
+            sr_auto = getattr(idc, "SR_auto", 2)
+            idc.split_sreg_range(start_ea, "T", 1, sr_auto)
+        except Exception:
+            try:
+                import ida_segregs
+                ida_segregs.split_sreg_range(start_ea, "T", 1, 2)
+            except Exception:
+                pass
     import struct
     candidates = []
     for i in range(4, len(data) - 3, 4):
         raw = struct.unpack_from("<I", data, i)[0]
-        # Thumb vectors usually carry LSB=1.
         target = raw & ~1
         if raw == 0:
             continue
         if start_ea <= target < end_ea:
             candidates.append(target)
         else:
-            # Base-normalized fallback: derive likely image base from high 16 bits.
             base = raw & 0xFFFF0000
             off = target - base
             if 0 <= off < (end_ea - start_ea):
@@ -610,7 +624,17 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
             if idaapi.get_func(ea):
                 seeded += 1
                 continue
-            idc.create_insn(ea)
+            # Use ida_ua.create_insn first (IDA 9.x), fall back to idc
+            created = 0
+            try:
+                import ida_ua
+                created = ida_ua.create_insn(ea)
+            except Exception:
+                pass
+            if created == 0:
+                created = idc.create_insn(ea)
+            if created == 0:
+                continue
             if ida_funcs.add_func(ea):
                 seeded += 1
         except Exception:

@@ -729,6 +729,11 @@ class TestResponseCompaction(unittest.TestCase):
         )
         self.assertEqual(s.get("action"), "stats")
         self.assertEqual(s.get("session_id"), "ABCD1234")
+        fw = self.server._normalize_tool_call_args(
+            "session",
+            {"action": "create", "binary_path": "fw.bin", "load_base": "0x120000"},
+        )
+        self.assertEqual(fw.get("baseaddr"), 0x120000)
         c = self.server._normalize_tool_call_args(
             "code",
             {"action": "assembly", "targets": "[0x401000,0x401010]", "style": "annotated"},

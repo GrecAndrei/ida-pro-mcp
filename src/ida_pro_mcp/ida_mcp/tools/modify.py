@@ -97,14 +97,17 @@ def _apply_memrl_feedback(suggestion_id: str, feedback_type: str) -> dict:
         return {"ok": False, "error": f"Unknown feedback type: {feedback_type}"}
 
     try:
-        from .memrl import MemRLBank
-    except ImportError:
+        from ida_pro_mcp.host.intelligence import PreferenceMemoryBank
+    except Exception:
         try:
-            from memrl import MemRLBank  # type: ignore[import-not-found]
+            from .memrl import MemRLBank as PreferenceMemoryBank
         except ImportError:
-            return {"ok": False, "error": "MemRLBank not available"}
+            try:
+                from memrl import MemRLBank as PreferenceMemoryBank  # type: ignore[import-not-found]
+            except ImportError:
+                return {"ok": False, "error": "MemRLBank not available"}
 
-    bank = MemRLBank()
+    bank = PreferenceMemoryBank()
     return bank.process_feedback(suggestion_id, reward)
 
 

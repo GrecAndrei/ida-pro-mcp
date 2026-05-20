@@ -8,6 +8,7 @@ import os
 import re
 from typing import Any, Optional
 
+from .config import _bounded_int
 from .errors import MCPError, make_error
 from .schemas import TOOL_ACTIONS
 from .symbol_db import SymbolDB
@@ -166,7 +167,7 @@ class ServerBlackboardMixin:
         """Host-side blackboard handler so it works without IDA runtime."""
         store = self._get_blackboard_store()
         if store is None:
-            return make_error(MCPError.IDA_ERROR, "BlackboardStore unavailable")
+            return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
         action = str(args.get("action") or "list").strip().lower()
         if action == "write":
             title = str(args.get("name") or args.get("title") or "").strip()
@@ -305,7 +306,7 @@ class ServerBlackboardMixin:
                 results = fe.frontier(limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200))
                 return {"ok": True, "frontier": results, "count": len(results)}
             except Exception as e:
-                return make_error(MCPError.IDA_ERROR, f"frontier unavailable: {e}")
+                return make_error(MCPError.IO_ERROR, f"frontier unavailable: {e}")
         if action == "add_evidence":
             entry_id = str(args.get("entry_id") or "").strip()
             evidence_type = str(args.get("evidence_type") or args.get("type") or "").strip()
@@ -331,7 +332,7 @@ class ServerBlackboardMixin:
             # Delegate to the tool module which owns the crawler singleton
             mod = type(self)._blackboard_module
             if mod is None:
-                return make_error(MCPError.IDA_ERROR, "BlackboardStore unavailable")
+                return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
             crawler = mod._BackgroundCrawler.instance()
             if action == "start_crawler":
                 crawler.start(notify_fn=self._send_notification)
@@ -405,4 +406,3 @@ class ServerBlackboardMixin:
             f"Unsupported blackboard action: '{action}'",
             hint="Valid actions: write, read, list, search, update, delete, clear, stats, merge, prune, contradict, resolve, next_target, start_crawler, stop_crawler, crawler_status, accept, reject, accept_proposal, reject_proposal, add_evidence, calibrate, campaign_summary, auto_tag_propagate",
         )
-

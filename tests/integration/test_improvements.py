@@ -555,12 +555,12 @@ def run_tests(client: MCPTestClient, binary_path: str) -> list[TestResult]:
     results.append(r)
     print(r)
     
-    # Test edit hub
-    r = TestResult("edit - hub routing to rename")
-    result = client.call_tool("edit", action="comment", addr=test_addr, value="Test via edit hub")
+    # Test modify (comment action)
+    r = TestResult("modify - comment action")
+    result = client.call_tool("modify", action="comment", addr=test_addr, value="Test via modify tool")
     if "_error" not in result:
         r.passed = result.get("ok", False)
-        r.message = "Comment set via hub"
+        r.message = "Comment set via modify"
         r.data = result
     else:
         # May fail due to readonly IDB
