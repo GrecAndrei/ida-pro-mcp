@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import struct
 import os
+import hashlib
 from typing import Dict, List, Tuple, Optional, Union
 import numpy as np
 
@@ -83,6 +84,16 @@ def _unpack_3bit(data: bytes, count: int) -> np.ndarray:
         values.append((b2 >> 2) & 7)
         values.append((b2 >> 5) & 7)
     return np.array(values[:count], dtype=np.uint8)
+
+
+def _stable_u32(text: str) -> int:
+    return int(hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:8], 16)
+
+
+def _turboquant_index_path(db_path: str) -> str:
+    if db_path.endswith(".turboquant.bin"):
+        return db_path.replace(".turboquant.bin", ".turboquant.index.db")
+    return db_path + ".index.db"
 
 
 class TurboQuantMemoryBank:
@@ -267,13 +278,13 @@ class FunctionEmbeddingEngine:
 
         if instruction_mix:
             for mnem, count in instruction_mix.items():
-                h = hash(mnem) & 0xFFFFFFFF
+                h = _stable_u32(mnem)
                 idx = h % self.dim
                 vec[idx] += math.sqrt(count) * (1.0 if (h & 1) else -1.0)
 
         if apis:
             for api in apis:
-                h = hash(api) & 0xFFFFFFFF
+                h = _stable_u32(api)
                 for offset in range(4):
                     idx = (h + self._api_seeds[offset % self.dim]) % self.dim
                     weight = ((h >> (offset * 8)) & 0xFF) / 128.0 - 1.0
@@ -281,7 +292,7 @@ class FunctionEmbeddingEngine:
 
         if strings:
             for s in strings:
-                h = hash(s) & 0xFFFFFFFF
+                h = _stable_u32(s)
                 for offset in range(2):
                     idx = (h + self._string_seeds[offset % self.dim]) % self.dim
                     weight = ((h >> (offset * 8 + 16)) & 0xFF) / 128.0 - 1.0
@@ -589,23 +600,35 @@ def turboquant(
             except Exception:
                 db_path = "unknown.turboquant.bin"
 
+    index_path = _turboquant_index_path(db_path)
+
+    def _load_index():
+        try:
+            from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+        except Exception:
+            from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex  # type: ignore
+        return FunctionEmbeddingIndex(index_path, BgeCodeEmbedder())
+
     if action == "delete":
-        if os.path.exists(db_path):
-            os.remove(db_path)
-            return {"ok": True, "deleted": db_path}
-        return {"ok": False, "error": "Bank not found", "path": db_path}
+        removed = False
+        for path in (db_path, index_path):
+            if os.path.exists(path):
+                os.remove(path)
+                removed = True
+        if removed:
+            return {"ok": True, "deleted": index_path if os.path.exists(index_path) is False else db_path}
+        return {"ok": False, "error": "Bank not found", "path": index_path}
 
     if action == "stats":
-        if not os.path.exists(db_path):
-            return {"ok": True, "total_vectors": 0, "compression_ratio": 0.0, "memory_bytes": 0}
-        bank = TurboQuantV2(dim=4096)
-        bank.load(db_path)
+        if not os.path.exists(index_path):
+            return {"ok": True, "total_vectors": 0, "compression_ratio": 1.0, "memory_bytes": 0}
+        bank = _load_index()
         return {
             "ok": True,
-            "total_vectors": len(bank._quantized),
-            "compression_ratio": round(bank.compression_ratio(), 4),
-            "memory_bytes": bank.compressed_bytes(),
-            "uncompressed_bytes": bank.uncompressed_bytes(),
+            "total_vectors": bank.size,
+            "compression_ratio": 1.0,
+            "memory_bytes": bank.size * 1536 * 4,
+            "backend": "intelligence",
         }
 
     if action == "ingest":
@@ -676,7 +699,7 @@ def turboquant(
         conn.close()
 
         engine = FunctionEmbeddingEngine(dim=4096)
-        bank = TurboQuantV2(dim=4096)
+        bank = _load_index()
 
         for row in rows:
             ea, name = row[0], row[1]
@@ -694,40 +717,51 @@ def turboquant(
                 apis=apis_by_ea.get(ea),
                 strings=strings_by_ea.get(ea),
             )
-            key = name or hex(ea)
-            bank.ingest(key, vec)
+            key = hex(ea) if isinstance(ea, int) else str(ea)
+            bank.index(key, name or key, " ".join([
+                name or "",
+                " ".join(apis_by_ea.get(ea) or []),
+                " ".join(strings_by_ea.get(ea) or []),
+            ]))
 
-        bank.save(db_path)
         return {
             "ok": True,
             "ingested": len(rows),
-            "compression_ratio": round(bank.compression_ratio(), 4),
-            "memory_bytes": bank.compressed_bytes(),
-            "path": db_path,
+            "compression_ratio": 1.0,
+            "memory_bytes": bank.size * 1536 * 4,
+            "path": index_path,
         }
 
     if action == "query":
-        if not os.path.exists(db_path):
-            return {"ok": False, "error": f"TurboQuant bank not found at {db_path}. Run turboquant(action='ingest') first."}
+        if not os.path.exists(index_path):
+            return {"ok": False, "error": f"TurboQuant bank not found at {index_path}. Run turboquant(action='ingest') first."}
         if query_key is None:
             return {"ok": False, "error": "query_key required for action='query'"}
 
-        bank = TurboQuantV2(dim=4096)
-        bank.load(db_path)
-
-        # Get query vector from bank
-        if query_key not in bank._originals:
-            found = False
-            for k in bank._originals:
-                if query_key.lower() in k.lower():
-                    query_key = k
-                    found = True
+        bank = _load_index()
+        query_vec = bank._cache.get(query_key)
+        if query_vec is None:
+            lowered = query_key.lower()
+            for ea, vec in bank._cache.items():
+                if lowered in ea.lower():
+                    query_vec = vec
+                    query_key = ea
                     break
-            if not found:
-                return {"ok": False, "error": f"Query key '{query_key}' not found in bank."}
-
-        query_vec = bank._originals[query_key]
-        results = bank.similarity(query_vec, top_k=top_k)
+            if query_vec is None:
+                try:
+                    with sqlite3.connect(index_path) as conn:
+                        row = conn.execute(
+                            "SELECT ea FROM func_embeddings WHERE lower(name) LIKE ? LIMIT 1",
+                            (f"%{lowered}%",),
+                        ).fetchone()
+                    if row:
+                        query_key = row[0]
+                        query_vec = bank._cache.get(query_key)
+                except Exception:
+                    pass
+        if query_vec is None:
+            return {"ok": False, "error": f"Query key '{query_key}' not found in bank."}
+        results = bank.similar_vec(query_vec, top_k=top_k)
         return {
             "ok": True,
             "query": query_key,

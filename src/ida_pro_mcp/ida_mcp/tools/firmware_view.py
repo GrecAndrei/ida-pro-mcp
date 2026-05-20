@@ -1482,21 +1482,41 @@ def firmware_view(
                     return min_ea + off, base
                 return None, None
 
-            # Cortex-M: read up to 256 entries from min_ea
-            if "arm" in proc or not proc:
+            # Detect raw binary (IDA defaults to metapc/x86 when format unknown)
+            filetype_id = _inf_filetype_id() if hasattr(_inf_filetype_id, '__call__') else 0
+            try:
+                filetype_id = _inf_filetype_id()
+            except Exception:
+                filetype_id = 0
+            is_raw = filetype_id in (0, 2)  # 0=unknown, 2=IDP (raw)
+
+            # Cortex-M: read up to 256 entries from min_ea.
+            # Also try when proc is metapc (IDA default for raw binaries) since
+            # raw ARM firmware gets loaded as x86 until processor is set.
+            if "arm" in proc or not proc or (is_raw and "metapc" in proc):
                 chunk = ida_bytes.get_bytes(min_ea, min(256 * 4, binary_size)) or b""
                 if len(chunk) >= 8:
                     sp_val = _struct.unpack_from("<I", chunk, 0)[0]
-                    # Cortex-M RAM spans 0x20000000-0x40080000 (SRAM/CCM/DTCM/ITCM).
-                    sp_in_ram = 0x20000000 <= sp_val <= 0x40080000
+                    # SP plausibility: non-zero, 4-byte aligned, not all-ones.
+                    # Covers standard Cortex-M SRAM (0x20000000+), vendor SRAM
+                    # (e.g. AIC8800D80 at 0x1a0000), and ITCM/CCM ranges.
+                    sp_plausible = (
+                        sp_val != 0
+                        and sp_val != 0xFFFFFFFF
+                        and (sp_val & 3) == 0
+                        and (
+                            0x00100000 <= sp_val <= 0x40080000  # standard + vendor SRAM
+                            or 0x60000000 <= sp_val <= 0xA0000000  # external RAM
+                        )
+                    )
                     thumb_like = 0
                     for i in range(1, min(32, len(chunk) // 4)):
                         vv = _struct.unpack_from("<I", chunk, i * 4)[0]
                         if vv & 1:
                             thumb_like += 1
-                    # Require both a valid SP AND dense Thumb bits; thumb-only threshold
-                    # raised to 16/32 to avoid false-positives on arbitrary LE data.
-                    looks_like_arm_ivt = sp_in_ram and thumb_like >= 4 or (not sp_in_ram and thumb_like >= 16)
+                    # With a plausible SP, require >=4 Thumb-bit entries (strong signal).
+                    # Without a recognised SP, require >=16 to avoid false positives.
+                    looks_like_arm_ivt = (sp_plausible and thumb_like >= 4) or (not sp_plausible and thumb_like >= 16)
 
                     if looks_like_arm_ivt:
                         arch_hint = "ARM Cortex-M (IVT at binary start)"

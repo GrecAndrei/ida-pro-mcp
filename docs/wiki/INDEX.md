@@ -154,8 +154,6 @@ Auto-generated from wiki file structure.
 
 - [types](tools/types.md)
 
-- [vuln_scan](tools/vuln_scan.md)
-
 - [wiki](tools/wiki.md)
 
 - [workflow](tools/workflow.md)

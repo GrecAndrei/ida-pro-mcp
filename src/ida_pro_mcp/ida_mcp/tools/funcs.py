@@ -362,11 +362,9 @@ def _funcs_impl(
                 if fn and flags:
                     fn.flags |= flags
                     ida_funcs.update_func(fn)
-                try:
-                    import ida_auto
-                    ida_auto.auto_wait()
-                except (ImportError, AttributeError):
-                    pass
+                # Do NOT call auto_wait() — it blocks IDA's main thread inside
+                # the socket server loop and can crash IDA. Let the idle loop
+                # handle follow-up analysis.
                 fn = ida_funcs.get_func(ea)
                 result = {
                     "ok": True,

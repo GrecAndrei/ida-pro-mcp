@@ -19,7 +19,6 @@ Load only one tool doc at a time to keep context small.
 ## Resolution Rules
 - Default doc filename: `ida-tool-<tool>.md`
 - Example: tool `search` -> `.agents/tool-docs/ida-tool-search.md`
-- Alias: `xfer_analysis` -> `ida-tool-xfer_analysis.md`
 - If unsure, list docs under `.agents/tool-docs/` and pick exact match.
 
 ## Available Tool Count

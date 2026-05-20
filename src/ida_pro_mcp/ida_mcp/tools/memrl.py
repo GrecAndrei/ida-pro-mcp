@@ -858,7 +858,11 @@ def emit_memrl_suggestion(
     db_path : str, optional
         Override MemRL database path.
     """
-    bank = MemRLBank(db_path=db_path)
+    try:
+        from ida_pro_mcp.host.intelligence import PreferenceMemoryBank
+        bank = PreferenceMemoryBank(db_path=db_path)
+    except Exception:
+        bank = MemRLBank(db_path=db_path)
     intent_key = f"{source_tool}:{source_action}:{addr}"
     experience_key = f"{source_tool}:{source_action}:{addr}:{value[:64]}"
     return bank.ingest_suggestion(
@@ -986,7 +990,11 @@ def memrl(
     TD(0) update:
         Q_new = Q_old + alpha * (reward - Q_old)
     """
-    bank = MemRLBank(db_path=db_path)
+    try:
+        from ida_pro_mcp.host.intelligence import PreferenceMemoryBank
+        bank = PreferenceMemoryBank(db_path=db_path)
+    except Exception:
+        bank = MemRLBank(db_path=db_path)
 
     if action == "record":
         if not intent_key or not experience_key:

@@ -380,7 +380,7 @@ def _handle_feature_expansion_action(
                 "search.semantic",
             ]
         elif qtype == "vulnerability_triage":
-            order = ["search.vulnerable", "vuln_scan.dangerous_flow", "code.decompile", "code.decomp_dataflow"]
+            order = ["search.vulnerable", "threat_hunt.vuln", "code.decompile", "code.decomp_dataflow"]
         elif qtype == "threat_hunting":
             order = ["string_ops.suspicious", "imports_deep.summary", "trace_analysis.anti_analysis_detect", "search.find"]
         else:

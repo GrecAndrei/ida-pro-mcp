@@ -290,7 +290,7 @@ Additional specialized capabilities remain accessible via hub tools + wiki docs.
 - Data access: `idb`, `data`, `code`, `search`, `types`, `memory`, `query`
 - Editing: `modify`, `funcs`, `segments`, `bulk`, `annotation`
 - Analysis: `cfg_analysis`, `xref_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `compare`, `summarize`, `agent`
-- Security RE: `threat_hunt`, `vuln_scan`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `yara_hunt`
+- Security RE: `threat_hunt`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `yara_hunt`
 - Debug/trace: `debug`, `trace`, `trace_analysis`, `coverage`
 - Structural: `ctree`, `microcode`, `graph`, `imports_deep`, `symbols`, `patterns`
 - Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `llm_helpers`, `binary_info`, `string_ops`

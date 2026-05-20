@@ -57,7 +57,7 @@ with open("{result_file}", "w") as f:
 idc.qexit(0)
 ''')
         proc = subprocess.run(
-            [IDAT, "-A", f"-S{script}", TEST_BINARY],
+            [IDAT, "-A", "-c", f"-S{script}", TEST_BINARY],
             capture_output=True,
             text=True,
             timeout=30,
@@ -90,7 +90,7 @@ class IDARunner:
         self.binary = binary
         self.project_root = PROJECT_ROOT
 
-    def run_script(self, script_body: str, timeout: int = 120) -> dict:
+    def run_script(self, script_body: str, timeout: int = 120, processor: str = "") -> dict:
         """
         Write script_body to a temp file, launch idat -B -S<script>,
         and parse the JSON result written to a known temp file.
@@ -128,8 +128,12 @@ idc.qexit(0)
             f.write(wrapped)
 
         env = {**os.environ, "TVHEADLESS": "1", "IDA_NO_HISTORY": "1"}
-        # Use -A for autonomous mode (auto-analysis, execute script, then quit)
-        cmd = [self.idat, "-A", f"-S{script_file}", self.binary]
+        # -A: autonomous, -c: always create a new IDB (don't fail if no existing .i64)
+        # -p<proc>: set processor type (e.g. -parm for ARM)
+        cmd = [self.idat, "-A", "-c", f"-S{script_file}"]
+        if processor:
+            cmd.append(f"-p{processor}")
+        cmd.append(self.binary)
 
         start = time.time()
         try:

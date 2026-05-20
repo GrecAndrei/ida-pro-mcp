@@ -75,6 +75,20 @@ def normalize_arch_options(options: Dict[str, Any]) -> Tuple[Dict[str, Any], Dic
         out["value"] = out.get("loader_options")
         meta["normalizations"].append("loader_options->value")
 
+    for key in ("baseaddr", "start_ea", "min_ea", "max_ea"):
+        if out.get(key) is None:
+            continue
+        raw = out.get(key)
+        if isinstance(raw, int):
+            continue
+        try:
+            coerced = int(str(raw), 0)
+        except Exception:
+            continue
+        if coerced != raw:
+            out[key] = coerced
+            meta["normalizations"].append(f"{key}:coerced=int")
+
     return out, meta
 
 
@@ -83,6 +97,7 @@ class ArchInference:
     processor: str | None = None
     bitness: int | None = None
     endian: str | None = None
+    loader: str | None = None
     file_kind: str = "unknown"
     confidence: float = 0.0
     reason: str = ""
@@ -102,6 +117,8 @@ class ArchInference:
             "reason": self.reason,
             "candidates": self.candidates,
         }
+        if self.loader is not None:
+            d["loader"] = self.loader
         if self.load_base is not None:
             d["load_base"] = self.load_base
         if self.chip_family is not None:
@@ -311,6 +328,7 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
         inf.processor = chip.get("processor")
         inf.bitness = chip.get("bitness")
         inf.endian = chip.get("endian")
+        inf.loader = "bin"
         inf.confidence = float(chip.get("confidence") or 0.95)
         inf.reason = f"chip profile match: {chip.get('chip_family', 'unknown')}"
         inf.chip_family = str(chip.get("chip_family") or "unknown")
@@ -327,6 +345,7 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
             inf.processor = "arm"
             inf.bitness = 32
             inf.endian = "little"
+            inf.loader = "bin"
             inf.confidence = 0.92
             inf.reason = "raw Cortex-M vector table heuristic"
             rv_even = rv_le & ~1
