@@ -29,7 +29,8 @@ script_path = os.path.abspath(__file__)
 _src_root = os.path.dirname(os.path.dirname(script_path))
 _pkg_root = os.path.join(_src_root, "ida_pro_mcp")
 _mcp_root = os.path.join(_pkg_root, "ida_mcp")
-for p in [_src_root, _pkg_root, _mcp_root]:
+_tools_root = os.path.join(_mcp_root, "tools")
+for p in [_src_root, _pkg_root, _mcp_root, _tools_root]:
     if p not in sys.path: sys.path.insert(0, p)
 
 os.environ["IDA_MCP_BYPASS_SYNC"] = "1"
@@ -90,12 +91,35 @@ def _canonical_tool_name(name):
 
 def _try_load_single_tool(name):
     import importlib
+    import importlib.util
 
     canonical = _canonical_tool_name(name)
     if canonical in TOOLS:
         return TOOLS[canonical], canonical, None
+    tools_dir = os.path.join(_mcp_root, "tools")
+    flat_path = os.path.join(tools_dir, f"{canonical}.py")
+    package_init = os.path.join(tools_dir, canonical, "__init__.py")
+    module_path = None
+    module_kwargs = {}
+    if os.path.exists(flat_path):
+        module_path = flat_path
+    elif os.path.exists(package_init):
+        try:
+            module = importlib.import_module(f"ida_mcp.tools.{canonical}")
+            if hasattr(module, canonical):
+                tool_func = getattr(module, canonical)
+                TOOLS[canonical] = tool_func
+                return tool_func, canonical, None
+            return None, canonical, f"module 'ida_mcp.tools.{canonical}' missing callable '{canonical}'"
+        except Exception as e:
+            return None, canonical, str(e)
+    else:
+        return None, canonical, f"no tool file or package: {canonical}.py"
     try:
-        module = importlib.import_module(f"ida_mcp.tools.{canonical}")
+        spec = importlib.util.spec_from_file_location(canonical, module_path, **module_kwargs)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[canonical] = module
+        spec.loader.exec_module(module)
         if hasattr(module, canonical):
             tool_func = getattr(module, canonical)
             TOOLS[canonical] = tool_func
@@ -109,12 +133,21 @@ def load_tools():
     global TOOLS
     try:
         tools_dir = os.path.join(_mcp_root, "tools")
+        # tools_dir is on sys.path directly; use flat importlib to avoid
+        # triggering ida_mcp/__init__.py → rpc.py → zeromcp which is not
+        # available in the IDA process and would crash every tool load.
         import importlib
+        import importlib.util
         for f in os.listdir(tools_dir):
             if f.endswith(".py") and f != "__init__.py":
                 name = f[:-3]
                 try:
-                    module = importlib.import_module(f"ida_mcp.tools.{name}")
+                    spec = importlib.util.spec_from_file_location(
+                        name, os.path.join(tools_dir, f)
+                    )
+                    module = importlib.util.module_from_spec(spec)
+                    sys.modules[name] = module          # flat name so intra-tool imports work
+                    spec.loader.exec_module(module)
                     if hasattr(module, name): TOOLS[name] = getattr(module, name)
                 except Exception as e: log_ev(f"Load error {name}: {e}")
         # Register aliases only if target exists
@@ -434,6 +467,52 @@ def _apply_pre_analysis_options():
                 warnings_list.append("set_loader_options unavailable")
         except Exception as e:
             warnings_list.append(f"loader_options: {e}")
+
+    # Raw binary / firmware fix: set segment class to CODE and fix bitness.
+    # IDA's raw binary loader creates BSS/DATA segments by default which
+    # block instruction creation. Ensure the first segment is CODE and 32-bit
+    # when an ARM or firmware processor is loaded.
+    try:
+        proc_lower = str(processor or "").lower()
+        is_firmware_arch = proc_lower in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8")
+        seg = idaapi.getseg(idaapi.inf_get_min_ea())
+        if seg and is_firmware_arch:
+            # Fix segment class: ensure CODE not BSS/DATA
+            try:
+                cur_class = ida_segment.get_segm_class(seg)
+                if cur_class != "CODE":
+                    ida_segment.set_segm_class(seg, "CODE")
+                    changed.append(f"segment_class={cur_class}→CODE")
+            except Exception:
+                pass
+            # Fix segment bitness: force 32-bit for firmware architectures
+            if bitness == 32:
+                try:
+                    if hasattr(seg, "bitness") and seg.bitness != 1:
+                        seg.bitness = 1
+                        ida_segment.update_segm(seg)
+                        changed.append("segment_bitness=32")
+                except Exception:
+                    try:
+                        ida_segment.set_segm_addressing(seg, 1)
+                        changed.append("segment_addressing=32bit")
+                    except Exception:
+                        pass
+            # ARM Cortex-M Thumb: set T=1 globally
+            if "arm" in proc_lower:
+                try:
+                    sr_auto = getattr(idc, "SR_auto", 2)
+                    idc.split_sreg_range(seg.start_ea, "T", 1, sr_auto)
+                    changed.append("T=1 set for ARM Thumb")
+                except Exception:
+                    try:
+                        import ida_segregs
+                        ida_segregs.split_sreg_range(seg.start_ea, "T", 1, 2)
+                        changed.append("T=1 via ida_segregs")
+                    except Exception:
+                        pass
+    except Exception:
+        pass
 
     if changed:
         log_ev(f"Pre-analysis options applied: {', '.join(changed)}")
