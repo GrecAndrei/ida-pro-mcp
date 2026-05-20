@@ -1,0 +1,1629 @@
+#!/usr/bin/env python3
+"""Runtime/session orchestration helpers for IDAMCPServer."""
+
+from __future__ import annotations
+
+import atexit
+import glob
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+from .audit import AuditLogger
+from .config import (
+    _RUNTIME_LEASE_RE,
+    _bounded_int,
+    _coerce_bool,
+    _env_bool,
+    _is_writable_dir,
+    _normalize_session_id,
+    _parse_str_list,
+    _select_runtime_dir,
+    PROCESS_TERMINATION_TIMEOUT_SECONDS,
+    RUNTIME_LEASE_HEARTBEAT_SECONDS,
+    RUNTIME_LEASE_TTL,
+    log_rpc,
+)
+from .context_density import ContextDensityOptimizer
+from .errors import MCPError, make_error
+from .insight_index import InsightIndex
+from .intelligence import get_assembler
+from .patterns import GlobalFactsDatabase
+from .rate_limit import RateLimiter
+from .session import BookmarkManager, Session, SessionManager
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+class ServerRuntimeMixin:
+    def _runtime_lease_path(self, sid: str) -> str:
+            return os.path.join(self._runtime_lease_dir, f"SID_{sid}.lease.json")
+
+    def _write_runtime_lease_record(self, path: str, lease: dict) -> None:
+            tmp = path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(lease, f, indent=2)
+                os.replace(tmp, path)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    def _write_runtime_lease(self, sid: str, runtime: dict) -> None:
+            proc = runtime.get("process")
+            if not proc:
+                return
+            lease = {
+                "session_id": sid,
+                "pid": int(proc.pid),
+                "port": int(runtime.get("port") or 0),
+                "idat_exe": str(self.idat_exe or ""),
+                "updated_at": time.time(),
+            }
+            path = self._runtime_lease_path(sid)
+            self._write_runtime_lease_record(path, lease)
+
+    def _remove_runtime_lease(self, sid: str) -> None:
+            try:
+                os.remove(self._runtime_lease_path(sid))
+            except OSError:
+                pass
+
+    def _kill_stale_pid(self, pid: int) -> bool:
+            """Best-effort terminate a stale PID.
+
+            Returns True when PID is already absent or was terminated.
+            Returns False when the process state cannot be verified or terminated.
+            """
+            if pid <= 0:
+                return False
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+            deadline = time.time() + PROCESS_TERMINATION_TIMEOUT_SECONDS
+            while time.time() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return True
+                except Exception:
+                    return False
+                time.sleep(0.1)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+            try:
+                os.kill(pid, 0)
+                return False
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+
+    def _is_expected_ida_process(self, pid: int, lease: dict) -> bool:
+            if pid <= 0:
+                return False
+            if sys.platform != "linux":
+                return True
+            expected_path = str(
+                lease.get("idat_exe") or getattr(self, "idat_exe", "") or ""
+            ).strip()
+            proc_exe = f"/proc/{pid}/exe"
+            proc_cmdline = f"/proc/{pid}/cmdline"
+            expected_names = {n.lower() for n in self._ida_binary_names()}
+            if expected_path:
+                expected_path = os.path.realpath(os.path.expanduser(expected_path))
+                expected_names.add(os.path.basename(expected_path).lower())
+            try:
+                actual_exe = os.path.realpath(proc_exe)
+            except Exception:
+                actual_exe = ""
+            if actual_exe:
+                base = os.path.basename(actual_exe).lower()
+                if base in expected_names:
+                    return True
+                if expected_path:
+                    try:
+                        if (
+                            os.path.exists(expected_path)
+                            and os.path.exists(actual_exe)
+                            and os.path.samefile(expected_path, actual_exe)
+                        ):
+                            return True
+                    except Exception:
+                        pass
+            try:
+                with open(proc_cmdline, "rb") as f:
+                    cmdline = f.read().decode("utf-8", errors="ignore")
+            except Exception:
+                return False
+            parts = [p for p in cmdline.split("\x00") if p]
+            if not parts:
+                return False
+            first = os.path.basename(parts[0]).lower()
+            if first in expected_names:
+                return True
+            for part in parts:
+                if os.path.basename(part).lower() in expected_names:
+                    return True
+            return False
+
+    def _cleanup_stale_runtime_leases(self) -> None:
+            try:
+                entries = os.listdir(self._runtime_lease_dir)
+            except Exception:
+                return
+            now = time.time()
+            for name in entries:
+                m = _RUNTIME_LEASE_RE.fullmatch(name)
+                if not m:
+                    continue
+                path = os.path.join(self._runtime_lease_dir, name)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        lease = json.load(f)
+                except Exception:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    continue
+                sid = _normalize_session_id(lease.get("session_id"))
+                sid_from_name = m.group(1)
+                if not sid or sid != sid_from_name:
+                    # Malformed/mismatched lease metadata: drop it and do not signal any PID.
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    continue
+                try:
+                    pid = int(lease.get("pid") or 0)
+                except Exception:
+                    pid = 0
+                try:
+                    updated = float(lease.get("updated_at") or 0.0)
+                except Exception:
+                    updated = 0.0
+                with self._runtime_lock:
+                    tracked = bool(sid and sid in self.session_runtimes)
+                if tracked:
+                    continue
+                expired = (now - updated) > RUNTIME_LEASE_TTL
+                with self._runtime_lock:
+                    tracked_after = bool(sid and sid in self.session_runtimes)
+                if tracked_after:
+                    continue
+                if not expired:
+                    continue
+                if pid <= 0:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    continue
+                if not self._is_expected_ida_process(pid, lease):
+                    log_rpc(f"Skipping stale lease cleanup for non-IDA pid={pid} sid={sid}")
+                    continue
+                killed = self._kill_stale_pid(pid)
+                if killed:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                else:
+                    # Keep lease for retry, but back off immediate repeated kill attempts.
+                    lease["updated_at"] = now
+                    lease["last_error"] = "terminate_failed"
+                    self._write_runtime_lease_record(path, lease)
+
+    def _adopt_or_cleanup_stale_runtime_leases(self) -> None:
+            # Backward-compatible alias; method now only performs cleanup.
+            self._cleanup_stale_runtime_leases()
+
+    def _lease_heartbeat_loop(self) -> None:
+            while True:
+                if self._lease_thread_stop.wait(RUNTIME_LEASE_HEARTBEAT_SECONDS):
+                    break
+                if self._shutdown_requested:
+                    break
+                with self._runtime_lock:
+                    runtime_items = list(self.session_runtimes.items())
+                for sid, runtime in runtime_items:
+                    if self._shutdown_requested:
+                        break
+                    with self._runtime_lock:
+                        if self.session_runtimes.get(sid) is not runtime:
+                            continue
+                    proc = runtime.get("process")
+                    if not proc:
+                        continue
+                    if proc.poll() is None:
+                        self._write_runtime_lease(sid, runtime)
+                    else:
+                        self._remove_runtime_lease(sid)
+
+    def _start_runtime_lease_heartbeat(self) -> None:
+            if self._lease_thread and self._lease_thread.is_alive():
+                return
+            self._lease_thread = threading.Thread(
+                target=self._lease_heartbeat_loop,
+                name="ida-mcp-runtime-lease-heartbeat",
+                daemon=True,
+            )
+            self._lease_thread.start()
+
+    def _stop_runtime_lease_heartbeat(self) -> None:
+            self._lease_thread_stop.set()
+            t = self._lease_thread
+            if t and t.is_alive():
+                t.join(timeout=1.0)
+
+    def _register_lifecycle_handlers(self) -> None:
+            cls = self.__class__
+            if not cls._atexit_registered:
+                atexit.register(self.shutdown)
+                cls._atexit_registered = True
+            for sig_name in ("SIGINT", "SIGTERM"):
+                sig = getattr(signal, sig_name, None)
+                if sig is None:
+                    continue
+                try:
+                    signal.signal(sig, self._handle_termination_signal)
+                except Exception as e:
+                    log_rpc(f"Failed to register handler for {sig_name}: {e}")
+
+    def _handle_termination_signal(self, signum, frame):
+            self._shutdown_requested = True
+            self._lease_thread_stop.set()
+
+    def shutdown(self) -> None:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            self._shutdown_requested = True
+            self._stop_runtime_lease_heartbeat()
+            self._cleanup_all_runtimes()
+            # Stop all analysis engines
+            for engine in list(getattr(self, "_analysis_engines", {}).values()):
+                try:
+                    engine.stop()
+                except Exception:
+                    pass
+            # Stop usage intelligence
+            if getattr(self, "_usage_intel", None):
+                try:
+                    self._usage_intel.stop()
+                except Exception:
+                    pass
+            # Persist VOERA memory tiers
+            try:
+                if hasattr(self, "_insight_index"):
+                    self._insight_index.save()
+            except Exception as e:
+                log_rpc(f"Failed to save insight index: {e}")
+            try:
+                if hasattr(self, "_global_facts"):
+                    self._global_facts.close()
+            except Exception as e:
+                log_rpc(f"Failed to close global facts DB: {e}")
+            try:
+                if hasattr(self, "assembler") and self.assembler is not None:
+                    self.assembler.stop()
+            except Exception as e:
+                log_rpc(f"Failed to stop intelligence embedder: {e}")
+
+    def _ida_binary_names(self) -> List[str]:
+            if sys.platform == "win32":
+                return ["idat64.exe", "idat.exe", "ida64.exe", "ida.exe"]
+            return ["idat64", "idat", "ida64", "ida"]
+
+    def _is_executable_file(self, path: str) -> bool:
+            if not path:
+                return False
+            if not os.path.isfile(path):
+                return False
+            if os.name == "nt":
+                return True
+            return os.access(path, os.X_OK)
+
+    def _detect_ida_dir(self):
+            for env_name in ("IDADIR", "IDA_DIR"):
+                env_dir = os.environ.get(env_name)
+                if not env_dir:
+                    continue
+                env_dir = os.path.realpath(os.path.expanduser(env_dir))
+                if os.path.isdir(env_dir):
+                    return env_dir
+                if self._is_executable_file(env_dir):
+                    return os.path.dirname(env_dir)
+
+            env_idat = os.environ.get("IDA_MCP_IDAT")
+            if env_idat:
+                env_idat = os.path.realpath(os.path.expanduser(env_idat))
+                if self._is_executable_file(env_idat):
+                    return os.path.dirname(env_idat)
+
+            cands: List[str] = []
+            if sys.platform == "win32":
+                cands.extend(
+                    [
+                        r"C:\Program Files\IDA Professional 9.2",
+                        r"C:\Program Files\IDA Pro 9.2",
+                        r"C:\Program Files\IDA Professional 9.1",
+                        r"C:\Program Files\IDA Pro 9.1",
+                        r"C:\Program Files\IDA Professional 9.0",
+                        r"C:\Program Files\IDA Pro 9.0",
+                        r"C:\Program Files\IDA Professional",
+                        r"C:\Program Files\IDA Pro",
+                    ]
+                )
+            elif sys.platform == "linux":
+                home = str(Path.home())
+                patterns = [
+                    "/opt/ida*",
+                    "/opt/IDA*",
+                    "/opt/idapro*",
+                    "/opt/IDAPro*",
+                    "/usr/local/ida*",
+                    "/usr/local/IDA*",
+                    "/usr/local/idapro*",
+                    "/usr/local/IDAPro*",
+                    os.path.join(home, "ida*"),
+                    os.path.join(home, "IDA*"),
+                    os.path.join(home, "idapro*"),
+                    os.path.join(home, "IDAPro*"),
+                ]
+                for pattern in patterns:
+                    cands.extend(glob.glob(pattern))
+            else:
+                # macOS and other Unix-like platforms
+                cands.extend(
+                    [
+                        "/Applications/IDA Professional 9.2.app/Contents/MacOS",
+                        "/Applications/IDA Pro 9.2.app/Contents/MacOS",
+                        "/Applications/IDA Professional.app/Contents/MacOS",
+                        "/Applications/IDA Pro.app/Contents/MacOS",
+                    ]
+                )
+
+            binary_names = self._ida_binary_names()
+            for c in cands:
+                c = os.path.realpath(os.path.expanduser(c))
+                if not os.path.isdir(c):
+                    continue
+                for name in binary_names:
+                    if self._is_executable_file(os.path.join(c, name)):
+                        return c
+
+            for name in binary_names:
+                resolved = shutil.which(name)
+                if resolved:
+                    return os.path.dirname(os.path.realpath(resolved))
+            return ""
+
+    def _find_idat(self):
+            env_idat = os.environ.get("IDA_MCP_IDAT")
+            if env_idat:
+                env_idat = os.path.realpath(os.path.expanduser(env_idat))
+                if self._is_executable_file(env_idat):
+                    return env_idat
+
+            if not self.ida_dir:
+                self.ida_dir = self._detect_ida_dir()
+
+            for name in self._ida_binary_names():
+                if self.ida_dir:
+                    p = os.path.join(self.ida_dir, name)
+                    if self._is_executable_file(p):
+                        return p
+                resolved = shutil.which(name)
+                if resolved and self._is_executable_file(resolved):
+                    return os.path.realpath(resolved)
+
+            if not self.ida_dir:
+                return ""
+            return ""
+
+    def _tail_text_file(self, path: Optional[str], tail_lines: int = 40) -> str:
+            if not path:
+                return ""
+            if not os.path.exists(path):
+                return ""
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()
+                return "".join(lines[-max(1, int(tail_lines)) :]).strip()
+            except Exception:
+                return ""
+
+    def _get_ida_diagnostics(
+            self, stdout_log=None, stderr_log=None, tail_lines: int = 40
+        ):
+            out_log = stdout_log or os.path.join(self.cache_dir, "ida_stdout.log")
+            err_log = stderr_log
+            if err_log is None and out_log:
+                # Best effort: derive sibling stderr path for per-session logs.
+                err_guess = out_log.replace("ida_stdout_", "ida_stderr_")
+                if err_guess != out_log:
+                    err_log = err_guess
+            out_tail = self._tail_text_file(out_log, tail_lines=tail_lines)
+            err_tail = self._tail_text_file(err_log, tail_lines=tail_lines)
+            if not out_tail and not err_tail:
+                return "No log available."
+            blocks = []
+            if out_tail:
+                blocks.append(f"[stdout]\n{out_tail}")
+            if err_tail:
+                blocks.append(f"[stderr]\n{err_tail}")
+            return "\n\n".join(blocks)
+
+    def _extract_library_init_failure(self, diag: str) -> Optional[dict]:
+            if not isinstance(diag, str) or not diag.strip():
+                return None
+            low = diag.lower()
+            has_phrase = ("library init failed" in low) or (
+                "library initialization failed" in low
+            )
+            err_code = None
+            m_err = re.search(r"\berr(?:or)?\s*[:=]?\s*(\d+)\b", low)
+            if m_err:
+                try:
+                    err_code = int(m_err.group(1))
+                except Exception:
+                    err_code = None
+            has_err2 = bool(re.search(r"\berr(?:or)?\s*[:=]?\s*2\b", low))
+            if not has_phrase and not has_err2:
+                return None
+
+            causes: List[str] = []
+            hints: List[str] = []
+            if (
+                "cannot open shared object file" in low
+                or "no such file or directory" in low
+                or "failed to load shared library" in low
+            ):
+                causes.append("Missing shared runtime library (loader error).")
+                hints.append(
+                    "Verify IDA runtime dependencies are installed and loadable (ldd on idat64)."
+                )
+            if "glibcxx" in low or "cxxabi" in low:
+                causes.append("C++ runtime ABI mismatch (libstdc++ / libc++ conflict).")
+                hints.append(
+                    "Unset conflicting LD_LIBRARY_PATH entries or use system-compatible libstdc++."
+                )
+            if "qt.qpa.plugin" in low or "xcb" in low or "qt platform plugin" in low:
+                causes.append("Qt platform/plugin initialization failure.")
+                hints.append(
+                    "Check Qt plugin paths and system GUI/runtime deps (e.g. xcb plugin packages)."
+                )
+            if (
+                "wrong elf class" in low
+                or "bad cpu type" in low
+                or "exec format error" in low
+            ):
+                causes.append("Binary/runtime architecture mismatch.")
+                hints.append(
+                    "Use the correct IDA binary for host architecture and compatible target runtime."
+                )
+            if "permission denied" in low:
+                causes.append(
+                    "Filesystem permission error while loading runtime components."
+                )
+                hints.append(
+                    "Fix file execute/read permissions on IDA installation and plugins."
+                )
+            if "plugin" in low and "failed" in low:
+                causes.append(
+                    "A plugin failed during startup and broke library initialization."
+                )
+                hints.append("Disable third-party plugins and retry startup.")
+            if "python" in low and ("init" in low or "module" in low):
+                causes.append("Embedded Python/runtime initialization mismatch.")
+                hints.append(
+                    "Ensure no conflicting PYTHONHOME/PYTHONPATH overrides are injected."
+                )
+            if not causes:
+                causes.append("Generic library initialization failure.")
+                hints.append("Inspect stdout/stderr tails for missing dependency details.")
+
+            return {
+                "detected": True,
+                "error_code": err_code,
+                "err2": bool(has_err2 or (err_code == 2)),
+                "causes": causes,
+                "recommendations": hints,
+            }
+
+    def _is_library_init_err2(self, diag: str) -> bool:
+            info = self._extract_library_init_failure(diag)
+            if not info:
+                return False
+            if info.get("error_code") == 2:
+                return True
+            if info.get("err2"):
+                return True
+            # Preserve previous behavior: phrase alone still triggers recovery path.
+            return bool(info.get("detected"))
+
+    def _normalize_ida_args(
+            self, ida_args: Optional[Union[str, List[str]]]
+        ) -> List[str]:
+            if ida_args is None:
+                return []
+            if isinstance(ida_args, str):
+                parts = shlex.split(ida_args)
+            elif isinstance(ida_args, list):
+                parts = []
+                for p in ida_args:
+                    if p is None:
+                        continue
+                    part = str(p)
+                    # Explicitly reject empty entries after normalization.
+                    if part == "":
+                        raise ValueError("ida_args cannot include empty entries")
+                    parts.append(part)
+            else:
+                raise ValueError("ida_args must be a string or list of strings")
+            cleaned = []
+            # Reserved for server-managed script/log/output IDB wiring.
+            forbidden_prefixes = ("-S", "-L", "-o")
+            for arg in parts:
+                if "\x00" in arg:
+                    raise ValueError("ida_args cannot include null bytes")
+                # Args are passed via subprocess list (no shell), so metacharacters aren't interpreted.
+                if any(
+                    (ord(ch) < 32 and ch not in ("\t", "\n", "\r")) or ch == "\x7f"
+                    for ch in arg
+                ):
+                    raise ValueError("ida_args cannot include control characters")
+                if any(arg.startswith(prefix) for prefix in forbidden_prefixes):
+                    raise ValueError(f"ida_args cannot include {arg} (reserved by server)")
+                if arg == "-A":
+                    log_rpc("Ignoring redundant -A flag in ida_args")
+                    continue
+                cleaned.append(arg)
+            return cleaned
+
+    @staticmethod
+    def _pop_first(mapping: dict, keys: List[str], default: Any = None) -> Any:
+            for key in keys:
+                if key in mapping:
+                    return mapping.pop(key)
+            return default
+
+    def _load_session_macros(self):
+            self._session_macros = {}
+            try:
+                with open(self._macro_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except FileNotFoundError:
+                return
+            except Exception:
+                return
+            if not isinstance(raw, dict):
+                return
+            for key, value in raw.items():
+                if not isinstance(key, str) or not isinstance(value, dict):
+                    continue
+                name = str(value.get("name") or key).strip()
+                data = value.get("data")
+                if not name or not isinstance(data, dict):
+                    continue
+                self._session_macros[key.lower()] = {
+                    "name": name,
+                    "data": data,
+                    "updated_at": value.get("updated_at"),
+                }
+
+    def _save_session_macros(self):
+            try:
+                tmp = self._macro_path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self._session_macros, f, indent=2, ensure_ascii=False)
+                os.replace(tmp, self._macro_path)
+            except Exception:
+                pass
+
+    def _normalize_macro_name(self, value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            name = str(value).strip()
+            if not name:
+                return None
+            name = re.sub(r"\s+", " ", name)[:80]
+            return name or None
+
+    def _record_activity(
+            self,
+            tool_name: str,
+            call_args: Any,
+            result: Any,
+            *,
+            session_id: Optional[str] = None,
+        ):
+            if not isinstance(call_args, dict):
+                return
+            if not isinstance(result, dict) or result.get("error"):
+                return
+            sid = session_id
+            if not sid:
+                sid = _normalize_session_id(call_args.get("session_id"))
+            if not sid and self.current_session:
+                sid = self.current_session.session_id
+            if not sid:
+                return
+
+            action = call_args.get("action")
+            if not isinstance(action, str):
+                action = ""
+
+            # Auto-nudge tracking — use UsageIntelligence.observe if available, else auto_nudge
+            try:
+                ui = getattr(self, "_usage_intel", None)
+                if ui:
+                    ui.observe(
+                        tool_name, action,
+                        session_id=sid or "",
+                        addr=call_args.get("addr"),
+                    )
+                else:
+                    from .auto_nudge import record_tool_call
+                    record_tool_call(
+                        sid,
+                        tool_name,
+                        action,
+                        addr=call_args.get("addr"),
+                        query=call_args.get("query") or call_args.get("pattern"),
+                    )
+            except Exception:
+                pass
+
+            addresses: List[str] = []
+            if isinstance(result.get("items"), list):
+                for item in result["items"][:16]:
+                    if not isinstance(item, dict):
+                        continue
+                    addr = item.get("address") or item.get("addr")
+                    if addr is None and isinstance(item.get("address_ea"), int):
+                        addr = hex(item.get("address_ea"))
+                    if isinstance(addr, str) and addr.startswith("0x"):
+                        addresses.append(addr.lower())
+            matches = result.get("matches")
+            if isinstance(matches, str):
+                addresses.extend(re.findall(r"0x[0-9a-fA-F]+", matches)[:16])
+            deduped_addresses: List[str] = []
+            seen = set()
+            for addr in addresses:
+                a = addr.lower()
+                if a in seen:
+                    continue
+                seen.add(a)
+                deduped_addresses.append(a)
+
+            entry = {
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "session_id": sid,
+                "tool": tool_name,
+                "action": action,
+                "addresses": deduped_addresses[:8],
+                "topic": result.get("resolved_topic") or result.get("topic"),
+                "target": result.get("target")
+                or result.get("query")
+                or result.get("pattern"),
+            }
+            self._activity_log.append(entry)
+            if len(self._activity_log) > self._activity_log_max:
+                self._activity_log = self._activity_log[-self._activity_log_max :]
+
+            # Also persist into session skill/activity store so dashboard counters,
+            # phase progression, and dead-end detection reflect real tool usage.
+            try:
+                self.session_mgr.log_activity(
+                    sid,
+                    tool=tool_name,
+                    action=action or "",
+                    result=json.dumps(
+                        {
+                            "addresses": deduped_addresses[:4],
+                            "topic": entry.get("topic"),
+                            "target": entry.get("target"),
+                        },
+                        ensure_ascii=False,
+                    )[:400],
+                )
+            except Exception:
+                pass
+
+            # MemRL auto-reward: when the LLM navigates to an address we previously
+            # suggested, record an implicit accept reward (~0.7) to close the feedback
+            # loop without requiring explicit LLM cooperation.  This is the missing
+            # link that keeps Q-values from being frozen at their initial 0.5.
+            if deduped_addresses:
+                try:
+                    from ida_pro_mcp.ida_mcp.tools.memrl import MemRLBank
+                    bank = MemRLBank()
+                    for addr in deduped_addresses[:4]:
+                        bank.auto_reward_for_addr(addr, reward=0.7)
+                except Exception:
+                    pass
+
+    def _build_recent_workset(
+            self,
+            sid: str,
+            n: int,
+            include_bookmarks: bool,
+            include_items: bool,
+        ) -> dict:
+            n = _bounded_int(n, 20, min_value=1, max_value=200)
+            entries: List[Dict[str, Any]] = []
+            seen = set()
+            for row in reversed(self._activity_log):
+                if row.get("session_id") != sid:
+                    continue
+                key = (
+                    row.get("tool"),
+                    row.get("action"),
+                    tuple(row.get("addresses") or []),
+                    row.get("topic"),
+                    row.get("target"),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                entries.append(
+                    {
+                        "kind": "activity",
+                        "ts": row.get("ts"),
+                        "tool": row.get("tool"),
+                        "action": row.get("action"),
+                        "addresses": row.get("addresses") or [],
+                        "topic": row.get("topic"),
+                        "target": row.get("target"),
+                    }
+                )
+                if len(entries) >= n:
+                    break
+
+            if include_bookmarks:
+                bm_res = self.bookmark_mgr.list(sid, {"limit": max(1, n), "offset": 0})
+                for bm in bm_res.get("bookmarks", [])[:n]:
+                    if not isinstance(bm, dict):
+                        continue
+                    entries.append(
+                        {
+                            "kind": "bookmark",
+                            "ts": bm.get("timestamp"),
+                            "address": bm.get("addr"),
+                            "name": bm.get("name"),
+                            "category": bm.get("category"),
+                            "tags": bm.get("tags") or [],
+                        }
+                    )
+                    if len(entries) >= (n * 2):
+                        break
+
+            lines: List[str] = []
+            for item in entries:
+                if item.get("kind") == "bookmark":
+                    lines.append(
+                        f"{item.get('ts', '')}  bookmark  {item.get('address', '')}  {item.get('name', '')}".strip()
+                    )
+                    continue
+                addr_part = ",".join(item.get("addresses") or [])
+                tail_parts = [item.get("tool"), item.get("action")]
+                if addr_part:
+                    tail_parts.append(addr_part)
+                if item.get("topic"):
+                    tail_parts.append(str(item.get("topic")))
+                elif item.get("target"):
+                    tail_parts.append(str(item.get("target")))
+                tail = "  ".join([p for p in tail_parts if p])
+                lines.append(f"{item.get('ts', '')}  {tail}".strip())
+
+            out = {
+                "ok": True,
+                "action": "recent_workset",
+                "session_id": sid,
+                "workset": "\n".join(lines),
+                "count": len(entries),
+            }
+            if include_items:
+                out["items"] = entries
+            return out
+
+    def _json_safe_value(self, value: Any) -> Any:
+            """Recursively convert non-JSON-safe values to safe representations."""
+            if isinstance(value, bytes):
+                try:
+                    return value.decode("utf-8")
+                except Exception:
+                    return {"_bytes_hex": value.hex()}
+            if isinstance(value, bytearray):
+                return self._json_safe_value(bytes(value))
+            if isinstance(value, dict):
+                out = {}
+                for k, v in value.items():
+                    try:
+                        key = k if isinstance(k, str) else str(k)
+                    except Exception:
+                        key = "<non_string_key>"
+                    out[key] = self._json_safe_value(v)
+                return out
+            if isinstance(value, (list, tuple)):
+                return [self._json_safe_value(v) for v in value]
+            if isinstance(value, set):
+                return [self._json_safe_value(v) for v in value]
+            return value
+
+    def _serialize_payload(self, payload: Any, opts: dict) -> str:
+            payload = self._json_safe_value(payload)
+            if opts.get("mode") == "full":
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    def _build_ida_command(
+            self, session, log_file, script_path, use_existing_idb: bool
+        ):
+            cmd = [self.idat_exe, "-A"]
+            cmd.extend(session.ida_args or [])
+
+            # For new databases, inject processor/loader CLI flags so IDA loads
+            # with the correct architecture from the start instead of defaulting
+            # to metapc and requiring a post-load switch.
+            if not use_existing_idb:
+                opts = session.analysis_options or {}
+                ida_prefixes = {str(a)[:2] for a in (session.ida_args or [])}
+                if opts.get("processor") and "-p" not in ida_prefixes:
+                    cmd.append(f"-p{opts['processor']}")
+                if opts.get("loader") and "-T" not in ida_prefixes:
+                    cmd.append(f"-T{opts['loader']}")
+                # Apply inferred load base so IDA maps the binary at the correct
+                # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
+                if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
+                    try:
+                        # IDA -b flag is in 16-byte paragraphs, not bytes.
+                        paragraphs = int(opts["baseaddr"]) // 16
+                        cmd.append(f"-b{paragraphs:#x}")
+                    except (TypeError, ValueError):
+                        pass
+                # skip_analysis=true: pass -c to create IDB without running auto-analysis.
+                # Use for large/raw binaries where analysis blocks indefinitely.
+                # After session create, call analysis(action='run') to trigger manually.
+                if opts.get("skip_analysis") or opts.get("no_analysis"):
+                    if "-c" not in (session.ida_args or []):
+                        cmd.append("-c")
+
+            cmd.append(f"-S{script_path}")
+            cmd.append(f"-L{log_file}")
+            if use_existing_idb:
+                cmd.append(session.idb_path)
+            else:
+                cmd.append(f"-o{session.idb_path}")
+                if session.binary_path:
+                    cmd.append(session.binary_path)
+            return cmd
+
+    def _backup_idb(self, idb_path: str) -> Optional[str]:
+            if not idb_path or not os.path.exists(idb_path):
+                return None
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{idb_path}.corrupt.{timestamp}"
+            try:
+                os.replace(idb_path, backup_path)
+                log_rpc(f"Backed up corrupt IDB to {backup_path}")
+                return backup_path
+            except Exception as e:
+                log_rpc(f"Failed to backup corrupt IDB {idb_path}: {e}")
+                return None
+
+    def _cleanup_stale_idb_family(self, idb_path: str) -> None:
+            """Remove stale sidecar files that can block fresh IDB creation."""
+            if not idb_path:
+                return
+            base, ext = os.path.splitext(idb_path)
+            family_exts = [
+                ".id0",
+                ".id1",
+                ".nam",
+                ".til",
+                ".dmp",
+                ".asm",
+                ".i64",
+                ".idb",
+            ]
+            for fam_ext in family_exts:
+                path = f"{base}{fam_ext}"
+                if not os.path.exists(path):
+                    continue
+                try:
+                    os.remove(path)
+                    log_rpc(f"Removed stale IDB artifact: {path}")
+                except Exception as e:
+                    log_rpc(f"Failed to remove stale IDB artifact {path}: {e}")
+
+    def _nuclear_reset(self, idb_path, aggressive: bool = False):
+            if not idb_path:
+                return
+
+            base = idb_path.rsplit(".", 1)[0]
+
+            lock_exts = [
+                ".mcp.lock",  # Legacy MCP session lock for exclusive IDB access
+                ".lock",
+            ]
+            all_exts = [
+                ".id0",
+                ".id1",
+                ".id2",
+                ".id3",
+                ".id4",
+                ".nam",
+                ".til",
+                ".idb_info",
+                ".seg",
+                ".sig",
+                ".ids",
+            ]
+
+            cleanup_exts = all_exts if aggressive else lock_exts
+            for ext in cleanup_exts:
+                try:
+                    p = base + ext
+                    if os.path.exists(p):
+                        os.remove(p)
+                        log_rpc(f"Cleaned up temp file: {p}")
+                except Exception as e:
+                    log_rpc(f"Failed to clean up {base + ext}: {e}")
+
+            if aggressive and os.path.exists(idb_path):
+                try:
+                    if os.path.getsize(idb_path) < 100:
+                        log_rpc(f"IDB appears corrupted (too small): {idb_path}")
+                        os.remove(idb_path)
+                        log_rpc(f"Removed corrupted IDB: {idb_path}")
+                except Exception as e:
+                    log_rpc(f"Failed to check IDB size: {e}")
+
+    def _send_rpc_raw(self, request, port, timeout=5):
+            import socket
+
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            try:
+                s.connect(("127.0.0.1", port))
+                data = json.dumps(request, separators=(",", ":")).encode("utf-8")
+                s.sendall(len(data).to_bytes(4, "big") + data)
+                s.settimeout(60)
+                lb = b""
+                while len(lb) < 4:
+                    c = s.recv(4 - len(lb))
+                    if not c:
+                        raise EOFError()
+                    lb += c
+                rl = int.from_bytes(lb, "big")
+                rd = b""
+                while len(rd) < rl:
+                    c = s.recv(min(4096, rl - len(rd)))
+                    if not c:
+                        raise EOFError()
+                    rd += c
+                return json.loads(rd.decode("utf-8"))
+            finally:
+                s.close()
+
+    def _start_server(self, session):
+            opts = session.analysis_options or {}
+            preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
+            has_preload_request = any(k in opts and opts.get(k) is not None for k in preload_keys)
+            self._nuclear_reset(
+                session.idb_path, aggressive=bool(opts.get("aggressive_cleanup"))
+            )
+
+            # Validate IDA installation
+            if not self.idat_exe or not self._is_executable_file(self.idat_exe):
+                return make_error(
+                    MCPError.FILE_NOT_FOUND,
+                    "IDA executable not found. Set IDADIR or IDA_MCP_IDAT, or ensure idat64/idat is in PATH.",
+                    details={"ida_dir": self.ida_dir, "idat_exe": self.idat_exe},
+                )
+
+            # DYNAMIC PORT ASSIGNMENT
+            import socket
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", 0))
+            server_port = sock.getsockname()[1]
+            sock.close()
+
+            log_rpc(f"Assigned dynamic port: {server_port}")
+
+            # server_script.py lives next to host/, not inside host/src/
+            script_path = os.path.join(os.path.dirname(SCRIPT_DIR), "server_script.py")
+
+            # Environment for IDA
+            env = os.environ.copy()
+            ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
+            if ida_runtime_dir:
+                env["IDADIR"] = ida_runtime_dir
+            env["IDA_MCP_PORT"] = str(server_port)
+            env["IDA_MCP_BYPASS_SYNC"] = "1"
+            env["IDA_MCP_SESSION_ID"] = session.session_id
+            env["IDA_MCP_CACHE_DIR"] = self.cache_dir
+            env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
+            env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
+
+            # Determine whether to open existing IDB or create new one
+            use_existing_idb = os.path.exists(session.idb_path)
+            env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
+
+            sid_tag = session.session_id
+            log_file = os.path.join(self.cache_dir, f"ida_mcp_{sid_tag}.log")
+            stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
+            stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
+
+            # Launch IDA: Open existing IDB if present, otherwise analyze binary
+            if use_existing_idb:
+                log_rpc(f"Opening existing session IDB: {session.idb_path}")
+            else:
+                log_rpc(
+                    f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
+                )
+                # Ensure session directory exists
+                os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
+                self._cleanup_stale_idb_family(session.idb_path)
+            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb)
+
+            log_rpc(f"Launching IDA: {' '.join(cmd)}")
+
+            stdout_fh = open(stdout_log, "a", encoding="utf-8")
+            stderr_fh = open(stderr_log, "a", encoding="utf-8")
+            server_process = subprocess.Popen(
+                cmd, stdout=stdout_fh, stderr=stderr_fh, env=env
+            )
+
+            # WAIT FOR STARTUP using ping
+            startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
+            start_time = time.time()
+            ida_crashed = False
+            while time.time() - start_time < startup_timeout:
+                exit_code = server_process.poll()
+                if exit_code is not None:
+                    ida_crashed = True
+                    break
+
+                try:
+                    res = self._send_rpc_raw({"type": "ping"}, server_port, timeout=0.5)
+                    if res.get("pong"):
+                        log_rpc(f"IDA server is READY for {session.idb_path}")
+                        runtime = {
+                            "process": server_process,
+                            "port": server_port,
+                            "idb_path": session.idb_path,
+                            "stdout_log": stdout_log,
+                            "stderr_log": stderr_log,
+                            "log_handles": [stdout_fh, stderr_fh],
+                        }
+                        with self._runtime_lock:
+                            self.session_runtimes[session.session_id] = runtime
+                        self._write_runtime_lease(session.session_id, runtime)
+                        apply_res = self._apply_session_options(session, runtime)
+                        if apply_res.get("error"):
+                            return apply_res
+                        # Kick off heavy indexing in background so session create returns fast
+                        self._background_index(session.session_id, server_port)
+                        return {
+                            "ok": True,
+                            "idb_path": session.idb_path,
+                            "current_options": apply_res.get("current_options"),
+                            "bootstrap_report": apply_res.get("bootstrap_report"),
+                            "analysis_in_progress": True,
+                            "hint": "IDA is auto-analyzing the binary. Poll session(action='status') to check readiness, or start querying once analysis completes.",
+                        }
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+            if ida_crashed:
+                diag = self._get_ida_diagnostics(stdout_log, stderr_log)
+                if self._is_library_init_err2(diag):
+                    return self._attempt_session_recovery(session, diag, server_port)
+                lib_init = self._extract_library_init_failure(diag)
+                details = {"log": diag}
+                if lib_init:
+                    details["library_init"] = lib_init
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    f"IDA exited with code {exit_code}",
+                    details=details,
+                )
+
+            return make_error(
+                MCPError.IDA_TIMEOUT, f"IDA failed to initialize within {startup_timeout}s."
+            )
+
+    def _launch_and_wait(self, session, server_port, sanitize_env: bool = False):
+            script_path = os.path.join(os.path.dirname(SCRIPT_DIR), "server_script.py")
+            env = os.environ.copy()
+            ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
+            if ida_runtime_dir:
+                env["IDADIR"] = ida_runtime_dir
+            env["IDA_MCP_PORT"] = str(server_port)
+            env["IDA_MCP_BYPASS_SYNC"] = "1"
+            env["IDA_MCP_SESSION_ID"] = session.session_id
+            env["IDA_MCP_CACHE_DIR"] = self.cache_dir
+            env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
+            opts = session.analysis_options or {}
+            preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
+            has_preload_request = any(k in opts and opts.get(k) is not None for k in preload_keys)
+            env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
+            use_existing_idb = os.path.exists(session.idb_path)
+            env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
+            if sanitize_env:
+                for k in (
+                    "LD_LIBRARY_PATH",
+                    "DYLD_LIBRARY_PATH",
+                    "PYTHONHOME",
+                    "PYTHONPATH",
+                    "QT_PLUGIN_PATH",
+                    "QT_QPA_PLATFORM_PLUGIN_PATH",
+                ):
+                    env.pop(k, None)
+            sid_tag = session.session_id
+            log_file = os.path.join(self.cache_dir, f"ida_mcp_{sid_tag}.log")
+            stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
+            stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
+
+            if use_existing_idb:
+                log_rpc(f"Opening existing session IDB: {session.idb_path}")
+            else:
+                log_rpc(
+                    f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
+                )
+                os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
+            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb)
+
+            stdout_fh = open(stdout_log, "a", encoding="utf-8")
+            stderr_fh = open(stderr_log, "a", encoding="utf-8")
+            server_process = subprocess.Popen(
+                cmd, stdout=stdout_fh, stderr=stderr_fh, env=env
+            )
+
+            startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
+            start_time = time.time()
+            while time.time() - start_time < startup_timeout:
+                exit_code = server_process.poll()
+                if exit_code is not None:
+                    diag = self._get_ida_diagnostics(stdout_log, stderr_log)
+                    return {
+                        "error": True,
+                        "exit_code": exit_code,
+                        "log": diag,
+                        "library_init": self._extract_library_init_failure(diag),
+                        "sanitize_env": sanitize_env,
+                    }
+
+                try:
+                    res = self._send_rpc_raw({"type": "ping"}, server_port, timeout=0.5)
+                    if res.get("pong"):
+                        log_rpc(f"IDA server is READY for {session.idb_path}")
+                        runtime = {
+                            "process": server_process,
+                            "port": server_port,
+                            "idb_path": session.idb_path,
+                            "stdout_log": stdout_log,
+                            "stderr_log": stderr_log,
+                            "log_handles": [stdout_fh, stderr_fh],
+                        }
+                        with self._runtime_lock:
+                            self.session_runtimes[session.session_id] = runtime
+                        self._write_runtime_lease(session.session_id, runtime)
+                        return {"ok": True, "idb_path": session.idb_path}
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+            return {"error": True, "reason": "timeout"}
+
+    def _attempt_session_recovery(self, session, diag, server_port):
+            opts = session.analysis_options or {}
+            lib_init = self._extract_library_init_failure(diag)
+            if opts.get("recover") is False:
+                details = {"log": diag, "recovery_attempted": False}
+                if lib_init:
+                    details["library_init"] = lib_init
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "IDA failed with 'library init failed' and recovery is disabled.",
+                    details=details,
+                )
+            if lib_init:
+                log_rpc(
+                    f"Detected library init failure (err={lib_init.get('error_code')}) "
+                    f"causes={lib_init.get('causes')} - attempting recovery..."
+                )
+            else:
+                log_rpc("Detected library init failure - attempting recovery...")
+            self._cleanup_runtime(session.session_id)
+            time.sleep(1)
+
+            backup_path = None
+            if opts.get("backup_on_recover", True):
+                backup_path = self._backup_idb(session.idb_path)
+            self._nuclear_reset(
+                session.idb_path, aggressive=bool(opts.get("aggressive_cleanup", True))
+            )
+
+            if not session.binary_path or not os.path.exists(session.binary_path):
+                return make_error(
+                    MCPError.FILE_NOT_FOUND,
+                    "Recovery requires the original binary path (missing or invalid).",
+                    details={
+                        "binary_path": session.binary_path,
+                        "backup": backup_path,
+                        "log": diag,
+                    },
+                )
+
+            session.analysis_applied = False
+            self.session_mgr._save_metadata(session)
+
+            result = self._launch_and_wait(session, server_port)
+            if "error" in result and result.get("library_init"):
+                # One extra attempt with sanitized runtime env to avoid host LD/Python contamination.
+                retry_result = self._launch_and_wait(
+                    session, server_port, sanitize_env=True
+                )
+                if "error" not in retry_result:
+                    result = retry_result
+                else:
+                    result["sanitized_retry"] = retry_result
+            if "error" in result:
+                details = {"log": diag, "backup": backup_path, "recovery_attempted": True}
+                if lib_init:
+                    details["library_init"] = lib_init
+                if isinstance(result.get("sanitized_retry"), dict):
+                    details["sanitized_retry"] = {
+                        "exit_code": result["sanitized_retry"].get("exit_code"),
+                        "library_init": result["sanitized_retry"].get("library_init"),
+                    }
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "IDA failed to recover the session after cleanup.",
+                    details=details,
+                )
+
+            runtime = self.session_runtimes.get(session.session_id)
+            if runtime:
+                apply_res = self._apply_session_options(session, runtime)
+                if apply_res.get("error"):
+                    return apply_res
+                result["current_options"] = apply_res.get("current_options")
+
+            if backup_path:
+                result["backup"] = backup_path
+            return result
+
+    def _apply_session_options(self, session, runtime):
+            opts = session.analysis_options or {}
+            if not opts:
+                return {"ok": True}
+            if session.analysis_applied and opts.get("apply_once", True):
+                log_rpc(
+                    f"Skipping analysis options for session {session.session_id} (already applied)"
+                )
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    "note": "analysis_options already applied",
+                }
+
+            port = runtime.get("port")
+            if not port:
+                return make_error(MCPError.IDA_CRASHED, "Missing runtime port")
+
+            actions = []
+            options_payload = {}
+            if isinstance(opts.get("options"), dict):
+                options_payload.update(opts.get("options") or {})
+            for key in ("baseaddr", "start_ea", "min_ea", "max_ea"):
+                if key in opts and opts[key] is not None:
+                    options_payload[key] = opts[key]
+            if options_payload:
+                actions.append({"action": "set_options", "options": options_payload})
+
+            if any(k in opts for k in ("processor", "bitness", "endian", "flags")):
+                action_args = {"action": "set_architecture"}
+                for k in ("processor", "bitness", "endian", "flags"):
+                    if k in opts and opts[k] is not None:
+                        action_args[k] = opts[k]
+                actions.append(action_args)
+
+            loader_value = opts.get("value")
+            if loader_value is None and "loader_options" in opts:
+                loader_value = opts.get("loader_options")
+            if loader_value is not None:
+                loader_args = {"action": "set_loader_options", "value": loader_value}
+                if opts.get("loader"):
+                    loader_args["loader"] = opts["loader"]
+                actions.append(loader_args)
+
+            extra_actions = opts.get("analysis_actions")
+            if isinstance(extra_actions, list):
+                for action_args in extra_actions:
+                    if isinstance(action_args, dict) and action_args.get("action"):
+                        actions.append(action_args)
+
+            reanalyze = opts.get("reanalyze")
+
+            for action_args in actions:
+                res = self._send_rpc_raw({"tool": "analysis", "args": action_args}, port)
+                if res.get("error"):
+                    return res
+
+            if actions and (reanalyze is None or reanalyze):
+                reanalyze_args = {"action": "reanalyze"}
+                if opts.get("start") is not None:
+                    reanalyze_args["start"] = opts.get("start")
+                if opts.get("end") is not None:
+                    reanalyze_args["end"] = opts.get("end")
+                res = self._send_rpc_raw({"tool": "analysis", "args": reanalyze_args}, port)
+                if res.get("error"):
+                    return res
+
+            bootstrap_knowledge = {"chip_family": None, "imported_symbol_count": 0}
+            bootstrap_report = None
+            try:
+                chip_res = self._send_rpc_raw(
+                    {"tool": "knowledge", "args": {"action": "chip_identify"}},
+                    port,
+                )
+                if isinstance(chip_res, dict) and not chip_res.get("error"):
+                    prof = chip_res.get("profile")
+                    if isinstance(prof, dict) and prof.get("chip_family"):
+                        bootstrap_knowledge["chip_family"] = prof.get("chip_family")
+                import_res = self._send_rpc_raw(
+                    {
+                        "tool": "knowledge",
+                        "args": {
+                            "action": "import_symbols",
+                            "min_confidence": float(opts.get("symbol_import_min_confidence", 0.8)),
+                            "limit": int(opts.get("symbol_import_limit", 200)),
+                        },
+                    },
+                    port,
+                )
+                if isinstance(import_res, dict) and not import_res.get("error"):
+                    bootstrap_knowledge["imported_symbol_count"] = int(import_res.get("imported", 0) or 0)
+            except Exception:
+                pass
+
+            try:
+                chip_family = str(opts.get("chip_family") or bootstrap_knowledge.get("chip_family") or "").strip()
+                if chip_family:
+                    fw_args = {
+                        "chip_family": chip_family,
+                        "load_base": opts.get("baseaddr"),
+                        "memory_map": opts.get("memory_map") or [],
+                        "peripheral_addresses": opts.get("peripheral_addresses") or [],
+                        "post_load_actions": opts.get("post_load_actions") or [],
+                    }
+                    fw_res = self._send_rpc_raw({"tool": "firmware_bootstrap", "args": fw_args}, port)
+                    if isinstance(fw_res, dict) and not fw_res.get("error"):
+                        bootstrap_report = fw_res
+            except Exception:
+                bootstrap_report = None
+
+            if opts.get("apply_once", True):
+                session.analysis_applied = True
+            self.session_mgr._save_metadata(session)
+            current_options = {}
+            try:
+                current_options = self._send_rpc_raw(
+                    {"tool": "analysis", "args": {"action": "get_options"}}, port
+                )
+            except Exception:
+                pass
+
+            # Strict verification for architecture-sensitive loads.
+            try:
+                expected_proc = opts.get("processor")
+                expected_bits = opts.get("bitness")
+                expected_end = opts.get("endian")
+                got = current_options.get("result") if isinstance(current_options, dict) else None
+                if isinstance(got, dict):
+                    got_proc = str(got.get("procname") or "").strip().lower()
+                    got_bits = got.get("app_bitness")
+                    got_be = got.get("is_be")
+                    mismatches = []
+                    if expected_proc is not None:
+                        eproc = str(expected_proc).strip().lower()
+                        if got_proc and got_proc != eproc:
+                            mismatches.append(f"processor expected={eproc} got={got_proc}")
+                    if expected_bits is not None:
+                        try:
+                            if int(got_bits) != int(expected_bits):
+                                mismatches.append(f"bitness expected={expected_bits} got={got_bits}")
+                        except Exception:
+                            mismatches.append(f"bitness expected={expected_bits} got={got_bits}")
+                    if expected_end is not None:
+                        end_norm = str(expected_end).strip().lower()
+                        want_be = end_norm in ("be", "big", "big_endian", "big-endian", "bigendian", "1", "true")
+                        if got_be is not None and bool(got_be) != bool(want_be):
+                            mismatches.append(f"endian expected={'be' if want_be else 'le'} got={'be' if bool(got_be) else 'le'}")
+                    if mismatches:
+                        return make_error(
+                            MCPError.IDA_ERROR,
+                            "Architecture preload did not stick after analysis option application",
+                            details={
+                                "mismatches": mismatches,
+                                "expected": {"processor": expected_proc, "bitness": expected_bits, "endian": expected_end},
+                                "current_options": got,
+                                "hint": "Create a fresh session with architecture block and avoid reusing existing IDBs for incompatible binaries.",
+                            },
+                        )
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "current_options": current_options if not current_options.get("error") else None,
+                "bootstrap_knowledge": bootstrap_knowledge,
+                "bootstrap_report": bootstrap_report,
+            }
+
+    def _background_index(self, session_id: str, server_port: int):
+            """Run schemaboot + turboquant + mbagcn indexing in background thread."""
+            import threading
+
+            def _run():
+                log_rpc(f"[bg-index] Starting background indexing for {session_id}")
+                try:
+                    self._send_rpc_raw(
+                        {"tool": "schemaboot", "args": {"action": "ingest"}},
+                        server_port,
+                        timeout=60.0,
+                    )
+                    log_rpc(f"[bg-index] schemaboot complete for {session_id}")
+                except Exception as e:
+                    log_rpc(f"[bg-index] schemaboot failed (non-fatal): {e}")
+                try:
+                    self._send_rpc_raw(
+                        {"tool": "turboquant", "args": {"action": "ingest"}},
+                        server_port,
+                        timeout=120.0,
+                    )
+                    log_rpc(f"[bg-index] turboquant complete for {session_id}")
+                except Exception as e:
+                    log_rpc(f"[bg-index] turboquant failed (non-fatal): {e}")
+                try:
+                    self._send_rpc_raw(
+                        {"tool": "mbagcn", "args": {"action": "stats"}},
+                        server_port,
+                        timeout=30.0,
+                    )
+                    log_rpc(f"[bg-index] mbagcn complete for {session_id}")
+                except Exception as e:
+                    log_rpc(f"[bg-index] mbagcn failed (non-fatal): {e}")
+                # Mark indexing as complete in session metadata
+                try:
+                    sess = self.session_mgr.sessions.get(session_id)
+                    if sess:
+                        sess.metadata = dict(sess.metadata or {})
+                        sess.metadata["indexing_complete"] = True
+                        self.session_mgr._save_metadata(sess)
+                except Exception:
+                    pass
+                log_rpc(f"[bg-index] Background indexing finished for {session_id}")
+                # Start the analysis engine for this session
+                try:
+                    from .analysis_engine import AnalysisEngine
+                    bb_path = os.path.join(self.cache_dir, f"{session_id}.blackboard.db")
+                    proposals_path = os.path.join(self.cache_dir, f"{session_id}.proposals.db")
+                    engine = AnalysisEngine(
+                        session_id=session_id,
+                        rpc_fn=lambda tool, args: self._send_rpc_raw(
+                            {"tool": tool, "args": args}, server_port, timeout=30.0
+                        ),
+                        notify_fn=self._send_notification,
+                        bb_path=bb_path,
+                        proposals_path=proposals_path,
+                        embeddings_dir=self.cache_dir,
+                    )
+                    engine.start()
+                    self._analysis_engines[session_id] = engine
+                    log_rpc(f"[bg-index] Analysis engine started for {session_id}")
+                except Exception as e:
+                    log_rpc(f"[bg-index] Analysis engine failed to start (non-fatal): {e}")
+
+            threading.Thread(target=_run, daemon=True, name=f"bg-index-{session_id}").start()
+
+    def _cleanup_runtime(self, sid):
+            with self._runtime_lock:
+                runtime = self.session_runtimes.pop(sid, None)
+            self._remove_runtime_lease(sid)
+            if not runtime:
+                return
+            proc = runtime.get("process")
+            port = runtime.get("port")
+            if proc:
+                try:
+                    self._send_rpc_raw({"type": "shutdown"}, port, timeout=1)
+                except Exception:
+                    pass
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except Exception:
+                        proc.kill()
+            for fh in runtime.get("log_handles", []):
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+
+    def _cleanup_all_runtimes(self):
+            with self._runtime_lock:
+                runtime_sids = list(self.session_runtimes.keys())
+            for sid in runtime_sids:
+                self._cleanup_runtime(sid)
+            self._adopt_or_cleanup_stale_runtime_leases()
+
+    def _resolve_session_from_idb_ref(self, idb_ref: Any) -> Optional[Session]:
+            """Resolve idb references from session id, SID_* idb id/name, path, or basename."""
+            if not isinstance(idb_ref, str):
+                return None
+            raw = idb_ref.strip()
+            if not raw:
+                return None
+
+            sid = _normalize_session_id(raw)
+            if sid:
+                session = self.session_mgr.get_session(sid)
+                if session:
+                    return session
+
+            base = os.path.basename(raw)
+            # SID_* filenames encode the canonical 8-char session id (SESSION_ID_RE).
+            sid_match = re.match(r"^SID_([A-Za-z0-9]{8})(?:_|$)", base)
+            if sid_match:
+                session = self.session_mgr.get_session(sid_match.group(1).upper())
+                if session:
+                    return session
+
+            found = self.session_mgr.find_session_by_path(raw)
+            if found:
+                return found
+
+            wanted = base.lower()
+            if not wanted:
+                return None
+            for session in self.session_mgr.discover_sessions():
+                if os.path.basename(session.idb_path or "").lower() == wanted:
+                    return session
+            return None
