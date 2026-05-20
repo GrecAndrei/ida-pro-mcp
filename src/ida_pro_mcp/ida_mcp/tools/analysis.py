@@ -440,20 +440,27 @@ def analysis(
                 s_ea = idaapi.inf_get_min_ea()
                 e_ea = idaapi.inf_get_max_ea()
 
-            # Fix segment class for raw binaries: ensure CODE not DATA
+            # Fix segment class AND type for raw binaries: ensure CODE not DATA/BSS.
+            # set_segm_class only changes the class string; seg.type and seg.perm
+            # are what create_insn()/add_func() actually check.
             try:
                 seg = idaapi.getseg(s_ea)
                 if seg:
                     cur_class = ida_segment.get_segm_class(seg)
                     if cur_class != "CODE":
                         ida_segment.set_segm_class(seg, "CODE")
+                    if seg.type != idaapi.SEG_CODE:
+                        seg.type = idaapi.SEG_CODE
+                        ida_segment.update_segm(seg)
+                    if not (seg.perm & idaapi.SEGPERM_EXEC):
+                        seg.perm |= idaapi.SEGPERM_EXEC
+                        ida_segment.update_segm(seg)
             except Exception:
                 pass
 
-            # Schedule analysis non-blocking. auto_wait() blocks IDA's main
-            # thread inside the socket server loop and causes IDA to crash.
-            # Use plan_range / auto_mark_range (fire-and-forget) — IDA's idle
-            # loop picks up the work after this RPC call returns.
+            # Schedule analysis (non-blocking by default). Use plan_range or
+            # auto_mark_range (fire-and-forget) so IDA's idle loop picks up the
+            # work after this RPC call returns.
             import ida_auto as _ida_auto
             if hasattr(_ida_auto, "plan_range"):
                 _ida_auto.plan_range(s_ea, e_ea)
@@ -466,6 +473,24 @@ def analysis(
                 mode = "idaapi.auto_mark_range"
             else:
                 mode = "none"
+            # Optionally poll until analysis completes.
+            blocking = kwargs.get("blocking") or kwargs.get("wait") or False
+            waited = 0.0
+            if blocking:
+                poll_timeout = float(kwargs.get("poll_timeout", 60.0) or 60.0)
+                start_time = time.time()
+                while time.time() - start_time < poll_timeout:
+                    analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+                    if analysis_ok:
+                        break
+                    time.sleep(0.2)
+                    waited += 0.2
+                    try:
+                        import ida_kernwin
+                        if hasattr(ida_kernwin, "process_ui_action"):
+                            pass  # pump the event loop
+                    except Exception:
+                        pass
             # Raw-binary bootstrap: seed entry points synchronously so models
             # can call code/funcs tools immediately after this returns.
             try:
@@ -480,7 +505,7 @@ def analysis(
                 func_count = sum(1 for _ in idautils.Functions())
             except Exception:
                 func_count = 0
-            return {
+            result = {
                 "ok": True,
                 "start": hex(s_ea),
                 "end": hex(e_ea),
@@ -490,6 +515,10 @@ def analysis(
                 "note": "Analysis scheduled (non-blocking). Poll with analysis(action='wait', timeout=30) or session(action='status') until analysis_complete=true.",
                 **boot,
             }
+            if blocking:
+                result["blocking_waited"] = round(waited, 2)
+                result["note"] = "Analysis ran blocking. Ready to query."
+            return result
 
         if action == "wait":
             # Report current analysis state and optionally spin-wait for completion.

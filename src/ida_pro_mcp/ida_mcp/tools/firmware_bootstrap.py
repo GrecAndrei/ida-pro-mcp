@@ -55,13 +55,20 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
     code_failures = []
     func_failures = []
 
-    # Fix segment class: ensure segments are CODE not DATA for firmware
+    # Fix segment class AND type flag: set_segm_class only changes the class
+    # string; seg.type and seg.perm are what create_insn()/add_func() check.
     try:
         seg = idaapi.getseg(mn)
         if seg:
             cur_class = ida_segment.get_segm_class(seg)
             if cur_class != "CODE" or not ida_segment.is_spec_segm(mn):
                 ida_segment.set_segm_class(seg, "CODE")
+            if seg.type != idaapi.SEG_CODE:
+                seg.type = idaapi.SEG_CODE
+                ida_segment.update_segm(seg)
+            if not (seg.perm & idaapi.SEGPERM_EXEC):
+                seg.perm |= idaapi.SEGPERM_EXEC
+                ida_segment.update_segm(seg)
     except Exception:
         pass
 

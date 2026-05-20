@@ -477,12 +477,27 @@ def _apply_pre_analysis_options():
         is_firmware_arch = proc_lower in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8")
         seg = idaapi.getseg(idaapi.inf_get_min_ea())
         if seg and is_firmware_arch:
-            # Fix segment class: ensure CODE not BSS/DATA
+            # Fix segment class AND type flag: set_segm_class only changes the
+            # class string; seg.type and seg.perm are what create_insn() checks.
             try:
                 cur_class = ida_segment.get_segm_class(seg)
                 if cur_class != "CODE":
                     ida_segment.set_segm_class(seg, "CODE")
                     changed.append(f"segment_class={cur_class}→CODE")
+            except Exception:
+                pass
+            try:
+                if seg.type != idaapi.SEG_CODE:
+                    seg.type = idaapi.SEG_CODE
+                    ida_segment.update_segm(seg)
+                    changed.append("SEG_CODE type set")
+            except Exception:
+                pass
+            try:
+                if not (seg.perm & idaapi.SEGPERM_EXEC):
+                    seg.perm |= idaapi.SEGPERM_EXEC
+                    ida_segment.update_segm(seg)
+                    changed.append("SEGPERM_EXEC added")
             except Exception:
                 pass
             # Fix segment bitness: force 32-bit for firmware architectures
