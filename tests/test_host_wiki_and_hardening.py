@@ -130,6 +130,51 @@ class TestHostWikiTool(unittest.TestCase):
         self.assertIn("related_topics", res)
         self.assertIn("tools/trace", res["related_topics"])
 
+    def test_tools_call_enforces_strict_blackboard_policy_then_allows_after_refresh(self):
+        set_policy = self.server._execute_tool(
+            "blackboard",
+            {
+                "action": "policy_set",
+                "strict_mode": True,
+                "max_staleness_calls": 4,
+                "require_working_set": True,
+                "require_decision_or_write": True,
+                "enforce_phases": ["scout", "prove", "commit", "finalize"],
+            },
+        )
+        self.assertTrue(set_policy.get("ok"))
+
+        blocked_req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "wiki", "arguments": {"action": "list_topics"}},
+        }
+        blocked_resp = self.server.handle_request(blocked_req)
+        blocked_payload = json.loads(blocked_resp["result"]["content"][0]["text"])
+        self.assertTrue(blocked_payload.get("error"))
+        self.assertIn(
+            "Strict blackboard policy gate failed before tool execution",
+            str(blocked_payload.get("message") or ""),
+        )
+
+        self.server._execute_tool("blackboard", {"action": "working_set"})
+        self.server._execute_tool(
+            "blackboard",
+            {"action": "write", "title": "fresh intent", "category": "wm_now"},
+        )
+
+        allow_req = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "wiki", "arguments": {"action": "list_topics"}},
+        }
+        allow_resp = self.server.handle_request(allow_req)
+        allow_payload = json.loads(allow_resp["result"]["content"][0]["text"])
+        self.assertTrue(allow_payload.get("ok"))
+        self.assertIn("categories", allow_payload)
+
 
 class TestHostHardening(unittest.TestCase):
     def setUp(self):
@@ -694,6 +739,46 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertIsNotNone(directive)
         self.assertIn("MCP_RECOMMENDED_CALL", directive)
         self.assertIn("code.callees", directive)
+
+    def test_response_injects_blackboard_required_call_when_strict_policy_is_stale(self):
+        self.server._handle_blackboard(
+            {
+                "action": "policy_set",
+                "strict_mode": True,
+                "max_staleness_calls": 4,
+                "require_working_set": True,
+                "require_decision_or_write": True,
+            }
+        )
+        opts = self.server._default_response_options()
+        out = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"},
+            opts,
+            tool_name="session",
+            call_args={"action": "status"},
+        )
+        self.assertIn("must_call_before_answer", out)
+        self.assertTrue(out["must_call_before_answer"])
+        self.assertEqual(out.get("required_followup_call", {}).get("tool"), "blackboard")
+        self.assertIn(out.get("required_followup_call", {}).get("action"), {"working_set", "decision_card"})
+        self.assertIn("llm_execution_directive", out)
+        self.assertIn("MCP_REQUIRED_CALL", out["llm_execution_directive"])
+
+    def test_response_injects_phase_followup_in_prove_phase(self):
+        self.server._handle_blackboard({"action": "phase_set", "phase": "prove"})
+        opts = self.server._default_response_options()
+        out = self.server._prepare_response_payload(
+            {"ok": True, "value": "ready"},
+            opts,
+            tool_name="session",
+            call_args={"action": "status"},
+        )
+        self.assertTrue(out.get("must_call_before_answer"))
+        req = out.get("required_followup_call", {})
+        self.assertEqual(req.get("tool"), "blackboard")
+        self.assertEqual(req.get("action"), "decision_card")
+        gate = out.get("blackboard_phase_gate", {})
+        self.assertEqual(gate.get("phase"), "prove")
 
     def test_normalize_search_aliases_accept_noisy_variants(self):
         normalized = self.server._normalize_tool_call_args(

@@ -1,0 +1,186 @@
+import os
+import sys
+import types
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from ida_pro_mcp.host.server_blackboard import ServerBlackboardMixin
+from ida_pro_mcp.host.server_dispatch import ServerDispatchMixin
+
+
+class _FakeStore:
+    def __init__(self):
+        self.items = []
+        self._id = 0
+
+    def write(self, title, content="", category="general", addr="", tags=None, confidence=0.5, source="", source_type="", **kwargs):
+        self._id += 1
+        eid = f"e{self._id}"
+        self.items.append(
+            {
+                "id": eid,
+                "title": title,
+                "content": content,
+                "category": category,
+                "addr": addr,
+                "tags": tags or [],
+                "confidence": confidence,
+                "source_type": source_type or source or "manual",
+                "resolved": 0,
+                "contradicted": 0,
+            }
+        )
+        return eid
+
+    def list(self, category=None, limit=100, include_resolved=True, include_contradicted=False, **kwargs):
+        rows = [r for r in self.items if (not category or r.get("category") == category)]
+        if not include_contradicted:
+            rows = [r for r in rows if not r.get("contradicted")]
+        return rows[:limit]
+
+    def read(self, entry_id):
+        for r in self.items:
+            if r.get("id") == entry_id:
+                return r
+        return None
+
+    def semantic_search(self, **kwargs):
+        return self.list(limit=kwargs.get("top_k", 20))
+
+    def next_target(self, limit=5):
+        return [
+            {
+                "entry_id": "q1",
+                "addr": "0x401000",
+                "title": "decrypt_config",
+                "confidence": 0.8,
+                "priority_score": 0.55,
+                "xref_count": 4,
+                "entropy": 3.2,
+            }
+        ][:limit]
+
+    def stats(self):
+        by_category = {}
+        for row in self.items:
+            by_category[row["category"]] = by_category.get(row["category"], 0) + 1
+        avg = 0.0
+        if self.items:
+            avg = sum(float(r.get("confidence") or 0.0) for r in self.items) / len(self.items)
+        return {
+            "total_entries": len(self.items),
+            "by_category": by_category,
+            "avg_confidence": avg,
+            "unresolved": len(self.items),
+            "contradicted": 0,
+        }
+
+    def exists_similar(self, addr, category, title):
+        return any(r.get("category") == category and r.get("title") == title for r in self.items)
+
+    def update(self, entry_id, **kwargs):
+        row = self.read(entry_id)
+        if not row:
+            return False
+        row.update(kwargs)
+        return True
+
+
+class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin):
+    def __init__(self):
+        self.cache_dir = "/tmp"
+        self.current_session = types.SimpleNamespace(session_id="sid-test", idb_path="/tmp/fake.i64")
+        self._blackboard_module = None
+        self._blackboard_store = None
+        self._analysis_engines = {}
+        self._send_notification = lambda _msg: None
+        self._store = _FakeStore()
+        self._tool_calls = []
+        self._usage_intel = None
+        self._guardrail_strict_writes = False
+
+    def _get_blackboard_store(self):
+        return self._store
+
+    def _normalize_tool_call_args(self, tool_name, args):
+        return dict(args or {})
+
+    def _guardrail_mode_from_args(self, call_args):
+        return "assist"
+
+    def _compute_pointer_note_signal(self, tool_name, call_args, payload):
+        return 0.0
+
+    def call_tool(self, tool_name, idb_path, **kwargs):
+        self._tool_calls.append((tool_name, dict(kwargs or {})))
+        return {"ok": True, "tool": tool_name, "action": kwargs.get("action"), "idb": idb_path}
+
+
+def test_dispatch_strict_policy_blocks_non_blackboard_tool_when_stale():
+    srv = _DummyDispatchServer()
+    set_policy = srv._handle_blackboard(
+        {
+            "action": "policy_set",
+            "strict_mode": True,
+            "max_staleness_calls": 2,
+            "require_working_set": True,
+            "require_decision_or_write": True,
+            "enforce_phases": ["scout", "prove", "commit", "finalize"],
+        }
+    )
+    assert set_policy.get("ok") is True
+
+    res = srv._execute_tool_inner("code", "code", {"action": "decompile", "addr": "0x401000"})
+    assert res.get("error") is True
+    assert "Strict blackboard policy gate failed" in str(res.get("message") or "")
+
+
+def test_dispatch_strict_policy_allows_tool_after_fresh_cycle():
+    srv = _DummyDispatchServer()
+    srv._handle_blackboard(
+        {
+            "action": "policy_set",
+            "strict_mode": True,
+            "max_staleness_calls": 4,
+            "require_working_set": True,
+            "require_decision_or_write": True,
+            "enforce_phases": ["scout", "prove", "commit", "finalize"],
+        }
+    )
+    srv._handle_blackboard({"action": "working_set"})
+    srv._handle_blackboard({"action": "write", "title": "fresh note", "category": "wm_now"})
+
+    res = srv._execute_tool_inner("code", "code", {"action": "decompile", "addr": "0x401000"})
+    assert res.get("ok") is True
+    assert res.get("tool") == "code"
+
+
+def test_dispatch_phase_prove_blocks_modify_until_receipts():
+    srv = _DummyDispatchServer()
+    srv._handle_blackboard({"action": "phase_set", "phase": "prove"})
+    res = srv._execute_tool_inner("modify", "modify", {"action": "set_name", "addr": "0x401000", "name": "f_cfg"})
+    assert res.get("error") is True
+    assert "prove phase requires evidence cards" in str(res.get("message") or "").lower()
+
+
+def test_dispatch_strict_stale_not_blocked_in_scout_but_blocked_in_commit():
+    srv = _DummyDispatchServer()
+    srv._handle_blackboard(
+        {
+            "action": "policy_set",
+            "strict_mode": True,
+            "max_staleness_calls": 1,
+            "require_working_set": True,
+            "require_decision_or_write": True,
+            "enforce_phases": ["commit", "finalize"],
+        }
+    )
+    # In scout (default), stale strict policy should not block normal calls.
+    ok_in_scout = srv._execute_tool_inner("code", "code", {"action": "decompile", "addr": "0x401000"})
+    assert ok_in_scout.get("ok") is True
+
+    # Move to commit and force stale state, then same call should be blocked by strict policy.
+    srv._handle_blackboard({"action": "phase_set", "phase": "commit"})
+    blocked = srv._execute_tool_inner("code", "code", {"action": "decompile", "addr": "0x401000"})
+    assert blocked.get("error") is True
+    assert "Strict blackboard policy gate failed" in str(blocked.get("message") or "")

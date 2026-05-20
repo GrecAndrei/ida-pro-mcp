@@ -1122,11 +1122,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         "args": {
                             "action": "python",
                             "code": """\
-import idaapi, ida_segment, idc
-mn = idaapi.inf_get_min_ea()
-seg = idaapi.getseg(mn)
-if seg:
-    ida_segment.set_segm_class(seg, "CODE")
+import idaapi, ida_segment, ida_segregs, idc, idautils
+for seg_ea in idautils.Segments():
+    seg = idaapi.getseg(seg_ea)
+    if not seg:
+        continue
+    cur_class = ida_segment.get_segm_class(seg)
+    if cur_class != "CODE":
+        ida_segment.set_segm_class(seg, "CODE")
     if seg.type != idaapi.SEG_CODE:
         seg.type = idaapi.SEG_CODE
         ida_segment.update_segm(seg)
@@ -1139,6 +1142,9 @@ if seg:
 """
                         }
                     }, port, timeout=5)
+                except Exception as e:
+                    log_rpc(f"Segment fix RPC failed: {e}")
+                try:
                     proc = str(opts.get('processor') or '').lower()
                     if 'arm' in proc:
                         self._send_rpc_raw({
@@ -1146,18 +1152,19 @@ if seg:
                             "args": {
                                 "action": "python",
                                 "code": """\
-import idaapi, idc
-mn = idaapi.inf_get_min_ea()
-try:
-    idc.split_sreg_range(mn, 'T', 1, 2)
-except Exception:
-    import ida_segregs
-    ida_segregs.split_sreg_range(mn, 'T', 1, 2)
+import idaapi, idc, ida_segregs, idautils
+for seg_ea in idautils.Segments():
+    seg = idaapi.getseg(seg_ea)
+    if seg:
+        try:
+            idc.split_sreg_range(seg.start_ea, 'T', 1, 2)
+        except Exception:
+            ida_segregs.split_sreg_range(seg.start_ea, 'T', 1, 2)
 """
                             }
                         }, port, timeout=5)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_rpc(f"Thumb T=1 RPC failed: {e}")
 
             if actions and (reanalyze is None or reanalyze):
                 reanalyze_args = {"action": "reanalyze"}

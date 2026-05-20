@@ -86,16 +86,16 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                         or ""
                     ).strip().lower()
                     ft_id = meta.get("file_type_id")
-                    raw_binary_mode = raw_binary_mode or ft_name in {"raw", "unknown", "bin", "binary", ""}
+                    raw_binary_mode = raw_binary_mode or ft_name in {"raw", "unknown", "bin", "binary", "obj", ""}
                     if not ft_name and ft_id is None:
                         return False, overview_trigger, raw_binary_mode
-                    if ft_name in {"raw", "unknown", "bin", "binary", ""}:
+                    if ft_name in {"raw", "unknown", "bin", "binary", "obj", ""}:
                         return True, "idb_meta_filetype", raw_binary_mode
                     try:
                         ft_num = int(ft_id) if ft_id is not None else None
                     except Exception:
                         ft_num = None
-                    if ft_num in {0, 17}:
+                    if ft_num in {0, 2, 17}:
                         return True, "idb_meta_filetype", raw_binary_mode
                     return False, overview_trigger, raw_binary_mode
                 return False, overview_trigger, raw_binary_mode

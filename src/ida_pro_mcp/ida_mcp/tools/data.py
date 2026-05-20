@@ -160,7 +160,7 @@ def data(
             except Exception:
                 min_len = 6
             # Raw blobs are noisy before code/data heads exist.
-            if _filetype_name(_inf_filetype_id()) in {"raw", "unknown"} and min_len < 8:
+            if _inf_filetype_id() in {0, 2, 17} and min_len < 8:
                 min_len = 8
             # Adaptive printable-ratio gate for short strings.
             ratio_samples = []

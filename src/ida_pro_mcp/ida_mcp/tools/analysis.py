@@ -440,12 +440,14 @@ def analysis(
                 s_ea = idaapi.inf_get_min_ea()
                 e_ea = idaapi.inf_get_max_ea()
 
-            # Fix segment class AND type for raw binaries: ensure CODE not DATA/BSS.
+            # Fix ALL segments to CODE type/class/perm for raw binaries.
             # set_segm_class only changes the class string; seg.type and seg.perm
             # are what create_insn()/add_func() actually check.
-            try:
-                seg = idaapi.getseg(s_ea)
-                if seg:
+            for seg_ea in idautils.Segments():
+                try:
+                    seg = idaapi.getseg(seg_ea)
+                    if not seg:
+                        continue
                     cur_class = ida_segment.get_segm_class(seg)
                     if cur_class != "CODE":
                         ida_segment.set_segm_class(seg, "CODE")
@@ -455,8 +457,8 @@ def analysis(
                     if not (seg.perm & idaapi.SEGPERM_EXEC):
                         seg.perm |= idaapi.SEGPERM_EXEC
                         ida_segment.update_segm(seg)
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
             # Schedule analysis (non-blocking by default). Use plan_range or
             # auto_mark_range (fire-and-forget) so IDA's idle loop picks up the
@@ -636,6 +638,8 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
             if created == 0:
                 continue
             if ida_funcs.add_func(ea):
+                seeded += 1
+            elif ida_funcs.add_func(ea, min(ea + 256, end_ea)):
                 seeded += 1
         except Exception:
             continue

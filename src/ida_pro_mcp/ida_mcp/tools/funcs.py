@@ -380,7 +380,6 @@ def _funcs_impl(
             if end_ea and hasattr(idaapi, "auto_mark_range"):
                 try:
                     idaapi.auto_mark_range(ea, end_ea, idaapi.AU_FINAL)
-                    idaapi.auto_wait()
                 except Exception:
                     pass
                 if ida_funcs.add_func(ea, end_ea):

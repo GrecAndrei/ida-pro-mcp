@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 import textwrap
@@ -41,21 +42,26 @@ OPENCODE_AUTH_PATH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
 
 MODELS = [
     {
-        "id":          "deepseek-v4-flash",
-        "label":       "DeepSeek V4 Flash",
-        "extra":       {"reasoning_effort": "max"},
-        "tool_budget": 100,
-        "max_turns":   70,
-    },
-    {
         "id":          "gpt-5.4-mini",
-        "label":       "GPT-5.4 Mini",
+        "label":       "GPT-5.4 Mini (Non-Strict)",
         "extra":       {"reasoning_effort": "high"},
         "base_url":    AZURE_BASE_URL,
         "api_key_source": "azure",
         "use_max_completion_tokens": True,
         "tool_budget": 100,
         "max_turns":   70,
+        "blackboard_strict_mode": False,
+    },
+    {
+        "id":          "gpt-5.4-mini",
+        "label":       "GPT-5.4 Mini (Strict)",
+        "extra":       {"reasoning_effort": "high"},
+        "base_url":    AZURE_BASE_URL,
+        "api_key_source": "azure",
+        "use_max_completion_tokens": True,
+        "tool_budget": 100,
+        "max_turns":   70,
+        "blackboard_strict_mode": True,
     },
 ]
 
@@ -84,6 +90,10 @@ def _make_mcp_env(label: str) -> dict:
     cache_dir = str(Path(__file__).parent / "results" / f"cache_{slug}_{int(time.time())}")
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
     return {**MCP_ENV_BASE, "IDA_MCP_CACHE_DIR": cache_dir}
+
+
+def _safe_slug(text: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9._-]+", "_", text).strip("._-") or "run"
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +269,16 @@ class RunStats:
     label: str
     binary: str
     eval_start: str
+    blackboard_strict_mode: bool = False
+    run_index: int = 1
+    run_count: int = 1
 
     turns: list[TurnStats] = field(default_factory=list)
     progress_reports: list[dict] = field(default_factory=list)
     bonus_pts: int = 0
+    blackboard_calls: int = 0
+    blackboard_writes: int = 0
+    strict_gate_blocks: int = 0
 
     @property
     def total_input_tokens(self) -> int:
@@ -338,6 +354,12 @@ class RunStats:
             "unique_tool_count": len(self.unique_tools_used),
             "stall_count": self.stall_count,
             "bonus_pts": self.bonus_pts,
+            "blackboard_strict_mode": self.blackboard_strict_mode,
+            "run_index": self.run_index,
+            "run_count": self.run_count,
+            "blackboard_calls": self.blackboard_calls,
+            "blackboard_writes": self.blackboard_writes,
+            "strict_gate_blocks": self.strict_gate_blocks,
             "progress_reports": self.progress_reports,
             "turns": [
                 {
@@ -355,6 +377,37 @@ class RunStats:
                 for t in self.turns
             ],
         }
+
+
+def _run_total_tokens(rs: RunStats) -> int:
+    return rs.total_input_tokens + rs.total_output_tokens + rs.total_thinking_tokens
+
+
+def _run_is_valid(r: dict) -> bool:
+    if "error" in r:
+        return False
+    rs = r.get("run_stats")
+    sc = r.get("score")
+    if rs is None or sc is None:
+        return False
+    # Treat placeholder/empty runs as invalid for aggregate comparisons.
+    if int(r.get("tool_calls", 0) or 0) == 0:
+        return False
+    if int(r.get("turns", 0) or 0) <= 1 and int(sc.total) == 0 and int(sc.pts) == 0:
+        return False
+    return True
+
+
+def _safe_div(num: float, den: float) -> float:
+    return (num / den) if den else 0.0
+
+
+def _mean_std(values: list[float]) -> tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    if len(values) == 1:
+        return values[0], 0.0
+    return statistics.mean(values), statistics.pstdev(values)
 
 
 # ---------------------------------------------------------------------------
@@ -768,6 +821,9 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str, a
         label=label,
         binary=binary_path,
         eval_start=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        blackboard_strict_mode=bool(model_cfg.get("blackboard_strict_mode", False)),
+        run_index=int(model_cfg.get("run_index", 1)),
+        run_count=int(model_cfg.get("run_count", 1)),
     )
     t_start = time.time()
     tool_call_count = 0
@@ -777,6 +833,21 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str, a
     try:
         mcp.initialize()
         mcp_tools = mcp.list_tools()
+        strict_mode = bool(model_cfg.get("blackboard_strict_mode", False))
+        preflight = mcp.call_tool(
+            "blackboard",
+            {
+                "action": "policy_set",
+                "strict_mode": strict_mode,
+                "max_staleness_calls": 6,
+                "require_working_set": True,
+                "require_decision_or_write": True,
+            },
+        )
+        if isinstance(preflight, dict) and preflight.get("error"):
+            print(f"  [{label}] warning: failed to set blackboard strict policy: {preflight}")
+        else:
+            print(f"  [{label}] blackboard strict_mode={strict_mode}")
     except Exception as e:
         print(f"  [{label}] MCP init failed: {e}")
         mcp.close()
@@ -923,6 +994,10 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str, a
             # --- regular MCP tool ---
             tool_call_count += 1
             turn_stats.tool_names.append(tname)
+            if tname == "blackboard":
+                run_stats.blackboard_calls += 1
+                if str(targs.get("action", "")).strip().lower() == "write":
+                    run_stats.blackboard_writes += 1
 
             print(f"  [{label}]   tool[{tool_call_count}] {tname}({targs.get('action','')}) …")
             _score_tool_call(tname, targs, score, tool_call_count, prev_calls)
@@ -934,6 +1009,10 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str, a
                 result = {"ok": False, "error": str(e)}
 
             result_str = json.dumps(result)[:5000]
+            if isinstance(result, dict) and result.get("error"):
+                msg_txt = str(result.get("message", "")).lower()
+                if "strict blackboard policy gate failed" in msg_txt:
+                    run_stats.strict_gate_blocks += 1
 
             # Classify result quality
             if isinstance(result, dict) and result.get("error"):
@@ -995,14 +1074,24 @@ def run_model(model_cfg: dict, binary_path: str, max_turns: int, api_key: str, a
 # Parallel runner + report
 # ---------------------------------------------------------------------------
 
-def run_all(binary_path: str, max_turns: int, model_filter: list[str] | None = None) -> None:
+def run_all(binary_path: str, max_turns: int, model_filter: list[str] | None = None, repeats: int = 1) -> None:
     api_key   = _load_api_key("opencode")
     try:
         azure_key = _load_api_key("azure")
     except RuntimeError:
         azure_key = ""
 
-    active_models = [m for m in MODELS if not model_filter or m["label"] in model_filter]
+    base_models = [m for m in MODELS if not model_filter or m["label"] in model_filter]
+    active_models: list[dict] = []
+    repeats = max(1, int(repeats))
+    for m in base_models:
+        for i in range(1, repeats + 1):
+            c = dict(m)
+            c["base_label"] = m["label"]
+            c["run_index"] = i
+            c["run_count"] = repeats
+            c["label"] = f"{m['label']} [R{i}/{repeats}]"
+            active_models.append(c)
 
     print(f"Binary: {binary_path}")
     print(f"Models: {', '.join(m['label'] for m in active_models)}")
@@ -1058,15 +1147,71 @@ def _print_report(results: list[dict]) -> None:
         print(f"\n  Latency:      avg {rs.avg_latency_ms:.0f}ms  |  p95 {rs.p95_latency_ms:.0f}ms")
         print(f"  Tool quality: {rs.tool_success_rate:.0%} success  |  {rs.tool_empty_rate:.0%} empty  |  stalls: {rs.stall_count}")
         print(f"  Unique tools: {len(rs.unique_tools_used)}  ({', '.join(sorted(rs.unique_tools_used)[:8])}{'…' if len(rs.unique_tools_used) > 8 else ''})")
+        print(f"  Blackboard:   strict={rs.blackboard_strict_mode}  calls={rs.blackboard_calls}  writes={rs.blackboard_writes}  strict_blocks={rs.strict_gate_blocks}")
+        total_tokens = _run_total_tokens(rs)
+        print(
+            f"  Efficiency:   score/s={_safe_div(s.total, float(r['elapsed_s'] or 0.0)):.3f}  "
+            f"score/tool={_safe_div(s.total, float(r['tool_calls'] or 0.0)):.3f}  "
+            f"score/1kTok={_safe_div(s.total * 1000.0, float(total_tokens)):.4f}"
+        )
         print(f"\n  Checkpoints:")
         for ev in s.events:
             print(f"    {ev}")
 
+    strict = [r for r in results if _run_is_valid(r) and r["run_stats"].blackboard_strict_mode]
+    non_strict = [r for r in results if _run_is_valid(r) and not r["run_stats"].blackboard_strict_mode]
+    if strict and non_strict:
+        s = strict[0]["run_stats"]
+        n = non_strict[0]["run_stats"]
+        print(f"\n{'─'*60}")
+        print("  STRICT VS NON-STRICT DELTA")
+        print(f"  Blackboard writes: {s.blackboard_writes} vs {n.blackboard_writes} (delta {s.blackboard_writes - n.blackboard_writes:+d})")
+        print(f"  Strict gate blocks: {s.strict_gate_blocks} vs {n.strict_gate_blocks} (delta {s.strict_gate_blocks - n.strict_gate_blocks:+d})")
+        print(f"  Tool success rate: {s.tool_success_rate:.1%} vs {n.tool_success_rate:.1%}")
+        print(f"  Score total: {strict[0]['score'].total} vs {non_strict[0]['score'].total}")
+
     print("\n" + "=" * 70)
     winners = [r for r in results if "error" not in r]
+    valid_winners = [r for r in winners if _run_is_valid(r)]
     if winners:
         best = winners[0]
         print(f"  WINNER: {best['label']}  ({best['score'].total}/{best['score'].max_pts})")
+    if valid_winners:
+        invalid = [r for r in results if ("error" not in r and not _run_is_valid(r))]
+        if invalid:
+            print(f"  NOTE: ignored {len(invalid)} invalid/empty run(s) in aggregate stats")
+        grouped: dict[str, list[dict]] = {}
+        for r in valid_winners:
+            base = str(r.get("base_label") or r["label"].split(" [R", 1)[0])
+            grouped.setdefault(base, []).append(r)
+        if grouped:
+            print("\n  AGGREGATES:")
+            for base, rows in sorted(grouped.items()):
+                n = len(rows)
+                scores = [float(rr["score"].total) for rr in rows]
+                bb_writes = [float(rr["run_stats"].blackboard_writes) for rr in rows]
+                strict_blocks = [float(rr["run_stats"].strict_gate_blocks) for rr in rows]
+                tool_success = [float(rr["run_stats"].tool_success_rate) for rr in rows]
+                score_per_s = [_safe_div(float(rr["score"].total), float(rr.get("elapsed_s", 0.0) or 0.0)) for rr in rows]
+                score_per_tool = [_safe_div(float(rr["score"].total), float(rr.get("tool_calls", 0.0) or 0.0)) for rr in rows]
+                score_per_1k_tok = [
+                    _safe_div(float(rr["score"].total) * 1000.0, float(_run_total_tokens(rr["run_stats"])))
+                    for rr in rows
+                ]
+                m_score, s_score = _mean_std(scores)
+                m_writes, s_writes = _mean_std(bb_writes)
+                m_blocks, s_blocks = _mean_std(strict_blocks)
+                m_success, s_success = _mean_std(tool_success)
+                m_sps, s_sps = _mean_std(score_per_s)
+                m_spt, s_spt = _mean_std(score_per_tool)
+                m_spk, s_spk = _mean_std(score_per_1k_tok)
+                print(
+                    f"    {base}: n={n}  score={m_score:.1f}±{s_score:.1f}  "
+                    f"bb_writes={m_writes:.1f}±{s_writes:.1f}  strict_blocks={m_blocks:.1f}±{s_blocks:.1f}  "
+                    f"tool_success={m_success:.1%}±{s_success:.1%}  "
+                    f"score/s={m_sps:.3f}±{s_sps:.3f}  score/tool={m_spt:.3f}±{s_spt:.3f}  "
+                    f"score/1kTok={m_spk:.4f}±{s_spk:.4f}"
+                )
     print("=" * 70)
 
 
@@ -1079,6 +1224,7 @@ def _save_report(results: list[dict], binary_path: str) -> None:
     serialisable = []
     for r in results:
         rec = {k: v for k, v in r.items() if k not in ("messages",)}
+        rec["valid_run"] = _run_is_valid(r)
         if "score" in rec:
             sc: Score = rec["score"]
             rec["score"] = {
@@ -1109,7 +1255,7 @@ def _save_progress_logs(results: list[dict], binary_path: str) -> None:
             continue
         rs: RunStats = r["run_stats"]
         sc: Score = r["score"]
-        slug = rs.label.lower().replace(" ", "_")
+        slug = _safe_slug(rs.label.lower())
         path = out_dir / f"progress_{slug}_{bin_stem}_{ts}.json"
         payload = {
             "model": rs.label,
@@ -1148,9 +1294,10 @@ if __name__ == "__main__":
     )
     ap.add_argument("--max-turns", type=int, default=MAX_TURNS)
     ap.add_argument("--models", nargs="+", help="Run only these model labels (e.g. 'GPT-5.4 Mini')")
+    ap.add_argument("--repeats", type=int, default=3, help="Number of repeated runs per model variant")
     args = ap.parse_args()
 
     if not Path(args.binary).exists():
         sys.exit(f"Binary not found: {args.binary}")
 
-    run_all(args.binary, args.max_turns, model_filter=args.models)
+    run_all(args.binary, args.max_turns, model_filter=args.models, repeats=args.repeats)

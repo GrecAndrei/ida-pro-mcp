@@ -442,11 +442,6 @@ def firmware_view(
         if action == "auto_retype":
             if apply and snapshot_before_apply:
                 try:
-                    import ida_auto
-                    ida_auto.auto_wait()
-                except Exception:
-                    pass
-                try:
                     import ida_kernwin
                     ida_kernwin.process_ui_action("UndoCreateSnapshot")
                 except Exception:
@@ -492,6 +487,20 @@ def firmware_view(
                         if prev_kind == "data" and not force:
                             _record_contradiction(state, pea, prev_kind, "code", "data_to_code_guard", confidence=0.74)
                             continue
+                        # Set Thumb mode for ARM before creating instruction
+                        try:
+                            _proc = (_inf_procname() or "").lower()
+                        except Exception:
+                            _proc = ""
+                        if "arm" in _proc:
+                            try:
+                                idc.split_sreg_range(pea, "T", 1, getattr(idc, "SR_auto", 2))
+                            except Exception:
+                                try:
+                                    import ida_segregs
+                                    ida_segregs.split_sreg_range(pea, "T", 1, 2)
+                                except Exception:
+                                    pass
                         if idc.create_insn(pea) > 0:
                             applied += 1
                             state["history"].append({"ts": int(time.time()), "action": "auto_retype", "ea": hex(pea), "new_kind": "code", "prev_kind": prev_kind, "size": 1})
@@ -1130,11 +1139,6 @@ def firmware_view(
         if action == "smart_carve":
             if apply and snapshot_before_apply:
                 try:
-                    import ida_auto
-                    ida_auto.auto_wait()
-                except Exception:
-                    pass
-                try:
                     import ida_kernwin
                     ida_kernwin.process_ui_action("UndoCreateSnapshot")
                 except Exception:
@@ -1257,6 +1261,19 @@ def firmware_view(
                     rolled = 1
                 prev = str(target.get("prev_kind") or "unknown")
                 if prev == "code":
+                    try:
+                        _proc = (_inf_procname() or "").lower()
+                    except Exception:
+                        _proc = ""
+                    if "arm" in _proc:
+                        try:
+                            idc.split_sreg_range(ea_i, "T", 1, getattr(idc, "SR_auto", 2))
+                        except Exception:
+                            try:
+                                import ida_segregs
+                                ida_segregs.split_sreg_range(ea_i, "T", 1, 2)
+                            except Exception:
+                                pass
                     idc.create_insn(ea_i)
                 elif prev == "data":
                     ida_bytes.create_data(ea_i, ida_bytes.byte_flag(), 1, idaapi.BADADDR)
