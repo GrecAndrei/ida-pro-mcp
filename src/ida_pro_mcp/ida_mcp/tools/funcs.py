@@ -282,7 +282,35 @@ def _funcs_impl(
             # Ensure code exists at the start address - auto-convert if possible
             byte_flags = ida_bytes.get_flags(ea)
             if not ida_bytes.is_code(byte_flags):
-                created = idc.create_insn(ea)
+                # Cortex-M/raw blobs commonly need explicit Thumb state before
+                # IDA can decode instruction bytes at vector-handler addresses.
+                try:
+                    proc = (_inf_procname() or "").lower()
+                except Exception:
+                    proc = ""
+                is_arm = "arm" in proc
+                if is_arm:
+                    # Set T=1 segment register for Thumb mode (all Cortex-M is Thumb-2)
+                    try:
+                        sr_auto = getattr(idc, "SR_auto", 2)
+                        idc.split_sreg_range(ea, "T", 1, sr_auto)
+                    except Exception:
+                        try:
+                            import ida_segregs
+                            ida_segregs.split_sreg_range(ea, "T", 1, 2)
+                        except Exception:
+                            pass
+
+                # Try ida_ua.create_insn (IDA 9.x) first, fall back to idc.create_insn
+                created = 0
+                try:
+                    import ida_ua
+                    created = ida_ua.create_insn(ea)
+                except Exception:
+                    created = idc.create_insn(ea)
+                if created == 0:
+                    created = idc.create_insn(ea)
+
                 if created == 0 or not ida_bytes.is_code(ida_bytes.get_flags(ea)):
                     # Raw/firmware regions often need wider undefine + auto-analysis nudges.
                     converted = False
@@ -297,7 +325,23 @@ def _funcs_impl(
                                 ida_auto.auto_make_code(ea)
                         except Exception:
                             pass
-                        created = idc.create_insn(ea)
+                        if is_arm:
+                            try:
+                                sr_auto = getattr(idc, "SR_auto", 2)
+                                idc.split_sreg_range(ea, "T", 1, sr_auto)
+                            except Exception:
+                                try:
+                                    import ida_segregs
+                                    ida_segregs.split_sreg_range(ea, "T", 1, 2)
+                                except Exception:
+                                    pass
+                        try:
+                            import ida_ua
+                            created = ida_ua.create_insn(ea)
+                        except Exception:
+                            created = idc.create_insn(ea)
+                        if created == 0:
+                            created = idc.create_insn(ea)
                         if created != 0 and ida_bytes.is_code(ida_bytes.get_flags(ea)):
                             converted = True
                             break
@@ -305,7 +349,7 @@ def _funcs_impl(
                         return make_error(
                             MCPError.ADDRESS_INVALID,
                             f"Address {hex(ea)} cannot be converted to code",
-                            "Tried carve-and-convert retries (16/64/256 bytes). Bytes may be invalid for current processor; verify architecture or use firmware_view(action='auto_retype').",
+                            "Tried carve-and-convert retries (16/64/256 bytes). Bytes may be invalid for current processor; verify architecture or use firmware_view(action='auto_retype'). For ARM Cortex-M firmware, ensure Thumb mode (T=1) is set via seg_reg action.",
                         )
 
             if ida_funcs.add_func(ea, end_ea or idaapi.BADADDR):

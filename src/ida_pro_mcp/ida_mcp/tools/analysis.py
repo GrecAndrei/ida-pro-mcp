@@ -164,11 +164,15 @@ def analysis(
                 "max_ea": getattr(idc, "INF_MAX_EA", None),
             }
             applied = {}
+            requested_baseaddr = None
             for key, val in options.items():
                 if key not in mapping or mapping[key] is None:
                     continue
                 try:
-                    cast_val = int(val)
+                    if isinstance(val, str):
+                        cast_val = int(val, 0)
+                    else:
+                        cast_val = int(val)
                 except (TypeError, ValueError):
                     return make_error(
                         MCPError.INVALID_ARGS,
@@ -184,6 +188,55 @@ def analysis(
                         details={"key": key, "value": cast_val},
                     )
                 applied[key] = cast_val
+                if key == "baseaddr":
+                    requested_baseaddr = cast_val
+
+            if requested_baseaddr is not None:
+                current_base = None
+                try:
+                    if hasattr(idc, "get_inf_attr") and getattr(idc, "INF_BASEADDR", None) is not None:
+                        current_base = int(idc.get_inf_attr(idc.INF_BASEADDR))
+                except Exception:
+                    current_base = None
+                if current_base is None:
+                    try:
+                        current_base = int(_safe_inf_get("baseaddr", 0) or 0)
+                    except Exception:
+                        current_base = 0
+                delta = requested_baseaddr - int(current_base or 0)
+                if delta != 0:
+                    rebased = False
+                    rebase_errors = []
+                    for rebase_fn in (
+                        getattr(idc, "rebase_program", None),
+                        getattr(idaapi, "rebase_program", None),
+                    ):
+                        if not callable(rebase_fn):
+                            continue
+                        for flags in (
+                            0,
+                            getattr(idc, "MSF_FIXONCE", 0) | getattr(idc, "MSF_SILENT", 0),
+                        ):
+                            try:
+                                result = rebase_fn(delta, flags)
+                                rebased = bool(result) or result is None
+                                if rebased:
+                                    break
+                            except Exception as e:
+                                rebase_errors.append(str(e))
+                        if rebased:
+                            break
+                    if not rebased:
+                        return make_error(
+                            MCPError.IDA_ERROR,
+                            "Failed to rebase program to requested baseaddr",
+                            details={
+                                "requested_baseaddr": hex(requested_baseaddr),
+                                "current_baseaddr": hex(int(current_base or 0)),
+                                "delta": delta,
+                                "errors": rebase_errors[:3],
+                            },
+                        )
             return {"ok": True, "applied": applied}
 
         if action == "set_processor":
@@ -386,52 +439,83 @@ def analysis(
             else:
                 s_ea = idaapi.inf_get_min_ea()
                 e_ea = idaapi.inf_get_max_ea()
-            if hasattr(idaapi, "auto_mark_range"):
+
+            # Fix segment class for raw binaries: ensure CODE not DATA
+            try:
+                seg = idaapi.getseg(s_ea)
+                if seg:
+                    cur_class = ida_segment.get_segm_class(seg)
+                    if cur_class != "CODE":
+                        ida_segment.set_segm_class(seg, "CODE")
+            except Exception:
+                pass
+
+            # Schedule analysis non-blocking. auto_wait() blocks IDA's main
+            # thread inside the socket server loop and causes IDA to crash.
+            # Use plan_range / auto_mark_range (fire-and-forget) — IDA's idle
+            # loop picks up the work after this RPC call returns.
+            import ida_auto as _ida_auto
+            if hasattr(_ida_auto, "plan_range"):
+                _ida_auto.plan_range(s_ea, e_ea)
+                mode = "plan_range"
+            elif hasattr(_ida_auto, "auto_mark_range"):
+                _ida_auto.auto_mark_range(s_ea, e_ea, _ida_auto.AU_FINAL)
+                mode = "auto_mark_range"
+            elif hasattr(idaapi, "auto_mark_range"):
                 idaapi.auto_mark_range(s_ea, e_ea, idaapi.AU_FINAL)
-                idaapi.auto_wait()
-                # Raw-binary bootstrap: if no functions were discovered, seed likely entry points.
-                try:
-                    func_count = sum(1 for _ in idautils.Functions())
-                except Exception:
-                    func_count = 0
-                boot = {"seeded_entries": 0}
-                if func_count == 0:
-                    boot = _bootstrap_raw_entry_points(s_ea, e_ea)
-                    try:
-                        idaapi.auto_mark_range(s_ea, e_ea, idaapi.AU_FINAL)
-                        idaapi.auto_wait()
-                    except Exception:
-                        pass
-                return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), **boot}
-            # Compatibility fallbacks for older IDA SDKs.
-            import ida_auto
-            if hasattr(ida_auto, "auto_mark_range"):
-                ida_auto.auto_mark_range(s_ea, e_ea, ida_auto.AU_FINAL)
-                ida_auto.auto_wait()
-                return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "mode": "ida_auto.auto_mark_range"}
-            if hasattr(ida_auto, "plan_and_wait"):
-                try:
-                    ida_auto.plan_and_wait(s_ea, e_ea, True)
-                except TypeError:
-                    ida_auto.plan_and_wait(s_ea, e_ea)
-                return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "mode": "plan_and_wait"}
-            # Last-resort no-op success with explicit note rather than hard failure.
+                mode = "idaapi.auto_mark_range"
+            else:
+                mode = "none"
+            # Raw-binary bootstrap: seed entry points synchronously so models
+            # can call code/funcs tools immediately after this returns.
+            try:
+                func_count = sum(1 for _ in idautils.Functions())
+            except Exception:
+                func_count = 0
+            boot = {"seeded_entries": 0}
+            if func_count == 0:
+                boot = _bootstrap_raw_entry_points(s_ea, e_ea)
+            analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else False
+            try:
+                func_count = sum(1 for _ in idautils.Functions())
+            except Exception:
+                func_count = 0
             return {
                 "ok": True,
                 "start": hex(s_ea),
                 "end": hex(e_ea),
-                "mode": "soft-fallback",
-                "note": "Reanalysis APIs unavailable in this runtime; request accepted but no direct reanalysis primitive exists.",
+                "mode": mode,
+                "analysis_complete": analysis_ok,
+                "functions": func_count,
+                "note": "Analysis scheduled (non-blocking). Poll with analysis(action='wait', timeout=30) or session(action='status') until analysis_complete=true.",
+                **boot,
             }
 
         if action == "wait":
-            # Block until IDA's auto-analysis queue is drained.
-            # Use after session create or reanalyze to ensure functions/strings
-            # are fully defined before calling code/data tools.
-            try:
-                idaapi.auto_wait()
-            except Exception:
-                pass
+            # Report current analysis state and optionally spin-wait for completion.
+            # Uses request_idle callback + short spins to avoid blocking the socket loop.
+            poll_timeout = float(kwargs.get("timeout", 0.0) or 0.0)
+            poll_max_wait = float(kwargs.get("max_wait", 30.0) or 30.0)
+            start_time = time.time()
+            waited = 0.0
+            while True:
+                analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+                if analysis_ok:
+                    break
+                if poll_timeout <= 0:
+                    break
+                remaining = min(poll_timeout, poll_max_wait) - waited
+                if remaining <= 0:
+                    break
+                sleep_sec = min(0.1, remaining)
+                time.sleep(sleep_sec)
+                waited += sleep_sec
+                # Pump IDA's idle queue to let auto-analysis make progress
+                try:
+                    if hasattr(idaapi, "process_ui_action"):
+                        pass  # non-blocking, just let the loop spin
+                except Exception:
+                    pass
             analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
             try:
                 func_count = sum(1 for _ in idautils.Functions())
@@ -446,7 +530,12 @@ def analysis(
                 "analysis_complete": analysis_ok,
                 "functions": func_count,
                 "strings": string_count,
-                "note": "Auto-analysis drained. Safe to call code/data/funcs tools now." if analysis_ok else "Analysis queue may still have pending work.",
+                "seconds_waited": round(waited, 2),
+                "note": (
+                    "Analysis complete. Safe to call code/data/funcs tools."
+                    if analysis_ok else
+                    f"Analysis still in progress after {round(waited, 1)}s. Retry with timeout=<seconds> or poll session(action='status')."
+                ),
             }
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

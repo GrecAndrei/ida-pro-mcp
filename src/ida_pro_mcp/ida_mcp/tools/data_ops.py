@@ -161,10 +161,33 @@ def data_ops(
             return make_error(MCPError.IDA_ERROR, "Failed to undefine")
 
         elif action == "make_code":
-            length = idc.create_insn(ea)
+            # Auto-detect Thumb mode for ARM Cortex-M firmware
+            try:
+                proc = (_inf_procname() or "").lower()
+            except Exception:
+                proc = ""
+            if "arm" in proc:
+                try:
+                    sr_auto = getattr(idc, "SR_auto", 2)
+                    idc.split_sreg_range(ea, "T", 1, sr_auto)
+                except Exception:
+                    try:
+                        import ida_segregs
+                        ida_segregs.split_sreg_range(ea, "T", 1, 2)
+                    except Exception:
+                        pass
+            # Try ida_ua.create_insn first (IDA 9.x), fall back to idc.create_insn
+            length = 0
+            try:
+                import ida_ua
+                length = ida_ua.create_insn(ea)
+            except Exception:
+                length = idc.create_insn(ea)
+            if length == 0:
+                length = idc.create_insn(ea)
             if length > 0:
                 return _attach_ml_context({"ok": True, "addr": addr, "size": length, "action": action}, action, f"insn_size={length}")
-            return make_error(MCPError.IDA_ERROR, "Failed to create instruction")
+            return make_error(MCPError.IDA_ERROR, "Failed to create instruction", "Verify address is valid code. For ARM Thumb, ensure T=1 segment register is set via seg_reg action.")
 
         elif action == "make_ptr":
             ptr_size = _inf_ptr_size()
