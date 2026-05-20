@@ -11,7 +11,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import sqlite3
 import sys
 import threading
@@ -28,6 +27,15 @@ from .intelligence_core import (
     _extract_signature,
 )
 from .intelligence_context_policy import ContextAssemblerPolicyMixin
+from .intelligence_context_semantic import ContextAssemblerSemanticMixin
+from .intelligence_api_patterns import (
+    ALL_INTERESTING_APIS,
+    actions_from_apis,
+    actions_from_schemaboot,
+    detect_crypto_constants,
+    extract_api_calls,
+    extract_string_refs,
+)
 
 
 
@@ -38,206 +46,8 @@ def _intel_profile_enabled() -> bool:
     return bool(INTEL_PROFILE)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Deterministic API pattern analysis
-# ─────────────────────────────────────────────────────────────────────────────
-_INTERESTING_APIS: Dict[str, frozenset] = {
-    "process_injection": frozenset({
-        "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
-        "NtCreateThread", "RtlCreateUserThread", "NtWriteVirtualMemory",
-    }),
-    "memory_exec": frozenset({
-        "VirtualAlloc", "VirtualProtect", "mmap", "mprotect",
-    }),
-    "network": frozenset({
-        "socket", "connect", "send", "recv", "bind", "listen", "accept",
-        "WSASocket", "WSAConnect", "WSASend", "WSARecv",
-        "InternetOpen", "InternetConnect", "HttpOpenRequest", "HttpSendRequest",
-        "WinHttpOpen", "WinHttpConnect", "WinHttpSendRequest", "WinHttpReadData",
-        "URLDownloadToFile",
-    }),
-    "crypto_winapi": frozenset({
-        "CryptEncrypt", "CryptDecrypt", "CryptHashData", "CryptDeriveKey",
-        "CryptGenKey", "CryptImportKey", "CryptAcquireContext",
-        "BCryptEncrypt", "BCryptDecrypt", "BCryptCreateHash",
-    }),
-    "persistence": frozenset({
-        "RegSetValue", "RegSetValueEx", "RegCreateKey", "RegOpenKey",
-        "CreateService", "OpenService", "StartService", "ChangeServiceConfig",
-    }),
-    "anti_debug": frozenset({
-        "IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-        "NtQueryInformationProcess", "OutputDebugString",
-        "NtSetInformationThread",
-    }),
-    "privilege": frozenset({
-        "AdjustTokenPrivileges", "OpenProcessToken", "LookupPrivilegeValue",
-        "ImpersonateLoggedOnUser", "DuplicateTokenEx",
-    }),
-    "process_spawn": frozenset({
-        "CreateProcess", "CreateProcessW", "CreateProcessA",
-        "ShellExecute", "ShellExecuteEx", "WinExec",
-        "NtCreateProcess",
-    }),
-    "file_ops": frozenset({
-        "CreateFile", "CreateFileW", "ReadFile", "WriteFile", "DeleteFile",
-        "MoveFile", "CopyFile", "FindFirstFile",
-    }),
-}
 
-_ALL_INTERESTING: frozenset = frozenset().union(*_INTERESTING_APIS.values())
-
-_API_COMBOS: List[Tuple[frozenset, List[Dict[str, Any]]]] = [
-    (frozenset({"VirtualAllocEx", "WriteProcessMemory"}), [
-        {"tool": "annotation", "action": "mark_dangerous",
-         "reason": "VirtualAllocEx + WriteProcessMemory = classic process injection"},
-        {"tool": "xref_analysis", "action": "call_chain",
-         "reason": "Trace injection chain to find where shellcode originates"},
-        {"tool": "code", "action": "callers",
-         "reason": "Find what triggers this injection"},
-    ]),
-    (frozenset({"CreateRemoteThread"}), [
-        {"tool": "annotation", "action": "mark_dangerous",
-         "reason": "CreateRemoteThread — remote code execution"},
-        {"tool": "code", "action": "callers",
-         "reason": "Trace where the target process handle comes from"},
-    ]),
-    (frozenset({"CryptEncrypt"}) | frozenset({"BCryptEncrypt"}) | frozenset({"CryptHashData"}), [
-        {"tool": "crypto_id", "action": "identify",
-         "reason": "Windows CNG/CryptoAPI in use — identify algorithm"},
-    ]),
-    (frozenset({"WSASocket"}) | frozenset({"InternetOpen"}) | frozenset({"WinHttpOpen"}), [
-        {"tool": "string_ops", "action": "find_urls",
-         "reason": "Network API — extract hardcoded URLs"},
-        {"tool": "string_ops", "action": "find_ips",
-         "reason": "Extract hardcoded IP addresses"},
-    ]),
-    (frozenset({"socket", "connect"}), [
-        {"tool": "string_ops", "action": "find_ips",
-         "reason": "Raw socket — find target IPs"},
-    ]),
-    (frozenset({"RegSetValueEx"}) | frozenset({"CreateService"}), [
-        {"tool": "search", "action": "api", "pattern": "*Reg*",
-         "reason": "Registry/service persistence — find related writes across binary"},
-    ]),
-    (frozenset({"IsDebuggerPresent"}) | frozenset({"CheckRemoteDebuggerPresent"})
-     | frozenset({"NtQueryInformationProcess"}), [
-        {"tool": "annotation", "action": "mark_dangerous",
-         "reason": "Anti-debugging — patch or note for analysis bypass"},
-    ]),
-    (frozenset({"AdjustTokenPrivileges"}), [
-        {"tool": "annotation", "action": "mark_dangerous",
-         "reason": "Token privilege manipulation — privilege escalation"},
-        {"tool": "xref_analysis", "action": "call_chain",
-         "reason": "Trace escalation path"},
-    ]),
-    (frozenset({"CreateProcess", "CreateProcessW"}) | frozenset({"ShellExecuteEx"}), [
-        {"tool": "string_ops", "action": "find_commands",
-         "reason": "Process spawning — extract command-line arguments"},
-        {"tool": "code", "action": "callers",
-         "reason": "Find what triggers process creation"},
-    ]),
-]
-
-_STRING_LIT_RE = re.compile(r'"([^"]{4,120})"')
-_HEX_CONST_RE  = re.compile(r'\b(0x[0-9A-Fa-f]{6,})\b')
-_CRYPTO_CONSTS = frozenset({
-    "0x67452301", "0xefcdab89", "0x98badcfe",
-    "0x6a09e667", "0xbb67ae85", "0x3c6ef372",
-    "0x428a2f98", "0x71374491",
-    "0xd76aa478", "0xe8c7b756",
-})
-
-
-def _extract_api_calls(pseudocode: str) -> List[str]:
-    found: List[str] = []
-    seen: set = set()
-    for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]{3,})\b", pseudocode):
-        name = m.group(1)
-        if name in _ALL_INTERESTING and name not in seen:
-            seen.add(name)
-            found.append(name)
-    return found[:30]
-
-
-def _extract_string_refs(pseudocode: str) -> List[str]:
-    raw = _STRING_LIT_RE.findall(pseudocode)
-    interesting = [
-        s for s in raw
-        if any(kw in s.lower() for kw in (
-            "http", "https", "ftp", "\\\\", "cmd", "powershell",
-            ".exe", ".dll", ".bat", ".ps1", "hkey", "software\\",
-            "run", "service", "password", "admin", "token",
-        )) or re.search(r"\d{1,3}\.\d{1,3}\.\d{1,3}", s)
-    ]
-    return (interesting or raw)[:8]
-
-
-def _detect_crypto_constants(pseudocode: str) -> List[str]:
-    hits = [h.lower() for h in _HEX_CONST_RE.findall(pseudocode)
-            if h.lower() in _CRYPTO_CONSTS]
-    return list(set(hits))[:5]
-
-
-def _actions_from_apis(apis: List[str], addr: str) -> List[Dict[str, Any]]:
-    api_set = frozenset(apis)
-    actions: List[Dict[str, Any]] = []
-    seen: set = set()
-    for required, combo_actions in _API_COMBOS:
-        if required & api_set:
-            for act in combo_actions:
-                key = f"{act['tool']}:{act['action']}"
-                if key not in seen:
-                    seen.add(key)
-                    a = dict(act)
-                    if addr and act.get("tool") in (
-                        "annotation", "xref_analysis", "crypto_id",
-                        "code", "string_ops",
-                    ):
-                        a.setdefault("addr", addr)
-                    actions.append(a)
-    return actions[:6]
-
-
-def _actions_from_schemaboot(attrs: Dict[str, Any], addr: str) -> List[Dict[str, Any]]:
-    actions: List[Dict[str, Any]] = []
-    xor        = attrs.get("xor_count", 0)
-    entropy    = attrs.get("entropy", 0.0)
-    cyclomatic = attrs.get("cyclomatic_complexity", 0)
-    xrefs_in   = attrs.get("incoming_xrefs", 0)
-
-    if xor > 5:
-        actions.append({
-            "tool": "crypto_id", "action": "identify", "addr": addr,
-            "reason": f"{xor} XOR instructions — possible custom encryption or obfuscation",
-        })
-    if entropy > 6.0:
-        actions.append({
-            "tool": "entropy", "action": "region", "addr": addr,
-            "reason": f"Entropy {entropy:.1f} — may process packed or encrypted data",
-        })
-    if cyclomatic > 15:
-        actions.append({
-            "tool": "code", "action": "blocks", "addr": addr,
-            "reason": f"Cyclomatic complexity {cyclomatic} — possible state machine or protocol parser",
-        })
-    if xrefs_in == 0:
-        actions.append({
-            "tool": "search", "action": "data_ref", "addr": addr,
-            "reason": "No direct callers — may be invoked via function pointer or vtable",
-        })
-    elif xrefs_in > 20:
-        actions.append({
-            "tool": "code", "action": "callers", "addr": addr,
-            "reason": f"{xrefs_in} callers — widely used utility, renaming will improve the whole analysis",
-        })
-    return actions[:4]
-
-
-
-
-
-class ContextAssemblerStateMixin(ContextAssemblerPolicyMixin):
+class ContextAssemblerStateMixin(ContextAssemblerSemanticMixin, ContextAssemblerPolicyMixin):
     def _behavior_classifier(self) -> BehaviorClassifier:
         """Return the shared classifier, re-binding it if the embedder changed.
 
@@ -1211,230 +1021,6 @@ class ContextAssemblerStateMixin(ContextAssemblerPolicyMixin):
         except Exception:
             return []
 
-    def _cached_bb_entry_vec(self, entry: Dict[str, Any]) -> Optional[List[float]]:
-        """Get or compute cached embedding vector for a blackboard entry."""
-        text = f"{entry.get('title', '')} {entry.get('content', '')}".strip()
-        if not text:
-            return None
-        entry_id = str(entry.get("id") or "")
-        updated = str(entry.get("updated_at") or "")
-        cache_key = f"{entry_id}:{updated}:{hashlib.md5(text[:800].encode()).hexdigest()}"
-        now = time.time()
-        with self._bb_entry_vec_cache_lock:
-            cached = self._bb_entry_vec_cache.get(cache_key)
-            if cached is not None:
-                vec, ts = cached
-                if now - ts <= self._bb_entry_cache_ttl_sec:
-                    with self._bb_cache_stats_lock:
-                        self._bb_cache_hits += 1
-                    return vec
-                self._bb_entry_vec_cache.pop(cache_key, None)
-        with self._bb_cache_stats_lock:
-            self._bb_cache_misses += 1
-        vec = self._embedder.embed(text[:400])
-        with self._bb_entry_vec_cache_lock:
-            # Keep cache bounded and evict oldest/expired entries.
-            if len(self._bb_entry_vec_cache) >= self._bb_entry_cache_max:
-                stale_keys = [k for k, (_, ts) in self._bb_entry_vec_cache.items()
-                              if now - ts > self._bb_entry_cache_ttl_sec]
-                for k in stale_keys:
-                    self._bb_entry_vec_cache.pop(k, None)
-                if len(self._bb_entry_vec_cache) >= self._bb_entry_cache_max:
-                    oldest = sorted(self._bb_entry_vec_cache.items(), key=lambda kv: kv[1][1])
-                    drop_n = max(1, self._bb_entry_cache_max // 4)
-                    for k, _ in oldest[:drop_n]:
-                        self._bb_entry_vec_cache.pop(k, None)
-            self._bb_entry_vec_cache[cache_key] = (vec, now)
-        return vec
-
-    def _cached_bb_entry_vecs(self, entries: List[Dict[str, Any]]) -> Dict[str, List[float]]:
-        """
-        Vectorize many blackboard entries with cache-first micro-batching.
-        Returns mapping of entry_id -> vector.
-        """
-        out: Dict[str, List[float]] = {}
-        misses: List[Tuple[str, str, str]] = []  # (cache_key, text, entry_id)
-        now = time.time()
-        with self._bb_entry_vec_cache_lock:
-            for entry in entries:
-                text = f"{entry.get('title', '')} {entry.get('content', '')}".strip()
-                if not text:
-                    continue
-                entry_id = str(entry.get("id") or "")
-                updated = str(entry.get("updated_at") or "")
-                cache_key = f"{entry_id}:{updated}:{hashlib.md5(text[:800].encode()).hexdigest()}"
-                cached = self._bb_entry_vec_cache.get(cache_key)
-                if cached is not None and (now - cached[1] <= self._bb_entry_cache_ttl_sec):
-                    out[entry_id or cache_key] = cached[0]
-                    with self._bb_cache_stats_lock:
-                        self._bb_cache_hits += 1
-                else:
-                    misses.append((cache_key, text[:400], entry_id or cache_key))
-                    with self._bb_cache_stats_lock:
-                        self._bb_cache_misses += 1
-        if misses:
-            texts = [m[1] for m in misses]
-            vecs = self._embedder.embed_batch(texts)
-            with self._bb_entry_vec_cache_lock:
-                for (cache_key, _text, entry_id), vec in zip(misses, vecs):
-                    if len(self._bb_entry_vec_cache) >= self._bb_entry_cache_max:
-                        oldest = sorted(self._bb_entry_vec_cache.items(), key=lambda kv: kv[1][1])
-                        for k, _ in oldest[: max(1, self._bb_entry_cache_max // 5)]:
-                            self._bb_entry_vec_cache.pop(k, None)
-                    self._bb_entry_vec_cache[cache_key] = (vec, now)
-                    out[entry_id] = vec
-        return out
-
-    def _semantic_candidates(
-        self,
-        all_entries: List[Dict[str, Any]],
-        api_calls: Optional[List[str]],
-        max_entries: int,
-    ) -> List[Dict[str, Any]]:
-        """Embedding-first candidate prefilter before semantic scoring."""
-        if not all_entries:
-            return []
-        api_calls = api_calls or []
-        q_text = " ".join(sorted(set(api_calls))).strip() or "binary reverse engineering related finding"
-        query_vec: Optional[List[float]] = None
-        try:
-            query_vec = self._embedder.embed(q_text[:400])
-        except Exception:
-            query_vec = None
-
-        scored: List[Tuple[float, Dict[str, Any]]] = []
-        if query_vec is not None:
-            texts: List[str] = []
-            refs: List[Dict[str, Any]] = []
-            for e in all_entries:
-                t = f"{e.get('title', '')} {e.get('content', '')} {' '.join(e.get('tags') or [])}".strip()
-                if not t:
-                    continue
-                texts.append(t[:400])
-                refs.append(e)
-            if texts:
-                try:
-                    vecs = self._embedder.embed_batch(texts)
-                    for e, ev in zip(refs, vecs):
-                        sim = BgeCodeEmbedder.cosine(query_vec, ev)
-                        scored.append((float(sim), e))
-                except Exception:
-                    scored = []
-
-        if not scored:
-            # Deterministic fallback: keep latest non-empty entries without weighted heuristics.
-            out = [e for e in all_entries if (e.get("title") or e.get("content"))]
-            out.sort(key=lambda e: float(e.get("updated_at") or 0.0), reverse=True)
-            return out[:max_entries]
-
-        # Merge: keep embedding-ranked head, then fill with strong-confidence entries
-        # that may lack rich text (to avoid coverage regressions).
-        embed_ranked = [e for _, e in sorted(scored, key=lambda x: x[0], reverse=True)]
-        seen = {str(e.get("id") or id(e)) for e in embed_ranked}
-        conf_fill = sorted(
-            [e for e in all_entries if str(e.get("id") or id(e)) not in seen],
-            key=lambda e: float(e.get("confidence") or 0.0),
-            reverse=True,
-        )
-        head_take = max(1, max_entries - 1) if conf_fill else max_entries
-        merged = embed_ranked[:head_take] + conf_fill + embed_ranked[head_take:]
-        dedup: List[Dict[str, Any]] = []
-        dedup_seen: set = set()
-        for e in merged:
-            k = str(e.get("id") or id(e))
-            if k in dedup_seen:
-                continue
-            dedup_seen.add(k)
-            dedup.append(e)
-            if len(dedup) >= max_entries:
-                break
-        return dedup[:max_entries]
-
-
-    def _get_bb_semantic_vec(
-        self,
-        query_vec: List[float],
-        bb_store,
-        top_k: int = 3,
-        threshold: float = 0.5,
-        max_entries: int = 20,
-        api_calls: Optional[List[str]] = None,
-        session_id: str = "",
-    ) -> List[Dict[str, Any]]:
-        """
-        Semantic blackboard retrieval using a pre-computed query vector.
-        Caps at max_entries to keep latency bounded: each entry requires one embed call.
-        """
-        if bb_store is None:
-            return []
-        try:
-            cache_key = ""
-            if session_id:
-                qh = hashlib.md5(json.dumps(query_vec[:32]).encode()).hexdigest()[:12]
-                ah = hashlib.md5("|".join(sorted(api_calls or [])).encode()).hexdigest()[:8]
-                cache_key = f"{session_id}:{qh}:{ah}:{threshold:.3f}:{max_entries}:{top_k}"
-                with self._semantic_result_cache_lock:
-                    cached = self._semantic_result_cache.get(cache_key)
-                    if cached and (time.time() - cached[0] <= self._semantic_result_cache_ttl_sec):
-                        return list(cached[1])
-
-            all_entries = bb_store.list(limit=max(max_entries * 3, 30))
-            if not all_entries:
-                return []
-            candidates = self._semantic_candidates(all_entries, api_calls, max_entries=max_entries)
-            scored = []
-            vecs = self._cached_bb_entry_vecs(candidates)
-            for entry in candidates:
-                entry_id = str(entry.get("id") or "")
-                emb = vecs.get(entry_id)
-                if emb is None:
-                    continue
-                sim = BgeCodeEmbedder.cosine(query_vec, emb)
-                if sim >= threshold:
-                    scored.append((sim, entry))
-            scored.sort(reverse=True)
-            out = [e for _, e in scored[:top_k]]
-            if cache_key:
-                with self._semantic_result_cache_lock:
-                    if len(self._semantic_result_cache) > 300:
-                        self._semantic_result_cache.clear()
-                    self._semantic_result_cache[cache_key] = (time.time(), out)
-            return out
-        except Exception:
-            return []
-
-    def _get_bb_semantic(
-        self,
-        pseudocode: str,
-        bb_store,
-        top_k: int = 3,
-        threshold: float = 0.5,
-    ) -> List[Dict[str, Any]]:
-        """
-        Find semantically relevant blackboard entries using embedding similarity.
-        Falls back gracefully if store is empty or embedder is slow.
-        """
-        if bb_store is None or not pseudocode:
-            return []
-        try:
-            all_entries = bb_store.list(limit=100)
-            if not all_entries:
-                return []
-            q = self._embedder.embed(pseudocode[:2000])
-            scored = []
-            for entry in all_entries:
-                text = f"{entry.get('title', '')} {entry.get('content', '')}"
-                if not text.strip():
-                    continue
-                emb = self._embedder.embed(text[:500])
-                sim = BgeCodeEmbedder.cosine(q, emb)
-                if sim >= threshold:
-                    scored.append((sim, entry))
-            scored.sort(reverse=True)
-            return [e for _, e in scored[:top_k]]
-        except Exception:
-            return []
-
     # ── stuck detection ──────────────────────────────────────────────────
 
     def record_call(self, session_id: str, tool: str, action: str, addr: str) -> None:
@@ -1719,9 +1305,9 @@ class ContextAssemblerStateMixin(ContextAssemblerPolicyMixin):
         string_refs: List[str] = []
         crypto_consts: List[str] = []
         try:
-            api_calls    = _extract_api_calls(pseudocode)
-            string_refs  = _extract_string_refs(pseudocode)
-            crypto_consts = _detect_crypto_constants(pseudocode)
+            api_calls = extract_api_calls(pseudocode)
+            string_refs = extract_string_refs(pseudocode)
+            crypto_consts = detect_crypto_constants(pseudocode)
         except Exception:
             pass
 
@@ -1783,7 +1369,7 @@ class ContextAssemblerStateMixin(ContextAssemblerPolicyMixin):
         actions: List[Dict[str, Any]] = []
         seen_act: set = set()
         try:
-            for act in _actions_from_apis(api_calls, addr):
+            for act in actions_from_apis(api_calls, addr):
                 key = f"{act['tool']}:{act['action']}"
                 if key not in seen_act:
                     seen_act.add(key)
@@ -1792,7 +1378,7 @@ class ContextAssemblerStateMixin(ContextAssemblerPolicyMixin):
             pass
         try:
             if sb_attrs:
-                for act in _actions_from_schemaboot(sb_attrs, addr):
+                for act in actions_from_schemaboot(sb_attrs, addr):
                     key = f"{act['tool']}:{act['action']}"
                     if key not in seen_act:
                         seen_act.add(key)
@@ -2061,7 +1647,7 @@ class ContextAssemblerStateMixin(ContextAssemblerPolicyMixin):
                 if row[6] is not None:
                     entry["callers"] = row[6]
                 apis = [a for a in apis_by_ea.get(ea_int, [])
-                        if a in _ALL_INTERESTING][:5]
+                        if a in ALL_INTERESTING_APIS][:5]
                 if apis:
                     entry["dangerous_apis"] = apis
                 if row[8]:
