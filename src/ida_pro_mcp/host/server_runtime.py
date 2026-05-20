@@ -1110,6 +1110,55 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if res.get("error"):
                     return res
 
+            # After setting architecture, synchronously fix segment state for
+            # firmware binaries BEFORE reanalyze or bootstrap run. IDA's raw
+            # binary loader creates BSS/DATA segments that block create_insn()
+            # and add_func(). This fix sets class→CODE, type=SEG_CODE,
+            # perm|=SEGPERM_EXEC, bitness→32, and T=1 for ARM Thumb.
+            if any(k in opts for k in ("processor", "bitness")):
+                try:
+                    self._send_rpc_raw({
+                        "tool": "misc",
+                        "args": {
+                            "action": "python",
+                            "code": """\
+import idaapi, ida_segment, idc
+mn = idaapi.inf_get_min_ea()
+seg = idaapi.getseg(mn)
+if seg:
+    ida_segment.set_segm_class(seg, "CODE")
+    if seg.type != idaapi.SEG_CODE:
+        seg.type = idaapi.SEG_CODE
+        ida_segment.update_segm(seg)
+    if not (seg.perm & idaapi.SEGPERM_EXEC):
+        seg.perm |= idaapi.SEGPERM_EXEC
+        ida_segment.update_segm(seg)
+    if hasattr(seg, 'bitness') and seg.bitness != 1:
+        seg.bitness = 1
+        ida_segment.update_segm(seg)
+"""
+                        }
+                    }, port, timeout=5)
+                    proc = str(opts.get('processor') or '').lower()
+                    if 'arm' in proc:
+                        self._send_rpc_raw({
+                            "tool": "misc",
+                            "args": {
+                                "action": "python",
+                                "code": """\
+import idaapi, idc
+mn = idaapi.inf_get_min_ea()
+try:
+    idc.split_sreg_range(mn, 'T', 1, 2)
+except Exception:
+    import ida_segregs
+    ida_segregs.split_sreg_range(mn, 'T', 1, 2)
+"""
+                            }
+                        }, port, timeout=5)
+                except Exception:
+                    pass
+
             if actions and (reanalyze is None or reanalyze):
                 reanalyze_args = {"action": "reanalyze"}
                 if opts.get("start") is not None:
