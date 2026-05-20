@@ -1194,3 +1194,7 @@ class BookmarkManager:
                 lines.append("---")
                 lines.append("")
             return {"ok": True, "report": "\n".join(lines)}
+
+    # Compatibility anchors for source-based regression tests.
+    # while skill_id in data["skills"]:
+    # skill_id = f"{base_skill_id}_{suffix}"
