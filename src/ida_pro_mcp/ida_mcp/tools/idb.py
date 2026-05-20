@@ -183,6 +183,9 @@ def idb_meta():
         "procname": _inf_procname(),
         "bitness": _inf_bitness(),
         "bits": _inf_bitness(),
+        "file_type_id": file_type_id,
+        "file_type_name": ft_loader,
+        "file_type_effective": ft_effective,
         "file_type_info": {
             "loader": ft_loader,
             "loader_id": file_type_id,
@@ -419,7 +422,8 @@ def idb_architecture_profile(meta=None, summary=None):
     import_count = int((summary or {}).get("imports", 0) or 0)
     proc = str(meta.get("processor") or "").strip().lower()
     raw_mode = bool(
-        file_type in ("raw", "unknown", "")
+        file_type in ("raw", "unknown", "obj", "")
+        or meta.get("file_type_id") in (0, 2, 17)
         or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and import_count == 0)
     )
     recs = []

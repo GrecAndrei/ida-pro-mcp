@@ -46,7 +46,7 @@ def binary_info(
         is_elf = file_type == idaapi.f_ELF if hasattr(idaapi, 'f_ELF') else False
         is_macho = file_type == idaapi.f_MACHO if hasattr(idaapi, 'f_MACHO') else False
 
-        fmt_name = "PE" if is_pe else "ELF" if is_elf else "Mach-O" if is_macho else _filetype_name(file_type).upper()
+        fmt_name = "PE" if is_pe else "ELF" if is_elf else "Mach-O" if is_macho else "RAW" if file_type in (0, 2, 17) else _filetype_name(file_type).upper()
 
         if action == "headers":
             # Entry points

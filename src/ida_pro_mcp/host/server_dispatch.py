@@ -639,6 +639,55 @@ class ServerDispatchMixin:
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
 
+            # ---- Blackboard strict policy preflight (global tool boundary) ----
+            try:
+                if tool_name != "blackboard" and hasattr(self, "_bb_policy_bump") and hasattr(self, "_bb_policy_check"):
+                    bb_state = self._bb_policy_bump()
+                    exempt_tools = {
+                        "session",
+                        "bookmarks",
+                        "batch",
+                        "truncation",
+                        "blackboard",
+                        "misc",
+                    }
+                    phase_name = "scout"
+                    if hasattr(self, "_phase_state"):
+                        try:
+                            phase_name = str((self._phase_state() or {}).get("phase") or "scout")
+                        except Exception:
+                            phase_name = "scout"
+                    should_enforce = bool(bb_state.get("strict_mode"))
+                    if hasattr(self, "_bb_policy_enforced_for_phase"):
+                        should_enforce = bool(self._bb_policy_enforced_for_phase(bb_state, phase_name))
+                    if should_enforce and tool_name not in exempt_tools:
+                        check = self._bb_policy_check(bb_state)
+                        if not check.get("ok"):
+                            return make_error(
+                                MCPError.INVALID_ARGS,
+                                "Strict blackboard policy gate failed before tool execution",
+                                hint=json.dumps(
+                                    {
+                                        "tool": tool_name,
+                                        "reasons": check.get("reasons", []),
+                                        "recommendation": check.get("recommendation", ""),
+                                    },
+                                    ensure_ascii=True,
+                                ),
+                                details={"policy": check.get("policy", {})},
+                            )
+            except Exception:
+                pass
+
+            # ---- Phase-state preflight (adaptive choreography) ----
+            try:
+                if tool_name != "blackboard" and hasattr(self, "_phase_preflight_for_tool"):
+                    phase_block = self._phase_preflight_for_tool(tool_name, args if isinstance(args, dict) else {})
+                    if isinstance(phase_block, dict) and phase_block.get("error"):
+                        return phase_block
+            except Exception:
+                pass
+
             # ---- Active Blackboard Kernel (preflight) ----
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             pre = {"decision": "allow"}

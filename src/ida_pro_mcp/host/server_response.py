@@ -56,6 +56,58 @@ except ImportError:
 class ServerResponseMixin(ServerResponseCompactMixin):
     """Mixin for output compaction, pointer notes, and response enrichment."""
 
+    def _inject_blackboard_policy_followup(
+        self, payload: dict, tool_name: str, call_args: Any
+    ) -> None:
+        if not isinstance(payload, dict):
+            return
+        if str(tool_name or "").strip().lower() == "blackboard":
+            return
+        if not hasattr(self, "_bb_policy_state") or not hasattr(self, "_bb_policy_check"):
+            return
+        try:
+            state = self._bb_policy_state()
+            if not bool((state or {}).get("strict_mode")):
+                return
+            check = self._bb_policy_check(state)
+            if check.get("ok"):
+                return
+            reasons = check.get("reasons", [])
+            payload.setdefault("blackboard_policy_gate", check)
+            payload["must_call_before_answer"] = True
+            payload["required_followup_call"] = {
+                "tool": "blackboard",
+                "action": "working_set",
+            }
+            # If a fresh write/decision is also required, steer to decision_card.
+            if "missing_decision_or_write" in reasons or "stale_decision_or_write" in reasons:
+                payload["required_followup_call"] = {
+                    "tool": "blackboard",
+                    "action": "decision_card",
+                }
+        except Exception:
+            return
+
+    def _inject_blackboard_phase_followup(self, payload: dict, tool_name: str) -> None:
+        if not isinstance(payload, dict):
+            return
+        if str(tool_name or "").strip().lower() == "blackboard":
+            return
+        if not hasattr(self, "_phase_followup_for_response"):
+            return
+        try:
+            follow = self._phase_followup_for_response(tool_name)
+            if not isinstance(follow, dict):
+                return
+            if follow.get("phase_gate"):
+                payload.setdefault("blackboard_phase_gate", follow.get("phase_gate"))
+            if follow.get("must_call_before_answer"):
+                payload["must_call_before_answer"] = True
+            if isinstance(follow.get("required_followup_call"), dict):
+                payload["required_followup_call"] = follow["required_followup_call"]
+        except Exception:
+            return
+
     def _pointer_note_signal_from_text(self, text: str) -> float:
         if not text:
             return 0.0
@@ -554,6 +606,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
             # ---- Explicit tool-first directive ----
             try:
+                self._inject_blackboard_policy_followup(compacted, tool_name, call_args)
+                self._inject_blackboard_phase_followup(compacted, tool_name)
                 directive = self._build_llm_execution_directive(compacted)
                 if directive:
                     compacted.setdefault("llm_execution_directive", directive)
@@ -863,36 +917,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                         "category": "analysis",
                                         "priority": 3,
                                     },
-                                },
-                            )
-            except Exception:
-                pass
-
-            # ---- State Contract Enforcement ----
-            # Suppress after first reminder per session to avoid token bloat.
-            # The check_state_contract window (16 calls) is sufficient to detect
-            # missing persistence — we only flag it once, not every batch.
-            try:
-                if (
-                    hasattr(self, "session_mgr")
-                    and self.current_session
-                    and tool_name not in {"session", "blackboard", "batch", "predictor", "workflow"}
-                ):
-                    sid = self.current_session.session_id
-                    contract = self.session_mgr.check_state_contract(sid, window=32)
-                    if isinstance(contract, dict) and contract.get("ok") and not contract.get("contract_met"):
-                        blackboard_gap = int(contract.get("blackboard_writes_in_window", 0) or 0)
-                        # Only alert when gap exceeds 32 calls without a write AND
-                        # we haven't already alerted in this session.
-                        contract_alerted = getattr(self, f"_contract_alerted_{sid}", False)
-                        if blackboard_gap == 0 and not contract_alerted:
-                            setattr(self, f"_contract_alerted_{sid}", True)
-                            compacted.setdefault(
-                                "llm_state_contract_reminder",
-                                {
-                                    "message": f"No blackboard write in last {contract.get('window_size', 32)} calls. Persist findings to maintain state.",
-                                    "recommended_action": contract.get("recommended_action"),
-                                    "contract_met": False,
                                 },
                             )
             except Exception:

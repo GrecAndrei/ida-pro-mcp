@@ -238,8 +238,11 @@ def _get_func_strings(func_ea):
 
 
 def _get_file_type_name():
-    """Get IDA's file type description."""
-    return _filetype_name(_inf_filetype_id()).upper()
+    """Get IDA's file type description, resolving OBJ→RAW for firmware."""
+    ft = _filetype_name(_inf_filetype_id()).upper()
+    if ft == "OBJ":
+        ft = "RAW"  # IDA processor-module loader reports raw firmware as OBJ
+    return ft
 
 
 def _decompile_preview(ea, max_lines=20):

@@ -302,8 +302,8 @@ class ResourceResolver:
                 except Exception:
                     imports = 0
                 is_firmware = bool(
-                    ft_name in {"", "raw", "unknown", "bin", "binary"}
-                    or ft_num in {0, 17}
+                    ft_name in {"", "raw", "unknown", "bin", "binary", "obj"}
+                    or ft_num in {0, 2, 17}
                     or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and imports == 0)
                 )
             state["binary"] = {

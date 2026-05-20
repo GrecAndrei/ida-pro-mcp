@@ -1069,7 +1069,7 @@ def llm_helpers(
                 lines.append(f"Import modules: {', '.join(modules[:10])}")
             if top_strings:
                 lines.append(f"Notable strings: {'; '.join(top_strings[:10])}")
-            if file_type_name in ("UNKNOWN", "RAW"):
+            if file_type_name in ("UNKNOWN", "RAW", "OBJ"):
                 lines.append(
                     "Raw/unknown format: start with firmware_view(action='scan_region') and firmware_view(action='pointer_sweep') after confirming the load architecture."
                 )

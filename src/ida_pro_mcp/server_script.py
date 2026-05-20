@@ -18,7 +18,7 @@ def log_ev(msg):
     print(msg)
 
 try:
-    import idaapi, idc, ida_auto
+    import idaapi, idc, ida_auto, idautils, ida_segment
     log_ev("IDA modules imported")
 except Exception as e:
     log_ev(f"CRITICAL: {e}")
@@ -468,66 +468,69 @@ def _apply_pre_analysis_options():
         except Exception as e:
             warnings_list.append(f"loader_options: {e}")
 
-    # Raw binary / firmware fix: set segment class to CODE and fix bitness.
+    # Raw binary / firmware fix: set ALL segments to CODE and fix bitness.
     # IDA's raw binary loader creates BSS/DATA segments by default which
-    # block instruction creation. Ensure the first segment is CODE and 32-bit
+    # block instruction creation. Ensure every segment is CODE and 32-bit
     # when an ARM or firmware processor is loaded.
-    try:
-        proc_lower = str(processor or "").lower()
-        is_firmware_arch = proc_lower in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8")
-        seg = idaapi.getseg(idaapi.inf_get_min_ea())
-        if seg and is_firmware_arch:
-            # Fix segment class AND type flag: set_segm_class only changes the
-            # class string; seg.type and seg.perm are what create_insn() checks.
-            try:
-                cur_class = ida_segment.get_segm_class(seg)
-                if cur_class != "CODE":
-                    ida_segment.set_segm_class(seg, "CODE")
-                    changed.append(f"segment_class={cur_class}→CODE")
-            except Exception:
-                pass
-            try:
-                if seg.type != idaapi.SEG_CODE:
-                    seg.type = idaapi.SEG_CODE
-                    ida_segment.update_segm(seg)
-                    changed.append("SEG_CODE type set")
-            except Exception:
-                pass
-            try:
-                if not (seg.perm & idaapi.SEGPERM_EXEC):
-                    seg.perm |= idaapi.SEGPERM_EXEC
-                    ida_segment.update_segm(seg)
-                    changed.append("SEGPERM_EXEC added")
-            except Exception:
-                pass
-            # Fix segment bitness: force 32-bit for firmware architectures
-            if bitness == 32:
+    proc_lower = str(processor or "").lower()
+    is_firmware_arch = proc_lower in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8")
+    if is_firmware_arch:
+        try:
+            for seg_ea in idautils.Segments():
+                seg = idaapi.getseg(seg_ea)
+                if not seg:
+                    continue
                 try:
-                    if hasattr(seg, "bitness") and seg.bitness != 1:
-                        seg.bitness = 1
+                    cur_class = ida_segment.get_segm_class(seg)
+                    if cur_class != "CODE":
+                        ida_segment.set_segm_class(seg, "CODE")
+                        changed.append(f"segment_class={cur_class}→CODE")
+                except Exception:
+                    pass
+                try:
+                    if seg.type != idaapi.SEG_CODE:
+                        seg.type = idaapi.SEG_CODE
                         ida_segment.update_segm(seg)
-                        changed.append("segment_bitness=32")
+                        changed.append("SEG_CODE type set")
                 except Exception:
-                    try:
-                        ida_segment.set_segm_addressing(seg, 1)
-                        changed.append("segment_addressing=32bit")
-                    except Exception:
-                        pass
-            # ARM Cortex-M Thumb: set T=1 globally
-            if "arm" in proc_lower:
+                    pass
                 try:
-                    sr_auto = getattr(idc, "SR_auto", 2)
-                    idc.split_sreg_range(seg.start_ea, "T", 1, sr_auto)
-                    changed.append("T=1 set for ARM Thumb")
+                    if not (seg.perm & idaapi.SEGPERM_EXEC):
+                        seg.perm |= idaapi.SEGPERM_EXEC
+                        ida_segment.update_segm(seg)
+                        changed.append("SEGPERM_EXEC added")
                 except Exception:
+                    pass
+                if bitness == 32:
                     try:
-                        import ida_segregs
-                        ida_segregs.split_sreg_range(seg.start_ea, "T", 1, 2)
-                        changed.append("T=1 via ida_segregs")
+                        if hasattr(seg, "bitness") and seg.bitness != 1:
+                            seg.bitness = 1
+                            ida_segment.update_segm(seg)
+                            changed.append("segment_bitness=32")
                     except Exception:
-                        pass
-    except Exception:
-        pass
+                        try:
+                            ida_segment.set_segm_addressing(seg, 1)
+                            changed.append("segment_addressing=32bit")
+                        except Exception:
+                            pass
+            # ARM Cortex-M Thumb: set T=1 globally on all segments
+            if "arm" in proc_lower:
+                for seg_ea in idautils.Segments():
+                    seg = idaapi.getseg(seg_ea)
+                    if seg:
+                        try:
+                            sr_auto = getattr(idc, "SR_auto", 2)
+                            idc.split_sreg_range(seg.start_ea, "T", 1, sr_auto)
+                            changed.append(f"T=1 set for {hex(seg.start_ea)}")
+                        except Exception:
+                            try:
+                                import ida_segregs
+                                ida_segregs.split_sreg_range(seg.start_ea, "T", 1, 2)
+                                changed.append(f"T=1 via ida_segregs at {hex(seg.start_ea)}")
+                            except Exception:
+                                pass
+        except Exception:
+            log_ev("Segment fix failed (non-fatal)")
 
     if changed:
         log_ev(f"Pre-analysis options applied: {', '.join(changed)}")

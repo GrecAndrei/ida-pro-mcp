@@ -23,8 +23,14 @@ def _safe_bounds() -> tuple[int, int]:
     try:
         mn = int(_inf_min_ea())
         mx = int(_inf_max_ea())
+        if mn == 0 and mx == 0:
+            raise ValueError("inf returned 0,0")
         return mn, mx
     except Exception:
+        for ea in idautils.Segments():
+            seg = idaapi.getseg(ea)
+            if seg:
+                return seg.start_ea, seg.end_ea
         return 0, 0
 
 
@@ -55,13 +61,17 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
     code_failures = []
     func_failures = []
 
-    # Fix segment class AND type flag: set_segm_class only changes the class
-    # string; seg.type and seg.perm are what create_insn()/add_func() check.
-    try:
-        seg = idaapi.getseg(mn)
-        if seg:
+    # Fix ALL segments: ensure CODE type/class/perm so create_insn() and
+    # add_func() work. IDA's processor-module loader creates BSS/DATA
+    # segments for raw binaries; we upgrade every segment here.
+    seg_fix_count = 0
+    for seg_ea in idautils.Segments():
+        try:
+            seg = idaapi.getseg(seg_ea)
+            if not seg:
+                continue
             cur_class = ida_segment.get_segm_class(seg)
-            if cur_class != "CODE" or not ida_segment.is_spec_segm(mn):
+            if cur_class != "CODE":
                 ida_segment.set_segm_class(seg, "CODE")
             if seg.type != idaapi.SEG_CODE:
                 seg.type = idaapi.SEG_CODE
@@ -69,8 +79,9 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
             if not (seg.perm & idaapi.SEGPERM_EXEC):
                 seg.perm |= idaapi.SEGPERM_EXEC
                 ida_segment.update_segm(seg)
-    except Exception:
-        pass
+            seg_fix_count += 1
+        except Exception:
+            pass
 
     handler_addrs = []
     skipped_oob = []
@@ -150,6 +161,15 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
         fn = ida_funcs.get_func(h)
         if not fn:
             ok = ida_funcs.add_func(h)
+            if not ok:
+                # add_func with auto-bounds fails for raw firmware because
+                # Thumb/lack of standard prologue blocks flow analysis.
+                # Retry with an explicit end bound.
+                try:
+                    bound = min(h + 256, mx)
+                    ok = ida_funcs.add_func(h, bound)
+                except Exception:
+                    pass
             add_func_results.append({"addr": hex(h), "ok": bool(ok), "is_code": ida_bytes.is_code(ida_bytes.get_flags(h))})
             if ok:
                 created += 1
@@ -166,20 +186,40 @@ def _run_vector_bootstrap() -> Dict[str, Any]:
                 nm = str(vec.get("name") or "")
                 if nm and nm.endswith("_Handler"):
                     idc.set_name(fn.start_ea, nm, ida_name.SN_FORCE)
+    # Verify segment fix: resolve primary segment (use first segment if mn is 0)
+    primary_seg_ea = mn if mn > 0 else next(idautils.Segments(), idaapi.BADADDR)
+    primary_seg = idaapi.getseg(primary_seg_ea) if primary_seg_ea != idaapi.BADADDR else None
+    seg_code_verified = bool(
+        primary_seg and primary_seg.type == idaapi.SEG_CODE
+    ) if primary_seg else False
+    seg_class_verified = str(ida_segment.get_segm_class(primary_seg)) if primary_seg else "N/A"
+    seg_count = seg_fix_count
+
     result = {
         "vectors_detected": len(vectors),
         "entry_points_defined": entries,
         "functions_created": created,
+        "segment_code_flag": seg_code_verified,
+        "segment_class": seg_class_verified,
+        "segments_fixed": seg_count,
         "reset_handler": (hex(reset_addr) if reset_addr is not None else None),
     }
-    if code_failures or func_failures or skipped_oob:
+    if code_failures or func_failures or skipped_oob or not seg_code_verified:
         result["_debug"] = {
             "handler_count": len(handler_addrs),
+            "segments_fixed": seg_count,
+            "primary_seg_code": seg_code_verified,
+            "primary_seg_class": seg_class_verified,
             "skipped_oob": skipped_oob[:10],
             "add_func_sample": add_func_results[:10],
             "code_failures": code_failures[:10],
             "func_failures": func_failures[:10],
         }
+        if not seg_code_verified:
+            result["_debug"]["segment_note"] = (
+                "Segment was not CODE after fix attempt. create_insn/add_func will likely fail. "
+                "Try setting the processor/loader with -Tbin before calling firmware_bootstrap."
+            )
         result["_status"] = "partial" if (created > 0 or entries > 0) else "failed"
     return result
 
