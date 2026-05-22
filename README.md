@@ -88,6 +88,7 @@ Installer behavior:
 6. Sets wiki path automatically when available.
 7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1` and `IDA_MCP_TOOLS_LIST_MODE=full` so MCP clients receive full tool descriptions and schemas directly.
 8. Hardcoded MCP client config paths are loaded dynamically from `client_configs.json`.
+9. Adds `ida-pro-mcp-cli` to your `~/.bashrc` as a shell function and PATH entry for direct JSON-safe command use.
 
 Default install directory:
 
@@ -128,6 +129,18 @@ pip install -e .
 ```bash
 python -u ida_mcp_stdio.py
 ```
+
+### CLI command
+
+The installer also exposes a dedicated shell command for scripted use:
+
+```bash
+ida-pro-mcp-cli tool session '{"action":"status"}'
+ida-pro-mcp-cli rpc tools/list '{}'
+ida-pro-mcp-cli raw '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+If the console script is not yet installed, the bashrc function falls back to `python -m ida_pro_mcp.cli`.
 
 ## Documentation Map
 

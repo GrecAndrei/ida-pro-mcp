@@ -241,6 +241,70 @@ def get_codex_home_dir():
     return Path.home() / ".codex"
 
 
+def get_bashrc_path():
+    """Get the user's bashrc path."""
+    return Path.home() / ".bashrc"
+
+
+def install_bashrc_cli(install_path: Path):
+    """Add ida-pro-mcp-cli to bash PATH via a managed bashrc block."""
+    if sys.platform == "win32":
+        return {"ok": True, "skipped": True, "reason": "bashrc not used on Windows"}
+
+    bashrc = get_bashrc_path()
+    venv_bin = install_path / ".venv" / "bin"
+    cli_path = venv_bin / "ida-pro-mcp-cli"
+    if not cli_path.exists():
+        return {"ok": False, "reason": f"CLI not found at {cli_path}"}
+
+    block_start = "# >>> ida-pro-mcp >>>"
+    block_end = "# <<< ida-pro-mcp <<<"
+    block = "\n".join(
+        [
+            block_start,
+            f'export IDA_PRO_MCP_HOME="{install_path}"',
+            'case ":$PATH:" in',
+            f'  *":$IDA_PRO_MCP_HOME/.venv/bin:"*) ;;',
+            '  *) export PATH="$IDA_PRO_MCP_HOME/.venv/bin:$PATH" ;;',
+            'esac',
+            f'export IDA_PRO_MCP_CLI="$IDA_PRO_MCP_HOME/.venv/bin/ida-pro-mcp-cli"',
+            'ida-pro-mcp-cli() {',
+            '  if [ -x "$IDA_PRO_MCP_HOME/.venv/bin/ida-pro-mcp-cli" ]; then',
+            '    "$IDA_PRO_MCP_HOME/.venv/bin/ida-pro-mcp-cli" "$@"',
+            '  else',
+            '    PYTHONPATH="$IDA_PRO_MCP_HOME/src${PYTHONPATH:+:$PYTHONPATH}" command python -m ida_pro_mcp.cli "$@"',
+            '  fi',
+            '}',
+            block_end,
+            "",
+        ]
+    )
+
+    try:
+        existing = bashrc.read_text(encoding="utf-8") if bashrc.exists() else ""
+    except Exception as e:
+        return {"ok": False, "reason": f"failed to read {bashrc}: {e}"}
+
+    if block_start in existing and block_end in existing:
+        start_idx = existing.index(block_start)
+        end_idx = existing.index(block_end) + len(block_end)
+        newline_idx = existing.find("\n", end_idx)
+        if newline_idx == -1:
+            updated = existing[:start_idx] + block
+        else:
+            updated = existing[:start_idx] + block + existing[newline_idx + 1 :]
+    else:
+        updated = existing.rstrip("\n") + ("\n" if existing.strip() else "") + block
+
+    try:
+        bashrc.parent.mkdir(parents=True, exist_ok=True)
+        bashrc.write_text(updated, encoding="utf-8")
+    except Exception as e:
+        return {"ok": False, "reason": f"failed to write {bashrc}: {e}"}
+
+    return {"ok": True, "path": str(bashrc), "cli": str(cli_path)}
+
+
 def _safe_remove_path(path: Path):
     """Remove existing file/dir/symlink safely."""
     if not path.exists() and not path.is_symlink():
@@ -752,11 +816,11 @@ def verify_runtime_imports(install_path: Path) -> bool:
             [
                 str(python_exe),
                 "-c",
-                "import numpy, tomli_w, requests, ida_pro_mcp.host.server; print('ok')",
+                "import numpy, tomli_w, requests, ida_pro_mcp.host.server, ida_pro_mcp.cli; print('ok')",
             ],
             cwd=install_path,
         )
-        success("Runtime import check passed (numpy/tomli_w/requests/server)")
+        success("Runtime import check passed (numpy/tomli_w/requests/server/cli)")
         return True
     except Exception as e:
         error(f"Runtime import check failed: {e}")
@@ -1198,6 +1262,16 @@ def do_install(skills_mode: str = "router"):
     if not setup_virtualenv(install_path):
         return False
 
+    bashrc_result = install_bashrc_cli(install_path)
+    if bashrc_result.get("ok"):
+        if bashrc_result.get("skipped"):
+            dim(bashrc_result.get("reason", "bashrc update skipped"))
+        else:
+            success(f"bashrc: {bashrc_result.get('path')}")
+            dim("Added PATH entry for ida-pro-mcp-cli")
+    else:
+        warning(f"bashrc update skipped: {bashrc_result.get('reason', 'unknown error')}")
+
     # Step 4: Configure MCP Clients
     step(4, total_steps, "Configuring MCP clients...")
     configs = get_mcp_config_paths()
@@ -1327,6 +1401,8 @@ def do_install(skills_mode: str = "router"):
 
    {C.WHITE}Deployed Components:{C.RESET}
       - {C.CYAN}MCP Server{C.RESET} (headless host for IDEs)
+      - {C.CYAN}CLI{C.RESET} (ida-pro-mcp-cli, ephemeral JSON/RPC shell command)
+      - {C.CYAN}bashrc{C.RESET} (PATH entry for ida-pro-mcp-cli)
       - {C.CYAN}IDA Plugin{C.RESET} {"(installed)" if plugin_installed else "(not installed - IDA not found)"}
       - {C.CYAN}Codex Skills{C.RESET} {"(installed)" if codex_skills_result.get("ok") else "(not installed)"} [{codex_skills_result.get("mode", skills_mode)}]
 

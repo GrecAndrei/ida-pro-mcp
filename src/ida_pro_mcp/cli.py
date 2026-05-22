@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Ephemeral CLI for driving the ida-pro-mcp server from shell scripts.
+
+This is a thin JSON-safe wrapper around the existing stdio MCP server. It
+starts the server only for the duration of the request, forwards JSON input
+without shell interpolation, and exits immediately after printing a response.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import threading
+from dataclasses import dataclass
+from typing import Any, Optional
+
+
+def _load_json_arg(value: Optional[str], *, label: str) -> Any:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"invalid JSON for {label}: {exc}") from exc
+
+
+def _read_stdin_json(*, label: str) -> Any:
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"invalid JSON from stdin for {label}: {exc}") from exc
+
+
+@dataclass
+class _StderrTail:
+    lines: list[str]
+    limit: int = 40
+
+    def push(self, text: str) -> None:
+        self.lines.append(text)
+        if len(self.lines) > self.limit:
+            del self.lines[: len(self.lines) - self.limit]
+
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
+class MCPStdioClient:
+    def __init__(self, cmd: list[str]):
+        self.proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self._id = 0
+        self._stderr = _StderrTail([])
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
+
+    def _drain_stderr(self) -> None:
+        if self.proc.stderr is None:
+            return
+        for line in self.proc.stderr:
+            self._stderr.push(line.rstrip("\n"))
+
+    def send(self, request: dict[str, Any]) -> dict:
+        if self.proc.stdin is None or self.proc.stdout is None:
+            raise SystemExit("MCP process pipes are unavailable")
+        self.proc.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
+        self.proc.stdin.flush()
+        line = self.proc.stdout.readline()
+        if not line:
+            method = str(request.get("method", "request"))
+            self._raise_closed(method)
+        return json.loads(line)
+
+    def call(self, method: str, params: Any = None, *, request_id: int | None = None) -> dict:
+        if not method or not isinstance(method, str):
+            raise SystemExit("method must be a non-empty string")
+        rid = request_id if request_id is not None else self._next_id()
+        req = {"jsonrpc": "2.0", "id": rid, "method": method}
+        if params is not None:
+            req["params"] = params
+        return self.send(req)
+
+    def close(self) -> None:
+        try:
+            if self.proc.stdin:
+                self.proc.stdin.close()
+            self.proc.wait(timeout=3)
+        except Exception:
+            self.proc.kill()
+
+    def _next_id(self) -> int:
+        self._id += 1
+        return self._id
+
+    def _raise_closed(self, method: str) -> None:
+        stderr = self._stderr.text()
+        self.close()
+        raise SystemExit(
+            f"MCP server closed before responding to {method}.\n{stderr}".strip()
+        )
+
+
+def _server_cmd() -> list[str]:
+    return [sys.executable, "-m", "ida_pro_mcp.server"]
+
+
+def _print_json(value: Any, *, pretty: bool) -> None:
+    if pretty:
+        print(json.dumps(value, indent=2, ensure_ascii=False))
+    else:
+        print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def _normalize_tool_result(response: dict) -> Any:
+    if "result" not in response:
+        return response
+    result = response["result"]
+    content = result.get("content", [])
+    if not isinstance(content, list) or not content:
+        return result
+    first = content[0]
+    if not isinstance(first, dict):
+        return result
+    text = first.get("text")
+    if not isinstance(text, str):
+        return result
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"text": text, "isError": bool(result.get("isError"))}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Ephemeral JSON-safe CLI for ida-pro-mcp",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  ida-pro-mcp-cli rpc tools/list '{}'\n"
+            "  ida-pro-mcp-cli tool session '{\"action\":\"status\"}'\n"
+            "  ida-pro-mcp-cli raw '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'\n"
+        ),
+    )
+    parser.add_argument(
+        "mode",
+        choices=("rpc", "tool", "raw", "tools-list"),
+        help="Request type to execute",
+    )
+    parser.add_argument("name", nargs="?", help="RPC method or MCP tool name")
+    parser.add_argument(
+        "payload",
+        nargs="?",
+        help="JSON request params, tool args, or a full JSON-RPC object",
+    )
+    parser.add_argument(
+        "--stdin-json",
+        action="store_true",
+        help="Read the JSON payload from stdin instead of argv",
+    )
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    parser.add_argument(
+        "--request-id",
+        type=int,
+        default=None,
+        help="Override JSON-RPC request id",
+    )
+    args = parser.parse_args()
+
+    payload = None
+    if args.stdin_json:
+        payload = _read_stdin_json(label=args.mode)
+    elif args.payload is not None:
+        payload = _load_json_arg(args.payload, label="payload")
+
+    client = MCPStdioClient(_server_cmd())
+    try:
+        client.call(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "ida-pro-mcp-cli", "version": "1.0"},
+            },
+            request_id=1,
+        )
+
+        if args.mode == "raw":
+            if not isinstance(payload, dict):
+                raise SystemExit("raw mode requires a full JSON-RPC object payload")
+            if "jsonrpc" not in payload:
+                payload["jsonrpc"] = "2.0"
+            if "id" not in payload and args.request_id is not None:
+                payload["id"] = args.request_id
+            response = client.send(payload)
+            _print_json(response, pretty=args.pretty)
+            return 0
+
+        if args.mode == "tools-list":
+            response = client.call("tools/list", payload if isinstance(payload, dict) else {})
+            _print_json(response, pretty=args.pretty)
+            return 0
+
+        if not args.name:
+            raise SystemExit(f"{args.mode} mode requires a method/tool name")
+
+        if args.mode == "rpc":
+            response = client.call(args.name, payload if payload is not None else {}, request_id=args.request_id)
+            _print_json(response, pretty=args.pretty)
+            return 0
+
+        if args.mode == "tool":
+            response = client.call(
+                "tools/call",
+                {"name": args.name, "arguments": payload if payload is not None else {}},
+                request_id=args.request_id,
+            )
+            _print_json(_normalize_tool_result(response), pretty=args.pretty)
+            return 0
+
+        raise SystemExit(f"unsupported mode: {args.mode}")
+    finally:
+        client.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
