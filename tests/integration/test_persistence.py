@@ -11,12 +11,12 @@ import pytest
 
 # Check IDA availability without relative imports
 _IDA_AVAILABLE = bool(
-    os.path.isfile(os.environ.get("IDA_DIR", "/home/grec-alexander/ida-pro-9.2") + "/idat")
+    os.path.isfile(os.path.join(os.environ.get("IDA_DIR") or os.environ.get("IDADIR") or "", "idat"))
 )
 pytestmark = pytest.mark.skipif(not _IDA_AVAILABLE, reason="IDA integration tests require licensed IDA Pro")
 
 
-@pytest.mark.xfail(reason="MCP stdio server subprocess crashes on startup (exit code 2) — pre-existing infra issue")
+@pytest.mark.xfail(reason="Known flaky stdio startup in this integration harness")
 
 
 def _extract_tool_result(resp):

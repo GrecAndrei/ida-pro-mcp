@@ -8,7 +8,8 @@ Key features:
   - Rich per-turn telemetry: tokens, latency, success/fail/empty, thinking tokens
   - Progress logs: results/progress_<model>_<binary>_<ts>.json
 
-API key: read from OPENCODE_API_KEY env var, or ~/.claude/.secretkey.txt
+API key: read from OPENCODE_API_KEY/AZURE_API_KEY env vars, OpenCode auth.json,
+or OPENCODE_KEY_FILE.
 """
 
 from __future__ import annotations
@@ -75,7 +76,6 @@ MCP_CMD = [
 ]
 MCP_ENV_BASE = {
     **os.environ,
-    "IDADIR": os.environ.get("IDADIR", "/home/grec-alexander/ida-pro-9.2"),
     "IDA_MCP_RESPONSE_MODE":         "compact",
     "IDA_MCP_QOL_MODE":              "balanced",
     "IDA_MCP_BATCH_COMPACT":         "1",
@@ -84,6 +84,8 @@ MCP_ENV_BASE = {
     "IDA_MCP_COMPACT_CHAR_BUDGET":   "30000",
     "IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS": "1",
 }
+if "IDADIR" not in MCP_ENV_BASE and MCP_ENV_BASE.get("IDA_DIR"):
+    MCP_ENV_BASE["IDADIR"] = MCP_ENV_BASE["IDA_DIR"]
 
 def _make_mcp_env(label: str) -> dict:
     slug = label.lower().replace(" ", "_").replace("/", "_")
@@ -780,12 +782,8 @@ def _load_api_key(source: str = "opencode") -> str:
     except Exception:
         pass
 
-    for p in [
-        Path(__file__).parent.parent.parent / ".claude" / "secretkey.txt",
-        Path.home() / ".claude" / ".secretkey.txt",
-        Path.home() / ".secretkey.txt",
-        Path("/home/grec-alexander/Downloads/ida-pro-mcp/.claude/secretkey.txt"),
-    ]:
+    key_file_candidates = [Path(os.environ["OPENCODE_KEY_FILE"])] if os.environ.get("OPENCODE_KEY_FILE") else []
+    for p in key_file_candidates:
         if p.exists():
             lines = [l.strip() for l in p.read_text().strip().splitlines() if l.strip()]
             if len(lines) > 0:
@@ -1288,9 +1286,17 @@ def _save_progress_logs(results: list[dict], binary_path: str) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="LLM firmware RE eval harness v2")
+    default_binary = str(
+        Path(
+            os.environ.get(
+                "EVAL_BINARY",
+                Path(__file__).resolve().parents[2] / "tests" / "data" / "aic8800d80.bin",
+            )
+        )
+    )
     ap.add_argument(
         "--binary",
-        default="/home/grec-alexander/Downloads/aic8800d80/fmacfw_8800d80_h_u02.bin",
+        default=default_binary,
     )
     ap.add_argument("--max-turns", type=int, default=MAX_TURNS)
     ap.add_argument("--models", nargs="+", help="Run only these model labels (e.g. 'GPT-5.4 Mini')")

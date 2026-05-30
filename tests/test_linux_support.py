@@ -103,9 +103,13 @@ class TestInstallerRepairBehavior(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cfg = Path(td) / "settings.json"
             cfg.parent.mkdir(parents=True, exist_ok=True)
+            legacy_remote_key = next(
+                (k for k in install.LEGACY_SERVER_NAMES if isinstance(k, str) and k.startswith("github.com/")),
+                "github.com/legacy/ida-pro-mcp",
+            )
             legacy = {
                 "mcpServers": {
-                    "github.com/mrexodia/ida-pro-mcp": {
+                    legacy_remote_key: {
                         "command": "/old/python",
                         "args": ["-u", "/old/ida_mcp_stdio.py"],
                         "env": {"IDADIR": "/old/ida"},
@@ -117,7 +121,8 @@ class TestInstallerRepairBehavior(unittest.TestCase):
             self.assertTrue(ok)
             repaired = json.loads(cfg.read_text(encoding="utf-8"))
             self.assertIn("ida-pro-mcp", repaired.get("mcpServers", {}))
-            self.assertNotIn("github.com/mrexodia/ida-pro-mcp", repaired.get("mcpServers", {}))
+            for legacy_name in install.LEGACY_SERVER_NAMES:
+                self.assertNotIn(legacy_name, repaired.get("mcpServers", {}))
 
     def test_antigravity_enables_vertex_compat(self):
         with tempfile.TemporaryDirectory() as td:
@@ -141,9 +146,13 @@ class TestInstallerRepairBehavior(unittest.TestCase):
     def test_update_opencode_replaces_legacy_mcp_entry(self):
         with tempfile.TemporaryDirectory() as td:
             cfg = Path(td) / "opencode.json"
+            legacy_remote_key = next(
+                (k for k in install.LEGACY_SERVER_NAMES if isinstance(k, str) and k.startswith("github.com/")),
+                "github.com/legacy/ida-pro-mcp",
+            )
             legacy = {
                 "mcp": {
-                    "github.com/mrexodia/ida-pro-mcp": {
+                    legacy_remote_key: {
                         "type": "local",
                         "command": ["/old/python", "-u", "/old/ida_mcp_stdio.py"],
                     }
@@ -154,7 +163,8 @@ class TestInstallerRepairBehavior(unittest.TestCase):
             self.assertTrue(ok)
             repaired = json.loads(cfg.read_text(encoding="utf-8"))
             self.assertIn("ida-pro-mcp", repaired.get("mcp", {}))
-            self.assertNotIn("github.com/mrexodia/ida-pro-mcp", repaired.get("mcp", {}))
+            for legacy_name in install.LEGACY_SERVER_NAMES:
+                self.assertNotIn(legacy_name, repaired.get("mcp", {}))
 
 
 class TestRuntimeLeaseCleanup(unittest.TestCase):

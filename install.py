@@ -893,7 +893,7 @@ def get_mcp_config_paths():
 
 LEGACY_SERVER_NAMES = (
     "ida-pro-mcp",
-    "github.com/mrexodia/ida-pro-mcp",
+    "github.com/GrecAndrei/ida-pro-mcp",
     "ida_mcp",
     "ida-pro-mcp-server",
 )

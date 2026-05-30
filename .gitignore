@@ -11,6 +11,7 @@ build/
 .venv/
 venv/
 env/
+.python-version
 
 # IDA Pro artifacts
 *.i64
@@ -50,6 +51,7 @@ htmlcov/
 .codex/
 ida_mcp_cache/
 .claude/
+.commandcode/
 
 # Local probe/report artifacts
 reports/*.json

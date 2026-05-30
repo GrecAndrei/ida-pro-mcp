@@ -4,7 +4,7 @@ IDA Pro MCP uses a real embedding model (bge-code-v1, 1536 dims) for semantic an
 
 ## How it works
 
-**BgeCodeEmbedder** — manages a `llama-server` subprocess running `bge-code-v1-q8_0.gguf`. Auto-detected from `~/Downloads/`, `~/models/`, or `IDA_MCP_EMBED_MODEL` env var. Falls back to TF-IDF if the model isn't found.
+**BgeCodeEmbedder** — manages a `llama-server` subprocess running `bge-code-v1-q8_0.gguf`. Auto-detected from common local model locations or `IDA_MCP_EMBED_MODEL`. Falls back to TF-IDF if the model isn't found.
 
 **FunctionEmbeddingIndex** — per-binary SQLite store of 1536-dim embeddings. Written to `<idb_path>.embeddings.db`. Populated automatically when you decompile functions via `code(action="decompile")`.
 

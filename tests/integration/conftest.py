@@ -6,7 +6,9 @@ with a target binary, run an IDAPython script, and capture the results via a JSO
 file. All tests using these fixtures require a licensed IDA Pro installation.
 
 Environment:
-    IDA_DIR          - Path to IDA Pro installation (default: /home/grec-alexander/ida-pro-9.2)
+    IDA_DIR          - Path to IDA Pro installation (optional)
+    IDADIR           - Alternate env var for IDA install path
+    IDAT             - Full path to idat/idat64 executable (optional)
     TEST_BINARY      - Path to test binary (default: tests/data/test_binary.exe)
     SKIP_IDA_TESTS   - Set to "1" to skip all IDA integration tests
 """
@@ -17,10 +19,17 @@ import json
 import time
 import tempfile
 import subprocess
+import shutil
 import pytest
 
-IDA_DIR = os.environ.get("IDA_DIR", "/home/grec-alexander/ida-pro-9.2")
-IDAT = os.path.join(IDA_DIR, "idat")
+IDA_DIR = os.environ.get("IDA_DIR") or os.environ.get("IDADIR") or ""
+IDAT = (
+    os.environ.get("IDAT")
+    or (os.path.join(IDA_DIR, "idat") if IDA_DIR else "")
+    or shutil.which("idat64")
+    or shutil.which("idat")
+    or ""
+)
 TEST_BINARY = os.environ.get("TEST_BINARY", os.path.join(os.path.dirname(__file__), "..", "data", "test_binary.exe"))
 SKIP_IDA_TESTS = os.environ.get("SKIP_IDA_TESTS", "0") == "1"
 

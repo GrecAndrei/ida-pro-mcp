@@ -1,5 +1,5 @@
 // Type definitions exported from IDA
-// Source: C:\Users\Alexander\Downloads\ida-pro-mcp\test_target.exe
+// Source: tests/data/test_target.exe
 
 // Ordinal 1
 // _GUID

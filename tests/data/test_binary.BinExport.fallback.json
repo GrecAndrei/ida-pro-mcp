@@ -1,6 +1,6 @@
 {
   "format": "binexport-fallback",
-  "source_file": "/home/grec-alexander/Downloads/ida-pro-mcp/tests/data/test_binary.exe",
+  "source_file": "tests/data/test_binary.exe",
   "imagebase": "0x140000000",
   "functions": 520,
   "names": 1657,
