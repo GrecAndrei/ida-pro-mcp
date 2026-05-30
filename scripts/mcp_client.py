@@ -51,9 +51,10 @@ class MCPClient:
         # Auto-detect IDA if not set
         if "IDADIR" not in run_env:
             for ida_dir in [
-                "/home/REDACTED/ida-pro-9.2",
                 "/opt/ida-pro-9.2",
                 os.path.expanduser("~/ida-pro-9.2"),
+                "/opt/ida-pro",
+                "/usr/local/ida-pro",
             ]:
                 if os.path.isdir(ida_dir):
                     run_env["IDADIR"] = ida_dir

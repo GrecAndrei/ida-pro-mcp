@@ -134,9 +134,8 @@ def copy_python_env(env: dict[str, str]):
         "PYTHONNOUSERSITE",
         "PYTHONUSERBASE",
     ]
-    # MCP servers are run without inheriting the environment, so we need to forward
-    # the environment variables that affect Python's dependency resolution by hand.
-    # Issue: https://github.com/mrexodia/ida-pro-mcp/issues/111
+    # MCP servers are run without inheriting the environment, so forward
+    # variables that affect Python dependency resolution.
     result = False
     for var in python_vars:
         value = os.environ.get(var)
@@ -709,11 +708,15 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                     config["mcpServers"] = {}
                 mcp_servers = config["mcpServers"]
 
-        # Migrate old name
-        old_name = "github.com/mrexodia/ida-pro-mcp"
-        if old_name in mcp_servers:
-            mcp_servers[mcp.name] = mcp_servers[old_name]
-            del mcp_servers[old_name]
+        # Migrate legacy remote-style server keys to canonical `ida-pro-mcp`.
+        legacy_remote_keys = (
+            "github.com/GrecAndrei/ida-pro-mcp",
+        )
+        for legacy_key in legacy_remote_keys:
+            if legacy_key in mcp_servers:
+                mcp_servers[mcp.name] = mcp_servers[legacy_key]
+                del mcp_servers[legacy_key]
+                break
 
         if uninstall:
             if mcp.name not in mcp_servers:

@@ -4,7 +4,7 @@ import pytest
 
 AIC_FW = os.environ.get(
     "AIC8800D80_FW",
-    "/home/REDACTED/Downloads/aic8800d80/fmacfw_8800d80_h_u02.bin",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "aic8800d80.bin")),
 )
 
 

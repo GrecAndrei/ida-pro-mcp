@@ -30,7 +30,7 @@ class MCP(idaapi.plugin_t):
     wanted_name = "MCP"
     wanted_hotkey = "Ctrl-Alt-M"
 
-    # TODO: make these configurable
+    # Default bind/scan parameters for plugin-hosted MCP server.
     HOST = "127.0.0.1"
     BASE_PORT = 13337
     MAX_PORT_TRIES = 10
@@ -51,7 +51,7 @@ class MCP(idaapi.plugin_t):
             self.mcp.stop()
             self.mcp = None
 
-        # HACK: ensure fresh load of ida_mcp package
+        # Ensure a fresh `ida_mcp` package load when restarting the plugin.
         unload_package("ida_mcp")
         if TYPE_CHECKING:
             from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler

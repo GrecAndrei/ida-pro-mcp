@@ -7,17 +7,18 @@ import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(__file__))
 from conftest import IDARunner, ida_is_available
 
-AIC_FW = "/home/REDACTED/Downloads/aic8800d80/fmacfw_8800d80_h_u02.bin"
+AIC_FW = os.environ.get(
+    "AIC8800D80_FW",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "aic8800d80.bin")),
+)
 TEST_BINARY = "tests/data/test_binary.exe"
-IDA_BIN = "/home/REDACTED/ida-pro-9.2/idat"
 
 
 pytestmark = pytest.mark.skipif(not ida_is_available(), reason="IDA integration tests require licensed IDA Pro")
 
 
 def _run_with_binary(binary_path: str, script_body: str, timeout: int = 150) -> dict:
-    ida_dir = os.path.dirname(IDA_BIN)
-    runner = IDARunner(ida_dir=ida_dir, binary=binary_path)
+    runner = IDARunner(binary=binary_path)
     return runner.run_script(script_body, timeout=timeout)
 
 

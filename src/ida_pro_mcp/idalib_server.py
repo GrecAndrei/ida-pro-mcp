@@ -51,7 +51,7 @@ def main():
     if not args.input_path.exists():
         raise FileNotFoundError(f"Input file not found: {args.input_path}")
 
-    # TODO: add a tool for specifying the idb/input file (sandboxed)
+    # The input database path is currently provided by CLI arguments.
     logger.info("opening database: %s", args.input_path)
     if idapro.open_database(str(args.input_path), run_auto_analysis=True):
         raise RuntimeError("failed to analyze input file")
@@ -72,8 +72,8 @@ def main():
     signal.signal(signal.SIGTERM, cleanup_and_exit)
 
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
-    # TODO: with background=True the main thread (this one) does not fake any
-    # work from @idaread, so we deadlock.
+    # Keep background disabled: the main thread must service @idaread work,
+    # and background mode can deadlock IDA SDK synchronization.
     MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 

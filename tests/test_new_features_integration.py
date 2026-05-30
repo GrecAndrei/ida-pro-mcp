@@ -12,7 +12,7 @@ Tests:
 - modify rename propagation
 
 Run with: pytest tests/test_new_features_integration.py -v
-Requires: licensed IDA Pro at IDA_DIR (default /home/REDACTED/ida-pro-9.2)
+Requires: licensed IDA Pro configured via IDA_DIR or IDADIR
 """
 
 import os

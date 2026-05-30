@@ -27,6 +27,7 @@ Deterministic and ML-powered reverse engineering for IDA Pro via the Model Conte
 - [Response And Context Controls](#response-and-context-controls)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+- [Contributing](#contributing)
 - [License](#license)
 
 ## What This Project Is
@@ -37,7 +38,7 @@ It provides:
 
 - A host MCP server (`ida_mcp_stdio.py`) that LLM clients talk to via JSON-RPC over stdio
 - A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`) communicating over local TCP
-- 72 canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases
+- 73 canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases
 - A local ML engine (bge-code-v1 embeddings + BehaviorClassifier) for semantic search, label propagation, and frontier scoring
 - A full bootstrap evidence control loop in `session` actions (calibration, drift, mitigation, adaptation, readiness)
 - Structured audit logging, token-bucket rate limiting, and blackboard auto-pruning
@@ -104,7 +105,7 @@ pip install ida-pro-mcp
 ### Development install
 
 ```bash
-git clone https://github.com/mrexodia/ida-pro-mcp.git
+git clone https://github.com/GrecAndrei/ida-pro-mcp.git
 cd ida-pro-mcp
 pip install -e .
 ```
@@ -152,6 +153,8 @@ Primary documentation now lives under `docs/`:
 - `docs/TOOLS_REFERENCE.md`: tool-focused reference.
 - `docs/DEDUPLICATION_PLAN.md`: canonical-vs-compat tool surface and consolidation rules.
 - `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`: phase-by-phase bootstrap plan implementation matrix.
+- `ARCHITECTURE.md`: high-level boundaries and module ownership map.
+- `CONTRIBUTING.md`: contribution workflow, guardrails, and PR expectations.
 
 Legacy/superseded notes were moved to `docs/legacy/` to keep repo root clean.
 
@@ -790,8 +793,12 @@ Manual client probing:
 python tests/test_mcp_client.py --tool idb --args "action=meta"
 ```
 
-Test suite: 679+ test methods across 34 test files (510+ runnable without IDA Pro installed).
+Test suite: see `tests/` for current coverage and integration requirements.
+
+## Contributing
+
+See `CONTRIBUTING.md` for contribution workflow and `ARCHITECTURE.md` for a focused map of where to make changes safely.
 
 ## License
 
-MIT (see `LICENSE`).
+GNU General Public License v3.0 (GPL-3.0-only). See `LICENSE`.

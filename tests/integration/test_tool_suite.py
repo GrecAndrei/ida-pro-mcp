@@ -11,7 +11,10 @@ import pytest
 
 from conftest import ida_is_available
 
-AIC_FW = "/home/REDACTED/Downloads/aic8800d80/fmacfw_8800d80_h_u02.bin"
+AIC_FW = os.environ.get(
+    "AIC8800D80_FW",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "aic8800d80.bin")),
+)
 TEST_BINARY = "tests/data/test_binary.exe"
 
 

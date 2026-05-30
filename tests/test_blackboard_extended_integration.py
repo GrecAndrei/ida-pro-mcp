@@ -1,6 +1,6 @@
 """
 IDA integration tests for extended blackboard features.
-Requires licensed IDA Pro at IDA_DIR (default /home/REDACTED/ida-pro-9.2).
+Requires licensed IDA Pro configured via IDA_DIR or IDADIR.
 """
 import os
 import sys

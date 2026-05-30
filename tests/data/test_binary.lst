@@ -1,5 +1,5 @@
 ; IDA Pro Listing
-; File: /home/REDACTED/Downloads/ida-pro-mcp/tests/data/test_binary.exe
+; File: tests/data/test_binary.exe
 ; Range: 0x140000000 - 0x140001000
 
 0x140000000: HINSTANCE__ <905A4Dh>; PE magic number
