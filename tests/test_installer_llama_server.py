@@ -16,6 +16,14 @@ def test_parse_args_install_llama_server_flag():
     assert opts.interactive is False
 
 
+def test_parse_args_setup_embedder_enables_client_setup():
+    opts = parse_args(["--setup-embedder", "--no-interactive", "--yes"])
+    assert opts.setup_embedder is True
+    assert opts.install_llama_server is True
+    assert opts.embed_auto is True
+    assert opts.only == {"clients"}
+
+
 def test_find_embed_model_no_home_fallback(monkeypatch):
     with tempfile.TemporaryDirectory() as td:
         home = Path(td) / "home"
@@ -68,3 +76,15 @@ def test_run_install_downloads_llama_server_when_enabled_and_embed_model_found(m
         env = captured["cfg"]["env"]
         assert env.get("IDA_MCP_EMBED_MODEL") == fake_model
         assert env.get("IDA_MCP_EMBED_SERVER_BIN") == fake_server
+
+
+def test_main_embedder_doctor_bypasses_install(monkeypatch):
+    called = {"doctor": 0, "install": 0}
+
+    monkeypatch.setattr(main_mod, "run_embedder_doctor", lambda opts, ui: called.__setitem__("doctor", called["doctor"] + 1) or 0)
+    monkeypatch.setattr(main_mod, "run_install", lambda opts, ui: called.__setitem__("install", called["install"] + 1) or 1)
+
+    rc = main_mod.main(["--embedder-doctor", "--no-interactive", "--yes"])
+    assert rc == 0
+    assert called["doctor"] == 1
+    assert called["install"] == 0

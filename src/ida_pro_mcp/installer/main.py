@@ -103,6 +103,63 @@ def _build_embedder_capsule_state(embed_model: str, embed_server: str) -> dict:
     }
 
 
+def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
+    install_root = opts.install_root or get_install_root()
+    embed_model = opts.embed_model_path or (find_embed_model(install_root) if opts.embed_auto else "")
+    embed_server = opts.embed_server_bin or (find_llama_server_bin(install_root) if opts.embed_auto else "")
+
+    ui.info("Embedder doctor")
+    ui.info("---------------")
+    ui.info(f"install_root: {install_root}")
+    ui.info(f"llama-server: {'found ' + embed_server if embed_server else 'not found'}")
+    ui.info(f"model: {'found ' + embed_model if embed_model else 'not found'}")
+
+    from ida_pro_mcp.host import intelligence_core as intel_core
+
+    # Recreate singleton under doctor-selected env so status/probe reflect this setup.
+    prev_server = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
+    prev_model = os.environ.get("IDA_MCP_EMBED_MODEL", "")
+    prev_instance = intel_core.BgeCodeEmbedder._instance
+    try:
+        if embed_server:
+            os.environ["IDA_MCP_EMBED_SERVER_BIN"] = embed_server
+        if embed_model:
+            os.environ["IDA_MCP_EMBED_MODEL"] = embed_model
+        intel_core.BgeCodeEmbedder._instance = None
+        emb = intel_core.BgeCodeEmbedder()
+        status = emb.status(probe=True, deep_hash=False)
+        status["model_fingerprint"] = intel_core.model_fingerprint(embed_model, deep_hash=False)
+        status["server_fingerprint"] = intel_core.server_fingerprint(embed_server, deep_hash=False)
+        status["embed_test_ok"] = False
+        status["embed_test_dim"] = 0
+        try:
+            vec = emb.embed("embedder doctor quick check")
+            status["embed_test_ok"] = bool(vec)
+            status["embed_test_dim"] = len(vec or [])
+        except Exception as exc:
+            status["embed_test_error"] = str(exc)
+
+        if status.get("ready"):
+            ui.ok("health endpoint: ok")
+        else:
+            ui.warn("health endpoint: not ready")
+        ui.info(f"backend: {status.get('backend')}")
+        ui.info(f"embed test: {'ok' if status.get('embed_test_ok') else 'failed'}")
+        ui.info(f"fallback available: {'yes' if status.get('backend') == 'tfidf-fallback' or not status.get('use_llama') else 'yes'}")
+        print(json.dumps(status, indent=2))
+        return 0
+    finally:
+        intel_core.BgeCodeEmbedder._instance = prev_instance
+        if prev_server:
+            os.environ["IDA_MCP_EMBED_SERVER_BIN"] = prev_server
+        elif "IDA_MCP_EMBED_SERVER_BIN" in os.environ:
+            del os.environ["IDA_MCP_EMBED_SERVER_BIN"]
+        if prev_model:
+            os.environ["IDA_MCP_EMBED_MODEL"] = prev_model
+        elif "IDA_MCP_EMBED_MODEL" in os.environ:
+            del os.environ["IDA_MCP_EMBED_MODEL"]
+
+
 def _is_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -320,6 +377,8 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--runtime-source", choices=["auto", "local", "pypi"], default="auto", help="choose runtime package source")
     parser.add_argument("--embed-model", default="", help="explicit path to bge-code-v1 GGUF model")
     parser.add_argument("--embed-server-bin", default="", help="explicit path to llama-server binary")
+    parser.add_argument("--embedder-doctor", action="store_true", help="diagnose local embedder/model/server setup")
+    parser.add_argument("--setup-embedder", action="store_true", help="convenience mode to configure embedder with client setup")
     parser.add_argument(
         "--install-llama-server",
         action="store_true",
@@ -344,9 +403,16 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         embed_model_path=args.embed_model,
         embed_server_bin=args.embed_server_bin,
         install_llama_server=args.install_llama_server,
+        embedder_doctor=args.embedder_doctor,
+        setup_embedder=args.setup_embedder,
         capsule_path=Path(args.capsule).expanduser() if args.capsule else None,
         only=set(args.only),
     )
+    if opts.setup_embedder:
+        opts.embed_auto = True
+        opts.install_llama_server = True
+        if not opts.only:
+            opts.only = {"clients"}
     opts.install_root = Path(args.install_root).expanduser() if args.install_root else get_install_root()
     opts.source_root = Path(__file__).resolve().parents[3]
     return opts
@@ -563,6 +629,8 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
 def main(argv: list[str] | None = None) -> int:
     ui = UI()
     opts = parse_args(argv)
+    if opts.embedder_doctor:
+        return run_embedder_doctor(opts, ui)
     return run_install(opts, ui)
 
 
