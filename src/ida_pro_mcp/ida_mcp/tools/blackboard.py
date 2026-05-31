@@ -30,6 +30,7 @@ Actions:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import struct
@@ -222,6 +223,54 @@ class BlackboardStore:
         except Exception:
             return None
 
+    def _sync_entry_to_capsule(self, entry: Dict[str, Any], vector_blob: Optional[bytes]) -> None:
+        capsule_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
+        if not capsule_path:
+            return
+        try:
+            from ida_pro_mcp.capsule import CapsuleStore
+        except Exception:
+            return
+        try:
+            with CapsuleStore.open(capsule_path) as cap:
+                if not cap.is_initialized():
+                    cap.init(project_name="ida-session", created_by="ida-pro-mcp-blackboard")
+                idx_id = "blackboard-" + uuid.uuid5(uuid.NAMESPACE_URL, self.db_path).hex[:16]
+                embedder = _get_embedder()
+                backend = str(getattr(embedder, "backend", "unknown")) if embedder is not None else "unknown"
+                dim = int(getattr(embedder, "dim", 1536) or 1536) if embedder is not None else 1536
+                cap.add_semantic_index(
+                    kind="blackboard",
+                    backend=backend,
+                    dim=dim,
+                    model_id="",
+                    source_fingerprint=self.db_path,
+                    metadata={"db_path": self.db_path},
+                    index_id=idx_id,
+                )
+                text = f"{entry.get('title', '')}\n{entry.get('content', '')}".strip()
+                thash = hashlib.md5(text.encode("utf-8", errors="ignore")).hexdigest()
+                vsha = ""
+                if vector_blob:
+                    vsha = cap.store_semantic_vector(vector_blob, dim=dim, dtype="float32")
+                cap.upsert_semantic_item(
+                    index_id=idx_id,
+                    kind="blackboard_entry",
+                    stable_ref=str(entry.get("id") or ""),
+                    title=str(entry.get("title") or ""),
+                    text_hash=thash,
+                    vector_sha256=vsha,
+                    metadata={
+                        "category": entry.get("category"),
+                        "addr": entry.get("addr"),
+                        "confidence": entry.get("confidence"),
+                        "source_type": entry.get("source_type"),
+                        "updated_at": entry.get("updated_at"),
+                    },
+                )
+        except Exception:
+            return
+
     def write(
         self,
         title: str,
@@ -269,6 +318,19 @@ class BlackboardStore:
                 json.dumps(evidence or []), source_type, entropy, xref_count, 1,
             ))
             conn.commit()
+        self._sync_entry_to_capsule(
+            {
+                "id": entry_id,
+                "title": title,
+                "content": content,
+                "category": category,
+                "addr": addr,
+                "confidence": confidence,
+                "source_type": source_type or "manual",
+                "updated_at": now,
+            },
+            vector_blob,
+        )
         return entry_id
 
     def read(self, entry_id: str) -> Optional[Dict]:
@@ -777,7 +839,75 @@ class BlackboardStore:
                 (*updates.values(), entry_id),
             )
             conn.commit()
-            return cur.rowcount > 0
+            ok = cur.rowcount > 0
+        if ok:
+            entry = self.read(entry_id)
+            if entry:
+                vec_blob = None
+                try:
+                    with self._conn() as conn:
+                        row = conn.execute("SELECT vector FROM blackboard WHERE id=?", (entry_id,)).fetchone()
+                        vec_blob = row[0] if row and row[0] else None
+                except Exception:
+                    vec_blob = None
+                self._sync_entry_to_capsule(entry, vec_blob)
+        return ok
+
+    def semantic_index(self, category: Optional[str] = None) -> Dict[str, Any]:
+        conditions = []
+        params: list = []
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        with self._conn() as conn:
+            total = conn.execute(f"SELECT COUNT(*) FROM blackboard {where}", params).fetchone()[0]
+            embedded = conn.execute(
+                f"SELECT COUNT(*) FROM blackboard {where + (' AND ' if where else 'WHERE ')} vector IS NOT NULL",
+                params,
+            ).fetchone()[0]
+            missing = max(0, int(total) - int(embedded))
+        return {
+            "total": int(total),
+            "embedded": int(embedded),
+            "missing_vectors": int(missing),
+            "category": category or "",
+            "db_path": self.db_path,
+        }
+
+    def semantic_rebuild(self, category: Optional[str] = None, force: bool = False, limit: int = 5000) -> Dict[str, Any]:
+        embedder = _get_embedder()
+        if embedder is None:
+            return {"ok": False, "error": "embedder unavailable"}
+        conditions = []
+        params: list = []
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        if not force:
+            conditions.append("vector IS NULL")
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rebuilt = 0
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT id, title, content FROM blackboard {where} ORDER BY updated_at DESC LIMIT ?",
+                (*params, int(limit)),
+            ).fetchall()
+            for row in rows:
+                eid = str(row[0])
+                text = f"{row[1] or ''} {row[2] or ''}".strip()
+                if not text:
+                    continue
+                blob = self._embed_text(text)
+                if not blob:
+                    continue
+                conn.execute(
+                    "UPDATE blackboard SET vector=?, updated_at=? WHERE id=?",
+                    (blob, time.time(), eid),
+                )
+                rebuilt += 1
+            conn.commit()
+        return {"ok": True, "rebuilt": rebuilt, "category": category or "", "forced": bool(force)}
 
     def delete(self, entry_id: str) -> bool:
         with self._conn() as conn:
@@ -1511,6 +1641,61 @@ def blackboard(
             include_contradicted=include_contradicted,
         )
         return {"ok": True, "results": results, "count": len(results)}
+
+    elif action == "semantic_index":
+        stats = store.semantic_index(category=category or None)
+        return {"ok": True, **stats}
+
+    elif action == "semantic_rebuild":
+        force = bool(kwargs.get("force", False))
+        result = store.semantic_rebuild(
+            category=category or None,
+            force=force,
+            limit=int(limit or 5000),
+        )
+        return result
+
+    elif action == "related_by_behavior":
+        if not query:
+            return {"ok": False, "error": "query required"}
+        thr = threshold
+        try:
+            thr = float(threshold)
+        except Exception:
+            thr = 0.4
+        hits = store.semantic_search(
+            query=query,
+            top_k=max(1, int(top_k or 10)),
+            threshold=max(0.0, thr),
+            category=category or None,
+            include_resolved=include_resolved,
+            include_contradicted=include_contradicted,
+        )
+        out = []
+        for h in hits:
+            tags = h.get("tags") or []
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except Exception:
+                    tags = []
+            out.append(
+                {
+                    "entry_id": h.get("id"),
+                    "title": h.get("title"),
+                    "addr": h.get("addr"),
+                    "category": h.get("category"),
+                    "confidence": h.get("confidence"),
+                    "similarity": h.get("similarity"),
+                    "tags": tags,
+                }
+            )
+        return {
+            "ok": True,
+            "behavior": query,
+            "results": out,
+            "count": len(out),
+        }
 
     elif action == "update":
         if not entry_id:
