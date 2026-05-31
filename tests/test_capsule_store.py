@@ -1,10 +1,50 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
 from ida_pro_mcp.capsule import CapsuleStore, CapsuleVerificationError
+
+
+def _make_embedding_db(path, rows):
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        """
+        CREATE TABLE func_embeddings (
+            ea TEXT PRIMARY KEY,
+            name TEXT,
+            dim INTEGER,
+            vec_blob BLOB NOT NULL,
+            pseudo_hash TEXT,
+            indexed_at REAL,
+            source_kind TEXT,
+            source_hash TEXT,
+            signature_text TEXT,
+            signature_hash TEXT
+        )
+        """
+    )
+    conn.execute("CREATE TABLE embedding_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.executemany(
+        "INSERT INTO embedding_meta(key, value) VALUES(?, ?)",
+        [
+            ("embedding_backend", "bge-code-v1"),
+            ("embedding_dim", "1536"),
+            ("model_path", "/tmp/model.gguf"),
+            ("source_fingerprint", "srcfp1"),
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO func_embeddings(ea, name, dim, vec_blob, pseudo_hash, indexed_at, source_kind, source_hash, signature_text, signature_hash)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_capsule_init_creates_valid_manifest(tmp_path):
@@ -243,3 +283,65 @@ def test_capsule_auto_upgrades_schema_v1_to_v2(tmp_path):
         assert int(c.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"]) == 1
         c.inspect_summary()
         assert int(c._get_meta("schema_version") or 0) == 2
+
+
+def test_capsule_import_export_function_index_metadata_only(tmp_path):
+    src_db = tmp_path / "src.embeddings.db"
+    _make_embedding_db(
+        src_db,
+        [
+            ("0x401000", "sub_401000", 1536, b"abc", "ph1", 1.0, "function", "sh1", None, "sg1"),
+            ("0x402000", "sub_402000", 1536, b"def", "ph2", 2.0, "function", "sh2", None, "sg2"),
+        ],
+    )
+    capsule_path = tmp_path / "cap.sideband"
+    out_db = tmp_path / "out.embeddings.db"
+
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="idx")
+        imp = c.import_function_embedding_index(src_db, mode="metadata-only", index_id="IDX_META", max_items=1)
+        assert imp["imported_items"] == 1
+        assert imp["imported_vectors"] == 0
+        sem = c.semantic_summary()
+        assert sem["semantic_indexes"] == 1
+        assert sem["semantic_items"] == 1
+        assert sem["semantic_vectors"] == 0
+        exp = c.export_function_embedding_index(index_id="IDX_META", out_path=out_db, mode="metadata-only")
+        assert exp["exported_items"] == 1
+        assert exp["exported_vectors"] == 0
+
+    conn = sqlite3.connect(str(out_db))
+    row = conn.execute("SELECT COUNT(*) FROM func_embeddings").fetchone()
+    assert row[0] == 1
+    meta = dict(conn.execute("SELECT key, value FROM embedding_meta").fetchall())
+    assert meta["export_mode"] == "metadata-only"
+    conn.close()
+
+
+def test_capsule_import_export_function_index_with_vectors(tmp_path):
+    src_db = tmp_path / "src2.embeddings.db"
+    _make_embedding_db(
+        src_db,
+        [
+            ("0x500000", "sub_500000", 4, b"\x00\x00\x80?\x00\x00\x00@", "phx", 3.0, "function", "shx", None, "sgx"),
+        ],
+    )
+    capsule_path = tmp_path / "cap2.sideband"
+    out_db = tmp_path / "out2.embeddings.db"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="idx2")
+        imp = c.import_function_embedding_index(src_db, mode="with-vectors", index_id="IDX_VEC")
+        assert imp["imported_items"] == 1
+        assert imp["imported_vectors"] == 1
+        sem = c.semantic_summary()
+        assert sem["semantic_vectors"] == 1
+        c.verify()
+        exp = c.export_function_embedding_index(index_id="IDX_VEC", out_path=out_db, mode="with-vectors")
+        assert exp["exported_items"] == 1
+        assert exp["exported_vectors"] == 1
+    conn = sqlite3.connect(str(out_db))
+    row = conn.execute("SELECT dim, vec_blob FROM func_embeddings WHERE ea='0x500000'").fetchone()
+    assert row is not None
+    assert row[0] == 4
+    assert bytes(row[1]) == b"\x00\x00\x80?\x00\x00\x00@"
+    conn.close()

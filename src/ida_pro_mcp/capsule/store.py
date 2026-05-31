@@ -415,6 +415,235 @@ class CapsuleStore:
             "evidence_cards": get_count("evidence_cards"),
         }
 
+    def import_function_embedding_index(
+        self,
+        index_db_path: Path | str,
+        *,
+        mode: str = "metadata-only",
+        index_id: str | None = None,
+        max_items: int = 100_000,
+    ) -> dict:
+        self._assert_initialized()
+        p = Path(index_db_path)
+        if not p.exists():
+            raise CapsuleValidationError(f"embedding index not found: {p}")
+        if mode not in {"metadata-only", "with-vectors"}:
+            raise CapsuleValidationError("mode must be 'metadata-only' or 'with-vectors'")
+
+        src = sqlite3.connect(str(p))
+        src.row_factory = sqlite3.Row
+        try:
+            meta_rows = {}
+            try:
+                for row in src.execute("SELECT key, value FROM embedding_meta"):
+                    meta_rows[str(row["key"])] = str(row["value"])
+            except sqlite3.DatabaseError:
+                meta_rows = {}
+
+            dim = int(meta_rows.get("embedding_dim") or 1536)
+            sid = self.add_semantic_index(
+                kind="function",
+                backend=meta_rows.get("embedding_backend", "unknown"),
+                dim=dim,
+                model_id=meta_rows.get("model_path", ""),
+                model_fingerprint={
+                    "model_size": meta_rows.get("model_size", ""),
+                    "model_sha256_head": meta_rows.get("model_sha256_head", ""),
+                    "server_bin": meta_rows.get("server_bin", ""),
+                    "server_sha256_head": meta_rows.get("server_sha256_head", ""),
+                },
+                anchor_set_hash=meta_rows.get("anchor_set_hash", ""),
+                source_fingerprint=meta_rows.get("source_fingerprint", ""),
+                metadata={
+                    "source_index_path": str(p),
+                    "source_idb_path": meta_rows.get("source_idb_path", ""),
+                    "source_binary_path": meta_rows.get("source_binary_path", ""),
+                    "mode": mode,
+                },
+                index_id=index_id,
+            )
+
+            imported_items = 0
+            imported_vectors = 0
+            available_cols = {
+                str(r["name"])
+                for r in src.execute("PRAGMA table_info(func_embeddings)").fetchall()
+            }
+            select_cols = [
+                "ea",
+                "name",
+                "dim",
+                "vec_blob",
+                "pseudo_hash",
+                "indexed_at",
+                "source_kind" if "source_kind" in available_cols else "'function' AS source_kind",
+                "source_hash" if "source_hash" in available_cols else "'' AS source_hash",
+                "signature_hash" if "signature_hash" in available_cols else "'' AS signature_hash",
+            ]
+            query = f"SELECT {', '.join(select_cols)} FROM func_embeddings LIMIT ?"
+            for row in src.execute(query, (int(max_items),)):
+                vector_sha = ""
+                row_dim = int(row["dim"] or dim)
+                blob = bytes(row["vec_blob"]) if row["vec_blob"] is not None else b""
+                if mode == "with-vectors" and blob:
+                    vector_sha = self.store_semantic_vector(blob, dim=row_dim, dtype="float32")
+                    imported_vectors += 1
+                item_metadata = {
+                    "name": str(row["name"] or row["ea"]),
+                    "pseudo_hash": str(row["pseudo_hash"] or ""),
+                    "indexed_at": row["indexed_at"],
+                    "source_kind": str(row["source_kind"] or "function"),
+                    "source_hash": str(row["source_hash"] or ""),
+                    "signature_hash": str(row["signature_hash"] or ""),
+                    "dim": row_dim,
+                }
+                self.upsert_semantic_item(
+                    index_id=sid,
+                    kind="function",
+                    stable_ref=str(row["ea"]),
+                    title=str(row["name"] or row["ea"]),
+                    text_hash=str(row["pseudo_hash"] or row["signature_hash"] or ""),
+                    vector_sha256=vector_sha,
+                    metadata=item_metadata,
+                )
+                imported_items += 1
+
+            return {
+                "ok": True,
+                "index_id": sid,
+                "mode": mode,
+                "imported_items": imported_items,
+                "imported_vectors": imported_vectors,
+                "source_index_path": str(p),
+            }
+        finally:
+            src.close()
+
+    def export_function_embedding_index(
+        self,
+        *,
+        index_id: str,
+        out_path: Path | str,
+        mode: str = "metadata-only",
+    ) -> dict:
+        self._assert_initialized()
+        if mode not in {"metadata-only", "with-vectors"}:
+            raise CapsuleValidationError("mode must be 'metadata-only' or 'with-vectors'")
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            out.unlink()
+
+        row = self.conn.execute("SELECT * FROM semantic_indexes WHERE id=?", (index_id,)).fetchone()
+        if not row:
+            raise CapsuleValidationError(f"semantic index not found: {index_id}")
+        if str(row["kind"]) != "function":
+            raise CapsuleValidationError("export_function_embedding_index requires a function semantic index")
+
+        dst = sqlite3.connect(str(out))
+        try:
+            dst.execute(
+                """
+                CREATE TABLE IF NOT EXISTS func_embeddings (
+                    ea TEXT PRIMARY KEY,
+                    name TEXT,
+                    dim INTEGER,
+                    vec_blob BLOB NOT NULL,
+                    pseudo_hash TEXT,
+                    indexed_at REAL,
+                    source_kind TEXT DEFAULT 'function',
+                    source_hash TEXT,
+                    signature_text TEXT,
+                    signature_hash TEXT
+                )
+                """
+            )
+            dst.execute("CREATE INDEX IF NOT EXISTS idx_fe_name ON func_embeddings(name)")
+            dst.execute(
+                """
+                CREATE TABLE IF NOT EXISTS embedding_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            model_fp = json.loads(str(row["model_fingerprint_json"] or "{}"))
+            meta_pairs = {
+                "index_schema_version": "2",
+                "embedding_backend": str(row["backend"]),
+                "embedding_dim": str(row["dim"]),
+                "model_path": str(row["model_id"] or ""),
+                "model_size": str(model_fp.get("model_size", "")),
+                "model_sha256_head": str(model_fp.get("model_sha256_head", "")),
+                "server_bin": str(model_fp.get("server_bin", "")),
+                "server_sha256_head": str(model_fp.get("server_sha256_head", "")),
+                "anchor_set_hash": str(row["anchor_set_hash"] or ""),
+                "source_fingerprint": str(row["source_fingerprint"] or ""),
+                "source_idb_path": "",
+                "source_binary_path": "",
+                "exported_at": _now(),
+                "export_mode": mode,
+            }
+            dst.executemany(
+                "INSERT OR REPLACE INTO embedding_meta(key, value) VALUES(?, ?)",
+                list(meta_pairs.items()),
+            )
+
+            items = self.conn.execute(
+                """
+                SELECT stable_ref, title, text_hash, vector_sha256, metadata_json
+                FROM semantic_items
+                WHERE index_id=? AND kind='function'
+                ORDER BY created_at ASC
+                """,
+                (index_id,),
+            ).fetchall()
+            exported_items = 0
+            exported_vectors = 0
+            for item in items:
+                md = json.loads(str(item["metadata_json"] or "{}"))
+                dim = int(md.get("dim") or row["dim"] or 1536)
+                blob = b""
+                if mode == "with-vectors" and item["vector_sha256"]:
+                    vrow = self.conn.execute(
+                        "SELECT data FROM semantic_vectors WHERE vector_sha256=?",
+                        (str(item["vector_sha256"]),),
+                    ).fetchone()
+                    if vrow:
+                        blob = bytes(vrow["data"])
+                        exported_vectors += 1
+                dst.execute(
+                    """
+                    INSERT OR REPLACE INTO func_embeddings(
+                        ea, name, dim, vec_blob, pseudo_hash, indexed_at, source_kind, source_hash, signature_text, signature_hash
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(item["stable_ref"]),
+                        str(item["title"] or item["stable_ref"]),
+                        dim,
+                        blob,
+                        str(md.get("pseudo_hash") or item["text_hash"] or ""),
+                        md.get("indexed_at"),
+                        str(md.get("source_kind") or "function"),
+                        str(md.get("source_hash") or ""),
+                        None,
+                        str(md.get("signature_hash") or ""),
+                    ),
+                )
+                exported_items += 1
+            dst.commit()
+            return {
+                "ok": True,
+                "index_id": index_id,
+                "mode": mode,
+                "out_path": str(out),
+                "exported_items": exported_items,
+                "exported_vectors": exported_vectors,
+            }
+        finally:
+            dst.close()
+
     def add_audit_event(self, event_type: str, payload: dict, session_id: str | None = None) -> int:
         self._assert_initialized()
         data = self._json_dumps(payload)

@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from ida_pro_mcp.capsule import CapsuleStore
 from ida_pro_mcp.capsule.cli import main
+
+
+def _write_idx(path):
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        """
+        CREATE TABLE func_embeddings (
+            ea TEXT PRIMARY KEY,
+            name TEXT,
+            dim INTEGER,
+            vec_blob BLOB NOT NULL,
+            pseudo_hash TEXT,
+            indexed_at REAL
+        )
+        """
+    )
+    conn.execute("CREATE TABLE embedding_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO embedding_meta(key, value) VALUES('embedding_backend', 'tfidf-fallback')")
+    conn.execute("INSERT INTO embedding_meta(key, value) VALUES('embedding_dim', '1536')")
+    conn.execute(
+        "INSERT INTO func_embeddings(ea, name, dim, vec_blob, pseudo_hash, indexed_at) VALUES(?,?,?,?,?,?)",
+        ("0x401000", "sub_401000", 1536, b"xyz", "ph1", 1.0),
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_capsule_cli_init_inspect_verify(tmp_path, capsys):
@@ -123,3 +149,36 @@ def test_capsule_cli_semantic_commands(tmp_path, capsys):
     assert main(["export-semantic-manifest", str(capsule)]) == 0
     manifest = json.loads(capsys.readouterr().out)
     assert manifest["semantic_summary"]["semantic_indexes"] == 1
+
+
+def test_capsule_cli_import_export_function_index(tmp_path, capsys):
+    capsule = tmp_path / "imp.sideband"
+    idx = tmp_path / "sample.embeddings.db"
+    out = tmp_path / "out.embeddings.db"
+    _write_idx(idx)
+    assert main(["init", str(capsule), "--project-name", "x"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "import-function-index",
+                str(capsule),
+                str(idx),
+                "--mode",
+                "with-vectors",
+                "--index-id",
+                "IDX1",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["imported_items"] == 1
+    assert payload["imported_vectors"] == 1
+    assert main(["export-function-index", str(capsule), "--index-id", "IDX1", "--out", str(out), "--mode", "with-vectors"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["exported_items"] == 1
+    conn = sqlite3.connect(str(out))
+    row = conn.execute("SELECT COUNT(*) FROM func_embeddings").fetchone()
+    assert row is not None and row[0] == 1
+    conn.close()

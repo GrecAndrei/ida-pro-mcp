@@ -63,6 +63,19 @@ def build_parser() -> argparse.ArgumentParser:
     sem_manifest_p = sub.add_parser("export-semantic-manifest", help="export semantic summary+index manifest")
     sem_manifest_p.add_argument("capsule")
 
+    import_idx_p = sub.add_parser("import-function-index", help="import a .embeddings.db into capsule semantic tables")
+    import_idx_p.add_argument("capsule")
+    import_idx_p.add_argument("index_db")
+    import_idx_p.add_argument("--mode", choices=["metadata-only", "with-vectors"], default="metadata-only")
+    import_idx_p.add_argument("--index-id", default="")
+    import_idx_p.add_argument("--max-items", type=int, default=100000)
+
+    export_idx_p = sub.add_parser("export-function-index", help="export function semantic index to .embeddings.db")
+    export_idx_p.add_argument("capsule")
+    export_idx_p.add_argument("--index-id", required=True)
+    export_idx_p.add_argument("--out", required=True)
+    export_idx_p.add_argument("--mode", choices=["metadata-only", "with-vectors"], default="metadata-only")
+
     return p
 
 
@@ -146,6 +159,27 @@ def main(argv: list[str] | None = None) -> int:
                     "semantic_summary": c.semantic_summary(),
                     "semantic_indexes": c.list_semantic_indexes(),
                 }
+            print(json.dumps(payload, indent=2))
+            return 0
+
+        if args.command == "import-function-index":
+            with CapsuleStore.open(Path(args.capsule)) as c:
+                payload = c.import_function_embedding_index(
+                    Path(args.index_db),
+                    mode=args.mode,
+                    index_id=(args.index_id or None),
+                    max_items=int(args.max_items),
+                )
+            print(json.dumps(payload, indent=2))
+            return 0
+
+        if args.command == "export-function-index":
+            with CapsuleStore.open(Path(args.capsule)) as c:
+                payload = c.export_function_embedding_index(
+                    index_id=args.index_id,
+                    out_path=Path(args.out),
+                    mode=args.mode,
+                )
             print(json.dumps(payload, indent=2))
             return 0
 
