@@ -1,10 +1,10 @@
 # Use Cases
 
-`ida-pro-mcp` is designed for defensive, educational, interoperability, preservation, and maintainer-oriented reverse-engineering workflows. It exposes deterministic IDA Pro capabilities through MCP so agents can assist with structured analysis instead of scraping UI output.
+`ida-pro-mcp` is designed for defensive, educational, interoperability, preservation, and maintainer-oriented reverse-engineering workflows. It exposes deterministic IDA Pro capabilities through the Model Context Protocol (MCP) so agents can assist with structured analysis instead of scraping UI output.
 
 This project is not intended for cheating, piracy, DRM circumvention, unauthorized multiplayer tampering, or analysis of systems without permission.
 
-## 1. OSS supply-chain binary auditing
+## 1. Open source software (OSS) supply-chain binary auditing
 
 Maintainers often depend on native extensions, shared libraries, release artifacts, wheels, vendor SDKs, CI outputs, or prebuilt binaries they did not fully author.
 
@@ -69,8 +69,6 @@ Example workflows:
 - inspect crashy code paths that affect compatibility patches
 - recover names and notes for community documentation
 - compare different regional or patched game builds
-
-This project should not be used for cheating, piracy, DRM circumvention, or unauthorized multiplayer tampering.
 
 ## 6. Malware and abuse artifact triage for defenders
 

@@ -40,4 +40,5 @@ jobs:
       - name: Run standalone test suite
         env:
           IDA_MCP_DISABLE_RATE_LIMIT: "1"
+          IDA_MCP_POLICY_MODE: "permissive"
         run: python -m pytest -q
