@@ -1,3 +1,5 @@
+import hashlib
+import json
 import time
 
 try:
@@ -20,8 +22,8 @@ _FUNC_SUMMARY_CACHE_MAX = 512  # prevent unbounded growth
 @tool
 @idaread
 def agent(
-    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint"],
-                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint"],
+    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint", "intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary"],
+                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint|intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|export_index_summary"],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Search query or comma-separated addresses"] = None,
     depth: Annotated[int, "Exploration depth"] = 1,
@@ -661,6 +663,191 @@ def agent(
                     })
             
             return {"ok": True, "items": results, "count": len(results)}
+
+        elif action in ("intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary"):
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex
+            except ImportError:
+                try:
+                    from host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex  # type: ignore
+                except ImportError:
+                    return make_error(MCPError.IDA_ERROR, "intelligence components unavailable")
+
+            embedder = BgeCodeEmbedder()
+            classifier = BehaviorClassifier.instance(embedder)
+
+            def _index_for_current_idb():
+                idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB) or ""
+                db_path = idb_path + ".embeddings.db"
+                return FunctionEmbeddingIndex(db_path, embedder), db_path
+
+            if action in ("intelligence_status", "embedder_status"):
+                est = embedder.status(probe=bool(kwargs.get("probe", False)), deep_hash=bool(kwargs.get("deep_hash", False)))
+                loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
+                total = len(getattr(classifier, "ANCHORS", {}) or {})
+                idx_count = 0
+                active_indexes = 0
+                try:
+                    idx, idx_path = _index_for_current_idb()
+                    idx_count = int(idx.size)
+                    active_indexes = 1 if idx_path else 0
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "embedder": est,
+                    "anchors": {
+                        "count": total,
+                        "loaded": loaded,
+                        "anchor_set_hash": hashlib.sha256(
+                            json.dumps(classifier.ANCHORS, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest(),
+                    },
+                    "indexes": {
+                        "active_binaries": active_indexes,
+                        "functions_indexed": idx_count,
+                    },
+                }
+
+            if action == "anchor_status":
+                loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
+                total = len(getattr(classifier, "ANCHORS", {}) or {})
+                return {
+                    "ok": True,
+                    "count": total,
+                    "loaded": loaded,
+                    "anchor_set_hash": hashlib.sha256(
+                        json.dumps(classifier.ANCHORS, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest(),
+                }
+
+            if action == "refresh_anchors":
+                behaviors = []
+                if query:
+                    behaviors = [x.strip() for x in str(query).split(",") if x.strip()]
+                classifier.refresh_anchors(behaviors or None)
+                loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
+                return {"ok": True, "refreshed": behaviors or "all", "loaded": loaded}
+
+            if action == "classify_text":
+                if not query:
+                    return make_error(MCPError.INVALID_ARGS, "query required for classify_text")
+                threshold = float(kwargs.get("threshold", 0.25))
+                top_k = int(kwargs.get("top_k", 4))
+                block = bool(kwargs.get("block", False))
+                rows = classifier.classify(str(query), threshold=threshold, top_k=top_k, block=block)
+                return {
+                    "ok": True,
+                    "backend": embedder.backend,
+                    "behaviors": rows,
+                }
+
+            if action == "classify_function":
+                if not addr:
+                    return make_error(MCPError.INVALID_ARGS, "addr required for classify_function")
+                ea, err = validate_addr(addr, require_func=True)
+                if err:
+                    return err
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    pseudo = str(cfunc) if cfunc else ""
+                except Exception:
+                    pseudo = ""
+                if not pseudo:
+                    return make_error(MCPError.IDA_ERROR, "failed to decompile function")
+                threshold = float(kwargs.get("threshold", 0.25))
+                top_k = int(kwargs.get("top_k", 4))
+                block = bool(kwargs.get("block", False))
+                rows = classifier.classify(pseudo, threshold=threshold, top_k=top_k, block=block)
+                return {
+                    "ok": True,
+                    "addr": hex(ea),
+                    "name": ida_funcs.get_func_name(ea),
+                    "backend": embedder.backend,
+                    "behaviors": rows,
+                }
+
+            if action == "index_function":
+                if not addr:
+                    return make_error(MCPError.INVALID_ARGS, "addr required for index_function")
+                ea, err = validate_addr(addr, require_func=True)
+                if err:
+                    return err
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    pseudo = str(cfunc) if cfunc else ""
+                except Exception:
+                    pseudo = ""
+                if not pseudo:
+                    return make_error(MCPError.IDA_ERROR, "failed to decompile function")
+                idx, db_path = _index_for_current_idb()
+                name = ida_funcs.get_func_name(ea) or hex(ea)
+                idx.index(hex(ea), name, pseudo)
+                return {"ok": True, "addr": hex(ea), "name": name, "index": {"path": db_path, "size": idx.size}}
+
+            if action == "index_batch":
+                limit = max(1, int(kwargs.get("limit", max_items)))
+                idx, db_path = _index_for_current_idb()
+                count = 0
+                failures = 0
+                for fea in idautils.Functions():
+                    if count >= limit:
+                        break
+                    try:
+                        cfunc = ida_hexrays.decompile(fea)
+                        pseudo = str(cfunc) if cfunc else ""
+                        if not pseudo:
+                            failures += 1
+                            continue
+                        name = ida_funcs.get_func_name(fea) or hex(fea)
+                        idx.index(hex(fea), name, pseudo)
+                        count += 1
+                    except Exception:
+                        failures += 1
+                return {"ok": True, "indexed": count, "failed": failures, "index": {"path": db_path, "size": idx.size}}
+
+            if action == "similar_functions":
+                if not addr:
+                    return make_error(MCPError.INVALID_ARGS, "addr required for similar_functions")
+                ea, err = validate_addr(addr, require_func=True)
+                if err:
+                    return err
+                threshold = float(kwargs.get("threshold", 0.55))
+                top_k = max(1, int(kwargs.get("top_k", max_items)))
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    pseudo = str(cfunc) if cfunc else ""
+                except Exception:
+                    pseudo = ""
+                if not pseudo:
+                    return make_error(MCPError.IDA_ERROR, "failed to decompile function")
+                idx, db_path = _index_for_current_idb()
+                qname = ida_funcs.get_func_name(ea) or hex(ea)
+                idx.index_async(hex(ea), qname, pseudo)
+                similar = idx.similar(pseudo, top_k=top_k, exclude_ea=hex(ea), threshold=threshold)
+                return {
+                    "ok": True,
+                    "query_addr": hex(ea),
+                    "query_name": qname,
+                    "similar": similar,
+                    "index": {"path": db_path, "size": idx.size},
+                }
+
+            if action == "export_index_summary":
+                idx, db_path = _index_for_current_idb()
+                meta = {}
+                try:
+                    meta = idx.metadata()
+                except Exception:
+                    meta = {}
+                return {
+                    "ok": True,
+                    "index": {
+                        "path": db_path,
+                        "size": idx.size,
+                        "metadata": meta,
+                    },
+                }
         
         elif action == "similar":
             # Find functions with similar characteristics using embedding-based search
