@@ -654,6 +654,7 @@ class ServerDispatchMixin:
                         ack=args.get("_risk_ack") or args.get("_guardrail_ack"),
                     )
                     policy_audit = build_audit_record(policy_result, session_id=sid)
+                    policy_details = policy_result.to_dict()
                     if (
                         policy_result.decision != PolicyDecision.ALLOW
                         or policy_result.risk.value != "read"
@@ -665,28 +666,28 @@ class ServerDispatchMixin:
                                 tool=tool_name,
                                 action=str(args.get("action") or ""),
                                 args=policy_audit,
-                                result=policy_audit,
+                                result=policy_details,
                                 latency_ms=0.0,
                                 session_id=sid,
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log_rpc(f"Policy audit logging failed for {tool_name}: {e}")
                     if policy_result.decision == PolicyDecision.BLOCK:
                         return make_error(
                             getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
                             "Policy blocked this tool action",
                             hint="Use an allowed purpose and verify the workflow is authorized.",
-                            details=policy_result.to_dict(),
+                            details=policy_details,
                         )
                     if policy_result.decision == PolicyDecision.REQUIRE_ACK:
                         return make_error(
                             getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
                             "Policy requires explicit acknowledgement for this tool action",
                             hint="Retry with _risk_ack=true after verifying the action is authorized.",
-                            details=policy_result.to_dict(),
+                            details=policy_details,
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_rpc(f"Policy evaluation failed for {tool_name}: {e}")
             args.pop("_purpose", None)
             args.pop("_risk_ack", None)
 
