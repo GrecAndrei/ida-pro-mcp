@@ -52,6 +52,23 @@ Important architecture note:
 - Tool execution is deterministic IDA SDK logic plus local ML components (bge-code-v1 embeddings, BehaviorClassifier, FrontierEngine, schemaboot, Q-learning).
 - Any LLM behavior comes from the MCP client using this server, not from an embedded server-side LLM runtime.
 
+## Local Semantic Memory
+
+`ida-pro-mcp` can build a local semantic index of decompiled functions using
+`bge-code-v1` via `llama-server`, with a deterministic fallback when the model
+is unavailable.
+
+This enables behavior triage, similar-function search, and evidence-backed
+context injection without sending code to a remote API.
+
+Quick checks:
+
+```bash
+python install.py --embedder-doctor
+ida-pro-mcp-cli tool agent '{"action":"intelligence_status"}'
+python -m ida_pro_mcp.capsule.cli semantic-summary project.sideband --json
+```
+
 ## Why LLM Agents Use It
 
 Without MCP, an LLM has to infer analysis state from screenshots, logs, and pasted snippets.

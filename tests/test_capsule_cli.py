@@ -182,3 +182,45 @@ def test_capsule_cli_import_export_function_index(tmp_path, capsys):
     row = conn.execute("SELECT COUNT(*) FROM func_embeddings").fetchone()
     assert row is not None and row[0] == 1
     conn.close()
+
+
+def test_capsule_cli_export_analysis(tmp_path, capsys):
+    capsule = tmp_path / "analysis-src.sideband"
+    out = tmp_path / "analysis-only.sideband"
+
+    assert main(["init", str(capsule), "--project-name", "analysis-cli"]) == 0
+    capsys.readouterr()
+
+    with CapsuleStore.open(capsule) as c:
+        idx = c.add_semantic_index(kind="function", backend="tfidf-fallback", dim=2, index_id="IDXA")
+        vec = c.store_semantic_vector(b"\x00\x00\x80?\x00\x00\x00@", dim=2)
+        c.upsert_semantic_item(
+            index_id=idx,
+            kind="function",
+            stable_ref="0x401000",
+            title="sub_401000",
+            text_hash="h",
+            vector_sha256=vec,
+            metadata={"name": "sub_401000"},
+        )
+        c.store_blob(b"raw-binary", kind="binary")
+
+    assert (
+        main(
+            [
+                "export-analysis",
+                str(capsule),
+                "--out",
+                str(out),
+                "--metadata-only",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+
+    with CapsuleStore.open(out) as dst:
+        summary = dst.inspect_summary()
+        assert summary["objects"] == 0
+        assert summary["semantic_vectors"] == 0

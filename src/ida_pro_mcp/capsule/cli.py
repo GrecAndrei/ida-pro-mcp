@@ -76,6 +76,14 @@ def build_parser() -> argparse.ArgumentParser:
     export_idx_p.add_argument("--out", required=True)
     export_idx_p.add_argument("--mode", choices=["metadata-only", "with-vectors"], default="metadata-only")
 
+    export_analysis_p = sub.add_parser("export-analysis", help="export analysis-only capsule without raw blobs")
+    export_analysis_p.add_argument("capsule")
+    export_analysis_p.add_argument("--out", required=True)
+    export_analysis_p.add_argument("--metadata-only", action="store_true", help="export metadata only (equivalent to no vectors)")
+    export_analysis_p.add_argument("--include-vectors", action="store_true", help="include semantic vectors")
+    export_analysis_p.add_argument("--include-notes", action="store_true", help="include notes in export")
+    export_analysis_p.add_argument("--include-audit", action="store_true", help="include audit events in export")
+
     return p
 
 
@@ -179,6 +187,20 @@ def main(argv: list[str] | None = None) -> int:
                     index_id=args.index_id,
                     out_path=Path(args.out),
                     mode=args.mode,
+                )
+            print(json.dumps(payload, indent=2))
+            return 0
+
+        if args.command == "export-analysis":
+            include_vectors = bool(args.include_vectors)
+            if args.metadata_only:
+                include_vectors = False
+            with CapsuleStore.open(Path(args.capsule)) as c:
+                payload = c.export_analysis_capsule(
+                    out_path=Path(args.out),
+                    include_vectors=include_vectors,
+                    include_notes=bool(args.include_notes),
+                    include_audit=bool(args.include_audit),
                 )
             print(json.dumps(payload, indent=2))
             return 0

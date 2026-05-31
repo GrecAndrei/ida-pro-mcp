@@ -345,3 +345,68 @@ def test_capsule_import_export_function_index_with_vectors(tmp_path):
     assert row[0] == 4
     assert bytes(row[1]) == b"\x00\x00\x80?\x00\x00\x00@"
     conn.close()
+
+
+def test_capsule_export_analysis_capsule_metadata_only_excludes_blobs(tmp_path):
+    src = tmp_path / "src.sideband"
+    out = tmp_path / "analysis-only.sideband"
+    with CapsuleStore.open(src) as c:
+        c.init(project_name="analysis-export")
+        c.upsert_session("SID_1", {"phase": "triage"})
+        c.add_note(kind="finding", title="HTTP parser", body="candidate")
+        c.add_audit_event("session_create", {"ok": True}, session_id="SID_1")
+        c.store_blob(b"raw-bytes", kind="binary_blob")
+        idx = c.add_semantic_index(kind="function", backend="bge-code-v1", dim=4, index_id="IDX_EXP")
+        vec = c.store_semantic_vector(b"\x00\x00\x80?\x00\x00\x00@", dim=2)
+        item = c.upsert_semantic_item(
+            index_id=idx,
+            kind="function",
+            stable_ref="0x401000",
+            title="sub_401000",
+            text_hash="h1",
+            vector_sha256=vec,
+            metadata={"name": "sub_401000"},
+        )
+        c.add_behavior_hit(item_id=item, behavior="network_http", confidence=0.6)
+        c.add_evidence_card(claim="http parser candidate", claim_type="behavior_triage", confidence=0.6)
+
+        payload = c.export_analysis_capsule(out_path=out, include_vectors=False, include_notes=True, include_audit=False)
+        assert payload["ok"] is True
+
+    with CapsuleStore.open(out) as dst:
+        summary = dst.inspect_summary()
+        assert summary["objects"] == 0
+        assert summary["semantic_indexes"] == 1
+        assert summary["semantic_items"] == 1
+        assert summary["semantic_vectors"] == 0
+        assert summary["audit_events"] == 0
+        assert summary["sessions"] == 1
+        assert summary["evidence_cards"] == 1
+        manifest = dst.get_manifest()
+        assert manifest.get("analysis_export", {}).get("mode", {}).get("include_vectors") is False
+
+
+def test_capsule_export_analysis_capsule_with_vectors_and_audit(tmp_path):
+    src = tmp_path / "src2.sideband"
+    out = tmp_path / "analysis-with-vectors.sideband"
+    with CapsuleStore.open(src) as c:
+        c.init(project_name="analysis-export-2")
+        c.add_audit_event("session_update", {"ok": True}, session_id="SID_2")
+        idx = c.add_semantic_index(kind="function", backend="tfidf-fallback", dim=2, index_id="IDX2")
+        vec = c.store_semantic_vector(b"\x00\x00\x80?\x00\x00\x00@", dim=2)
+        _ = c.upsert_semantic_item(
+            index_id=idx,
+            kind="function",
+            stable_ref="0x500000",
+            title="sub_500000",
+            text_hash="h2",
+            vector_sha256=vec,
+            metadata={"name": "sub_500000"},
+        )
+        payload = c.export_analysis_capsule(out_path=out, include_vectors=True, include_notes=False, include_audit=True)
+        assert payload["ok"] is True
+
+    with CapsuleStore.open(out) as dst:
+        summary = dst.inspect_summary()
+        assert summary["semantic_vectors"] == 1
+        assert summary["audit_events"] == 1

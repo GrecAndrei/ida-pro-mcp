@@ -644,6 +644,184 @@ class CapsuleStore:
         finally:
             dst.close()
 
+    def export_analysis_capsule(
+        self,
+        *,
+        out_path: Path | str,
+        include_vectors: bool = False,
+        include_notes: bool = True,
+        include_audit: bool = False,
+    ) -> dict:
+        """Export an analysis-only capsule view without raw binary/blob payloads."""
+        self._assert_initialized()
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            out.unlink()
+
+        manifest = self.get_manifest()
+        trust = dict(manifest.get("trust") or {})
+        trust["contains_executable_payloads"] = False
+        trust.setdefault("state", "inspected")
+
+        with CapsuleStore.open(out) as dst:
+            dst.init(
+                project_name=str(self._get_meta("project_name") or "analysis-export"),
+                created_by="ida-pro-mcp-analysis-export",
+                force=True,
+            )
+
+            exported_manifest = dict(manifest)
+            exported_manifest["trust"] = trust
+            exported_manifest.setdefault("analysis_export", {})
+            exported_manifest["analysis_export"].update(
+                {
+                    "source_capsule": str(self.path),
+                    "exported_at": _now(),
+                    "mode": {
+                        "include_vectors": bool(include_vectors),
+                        "include_notes": bool(include_notes),
+                        "include_audit": bool(include_audit),
+                    },
+                }
+            )
+            dst.update_manifest(exported_manifest)
+
+            # Profiles and sessions are metadata and safe to export.
+            for row in self.conn.execute(
+                "SELECT name, kind, config_json FROM backend_profiles ORDER BY name ASC"
+            ).fetchall():
+                dst.upsert_backend_profile(
+                    str(row["name"]),
+                    str(row["kind"]),
+                    json.loads(str(row["config_json"] or "{}")),
+                )
+            for row in self.conn.execute(
+                "SELECT name, kind, config_json FROM client_profiles ORDER BY name ASC"
+            ).fetchall():
+                dst.upsert_client_profile(
+                    str(row["name"]),
+                    str(row["kind"]),
+                    json.loads(str(row["config_json"] or "{}")),
+                )
+            for row in self.conn.execute(
+                "SELECT session_id, state_json FROM sessions ORDER BY created_at ASC"
+            ).fetchall():
+                dst.upsert_session(
+                    str(row["session_id"]),
+                    json.loads(str(row["state_json"] or "{}")),
+                )
+
+            if include_notes:
+                for row in self.conn.execute(
+                    "SELECT kind, title, body, metadata_json, id FROM notes ORDER BY created_at ASC"
+                ).fetchall():
+                    dst.add_note(
+                        kind=str(row["kind"]),
+                        title=str(row["title"]),
+                        body=str(row["body"]),
+                        metadata=json.loads(str(row["metadata_json"] or "{}")),
+                        note_id=str(row["id"]),
+                    )
+
+            if include_audit:
+                for row in self.conn.execute(
+                    "SELECT event_type, session_id, json FROM audit_events ORDER BY id ASC"
+                ).fetchall():
+                    dst.add_audit_event(
+                        str(row["event_type"]),
+                        json.loads(str(row["json"] or "{}")),
+                        session_id=str(row["session_id"] or "") or None,
+                    )
+
+            # Semantic indexes/items/hits/cards are exported. Vectors are optional.
+            index_id_map: dict[str, str] = {}
+            for row in self.conn.execute(
+                "SELECT * FROM semantic_indexes ORDER BY created_at ASC"
+            ).fetchall():
+                src_id = str(row["id"])
+                index_id_map[src_id] = dst.add_semantic_index(
+                    kind=str(row["kind"]),
+                    backend=str(row["backend"]),
+                    dim=int(row["dim"]),
+                    model_id=str(row["model_id"] or ""),
+                    model_fingerprint=json.loads(str(row["model_fingerprint_json"] or "{}")),
+                    anchor_set_hash=str(row["anchor_set_hash"] or ""),
+                    source_fingerprint=str(row["source_fingerprint"] or ""),
+                    metadata=json.loads(str(row["metadata_json"] or "{}")),
+                    index_id=src_id,
+                )
+
+            item_id_map: dict[str, str] = {}
+            vector_cache: set[str] = set()
+            for row in self.conn.execute(
+                "SELECT * FROM semantic_items ORDER BY created_at ASC"
+            ).fetchall():
+                src_vec = str(row["vector_sha256"] or "")
+                vec_sha = ""
+                if include_vectors and src_vec:
+                    vrow = self.conn.execute(
+                        "SELECT data, dim, dtype FROM semantic_vectors WHERE vector_sha256=?",
+                        (src_vec,),
+                    ).fetchone()
+                    if vrow:
+                        if src_vec not in vector_cache:
+                            dst.store_semantic_vector(bytes(vrow["data"]), dim=int(vrow["dim"]), dtype=str(vrow["dtype"]))
+                            vector_cache.add(src_vec)
+                        vec_sha = src_vec
+                src_item_id = str(row["id"])
+                item_id_map[src_item_id] = dst.upsert_semantic_item(
+                    index_id=index_id_map.get(str(row["index_id"]), str(row["index_id"])),
+                    kind=str(row["kind"]),
+                    stable_ref=str(row["stable_ref"]),
+                    title=str(row["title"] or ""),
+                    text_hash=str(row["text_hash"]),
+                    vector_sha256=vec_sha,
+                    metadata=json.loads(str(row["metadata_json"] or "{}")),
+                    item_id=src_item_id,
+                )
+
+            for row in self.conn.execute(
+                "SELECT * FROM behavior_hits ORDER BY created_at ASC"
+            ).fetchall():
+                src_item = str(row["item_id"])
+                mapped_item = item_id_map.get(src_item, src_item)
+                dst.add_behavior_hit(
+                    item_id=mapped_item,
+                    behavior=str(row["behavior"]),
+                    confidence=float(row["confidence"]),
+                    anchor_set_hash=str(row["anchor_set_hash"] or ""),
+                    explain=json.loads(str(row["explain_json"] or "[]")),
+                    hit_id=str(row["id"]),
+                )
+
+            for row in self.conn.execute(
+                "SELECT * FROM evidence_cards ORDER BY created_at ASC"
+            ).fetchall():
+                dst.add_evidence_card(
+                    claim=str(row["claim"]),
+                    claim_type=str(row["claim_type"]),
+                    confidence=float(row["confidence"]),
+                    evidence=json.loads(str(row["evidence_json"] or "[]")),
+                    source_refs=json.loads(str(row["source_refs_json"] or "[]")),
+                    metadata=json.loads(str(row["metadata_json"] or "{}")),
+                    card_id=str(row["id"]),
+                )
+
+            verify = dst.verify()
+            summary = dst.inspect_summary()
+
+        return {
+            "ok": True,
+            "out_path": str(out),
+            "source_capsule": str(self.path),
+            "include_vectors": bool(include_vectors),
+            "include_notes": bool(include_notes),
+            "include_audit": bool(include_audit),
+            "verification": verify,
+            "summary": summary,
+        }
+
     def add_audit_event(self, event_type: str, payload: dict, session_id: str | None = None) -> int:
         self._assert_initialized()
         data = self._json_dumps(payload)

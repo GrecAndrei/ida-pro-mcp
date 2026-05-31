@@ -77,3 +77,15 @@ Planned follow-on work:
 - optional executable wrapper
 - signed capsules
 - capsule diff/replay
+
+## Analysis-Only Export
+
+Capsules support analysis-only export for authorized sharing workflows:
+
+```bash
+python -m ida_pro_mcp.capsule.cli export-analysis project.sideband --out analysis-only.sideband --metadata-only
+python -m ida_pro_mcp.capsule.cli export-analysis project.sideband --out analysis-with-vectors.sideband --include-vectors --include-notes --include-audit
+```
+
+Exported analysis capsules include semantic metadata, behavior/evidence records,
+and optional notes/audit events. Raw blob/object payloads are excluded by default.
