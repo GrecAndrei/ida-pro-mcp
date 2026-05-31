@@ -171,6 +171,31 @@ def test_dispatch_policy_ack_allows_misc_python_and_strips_internal_args(monkeyp
     assert any(r.get("tool") == "misc" and r.get("action") == "python" for r in srv.audit.records)
 
 
+def test_dispatch_policy_guardrail_ack_is_honored_even_with_false_risk_ack(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
+    srv = _DummyDispatchServer()
+
+    res = srv._execute_tool_inner(
+        "misc",
+        "misc",
+        {"action": "python", "_risk_ack": "false", "_guardrail_ack": True},
+    )
+
+    assert res.get("ok") is True
+
+
+def test_dispatch_policy_allows_misc_health_without_ack(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
+    srv = _DummyDispatchServer()
+    srv._handle_misc_health = lambda _args: {"ok": True, "tool": "misc", "action": "health"}  # type: ignore[attr-defined]
+
+    res = srv._execute_tool_inner("misc", "misc", {"action": "health"})
+
+    assert res.get("ok") is True
+    assert res.get("tool") == "misc"
+    assert res.get("action") == "health"
+
+
 def test_dispatch_policy_blocks_disallowed_purpose_in_enforce_mode(monkeypatch):
     monkeypatch.setenv("IDA_MCP_POLICY_MODE", "enforce")
     srv = _DummyDispatchServer()
