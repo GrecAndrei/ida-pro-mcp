@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import atexit
+import glob
 import json
 import math
 import os
@@ -61,17 +62,80 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
 _EMBED_LEASE_FILE = os.path.join("/tmp", "ida-mcp-embed-server.json")
 _MODEL_PATH_CACHE = None
 
+
+def hash_file(path: str, max_bytes: int | None = None) -> str:
+    h = hashlib.sha256()
+    read_bytes = 0
+    with open(path, "rb") as f:
+        while True:
+            chunk_size = 1024 * 1024
+            if max_bytes is not None:
+                remaining = max_bytes - read_bytes
+                if remaining <= 0:
+                    break
+                chunk_size = min(chunk_size, remaining)
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+            read_bytes += len(chunk)
+    return h.hexdigest()
+
+
+def _file_fingerprint(path: str, deep_hash: bool = False) -> dict:
+    out = {
+        "path": path,
+        "exists": False,
+        "size": 0,
+        "mtime_ns": 0,
+        "sha256_head_16mb": "",
+    }
+    if not path or not os.path.isfile(path):
+        return out
+    st = os.stat(path)
+    out["exists"] = True
+    out["size"] = int(st.st_size)
+    out["mtime_ns"] = int(st.st_mtime_ns)
+    try:
+        out["sha256_head_16mb"] = hash_file(path, max_bytes=16 * 1024 * 1024)
+    except OSError:
+        out["sha256_head_16mb"] = ""
+    if deep_hash:
+        try:
+            out["sha256_full"] = hash_file(path)
+        except OSError:
+            out["sha256_full"] = ""
+    return out
+
+
+def model_fingerprint(path: str, deep_hash: bool = False) -> dict:
+    return _file_fingerprint(path, deep_hash=deep_hash)
+
+
+def server_fingerprint(path: str, deep_hash: bool = False) -> dict:
+    return _file_fingerprint(path, deep_hash=deep_hash)
+
 def _find_llama_server() -> str:
-    """Locate llama-server binary from env, project-local paths, or PATH."""
+    """Locate llama-server binary from env, generic local paths, or PATH."""
     env = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
-    if env and os.path.isfile(env):
+    if env and os.path.isfile(env) and os.access(env, os.X_OK):
         return env
+
+    for candidate in (
+        os.path.join(os.path.expanduser("~"), ".local", "bin", "llama-server"),
+        "/usr/local/bin/llama-server",
+        "/usr/bin/llama-server",
+    ):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+
     by_path = shutil.which("llama-server")
     if by_path:
         return by_path
+
     candidates = [
-        os.path.join(_PROJECT_ROOT, ".opencode-swarm", "llama-server"),
         os.path.join(_PROJECT_ROOT, "bin", "llama-server"),
+        os.path.join(_PROJECT_ROOT, "llama-server"),
     ]
     for c in candidates:
         if os.path.isfile(c) and os.access(c, os.X_OK):
@@ -80,7 +144,7 @@ def _find_llama_server() -> str:
 
 
 def _find_model() -> str:
-    """Locate the embedding GGUF from env or project-local paths."""
+    """Locate the embedding GGUF from env and generic local paths."""
     global _MODEL_PATH_CACHE
     if isinstance(_MODEL_PATH_CACHE, str):
         return _MODEL_PATH_CACHE
@@ -89,15 +153,31 @@ def _find_model() -> str:
         _MODEL_PATH_CACHE = env
         return env
     candidates = [
-        os.path.join(_PROJECT_ROOT, ".opencode-swarm", "bge-code-v1-q8_0.gguf"),
-        os.path.join(_PROJECT_ROOT, "models", "bge-code-v1-q8_0.gguf"),
         os.path.join(_PROJECT_ROOT, "bge-code-v1-q8_0.gguf"),
+        os.path.join(_PROJECT_ROOT, "models", "bge-code-v1-q8_0.gguf"),
+        os.path.join(os.path.expanduser("~"), "models", "bge-code-v1-q8_0.gguf"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "bge-code-v1-q8_0.gguf"),
     ]
     for c in candidates:
         p = os.path.abspath(c)
         if os.path.isfile(p):
             _MODEL_PATH_CACHE = p
             return p
+    # Hugging Face cache snapshots for local model files.
+    hf_glob = os.path.join(
+        os.path.expanduser("~"),
+        ".cache",
+        "huggingface",
+        "hub",
+        "models--*",
+        "snapshots",
+        "*",
+        "bge-code-v1*.gguf",
+    )
+    for p in glob.glob(hf_glob):
+        if os.path.isfile(p):
+            _MODEL_PATH_CACHE = os.path.abspath(p)
+            return _MODEL_PATH_CACHE
     _MODEL_PATH_CACHE = ""
     return ""
 
@@ -243,6 +323,59 @@ class BgeCodeEmbedder:
         self._owns_proc = False
         self._consecutive_rpc_failures = 0
         self._max_rpc_failures = max(1, EMBED_MAX_FAILURES)
+
+    def status(self, probe: bool = False, deep_hash: bool = False) -> dict:
+        server_ready = bool(self._ready)
+        probe_error = ""
+        if probe:
+            if not server_ready and self._use_llama:
+                server_ready = bool(self._start_server())
+            elif self._port:
+                try:
+                    req = urllib.request.urlopen(f"http://127.0.0.1:{self._port}/health", timeout=2)
+                    server_ready = b'"ok"' in req.read()
+                    self._ready = server_ready
+                except Exception as exc:
+                    server_ready = False
+                    probe_error = str(exc)
+            else:
+                try:
+                    if os.path.isfile(_EMBED_LEASE_FILE):
+                        with open(_EMBED_LEASE_FILE, "r", encoding="utf-8") as f:
+                            lease = json.load(f)
+                        lease_port = int(lease.get("port") or 0)
+                        if lease_port > 0:
+                            req = urllib.request.urlopen(
+                                f"http://127.0.0.1:{lease_port}/health", timeout=2
+                            )
+                            if b'"ok"' in req.read():
+                                self._port = lease_port
+                                self._ready = True
+                                self._owns_proc = False
+                                server_ready = True
+                except Exception as exc:
+                    probe_error = str(exc)
+
+        return {
+            "backend": self.backend,
+            "use_llama": bool(self._use_llama),
+            "disabled_by_env": bool(EMBED_DISABLED),
+            "server_bin": self._server_bin,
+            "server_bin_exists": bool(self._server_bin and os.path.isfile(self._server_bin)),
+            "model_path": self._model_path,
+            "model_exists": bool(self._model_path and os.path.isfile(self._model_path)),
+            "ready": bool(server_ready),
+            "port": self._port,
+            "owns_process": bool(self._owns_proc),
+            "dim": self.dim,
+            "batch_size": int(self._batch_size),
+            "consecutive_rpc_failures": int(self._consecutive_rpc_failures),
+            "fingerprints": {
+                "model": model_fingerprint(self._model_path, deep_hash=deep_hash),
+                "server": server_fingerprint(self._server_bin, deep_hash=deep_hash),
+            },
+            "probe_error": probe_error,
+        }
 
     # ── subprocess management ──────────────────────────────────────────────
 

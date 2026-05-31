@@ -45,3 +45,14 @@ After `modify(action="rename")`, a background thread re-embeds the renamed funct
 | `IDA_MCP_EMBED_SERVER_BIN` | auto-detect | Path to llama-server binary |
 | `IDA_MCP_EMBED_DISABLED` | `0` | Set to `1` to force TF-IDF fallback |
 | `IDA_MCP_EMBED_THREADS` | `cpu_count/2` | CPU threads for llama-server |
+
+## Embedder status / doctor
+
+The embedder exposes a lightweight status view for diagnostics:
+
+- `BgeCodeEmbedder().status(probe=False)` reports backend, discovered model/server paths, readiness, batch state, and lightweight file fingerprints.
+- `probe=False` does not start `llama-server`.
+- `probe=True` may probe `/health` and can start the local server when configured.
+- `deep_hash=True` adds full SHA-256 hashes for model/server files (heavier than head-hash mode).
+
+Use this for local-first setup checks and keep claims cautious: semantic results are behavior hints and triage signals, not proof.
