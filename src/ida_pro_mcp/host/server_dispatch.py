@@ -651,7 +651,8 @@ class ServerDispatchMixin:
                         args.get("action"),
                         mode=os.environ.get("IDA_MCP_POLICY_MODE", "assist"),
                         purpose=args.get("_purpose"),
-                        ack=args.get("_risk_ack") or args.get("_guardrail_ack"),
+                        ack=_coerce_bool(args.get("_risk_ack"), False)
+                        or _coerce_bool(args.get("_guardrail_ack"), False),
                     )
                     policy_audit = build_audit_record(policy_result, session_id=sid)
                     policy_details = policy_result.to_dict()

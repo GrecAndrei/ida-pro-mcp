@@ -168,6 +168,11 @@ FILESYSTEM_READ_ACTIONS = {
     ("project", "read"),
 }
 
+READ_ONLY_ACTIONS = {
+    ("funcs", "info"),
+    ("misc", "health"),
+}
+
 DEBUGGER_TOOLS = {"debug"}
 
 DISALLOWED_PURPOSES = {
@@ -264,6 +269,8 @@ def classify_tool_action(tool: Any, action: Any) -> RiskTier:
         return RiskTier.DEBUGGER
     if action_name in DESTRUCTIVE_ACTIONS:
         return RiskTier.DESTRUCTIVE
+    if pair in READ_ONLY_ACTIONS:
+        return RiskTier.READ
     if tool_name in WRITE_IDB_TOOLS or action_name in WRITE_ACTIONS:
         return RiskTier.WRITE_IDB
     if tool_name in READ_ONLY_TOOLS:
