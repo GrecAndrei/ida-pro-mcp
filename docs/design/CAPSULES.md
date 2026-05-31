@@ -57,6 +57,13 @@ Capsule v0 includes:
 - optional content-addressed blob metadata + payload storage
 - CLI for `init`, `inspect`, `verify`, `add-report`, `add-note`, `export-manifest`
 
+Test coverage includes unit tests and optional real-IDA integration probes:
+
+- `tests/test_capsule_store.py`
+- `tests/test_capsule_cli.py`
+- `tests/test_capsule_installer_integration.py`
+- `tests/integration/test_capsule_real_ida.py` (requires licensed IDA and integration env)
+
 ## Roadmap
 
 Planned follow-on work:

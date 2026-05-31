@@ -87,3 +87,84 @@ def test_capsule_blob_hash_roundtrip(tmp_path):
         sha = c.store_blob(payload, kind="artifact", media_type="application/octet-stream")
         restored = c.get_blob(sha)
     assert restored == payload
+
+
+def test_capsule_verify_sets_last_verified_timestamp(tmp_path):
+    capsule_path = tmp_path / "verified.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="verified-test")
+        c.verify()
+        manifest = c.get_manifest()
+    assert manifest["trust"]["last_verified_at"] is not None
+
+
+def test_capsule_rejects_invalid_trust_state(tmp_path):
+    capsule_path = tmp_path / "invalid-trust.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="invalid-trust")
+        manifest = c.get_manifest()
+        manifest["trust"]["state"] = "definitely-not-valid"
+        c.update_manifest(manifest)
+        with pytest.raises(CapsuleVerificationError):
+            c.verify()
+
+
+def test_capsule_upsert_session_updates_existing_state(tmp_path):
+    capsule_path = tmp_path / "sessions.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="sessions")
+        c.upsert_session("SID_1", {"phase": "triage"})
+        c.upsert_session("SID_1", {"phase": "deep-dive"})
+        row = c.conn.execute("SELECT state_json FROM sessions WHERE session_id=?", ("SID_1",)).fetchone()
+    assert row is not None
+    assert json.loads(row["state_json"]) == {"phase": "deep-dive"}
+
+
+def test_capsule_upsert_profiles_roundtrip(tmp_path):
+    capsule_path = tmp_path / "profiles.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="profiles")
+        c.upsert_backend_profile("ida-primary", "ida", {"status": "primary"})
+        c.upsert_client_profile("OpenCode", "mcp-client", {"configured": True})
+        backend = c.conn.execute("SELECT kind, config_json FROM backend_profiles WHERE name='ida-primary'").fetchone()
+        client = c.conn.execute("SELECT kind, config_json FROM client_profiles WHERE name='OpenCode'").fetchone()
+    assert backend is not None
+    assert backend["kind"] == "ida"
+    assert json.loads(backend["config_json"]) == {"status": "primary"}
+    assert client is not None
+    assert client["kind"] == "mcp-client"
+    assert json.loads(client["config_json"]) == {"configured": True}
+
+
+def test_capsule_add_install_report_accepts_custom_id(tmp_path):
+    capsule_path = tmp_path / "report-id.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="report-id")
+        rid = c.add_install_report({"status": "ok"}, report_id="REPORT_1")
+        row = c.conn.execute("SELECT id FROM install_reports WHERE id='REPORT_1'").fetchone()
+    assert rid == "REPORT_1"
+    assert row is not None
+
+
+def test_capsule_summary_counts_reflect_written_rows(tmp_path):
+    capsule_path = tmp_path / "counts.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="counts")
+        c.upsert_session("SID_A", {"x": 1})
+        c.add_audit_event("installer_completed", {"ok": True})
+        c.store_blob(b"abc", kind="artifact")
+        summary = c.inspect_summary()
+    assert summary["sessions"] == 1
+    assert summary["audit_events"] == 1
+    assert summary["objects"] == 1
+
+
+def test_capsule_verify_detects_blob_hash_mismatch(tmp_path):
+    capsule_path = tmp_path / "tampered-blob.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="tampered")
+        sha = c.store_blob(b"good", kind="artifact")
+        c.conn.execute("UPDATE blobs SET data=? WHERE sha256=?", (b"evil", sha))
+        c.conn.commit()
+        with pytest.raises(CapsuleVerificationError):
+            c.verify()
