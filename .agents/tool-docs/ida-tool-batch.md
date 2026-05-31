@@ -6,10 +6,10 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Run multiple tool calls in a single request. Supports shorthand calls like 'tool:action' and inline {name, action, ...args} objects. Returns compact per-call rows + summary.
+Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.
 
 ## Actions
-- `run` (tool-specific)
+- `(pass calls array)` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -26,14 +26,18 @@ Run multiple tool calls in a single request. Supports shorthand calls like 'tool
 
 ## Parameters
 - `calls`: `array`
-- `continue_on_error`: `boolean`
+- `dry_run`: `boolean`
+- `script`: `string` - Macro DSL script. Alternative to 'calls'.
+- `stop_on_error`: `boolean`
+- `template`: `string` - Predefined template name
+- `template_vars`: `object` - Variables for template expansion
 
 ## Minimal Call Shapes
 ```json
 {
   "name": "batch",
   "arguments": {
-    "action": "run"
+    "action": "(pass calls array)"
   }
 }
 ```
@@ -42,7 +46,7 @@ Run multiple tool calls in a single request. Supports shorthand calls like 'tool
   "name": "batch",
   "arguments": {
     "action": "grep",
-    "source_action": "run",
+    "source_action": "(pass calls array)",
     "pattern": "<needle>"
   }
 }

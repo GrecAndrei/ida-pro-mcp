@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.
+Change data representation at addresses: define types, arrays, strings, pointers. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr (hex/dec/bin/char/offset via repr param), make_ptr.
 
 ## Actions
 - `make_data` (tool-specific)
@@ -14,6 +14,9 @@ Data type conversion. Actions: make_data, make_array, make_string, undefine, mak
 - `make_string` (tool-specific)
 - `undefine` (destructive)
 - `make_code` (tool-specific)
+- `cycle_data` (tool-specific)
+- `set_repr` (tool-specific)
+- `make_ptr` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

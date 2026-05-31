@@ -6,19 +6,15 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Crypto algorithm identification via known constants (AES S-box, SHA-256, CRC32, etc). Actions: identify, constants, key_schedule, block_cipher, hash_detect, rng_detect, asymmetric, custom_crypto, encoding, checksums.
+Detect cryptographic algorithms, constants, and encoding routines in the binary. Actions: identify, constants, encoding, checksums, entropy_analysis, aes_ni.
 
 ## Actions
 - `identify` (tool-specific)
 - `constants` (tool-specific)
-- `key_schedule` (tool-specific)
-- `block_cipher` (tool-specific)
-- `hash_detect` (tool-specific)
-- `rng_detect` (tool-specific)
-- `asymmetric` (tool-specific)
-- `custom_crypto` (tool-specific)
 - `encoding` (tool-specific)
 - `checksums` (tool-specific)
+- `entropy_analysis` (tool-specific)
+- `aes_ni` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

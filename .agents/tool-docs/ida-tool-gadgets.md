@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains.
+Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.
 
 ## Actions
 - `rop` (tool-specific)
@@ -19,6 +19,7 @@ ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actio
 - `mitigations` (tool-specific)
 - `seh_handlers` (tool-specific)
 - `pivot_chains` (tool-specific)
+- `classify_chain` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -34,7 +35,17 @@ ROP/JOP/COP gadget discovery. Query supports regex. x86/x64 + ARM/AArch64. Actio
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- (tool takes action-only or dynamic args)
+- `action`: `string` - allowed: `rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain`
+- `addr`: `string`
+- `limit`: `integer`
+- `max_insns`: `integer`
+- `min_score`: `integer`
+- `offset`: `integer`
+- `query`: `string`
+- `rebuild_index`: `boolean`
+- `source_actions`: `array|string`
+- `source_limit`: `integer`
+- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json

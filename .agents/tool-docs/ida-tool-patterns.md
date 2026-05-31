@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, create_sig.
+Generate, match, and manage FLIRT/byte pattern signatures for function identification. Actions: generate, match, list_sigs, apply_sig, create_sig, matched, yara_from_func, flirt_generate, match_yara.
 
 ## Actions
 - `generate` (tool-specific)
@@ -15,6 +15,9 @@ Signature and pattern matching. Actions: generate, match, list_sigs, apply_sig, 
 - `apply_sig` (tool-specific)
 - `create_sig` (tool-specific)
 - `matched` (tool-specific)
+- `yara_from_func` (tool-specific)
+- `flirt_generate` (tool-specific)
+- `match_yara` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Type Library (TIL) and prototype management. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header.
+Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph.
 
 ## Actions
 - `list` (read/discovery)
@@ -19,6 +19,11 @@ Type Library (TIL) and prototype management. Actions: list, get, set_prototype, 
 - `infer` (tool-specific)
 - `read_struct` (tool-specific)
 - `import_header` (tool-specific)
+- `diff` (tool-specific)
+- `visualize` (tool-specific)
+- `propagate` (tool-specific)
+- `enum_values` (tool-specific)
+- `type_graph` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

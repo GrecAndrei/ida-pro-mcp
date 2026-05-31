@@ -27,6 +27,8 @@ from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
 import shlex
 
+from ida_pro_mcp import __version__
+
 # Suppress ALL warnings
 warnings.filterwarnings("ignore")
 
@@ -447,7 +449,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                         "tools": {},
                         "resources": {},
                     },
-                    "serverInfo": {"name": "ida-pro-mcp", "version": "3.0.0"},
+                    "serverInfo": {"name": "ida-pro-mcp", "version": __version__},
                 },
             }
         if rid is None:

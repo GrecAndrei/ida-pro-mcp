@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Deep cross-reference analysis. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.
+Performs cross-reference graph analysis: call chains, dominators, hubs, dead code, and dependency graphs. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.
 
 ## Actions
 - `call_chain` (tool-specific)
@@ -19,6 +19,9 @@ Deep cross-reference analysis. Actions: call_chain, common_callers, common_calle
 - `influence` (tool-specific)
 - `dependency_graph` (tool-specific)
 - `dead_functions` (tool-specific)
+- `forward` (tool-specific)
+- `backward` (tool-specific)
+- `both` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

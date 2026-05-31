@@ -6,12 +6,19 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Topological visualization (CFG, callgraph). Actions: callgraph, cfg, xref_graph.
+Generate call graphs, CFGs, and xref graphs. Actions: callgraph, cfg, dominators, xref_graph.
 
 ## Actions
 - `callgraph` (tool-specific)
 - `cfg` (tool-specific)
+- `dominators` (tool-specific)
 - `xref_graph` (tool-specific)
+- `down` (tool-specific)
+- `up` (tool-specific)
+- `both` (tool-specific)
+- `json` (tool-specific)
+- `dot` (tool-specific)
+- `mermaid` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

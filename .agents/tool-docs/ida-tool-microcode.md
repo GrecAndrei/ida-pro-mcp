@@ -6,12 +6,13 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Hex-Rays Microcode (IR) access. Actions: get, blocks, instructions.
+Access Hex-Rays microcode IR for a function at various maturity levels. Actions: get, blocks, instructions, def_use_graph.
 
 ## Actions
 - `get` (read/discovery)
 - `blocks` (tool-specific)
 - `instructions` (tool-specific)
+- `def_use_graph` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

@@ -6,15 +6,14 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice.
+Data flow taint analysis from user-controlled sources to dangerous sinks. Actions: sources (list all taint sources: recv/read/fgets/getenv imports + blackboard IOCs), sinks (dangerous sinks reachable from a source), trace (trace forward from addr/source, write vuln entries to blackboard), paths (full call-graph paths source→sink with dataflow description), report (all sources → all reachable sinks). Example: taint(action='trace', source='recv') finds all paths from recv to memcpy/strcpy/system.
 
 ## Actions
-- `find_arg_usage` (tool-specific)
-- `trace_return` (tool-specific)
-- `find_sinks` (tool-specific)
-- `data_flow` (tool-specific)
-- `backward_trace` (tool-specific)
-- `slice` (tool-specific)
+- `sources` (tool-specific)
+- `sinks` (tool-specific)
+- `trace` (tool-specific)
+- `report` (tool-specific)
+- `paths` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -30,19 +29,14 @@ Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_retu
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `find_arg_usage, trace_return, find_sinks, data_flow, backward_trace, slice`
-- `addr`: `string`
-- `arg_num`: `integer`
-- `depth`: `integer`
-- `max_hits`: `integer`
-- `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
+- (tool takes action-only or dynamic args)
 
 ## Minimal Call Shapes
 ```json
 {
   "name": "taint",
   "arguments": {
-    "action": "find_arg_usage"
+    "action": "sources"
   }
 }
 ```
@@ -51,7 +45,7 @@ Static data flow and vulnerability analysis. Actions: find_arg_usage, trace_retu
   "name": "taint",
   "arguments": {
     "action": "grep",
-    "source_action": "find_arg_usage",
+    "source_action": "sources",
     "pattern": "<needle>"
   }
 }

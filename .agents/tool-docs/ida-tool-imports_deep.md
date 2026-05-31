@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Advanced import resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.
+Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.
 
 ## Actions
 - `thunks` (tool-specific)

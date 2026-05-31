@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Entropy and packing detection. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.
+Compute entropy over regions to detect packing, encryption, or compressed data. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.
 
 ## Actions
 - `section` (tool-specific)

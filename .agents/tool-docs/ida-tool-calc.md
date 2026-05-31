@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Mathematical and address resolution. Actions: eval, offset, convert, resolve, deref, chain, align.
+Safe address arithmetic and pointer resolution—use instead of mental math. Includes bitwise helper operations. Actions: eval, offset, convert, resolve, deref, chain, align, bitops.
 
 ## Actions
 - `eval` (tool-specific)
@@ -16,6 +16,7 @@ Mathematical and address resolution. Actions: eval, offset, convert, resolve, de
 - `deref` (tool-specific)
 - `chain` (tool-specific)
 - `align` (tool-specific)
+- `bitops` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -31,8 +32,9 @@ Mathematical and address resolution. Actions: eval, offset, convert, resolve, de
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `eval, offset, convert, resolve, deref, chain, align`
+- `action`: `string` - allowed: `eval, offset, convert, resolve, deref, chain, align, bitops`
 - `addr`: `string`
+- `bit_op`: `string`
 - `expr`: `string`
 - `offsets`: `array|string`
 - `size`: `integer`

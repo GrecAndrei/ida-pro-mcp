@@ -6,15 +6,16 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Built-in documentation system with ranked and semantic search, fuzzy topic resolution, section navigation, related-topic discovery, and generated fallback docs. Actions: list_topics, read, search, semantic_search, sections, index.
+Accesses built-in documentation and tool usage guides within MCP context. Actions: list_topics, read, search, semantic_search, index, sections, suggest.
 
 ## Actions
 - `list_topics` (tool-specific)
 - `read` (read/discovery)
 - `search` (read/discovery)
 - `semantic_search` (read/discovery)
-- `sections` (read/discovery)
 - `index` (read/discovery)
+- `sections` (read/discovery)
+- `suggest` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -30,7 +31,7 @@ Built-in documentation system with ranked and semantic search, fuzzy topic resol
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `list_topics, read, search, semantic_search, sections, index`
+- `action`: `string` - allowed: `list_topics, read, search, semantic_search, index, sections, suggest`
 - `category`: `string|array`
 - `context_lines`: `integer`
 - `fuzzy`: `boolean`

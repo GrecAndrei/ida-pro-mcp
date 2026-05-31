@@ -496,7 +496,7 @@ class MCPClient:
         r = self._send_recv("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "eval-harness", "version": "2.0"},
+            "clientInfo": {"name": "eval-harness", "version": "1.0.0"},
         })
         self.proc.stdin.write(
             json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}) + "\n"

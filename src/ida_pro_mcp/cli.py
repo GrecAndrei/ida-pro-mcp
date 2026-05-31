@@ -12,6 +12,8 @@ import argparse
 import json
 import subprocess
 import sys
+
+from ida_pro_mcp import __version__
 import threading
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -132,16 +134,24 @@ def _normalize_tool_result(response: dict) -> Any:
     content = result.get("content", [])
     if not isinstance(content, list) or not content:
         return result
-    first = content[0]
-    if not isinstance(first, dict):
-        return result
-    text = first.get("text")
-    if not isinstance(text, str):
-        return result
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {"text": text, "isError": bool(result.get("isError"))}
+
+    normalized_items = []
+    for item in content:
+        if not isinstance(item, dict):
+            normalized_items.append(item)
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            normalized_items.append(item)
+            continue
+        try:
+            normalized_items.append(json.loads(text))
+        except json.JSONDecodeError:
+            normalized_items.append({"text": text, "isError": bool(result.get("isError"))})
+
+    if len(normalized_items) == 1:
+        return normalized_items[0]
+    return {"content": normalized_items, "isError": bool(result.get("isError"))}
 
 
 def main() -> int:
@@ -197,7 +207,7 @@ def main() -> int:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "ida-pro-mcp-cli", "version": "1.0"},
+                "clientInfo": {"name": "ida-pro-mcp-cli", "version": __version__},
             },
             request_id=1,
         )

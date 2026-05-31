@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Hook suggestion and script generation. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.
+Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.
 
 ## Actions
 - `suggest` (tool-specific)

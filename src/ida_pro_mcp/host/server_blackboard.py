@@ -458,11 +458,9 @@ class ServerBlackboardMixin:
             if str(tool_name or "").strip().lower() == "blackboard":
                 return None
             store = self._get_blackboard_store()
-            if store is None:
-                return None
             phase_state = self._phase_state()
             phase = str(phase_state.get("phase") or "scout")
-            if phase == "prove" and not self._phase_has_prove_receipts(store):
+            if phase == "prove" and (store is None or not self._phase_has_prove_receipts(store)):
                 return {
                     "must_call_before_answer": True,
                     "required_followup_call": {"tool": "blackboard", "action": "decision_card"},
@@ -1515,15 +1513,21 @@ class ServerBlackboardMixin:
 
     def _handle_blackboard(self, args: dict) -> dict:
         """Host-side blackboard handler so it works without IDA runtime."""
-        store = self._get_blackboard_store()
-        if store is None:
-            return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
         policy_state = self._bb_policy_bump()
         phase_state = self._phase_state()
         action = str(args.get("action") or "list").strip().lower()
+        policy_only_actions = {"policy_set", "policy_status", "policy_check", "phase_status", "phase_set"}
+        store = None
+        if action not in policy_only_actions:
+            store = self._get_blackboard_store()
+            if store is None:
+                return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
         self._phase_log_action(phase_state, action, addr=str(args.get("addr") or "").strip())
-        self._phase_auto_transition(phase_state, action, args if isinstance(args, dict) else {}, store)
-        phase_block = self._phase_contract_check(phase_state, action, args if isinstance(args, dict) else {}, store)
+        if store is not None:
+            self._phase_auto_transition(phase_state, action, args if isinstance(args, dict) else {}, store)
+            phase_block = self._phase_contract_check(phase_state, action, args if isinstance(args, dict) else {}, store)
+        else:
+            phase_block = None
         if phase_block and action not in {"phase_status", "phase_set", "working_set", "list", "read", "search", "state_health", "policy_set", "policy_status", "policy_check"}:
             return phase_block
         if self._phase_find_loop(phase_state):

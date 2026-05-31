@@ -6,15 +6,17 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Database export. Actions: listing, html, idc, json, binexport, headers.
+Export IDB content in various formats for external tooling. Actions: listing, html, idc, json, sarif, binexport, headers, redact.
 
 ## Actions
 - `listing` (tool-specific)
 - `html` (tool-specific)
 - `idc` (tool-specific)
 - `json` (tool-specific)
+- `sarif` (tool-specific)
 - `binexport` (tool-specific)
 - `headers` (tool-specific)
+- `redact` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Database metadata and segment information. Actions: meta, summary, segments, entrypoints, bookmarks, overview.
+Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile.
 
 ## Actions
 - `meta` (tool-specific)
@@ -15,6 +15,7 @@ Database metadata and segment information. Actions: meta, summary, segments, ent
 - `entrypoints` (tool-specific)
 - `bookmarks` (tool-specific)
 - `overview` (tool-specific)
+- `architecture_profile` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -30,7 +31,7 @@ Database metadata and segment information. Actions: meta, summary, segments, ent
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `meta, summary, segments, entrypoints, bookmarks, overview`
+- `action`: `string` - allowed: `meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile`
 - `count`: `integer`
 - `offset`: `integer`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

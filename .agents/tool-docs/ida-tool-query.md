@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Unified read-only query hub. Actions: data, search, idb, code, types, imports_deep, symbols, patterns.
+Unified query interface combining data, search, code, types, symbols, and natural-language queries. Actions: data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch.
 
 ## Actions
 - `data` (tool-specific)
@@ -17,6 +17,8 @@ Unified read-only query hub. Actions: data, search, idb, code, types, imports_de
 - `imports_deep` (tool-specific)
 - `symbols` (tool-specific)
 - `patterns` (tool-specific)
+- `nl` (tool-specific)
+- `nl_batch` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -32,7 +34,7 @@ Unified read-only query hub. Actions: data, search, idb, code, types, imports_de
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `data, search, idb, code, types, imports_deep, symbols, patterns`
+- `action`: `string` - allowed: `data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch`
 - `args`: `object`
 - `subaction`: `string`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-PDB/DWARF symbol management. Actions: load_pdb, load_dwarf, status, apply, export.
+Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.
 
 ## Actions
 - `load_pdb` (tool-specific)

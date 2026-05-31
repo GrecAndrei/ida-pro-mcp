@@ -6,12 +6,33 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Direct database memory access. Actions: read, write, hexdump.
+Read, write, and inspect raw memory/bytes in the binary or debuggee. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram.
 
 ## Actions
 - `read` (read/discovery)
 - `write` (write/mutate)
 - `hexdump` (tool-specific)
+- `search` (read/discovery)
+- `compare` (tool-specific)
+- `pointers` (tool-specific)
+- `find_pointers` (tool-specific)
+- `entropy` (tool-specific)
+- `strings` (tool-specific)
+- `struct_walk` (tool-specific)
+- `histogram` (tool-specific)
+- `bytes` (tool-specific)
+- `u8` (tool-specific)
+- `u16` (tool-specific)
+- `u32` (tool-specific)
+- `u64` (tool-specific)
+- `s8` (tool-specific)
+- `s16` (tool-specific)
+- `s32` (tool-specific)
+- `s64` (tool-specific)
+- `f32` (tool-specific)
+- `f64` (tool-specific)
+- `ptr` (tool-specific)
+- `string` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -27,7 +48,7 @@ Direct database memory access. Actions: read, write, hexdump.
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `read, write, hexdump`
+- `action`: `string` - allowed_count: `24`
 - `addr`: `string`
 - `data`: `string`
 - `size`: `integer`

@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.
+List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge.
 
 ## Actions
 - `list` (read/discovery)
@@ -16,6 +16,11 @@ Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.
 - `set_perms` (tool-specific)
 - `move` (tool-specific)
 - `info` (read/discovery)
+- `analyze` (analysis)
+- `find_code` (tool-specific)
+- `find_data` (tool-specific)
+- `compare` (tool-specific)
+- `merge` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -31,7 +36,7 @@ Segment management. Actions: list, add, delete, set_attr, set_perms, move, info.
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `list, add, delete, set_attr, set_perms, move, info`
+- `action`: `string` - allowed: `list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge`
 - `attr`: `string`
 - `count`: `integer`
 - `end`: `string`

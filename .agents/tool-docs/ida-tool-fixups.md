@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Relocation/fixup management. Actions: list, get, add, delete.
+Manage relocation fixup entries in the IDB. Actions: list, get, add, delete.
 
 ## Actions
 - `list` (read/discovery)

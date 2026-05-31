@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow.
+Query and traverse the Hex-Rays decompiler ctree AST for a function. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.
 
 ## Actions
 - `get` (read/discovery)
@@ -16,6 +16,8 @@ Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, fi
 - `find_strings` (tool-specific)
 - `find_conditions` (tool-specific)
 - `get_logic_flow` (tool-specific)
+- `dominance_map` (tool-specific)
+- `var_dependency_graph` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -31,7 +33,7 @@ Hex-Rays AST (CTree) analysis. Actions: get, traverse, find_calls, find_vars, fi
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow`
+- `action`: `string` - allowed: `get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph`
 - `addr`: `string`
 - `depth`: `integer`
 - `query`: `string`

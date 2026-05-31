@@ -33,6 +33,7 @@ import json
 import os
 import sqlite3
 import struct
+import tempfile
 import threading
 import time
 import uuid
@@ -82,6 +83,16 @@ def _resolve_db_path(db_path: Optional[str] = None) -> str:
         or os.environ.get("IDA_MCP_DATA_DIR")
         or os.path.join(xdg, "ida-pro-mcp")
     )
+    for candidate in (root, os.path.join(tempfile.gettempdir(), "ida-pro-mcp")):
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            probe = os.path.join(candidate, ".write_probe")
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.unlink(probe)
+            return os.path.join(candidate, "blackboard.db")
+        except Exception:
+            continue
     return os.path.join(root, "blackboard.db")
 
 
@@ -115,7 +126,13 @@ class BlackboardStore:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = _resolve_db_path(db_path)
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        parent = os.path.dirname(self.db_path) or "."
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception:
+            fallback_root = os.path.join(tempfile.gettempdir(), "ida-pro-mcp")
+            os.makedirs(fallback_root, exist_ok=True)
+            self.db_path = os.path.join(fallback_root, os.path.basename(self.db_path) or "blackboard.db")
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
