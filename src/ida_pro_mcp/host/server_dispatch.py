@@ -13,6 +13,7 @@ from ida_pro_mcp import __version__
 
 from .config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
 from .errors import MCPError, make_error
+from .policy import PolicyDecision, build_audit_record, evaluate_policy
 from .schemas import (
     TOOL_ACTIONS,
     TOOL_ARG_SCHEMAS,
@@ -640,6 +641,54 @@ class ServerDispatchMixin:
             if not isinstance(args, dict):
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
+            sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+
+            # ---- Deterministic policy preflight ----
+            if tool_name != "blackboard":
+                try:
+                    policy_result = evaluate_policy(
+                        tool_name,
+                        args.get("action"),
+                        mode=os.environ.get("IDA_MCP_POLICY_MODE", "assist"),
+                        purpose=args.get("_purpose"),
+                        ack=args.get("_risk_ack") or args.get("_guardrail_ack"),
+                    )
+                    policy_audit = build_audit_record(policy_result, session_id=sid)
+                    if (
+                        policy_result.decision != PolicyDecision.ALLOW
+                        or policy_result.risk.value != "read"
+                        or policy_result.reasons
+                        or policy_result.flags
+                    ):
+                        try:
+                            self.audit.log(
+                                tool=tool_name,
+                                action=str(args.get("action") or ""),
+                                args=policy_audit,
+                                result=policy_audit,
+                                latency_ms=0.0,
+                                session_id=sid,
+                            )
+                        except Exception:
+                            pass
+                    if policy_result.decision == PolicyDecision.BLOCK:
+                        return make_error(
+                            getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
+                            "Policy blocked this tool action",
+                            hint="Use an allowed purpose and verify the workflow is authorized.",
+                            details=policy_result.to_dict(),
+                        )
+                    if policy_result.decision == PolicyDecision.REQUIRE_ACK:
+                        return make_error(
+                            getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
+                            "Policy requires explicit acknowledgement for this tool action",
+                            hint="Retry with _risk_ack=true after verifying the action is authorized.",
+                            details=policy_result.to_dict(),
+                        )
+                except Exception:
+                    pass
+            args.pop("_purpose", None)
+            args.pop("_risk_ack", None)
 
             # ---- Blackboard strict policy preflight (global tool boundary) ----
             try:
@@ -691,7 +740,6 @@ class ServerDispatchMixin:
                 pass
 
             # ---- Active Blackboard Kernel (preflight) ----
-            sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             pre = {"decision": "allow"}
 
             high_impact_tools = {
