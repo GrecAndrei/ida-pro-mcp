@@ -8,11 +8,38 @@ import sqlite3
 import struct
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_file_head_sha256(path: str, max_bytes: int = 16 * 1024 * 1024) -> str:
+    if not path or not os.path.isfile(path):
+        return ""
+    h = hashlib.sha256()
+    read_bytes = 0
+    with open(path, "rb") as f:
+        while read_bytes < max_bytes:
+            chunk = f.read(min(1024 * 1024, max_bytes - read_bytes))
+            if not chunk:
+                break
+            h.update(chunk)
+            read_bytes += len(chunk)
+    return h.hexdigest()
+
+
+def _safe_stat(path: str) -> tuple[int, int]:
+    if not path or not os.path.isfile(path):
+        return 0, 0
+    st = os.stat(path)
+    return int(st.st_size), int(st.st_mtime_ns)
 
 
 class FunctionEmbeddingIndex:
@@ -24,12 +51,17 @@ class FunctionEmbeddingIndex:
     of tabular features it was never designed for).
     """
 
+    INDEX_SCHEMA_VERSION = 2
+
     def __init__(self, db_path: str, embedder: Any):
         self._db_path = db_path
         self._embedder = embedder
-        self._cache: Dict[str, List[float]] = {}  # ea_hex → embedding
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self._cache: Dict[str, List[float]] = {}  # ea_hex -> embedding
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         self._init_db()
+        self._init_meta()
         self._load_cache()
 
     def _conn(self) -> sqlite3.Connection:
@@ -39,7 +71,8 @@ class FunctionEmbeddingIndex:
 
     def _init_db(self) -> None:
         with self._conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS func_embeddings (
                     ea       TEXT PRIMARY KEY,
                     name     TEXT,
@@ -48,9 +81,155 @@ class FunctionEmbeddingIndex:
                     pseudo_hash TEXT,
                     indexed_at  REAL
                 )
-            """)
+                """
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_name ON func_embeddings(name)")
+            # Additive migration for semantic provenance fields.
+            cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(func_embeddings)").fetchall()}
+            if "source_kind" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN source_kind TEXT DEFAULT 'function'")
+            if "source_hash" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN source_hash TEXT")
+            if "signature_text" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_text TEXT")
+            if "signature_hash" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_hash TEXT")
             conn.commit()
+
+    def _meta_set(self, conn: sqlite3.Connection, key: str, value: str) -> None:
+        conn.execute(
+            """
+            INSERT INTO embedding_meta(key, value) VALUES(?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (key, value),
+        )
+
+    def _meta_get(self, conn: sqlite3.Connection, key: str) -> Optional[str]:
+        row = conn.execute("SELECT value FROM embedding_meta WHERE key=?", (key,)).fetchone()
+        if not row:
+            return None
+        return str(row[0])
+
+    def _source_idb_path(self) -> str:
+        p = self._db_path
+        suffix = ".embeddings.db"
+        if p.endswith(suffix):
+            return p[: -len(suffix)]
+        return p
+
+    def _source_fingerprint(self) -> str:
+        src = self._source_idb_path()
+        if src and os.path.isfile(src):
+            st = os.stat(src)
+            return hashlib.sha256(f"{src}:{st.st_size}:{st.st_mtime_ns}".encode("utf-8")).hexdigest()
+        return hashlib.sha256(src.encode("utf-8")).hexdigest() if src else ""
+
+    def _embedder_meta_snapshot(self) -> Dict[str, str]:
+        backend = str(getattr(self._embedder, "backend", "unknown"))
+        dim = str(getattr(self._embedder, "dim", 0) or 0)
+        model_path = ""
+        server_bin = ""
+        try:
+            status = getattr(self._embedder, "status", None)
+            if callable(status):
+                st = status(probe=False)
+                model_path = str(st.get("model_path") or "")
+                server_bin = str(st.get("server_bin") or "")
+        except Exception:
+            pass
+        if not model_path:
+            model_path = str(getattr(self._embedder, "_model_path", "") or "")
+        if not server_bin:
+            server_bin = str(getattr(self._embedder, "_server_bin", "") or "")
+        model_size, _ = _safe_stat(model_path)
+        server_size, _ = _safe_stat(server_bin)
+        return {
+            "embedding_backend": backend,
+            "embedding_dim": dim,
+            "model_path": model_path,
+            "model_size": str(model_size),
+            "model_sha256_head": _safe_file_head_sha256(model_path),
+            "server_bin": server_bin,
+            "server_size": str(server_size),
+            "server_sha256_head": _safe_file_head_sha256(server_bin),
+        }
+
+    def _init_meta(self) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS embedding_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            now = _now_iso()
+            base = {
+                "index_schema_version": str(self.INDEX_SCHEMA_VERSION),
+                "signature_extractor_version": "v1",
+                "anchor_set_hash": "",
+                "created_at": now,
+                "updated_at": now,
+                "source_idb_path": self._source_idb_path(),
+                "source_binary_path": "",
+                "source_fingerprint": self._source_fingerprint(),
+            }
+            base.update(self._embedder_meta_snapshot())
+            for k, v in base.items():
+                if self._meta_get(conn, k) is None:
+                    self._meta_set(conn, k, v)
+            self._meta_set(conn, "updated_at", now)
+            conn.commit()
+
+    def metadata(self) -> Dict[str, Any]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT key, value FROM embedding_meta").fetchall()
+        out: Dict[str, Any] = {str(k): str(v) for k, v in rows}
+        for key in ("index_schema_version", "embedding_dim", "model_size", "server_size"):
+            if key in out:
+                try:
+                    out[key] = int(out[key])
+                except Exception:
+                    pass
+        return out
+
+    def verify_metadata(self, current_embedder: Any) -> Dict[str, Any]:
+        stored = self.metadata()
+        current_backend = str(getattr(current_embedder, "backend", "unknown"))
+        current_dim = int(getattr(current_embedder, "dim", 0) or 0)
+        current = {
+            "embedding_backend": current_backend,
+            "embedding_dim": current_dim,
+        }
+        mismatches: Dict[str, Dict[str, Any]] = {}
+        if str(stored.get("embedding_backend", "")) != current_backend:
+            mismatches["embedding_backend"] = {
+                "stored": stored.get("embedding_backend"),
+                "current": current_backend,
+            }
+        try:
+            stored_dim = int(stored.get("embedding_dim", 0) or 0)
+        except Exception:
+            stored_dim = 0
+        if stored_dim != current_dim:
+            mismatches["embedding_dim"] = {"stored": stored_dim, "current": current_dim}
+        return {
+            "ok": not mismatches,
+            "mismatches": mismatches,
+            "stored": stored,
+            "current": current,
+        }
+
+    def needs_rebuild(self, current_embedder: Any, source_fingerprint: str | None = None) -> bool:
+        chk = self.verify_metadata(current_embedder)
+        if chk["mismatches"]:
+            return True
+        if source_fingerprint is None:
+            source_fingerprint = self._source_fingerprint()
+        stored = chk.get("stored", {})
+        return str(stored.get("source_fingerprint", "")) != str(source_fingerprint or "")
 
     def _load_cache(self) -> None:
         """Load all stored embeddings into RAM for fast cosine search."""
@@ -89,17 +268,44 @@ class FunctionEmbeddingIndex:
         vec = self._embedder.embed(pseudocode)
         blob = self._pack(vec)
         self._cache[func_ea] = vec
+        sig_hash = self._phash(pseudocode)
+        src_hash = hashlib.sha256(f"{func_ea}:{sig_hash}".encode("utf-8")).hexdigest()[:24]
         try:
             with self._conn() as conn:
-                conn.execute("""
-                    INSERT INTO func_embeddings(ea, name, dim, vec_blob, pseudo_hash, indexed_at)
-                    VALUES(?,?,?,?,?,?)
+                conn.execute(
+                    """
+                    INSERT INTO func_embeddings(
+                        ea, name, dim, vec_blob, pseudo_hash, indexed_at, source_kind, source_hash, signature_text, signature_hash
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(ea) DO UPDATE SET
                         name=excluded.name,
+                        dim=excluded.dim,
                         vec_blob=excluded.vec_blob,
                         pseudo_hash=excluded.pseudo_hash,
-                        indexed_at=excluded.indexed_at
-                """, (func_ea, name, len(vec), blob, ph, time.time()))
+                        indexed_at=excluded.indexed_at,
+                        source_kind=excluded.source_kind,
+                        source_hash=excluded.source_hash,
+                        signature_text=excluded.signature_text,
+                        signature_hash=excluded.signature_hash
+                    """,
+                    (
+                        func_ea,
+                        name,
+                        len(vec),
+                        blob,
+                        ph,
+                        time.time(),
+                        "function",
+                        src_hash,
+                        None,
+                        sig_hash,
+                    ),
+                )
+                self._meta_set(conn, "updated_at", _now_iso())
+                self._meta_set(conn, "source_fingerprint", self._source_fingerprint())
+                for k, v in self._embedder_meta_snapshot().items():
+                    self._meta_set(conn, k, v)
                 conn.commit()
         except Exception:
             pass
@@ -131,8 +337,7 @@ class FunctionEmbeddingIndex:
         """Return top-k most similar functions given a pre-computed query vector."""
         if not self._cache:
             return []
-        # Snapshot to avoid RuntimeError if background _store_vec thread
-        # writes to _cache while we iterate (GIL alone doesn't protect iteration).
+        # Snapshot to avoid RuntimeError if background thread writes to _cache while we iterate.
         try:
             snapshot = list(self._cache.items())
         except RuntimeError:
@@ -192,7 +397,7 @@ class FunctionEmbeddingIndex:
                 ph = ",".join("?" * len(top_eas))
                 for row in conn.execute(
                     f"SELECT ea, name FROM func_embeddings WHERE ea IN ({ph})",
-                    top_eas
+                    top_eas,
                 ):
                     names[row[0]] = row[1] or row[0]
         except Exception:
