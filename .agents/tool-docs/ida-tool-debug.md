@@ -6,9 +6,10 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Debugger control and dynamic analysis. Actions: start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, regs, set_reg, threads, modules, callstack, read_mem, write_mem.
+Control the debugger: run, step, breakpoints, registers, memory, threads. Actions: status, start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, add_hw_bp, add_watch, regs, set_reg, reg_diff, snapshot_regs, threads, modules, callstack, read_mem, write_mem, search_mem, stack_dump, mem_map, bp_context, trace_start, trace_stop, trace_read, mem_diff.
 
 ## Actions
+- `status` (read/discovery)
 - `start` (tool-specific)
 - `stop` (tool-specific)
 - `continue` (tool-specific)
@@ -20,13 +21,29 @@ Debugger control and dynamic analysis. Actions: start, stop, continue, step_into
 - `add_bp` (tool-specific)
 - `del_bp` (tool-specific)
 - `enable_bp` (tool-specific)
+- `add_hw_bp` (tool-specific)
+- `add_watch` (tool-specific)
 - `regs` (tool-specific)
 - `set_reg` (tool-specific)
+- `reg_diff` (tool-specific)
+- `snapshot_regs` (tool-specific)
 - `threads` (tool-specific)
 - `modules` (tool-specific)
 - `callstack` (tool-specific)
 - `read_mem` (tool-specific)
 - `write_mem` (tool-specific)
+- `search_mem` (tool-specific)
+- `stack_dump` (tool-specific)
+- `mem_map` (tool-specific)
+- `bp_context` (tool-specific)
+- `trace_start` (tool-specific)
+- `trace_stop` (tool-specific)
+- `trace_read` (tool-specific)
+- `mem_diff` (tool-specific)
+- `read` (read/discovery)
+- `write` (write/mutate)
+- `rw` (tool-specific)
+- `execute` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -49,7 +66,7 @@ Debugger control and dynamic analysis. Actions: start, stop, continue, step_into
 {
   "name": "debug",
   "arguments": {
-    "action": "start"
+    "action": "status"
   }
 }
 ```
@@ -58,7 +75,7 @@ Debugger control and dynamic analysis. Actions: start, stop, continue, step_into
   "name": "debug",
   "arguments": {
     "action": "grep",
-    "source_action": "start",
+    "source_action": "status",
     "pattern": "<needle>"
   }
 }

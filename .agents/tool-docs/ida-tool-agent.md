@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-High-level analysis orchestrator. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack.
+High-level AI-assisted analysis combining search, context packing, and multi-hop discovery. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint.
 
 ## Actions
 - `analyze_function` (tool-specific)
@@ -19,6 +19,10 @@ High-level analysis orchestrator. Actions: analyze_function, explore_address, fi
 - `rename_suggestions` (tool-specific)
 - `batch_context` (tool-specific)
 - `similar` (tool-specific)
+- `bridge_query` (tool-specific)
+- `reflect` (tool-specific)
+- `cluster` (tool-specific)
+- `fingerprint` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -34,7 +38,7 @@ High-level analysis orchestrator. Actions: analyze_function, explore_address, fi
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar`
+- `action`: `string` - allowed_count: `14`
 - `addr`: `string`
 - `depth`: `integer`
 - `include_pseudocode`: `boolean`

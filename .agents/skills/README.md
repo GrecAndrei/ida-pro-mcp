@@ -1,7 +1,7 @@
 # Generated IDA Tool Skills
 <!-- GENERATED: scripts/generate_tool_skills.py -->
 
-- Source: `ida_mcp_stdio.py` (`TOOL_DESCRIPTIONS`, `TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`)
+- Source: `src/ida_pro_mcp/host/schemas_data.py` (`TOOLS`, `TOOL_DESCRIPTIONS`, `TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`)
 - Generator: `scripts/generate_tool_skills.py`
 
 ## Regenerate
@@ -13,7 +13,7 @@ python3 scripts/generate_tool_skills.py
 `1` router skill (`ida-tool-router`)
 
 ## Generated Tool Doc Count
-`67` per-tool docs
+`73` per-tool docs
 
 ## Notes
 - Keep only one skill loaded (`ida-tool-router`) to avoid startup skill-list bloat.
@@ -23,7 +23,7 @@ python3 scripts/generate_tool_skills.py
 ## Manifest
 ```json
 {
-  "tool_count": 67,
+  "tool_count": 73,
   "skills_root": ".agents/skills",
   "router_skill": ".agents/skills/ida-tool-router/SKILL.md",
   "tool_docs_root": ".agents/tool-docs"

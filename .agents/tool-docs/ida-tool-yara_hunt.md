@@ -6,12 +6,15 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-YARA pattern matching. Actions: scan, compile, list_rules.
+Scans the binary with YARA rules and provides match context and xref correlation. Actions: scan, compile, list_rules, match_context, extract_strings, xref_matches.
 
 ## Actions
 - `scan` (analysis)
 - `compile` (tool-specific)
 - `list_rules` (tool-specific)
+- `match_context` (tool-specific)
+- `extract_strings` (tool-specific)
+- `xref_matches` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

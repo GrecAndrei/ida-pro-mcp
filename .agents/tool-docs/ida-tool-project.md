@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Project I/O and file operations. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists. Legacy actions read/write map to misc read_file/write_file.
+Project I/O, file operations, and evidence management. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, read, write, sessions, batch, evidence_graph, knowledge_merge, confidence_model, replay_pipeline, hypothesis_tracker, temporal_reasoning, semantic_artifact_diff, ai_governance, knowledge_debt, casefile_export.
 
 ## Actions
 - `save` (tool-specific)
@@ -18,6 +18,16 @@ Project I/O and file operations. Actions: save, close, open, load_binary, list_r
 - `set_cwd` (tool-specific)
 - `list_dir` (tool-specific)
 - `exists` (tool-specific)
+- `evidence_graph` (tool-specific)
+- `knowledge_merge` (tool-specific)
+- `confidence_model` (tool-specific)
+- `replay_pipeline` (tool-specific)
+- `hypothesis_tracker` (tool-specific)
+- `temporal_reasoning` (tool-specific)
+- `semantic_artifact_diff` (tool-specific)
+- `ai_governance` (tool-specific)
+- `knowledge_debt` (tool-specific)
+- `casefile_export` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

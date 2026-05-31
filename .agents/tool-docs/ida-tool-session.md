@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Session lifecycle + runtime context hub. Actions: discover/create/get/list/switch/close/status/rebuild/update/rename/duplicate/export/import/archive/tag/note/stats/validate/snapshot/merge/macros/recent_workset. IDB is optional: after create/switch, tools use active session. If provided, idb accepts session ID, SID_* IDB id, binary path, or full IDB path.
+Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate.
 
 ## Actions
 - `discover` (tool-specific)
@@ -46,6 +46,25 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `macro_delete` (tool-specific)
 - `macro_run` (tool-specific)
 - `recent_workset` (tool-specific)
+- `crystallize_skill` (tool-specific)
+- `rate_skill` (tool-specific)
+- `list_skills` (tool-specific)
+- `suggest_strategy` (tool-specific)
+- `log_activity` (tool-specific)
+- `get_activity_log` (tool-specific)
+- `notebook_append` (tool-specific)
+- `notebook_read` (tool-specific)
+- `notebook_section` (tool-specific)
+- `track_hypothesis` (tool-specific)
+- `confirm_hypothesis` (tool-specific)
+- `refute_hypothesis` (tool-specific)
+- `list_hypotheses` (tool-specific)
+- `get_phase` (tool-specific)
+- `advance_phase` (tool-specific)
+- `dashboard` (tool-specific)
+- `link` (tool-specific)
+- `cross_reference` (tool-specific)
+- `list_snapshots` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -61,26 +80,27 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `37`
+- `action`: `string` - allowed_count: `56`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
-- `analysis_options`: `object` - Advanced analysis options payload
+- `analysis_options`: `object` - Advanced analysis payload. Preferred for architecture/loader config at session creation.
 - `apply_once`: `boolean`
+- `architecture`: `object` - Canonical preload architecture block for create/update (processor, bitness, endian, loader, loader_options, flags).
 - `backup_on_recover`: `boolean`
 - `baseaddr`: `string|integer`
 - `binary_path`: `string` - Path to target binary
-- `bitness`: `integer`
+- `bitness`: `integer` - Target bitness: 16, 32, or 64.
 - `data`: `object` - Macro payload for macro_set.
 - `end`: `string|integer`
-- `endian`: `string`
+- `endian`: `string` - Target endianness: le/little or be/big.
 - `flags`: `integer`
 - `force_new`: `boolean` - Force creation of a new session even if one exists
 - `ida_args`: `string|array`
 - `include_bookmarks`: `boolean` - Include bookmark entries in recent_workset.
 - `include_items`: `boolean` - Include structured items in recent_workset response.
 - `limit`: `integer` - Max sessions to return (list action)
-- `loader`: `string`
-- `loader_options`: `string|object`
+- `loader`: `string` - Loader name used before initial analysis.
+- `loader_options`: `string|object` - Loader option payload applied before analysis.
 - `macro`: `string` - Alias for macro name in macro_* actions.
 - `macro_data`: `object` - Alias for macro payload in macro_set.
 - `max_ea`: `string|integer`
@@ -91,7 +111,7 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `notes`: `string` - Free-form notes for the session (create action).
 - `offset`: `integer` - Skip first N sessions (list action)
 - `options`: `object`
-- `processor`: `string`
+- `processor`: `string` - Processor name (e.g. arm, mipsl, tricore).
 - `query`: `string` - Filter sessions by name/path (supports regex, glob, substring)
 - `reanalyze`: `boolean`
 - `recover`: `boolean`
@@ -100,7 +120,7 @@ Session lifecycle + runtime context hub. Actions: discover/create/get/list/switc
 - `start`: `string|integer`
 - `start_ea`: `string|integer`
 - `tags`: `array|string` - Tags for the session (create action). Comma-separated string or array.
-- `value`: `string|object`
+- `value`: `string|object` - Loader option payload alias (same as loader_options).
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes

@@ -9,6 +9,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from ida_pro_mcp import __version__
+
 from .config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
 from .errors import MCPError, make_error
 from .schemas import (
@@ -114,7 +116,7 @@ class ServerDispatchMixin:
             payload = {
                 "ok": True,
                 "action": "health",
-                "server": {"name": "ida-pro-mcp", "version": "3.0.0"},
+                "server": {"name": "ida-pro-mcp", "version": __version__},
                 "runtime": {
                     "cache_dir": self.cache_dir,
                     "cache_writable": _is_writable_dir(self.cache_dir),

@@ -5,8 +5,8 @@
     "entryPoint": "src/ida_pro_mcp/ida_mcp.py",
     "categories": ["api-scripting-and-automation", "debugging-and-tracing", "malware-analysis"],
     "logoPath": ".github/logo.png",
-    "description": "AI-powered reverse engineering assistant that bridges IDA Pro with language models through MCP.",
+    "description": "Model Context Protocol bridge for deterministic IDA Pro analysis and automation.",
     "idaVersions": ">=8.3",
-    "version": "2.0.0"
+    "version": "1.0.0"
   }
 }

@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Utilities. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health. Use python for full IDAPython access. read_file/write_file for host filesystem I/O. plugin_* manages IDA plugins. health runs host diagnostics without requiring a session.
+Utility grab-bag: run scripts, manage plugins, read/write files, check health. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health.
 
 ## Actions
 - `python` (tool-specific)

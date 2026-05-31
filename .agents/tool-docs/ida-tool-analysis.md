@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Analysis configuration and reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze.
+Controls IDA analysis engine settings and triggers reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait.
 
 ## Actions
 - `get_options` (tool-specific)

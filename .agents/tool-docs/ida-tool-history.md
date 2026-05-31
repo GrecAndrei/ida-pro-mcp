@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Undo/redo and snapshots. Actions: undo, redo, list, snapshot, restore, diff.
+Undo/redo IDB changes, create snapshots, restore, and diff states. Actions: undo, redo, list, snapshot, restore, diff.
 
 ## Actions
 - `undo` (tool-specific)

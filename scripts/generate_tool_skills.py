@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate Codex skill files from ida_mcp_stdio.py tool metadata.
+Generate Codex skill files from host schema metadata.
 
 Output:
   .agents/skills/ida-tool-router/SKILL.md
@@ -19,7 +19,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_FILE = REPO_ROOT / "ida_mcp_stdio.py"
+SOURCE_FILE = REPO_ROOT / "src" / "ida_pro_mcp" / "host" / "schemas_data.py"
 SKILLS_ROOT = REPO_ROOT / ".agents" / "skills"
 TOOL_DOCS_ROOT = REPO_ROOT / ".agents" / "tool-docs"
 GEN_MARKER = "<!-- GENERATED: scripts/generate_tool_skills.py -->"
@@ -340,7 +340,7 @@ def main() -> None:
         "# Generated IDA Tool Skills",
         GEN_MARKER,
         "",
-        "- Source: `ida_mcp_stdio.py` (`TOOL_DESCRIPTIONS`, `TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`)",
+        "- Source: `src/ida_pro_mcp/host/schemas_data.py` (`TOOLS`, `TOOL_DESCRIPTIONS`, `TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`)",
         "- Generator: `scripts/generate_tool_skills.py`",
         "",
         "## Regenerate",
@@ -379,7 +379,7 @@ def main() -> None:
         "# Generated IDA Tool Docs",
         GEN_MARKER,
         "",
-        "- Source: `ida_mcp_stdio.py` metadata",
+        "- Source: `src/ida_pro_mcp/host/schemas_data.py` metadata",
         "- Generator: `scripts/generate_tool_skills.py`",
         "",
         "These are per-tool reference docs intentionally not exposed as skills.",

@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Execution trace processing. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit.
+Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis.
 
 ## Actions
 - `import_trace` (tool-specific)
@@ -14,6 +14,13 @@ Execution trace processing. Actions: import_trace, analyze_coverage, find_loops,
 - `find_loops` (tool-specific)
 - `extract_api_calls` (tool-specific)
 - `basic_blocks_hit` (tool-specific)
+- `execution_timeline_graph` (tool-specific)
+- `cross_run_diff` (tool-specific)
+- `coverage_debug_plan` (tool-specific)
+- `anti_analysis_detect` (tool-specific)
+- `trace_entropy` (tool-specific)
+- `api_sequence` (tool-specific)
+- `loop_analysis` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

@@ -6,14 +6,12 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xor_scan (auto-decode with single-byte keys), stack_strings (char-by-char construction), opaque_predicates, control_flow_flatten, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt (provide key or auto-detect).
+Detect and decode obfuscation: stack strings, API hashing, dead code, anti-disasm. Actions: detect, detect_encoding, stack_strings, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt.
 
 ## Actions
+- `detect` (analysis)
 - `detect_encoding` (tool-specific)
-- `xor_scan` (tool-specific)
 - `stack_strings` (tool-specific)
-- `opaque_predicates` (tool-specific)
-- `control_flow_flatten` (tool-specific)
 - `dead_code` (tool-specific)
 - `api_hashing` (tool-specific)
 - `dynamic_dispatch` (tool-specific)
@@ -41,7 +39,7 @@ Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xo
 {
   "name": "deobfuscate",
   "arguments": {
-    "action": "detect_encoding"
+    "action": "detect"
   }
 }
 ```
@@ -50,7 +48,7 @@ Deobfuscation analysis. Compact output per finding. Actions: detect_encoding, xo
   "name": "deobfuscate",
   "arguments": {
     "action": "grep",
-    "source_action": "detect_encoding",
+    "source_action": "detect",
     "pattern": "<needle>"
   }
 }

@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Execution tracing. Actions: get, clear, set_options.
+Manages execution trace data for the current debug session. Actions: get, clear, set_options.
 
 ## Actions
 - `get` (read/discovery)

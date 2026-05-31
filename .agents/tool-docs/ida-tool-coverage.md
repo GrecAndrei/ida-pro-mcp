@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Code coverage import and analysis. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter.
+Import and analyze code coverage data to identify hit/missed paths. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter, function_coverage, gaps, compare, merge.
 
 ## Actions
 - `import_drcov` (tool-specific)
@@ -15,6 +15,10 @@ Code coverage import and analysis. Actions: import_drcov, import_lighthouse, hig
 - `report` (tool-specific)
 - `uncovered` (tool-specific)
 - `filter` (tool-specific)
+- `function_coverage` (tool-specific)
+- `gaps` (tool-specific)
+- `compare` (tool-specific)
+- `merge` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

@@ -6,12 +6,13 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Navigation and triage. Actions: goto, cursor, interesting.
+Navigate the IDA cursor to addresses or semantically interesting locations. Actions: goto, cursor, interesting, semantic_goto.
 
 ## Actions
 - `goto` (tool-specific)
 - `cursor` (tool-specific)
 - `interesting` (tool-specific)
+- `semantic_goto` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

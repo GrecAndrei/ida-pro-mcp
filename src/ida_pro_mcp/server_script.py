@@ -3,7 +3,7 @@ Truly Non-Blocking IDA Server
 Designed for maximum stability in IDA 9.2 Headless.
 Uses non-blocking sockets to ensure IDA main thread never hangs.
 """
-import sys, os, json, socket, traceback, time, select, re
+import sys, os, json, socket, traceback, time, select, re, hmac
 import inspect
 import difflib
 from typing import get_args, get_origin, Literal, Annotated
@@ -44,6 +44,7 @@ TOOL_ALIASES = {
 _ERROR_DETAIL_LEVEL = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
 if _ERROR_DETAIL_LEVEL not in {"none", "basic", "full"}:
     _ERROR_DETAIL_LEVEL = "basic"
+_SESSION_TOKEN = str(os.environ.get("IDA_MCP_SESSION_TOKEN", "") or "")
 
 
 def _trim_text(text, max_len=300):
@@ -238,6 +239,19 @@ def run_server():
                 data += chunk
                 
             req = json.loads(data.decode('utf-8'))
+            if _SESSION_TOKEN:
+                provided = str(req.get("session_token") or "")
+                if not provided or not hmac.compare_digest(provided, _SESSION_TOKEN):
+                    res = _build_error(
+                        "auth",
+                        "Unauthorized session token",
+                        code="UNAUTHORIZED",
+                        hint="Use the host-managed authenticated session runtime.",
+                    )
+                    resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
+                    conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
+                    conn.close()
+                    continue
             
             if req.get("type") == "ping":
                 resp = b'{"pong":true}'

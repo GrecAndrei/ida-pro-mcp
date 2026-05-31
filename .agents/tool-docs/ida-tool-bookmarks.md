@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Enhanced session-correlated bookmarking. Actions: add, list, delete, update, clear, find (supports regex/glob/substring in name, notes, tags, addr, category), export.
+Manages named address bookmarks for quick navigation and milestone tracking. Actions: add, list, delete, update, clear, find, export.
 
 ## Actions
 - `add` (write/mutate)

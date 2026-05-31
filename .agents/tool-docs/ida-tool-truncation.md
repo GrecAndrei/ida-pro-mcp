@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Continuation helper for auto-truncated responses. Actions: continue (retrieve next chunk by token/field).
+Continues a previously truncated tool response to retrieve remaining output. Actions: continue.
 
 ## Actions
 - `continue` (tool-specific)

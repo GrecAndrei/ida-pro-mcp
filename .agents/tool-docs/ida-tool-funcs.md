@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Function boundary management. Actions: create (auto-converts bytes to code, supports end address, flags, and force deletion of overlaps), delete (finds containing function if addr is inside one), set_flags, set_name (alias: rename), add_comment, list (supports regex/glob/substring query filtering), info (detailed function info with optional prototype and stack frame).
+Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, set_name, rename, add_comment, list, info, metrics, find_similar, suggest_names.
 
 ## Actions
 - `create` (write/mutate)
@@ -17,6 +17,9 @@ Function boundary management. Actions: create (auto-converts bytes to code, supp
 - `add_comment` (write/mutate)
 - `list` (read/discovery)
 - `info` (read/discovery)
+- `metrics` (tool-specific)
+- `find_similar` (tool-specific)
+- `suggest_names` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -32,7 +35,7 @@ Function boundary management. Actions: create (auto-converts bytes to code, supp
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `create, delete, set_flags, set_name, rename, add_comment, list, info`
+- `action`: `string` - allowed: `create, delete, set_flags, set_name, rename, add_comment, list, info, metrics, find_similar, suggest_names`
 - `addr`: `string`
 - `comment`: `string`
 - `count`: `integer`

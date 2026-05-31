@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Function listing, global variables, strings, imports, and exports. Actions: functions, globals, strings, imports, exports, lookup, bulk_query. Supports include_prototype, include_xrefs, min_size, named_only filters. Query patterns auto-detect regex (e.g. ^init, \w+alloc), glob (*alloc*), or plain substring.
+Retrieve core IDB data. functions: list all functions — always includes xref count (capped 999). globals: global variables. strings: string literals — always includes xref count. imports: imported modules and functions. exports: exported entry points. lookup: resolve name↔address. bulk_query: multiple queries in one call. capability_matrix: binary capability matrix from imports + function classifications. string_xrefs: ranked string-to-function xref map with module clustering.
 
 ## Actions
 - `functions` (tool-specific)
@@ -16,6 +16,8 @@ Function listing, global variables, strings, imports, and exports. Actions: func
 - `exports` (tool-specific)
 - `lookup` (tool-specific)
 - `bulk_query` (tool-specific)
+- `capability_matrix` (tool-specific)
+- `string_xrefs` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -31,7 +33,7 @@ Function listing, global variables, strings, imports, and exports. Actions: func
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `functions, globals, strings, imports, exports, lookup, bulk_query`
+- `action`: `string` - allowed: `functions, globals, strings, imports, exports, lookup, bulk_query, capability_matrix, string_xrefs`
 - `count`: `integer`
 - `include_prototype`: `boolean`
 - `include_xrefs`: `boolean`

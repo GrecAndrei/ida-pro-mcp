@@ -6,10 +6,11 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup.
+Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate.
 
 ## Actions
 - `auto_comment` (tool-specific)
+- `auto_comment_function` (tool-specific)
 - `label_loops` (tool-specific)
 - `label_branches` (tool-specific)
 - `mark_dangerous` (tool-specific)
@@ -19,6 +20,7 @@ Intelligent bulk annotation (writes to DB, supports dry_run). Actions: auto_comm
 - `mark_error_paths` (tool-specific)
 - `propagate_names` (tool-specific)
 - `cleanup` (tool-specific)
+- `validate` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

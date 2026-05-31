@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Lumina server interaction. Actions: pull, push, status, history, search.
+Interface to Hex-Rays Lumina server for collaborative function metadata sharing. Actions: pull, push, status, history, search, get_metadata.
 
 ## Actions
 - `pull` (tool-specific)

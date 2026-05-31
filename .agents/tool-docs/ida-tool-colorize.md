@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Visual highlighting. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.
+Sets and queries color highlighting on functions, ranges, and instructions. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.
 
 ## Actions
 - `set_func` (tool-specific)

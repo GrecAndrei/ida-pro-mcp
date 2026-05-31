@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Function comparison and similarity. Actions: functions (side-by-side diff), blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.
+Diff two IDB databases or functions across binaries. Actions: functions, blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.
 
 ## Actions
 - `functions` (tool-specific)

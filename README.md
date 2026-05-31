@@ -38,7 +38,7 @@ It provides:
 
 - A host MCP server (`ida_mcp_stdio.py`) that LLM clients talk to via JSON-RPC over stdio
 - A runtime bridge inside IDA (`src/ida_pro_mcp/server_script.py`) communicating over local TCP
-- 73 canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases
+- Canonical tools under `src/ida_pro_mcp/ida_mcp/tools/` with backward-compatible aliases (count is generated from schema metadata)
 - A local ML engine (bge-code-v1 embeddings + BehaviorClassifier) for semantic search, label propagation, and frontier scoring
 - A full bootstrap evidence control loop in `session` actions (calibration, drift, mitigation, adaptation, readiness)
 - Structured audit logging, token-bucket rate limiting, and blackboard auto-pruning
@@ -178,7 +178,8 @@ Regenerate after tool metadata changes:
 python3 scripts/generate_tool_skills.py
 ```
 
-Source of truth for generation -- all in `ida_mcp_stdio.py`:
+Source of truth for generation: `src/ida_pro_mcp/host/schemas_data.py`:
+- `TOOLS`
 - `TOOL_DESCRIPTIONS`
 - `TOOL_ACTIONS`
 - `TOOL_ARG_SCHEMAS`

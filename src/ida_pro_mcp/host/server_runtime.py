@@ -11,6 +11,7 @@ import re
 import shlex
 import shutil
 import signal
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -734,14 +735,24 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 except Exception as e:
                     log_rpc(f"Failed to check IDB size: {e}")
 
-    def _send_rpc_raw(self, request, port, timeout=5):
+    def _send_rpc_raw(self, request, port, timeout=5, auth_token: Optional[str] = None):
             import socket
 
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(timeout)
             try:
                 s.connect(("127.0.0.1", port))
-                data = json.dumps(request, separators=(",", ":")).encode("utf-8")
+                payload = dict(request) if isinstance(request, dict) else request
+                token = auth_token
+                if not token and isinstance(payload, dict):
+                    with self._runtime_lock:
+                        for runtime in self.session_runtimes.values():
+                            if int(runtime.get("port") or 0) == int(port):
+                                token = str(runtime.get("auth_token") or "")
+                                break
+                if token and isinstance(payload, dict):
+                    payload["session_token"] = token
+                data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
                 s.sendall(len(data).to_bytes(4, "big") + data)
                 s.settimeout(60)
                 lb = b""
@@ -796,6 +807,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if ida_runtime_dir:
                 env["IDADIR"] = ida_runtime_dir
             env["IDA_MCP_PORT"] = str(server_port)
+            session_token = secrets.token_urlsafe(32)
+            env["IDA_MCP_SESSION_TOKEN"] = session_token
             env["IDA_MCP_BYPASS_SYNC"] = "1"
             env["IDA_MCP_SESSION_ID"] = session.session_id
             env["IDA_MCP_CACHE_DIR"] = self.cache_dir
@@ -842,7 +855,12 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     break
 
                 try:
-                    res = self._send_rpc_raw({"type": "ping"}, server_port, timeout=0.5)
+                    res = self._send_rpc_raw(
+                        {"type": "ping"},
+                        server_port,
+                        timeout=0.5,
+                        auth_token=session_token,
+                    )
                     if res.get("pong"):
                         log_rpc(f"IDA server is READY for {session.idb_path}")
                         runtime = {
@@ -851,6 +869,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             "idb_path": session.idb_path,
                             "stdout_log": stdout_log,
                             "stderr_log": stderr_log,
+                            "auth_token": session_token,
                             "log_handles": [stdout_fh, stderr_fh],
                         }
                         with self._runtime_lock:
@@ -898,6 +917,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if ida_runtime_dir:
                 env["IDADIR"] = ida_runtime_dir
             env["IDA_MCP_PORT"] = str(server_port)
+            session_token = secrets.token_urlsafe(32)
+            env["IDA_MCP_SESSION_TOKEN"] = session_token
             env["IDA_MCP_BYPASS_SYNC"] = "1"
             env["IDA_MCP_SESSION_ID"] = session.session_id
             env["IDA_MCP_CACHE_DIR"] = self.cache_dir
@@ -953,7 +974,12 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     }
 
                 try:
-                    res = self._send_rpc_raw({"type": "ping"}, server_port, timeout=0.5)
+                    res = self._send_rpc_raw(
+                        {"type": "ping"},
+                        server_port,
+                        timeout=0.5,
+                        auth_token=session_token,
+                    )
                     if res.get("pong"):
                         log_rpc(f"IDA server is READY for {session.idb_path}")
                         runtime = {
@@ -962,6 +988,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             "idb_path": session.idb_path,
                             "stdout_log": stdout_log,
                             "stderr_log": stderr_log,
+                            "auth_token": session_token,
                             "log_handles": [stdout_fh, stderr_fh],
                         }
                         with self._runtime_lock:
