@@ -22,6 +22,7 @@ def test_agent_tool_exposes_intelligence_actions():
     assert "\"index_batch\"" in src
     assert "\"similar_functions\"" in src
     assert "\"export_index_summary\"" in src
+    assert "\"evidence_card\"" in src
 
 
 def test_agent_intelligence_status_reports_anchor_hash_and_index_counts():
@@ -37,3 +38,4 @@ def test_agent_schemas_include_intelligence_actions():
     assert "\"classify_text\"" in src
     assert "\"similar_functions\"" in src
     assert "\"export_index_summary\"" in src
+    assert "\"evidence_card\"" in src

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import time
 
 try:
@@ -22,8 +23,8 @@ _FUNC_SUMMARY_CACHE_MAX = 512  # prevent unbounded growth
 @tool
 @idaread
 def agent(
-    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint", "intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary"],
-                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint|intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|export_index_summary"],
+    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint", "intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary", "evidence_card"],
+                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint|intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|export_index_summary|evidence_card"],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Search query or comma-separated addresses"] = None,
     depth: Annotated[int, "Exploration depth"] = 1,
@@ -664,7 +665,7 @@ def agent(
             
             return {"ok": True, "items": results, "count": len(results)}
 
-        elif action in ("intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary"):
+        elif action in ("intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary", "evidence_card"):
             try:
                 from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex
             except ImportError:
@@ -847,6 +848,102 @@ def agent(
                         "size": idx.size,
                         "metadata": meta,
                     },
+                }
+
+            if action == "evidence_card":
+                if not addr:
+                    return make_error(MCPError.INVALID_ARGS, "addr required for evidence_card")
+                ea, err = validate_addr(addr, require_func=True)
+                if err:
+                    return err
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    pseudo = str(cfunc) if cfunc else ""
+                except Exception:
+                    pseudo = ""
+                if not pseudo:
+                    return make_error(MCPError.IDA_ERROR, "failed to decompile function")
+
+                threshold = float(kwargs.get("threshold", 0.25))
+                top_k = int(kwargs.get("top_k", 4))
+                behavior_rows = classifier.classify(pseudo, threshold=threshold, top_k=top_k, block=False)
+                idx, db_path = _index_for_current_idb()
+                qname = ida_funcs.get_func_name(ea) or hex(ea)
+                idx.index_async(hex(ea), qname, pseudo)
+                similar = idx.similar(pseudo, top_k=max(1, int(kwargs.get("similar_top_k", 3))), exclude_ea=hex(ea), threshold=0.0)
+
+                top_behavior = behavior_rows[0] if behavior_rows else {}
+                top_conf = float(top_behavior.get("confidence", 0.0) or 0.0)
+                claim_behavior = str(top_behavior.get("behavior") or "unknown_behavior")
+                claim = f"Function may implement {claim_behavior.replace('_', ' ')} behavior."
+                evidence = []
+                if behavior_rows:
+                    evidence.append(
+                        {
+                            "type": "behavior_anchor",
+                            "value": claim_behavior,
+                            "confidence": round(top_conf, 4),
+                            "source": "BehaviorClassifier",
+                            "explain": top_behavior.get("explain", []),
+                        }
+                    )
+                if similar:
+                    evidence.append(
+                        {
+                            "type": "similar_function",
+                            "addr": similar[0].get("ea"),
+                            "name": similar[0].get("name"),
+                            "similarity": similar[0].get("similarity"),
+                            "source": "FunctionEmbeddingIndex",
+                        }
+                    )
+                card = {
+                    "claim": claim,
+                    "claim_type": "behavior_triage",
+                    "confidence": round(top_conf, 4),
+                    "evidence": evidence,
+                    "source_refs": [{"kind": "function", "addr": hex(ea), "name": qname}],
+                    "required_followup": {
+                        "tool": "code",
+                        "action": "callers",
+                        "addr": hex(ea),
+                    },
+                }
+
+                persisted = False
+                persisted_id = ""
+                capsule_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
+                if capsule_path:
+                    try:
+                        from ida_pro_mcp.capsule import CapsuleStore
+
+                        with CapsuleStore.open(capsule_path) as cap:
+                            if not cap.is_initialized():
+                                cap.init(project_name="ida-session", created_by="ida-pro-mcp-agent")
+                            persisted_id = cap.add_evidence_card(
+                                claim=card["claim"],
+                                claim_type=card["claim_type"],
+                                confidence=card["confidence"],
+                                evidence=card["evidence"],
+                                source_refs=card["source_refs"],
+                                metadata={
+                                    "addr": hex(ea),
+                                    "name": qname,
+                                    "index_path": db_path,
+                                },
+                            )
+                            persisted = True
+                    except Exception:
+                        persisted = False
+                        persisted_id = ""
+
+                return {
+                    "ok": True,
+                    "addr": hex(ea),
+                    "name": qname,
+                    "card": card,
+                    "persisted": persisted,
+                    "persisted_id": persisted_id,
                 }
         
         elif action == "similar":
