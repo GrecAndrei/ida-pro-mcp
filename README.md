@@ -154,6 +154,7 @@ Primary documentation now lives under `docs/`:
 - `docs/TOOLS_REFERENCE.md`: tool-focused reference.
 - `docs/DEDUPLICATION_PLAN.md`: canonical-vs-compat tool surface and consolidation rules.
 - `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`: phase-by-phase bootstrap plan implementation matrix.
+- `docs/design/CAPSULES.md`: experimental Sideband capsule architecture and trust model.
 - `ARCHITECTURE.md`: high-level boundaries and module ownership map.
 - `CONTRIBUTING.md`: contribution workflow, guardrails, and PR expectations.
 
@@ -183,6 +184,7 @@ Installer safety flags:
 - `--embed-model <path>`: explicitly set `bge-code-v1` GGUF model path
 - `--embed-server-bin <path>`: explicitly set `llama-server` path
 - `--no-embed-auto`: disable automatic embedder/server discovery
+- `--capsule <file.sideband>`: write installer metadata/audit events into a capsule
 
 Regenerate after tool metadata changes:
 

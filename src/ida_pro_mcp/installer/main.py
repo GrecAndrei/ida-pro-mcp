@@ -260,6 +260,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--embed-server-bin", default="", help="explicit path to llama-server binary")
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument("--skills-mode", choices=["router", "full", "none"], default="router", help="Codex skill installation mode")
+    parser.add_argument("--capsule", default="", help="optional path to write installer metadata capsule (.sideband)")
     parser.add_argument("--only", action="append", choices=["runtime", "clients", "plugin", "skills", "shell"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     args = parser.parse_args(argv)
@@ -275,6 +276,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         embed_auto=not args.no_embed_auto,
         embed_model_path=args.embed_model,
         embed_server_bin=args.embed_server_bin,
+        capsule_path=Path(args.capsule).expanduser() if args.capsule else None,
         only=set(args.only),
     )
     opts.install_root = Path(args.install_root).expanduser() if args.install_root else get_install_root()
@@ -384,6 +386,49 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         report.finalize(True)
         report_path = install_root / "install-report.json"
         report.write(report_path)
+
+        if opts.capsule_path and not opts.dry_run:
+            from ida_pro_mcp.capsule import CapsuleStore
+
+            with CapsuleStore.open(opts.capsule_path) as capsule:
+                if not capsule.is_initialized():
+                    capsule.init(
+                        project_name=install_root.name,
+                        created_by="ida-pro-mcp-installer",
+                    )
+                capsule.add_install_report(
+                    {
+                        "status": report.status,
+                        "started_at": report.started_at,
+                        "finished_at": report.finished_at,
+                        "metadata": report.metadata,
+                        "steps": report.steps,
+                        "warnings": report.warnings,
+                    }
+                )
+                capsule.upsert_backend_profile(
+                    name="ida-primary",
+                    kind="ida",
+                    config={
+                        "idadir": str(detect_ida_install_dir() or ""),
+                        "status": "primary",
+                    },
+                )
+                for client in report.metadata.get("configured_clients", []):
+                    capsule.upsert_client_profile(
+                        name=str(client),
+                        kind="mcp-client",
+                        config={"configured": True, "server": "ida-pro-mcp"},
+                    )
+                capsule.add_audit_event(
+                    "installer_completed",
+                    {
+                        "install_root": str(install_root),
+                        "report_path": str(report_path),
+                        "status": report.status,
+                    },
+                )
+
         ui.ok(f"Install complete. Report: {report_path}")
         return 0
     except Exception as exc:
@@ -405,6 +450,24 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.warn(f"Failure report written to {report_path}")
         except Exception:
             pass
+
+        if opts.capsule_path and not opts.dry_run:
+            try:
+                from ida_pro_mcp.capsule import CapsuleStore
+
+                with CapsuleStore.open(opts.capsule_path) as capsule:
+                    if not capsule.is_initialized():
+                        capsule.init(project_name=(opts.install_root or get_install_root()).name, created_by="ida-pro-mcp-installer")
+                    capsule.add_audit_event(
+                        "installer_failed",
+                        {
+                            "install_root": str(opts.install_root or get_install_root()),
+                            "report_path": str(report_path),
+                            "error": msg,
+                        },
+                    )
+            except Exception as cap_exc:
+                ui.warn(f"Failed to write capsule failure event: {cap_exc}")
         return 1
 
 
