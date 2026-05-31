@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import struct
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -410,3 +412,229 @@ class FunctionEmbeddingIndex:
     @property
     def size(self) -> int:
         return len(self._cache)
+
+
+@dataclass
+class SemanticObject:
+    kind: str
+    stable_ref: str
+    title: str
+    text: str
+    metadata: dict
+
+
+class SemanticObjectIndex:
+    """
+    Generic semantic object index for mixed object kinds (function/gadget/etc).
+    Stored in SQLite with optional vector search using the configured embedder.
+    """
+
+    INDEX_SCHEMA_VERSION = 1
+    _TOKEN_RE = re.compile(r"[a-z0-9_]{2,}")
+
+    def __init__(self, db_path: str, embedder: Any):
+        self._db_path = db_path
+        self._embedder = embedder
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        self._init_db()
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _pack(self, vec: List[float]) -> bytes:
+        return struct.pack(f"{len(vec)}f", *vec)
+
+    def _unpack(self, blob: bytes) -> List[float]:
+        n = len(blob) // 4
+        return list(struct.unpack(f"{n}f", blob))
+
+    def _init_db(self) -> None:
+        with self._conn() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS semantic_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS semantic_objects (
+                    kind TEXT NOT NULL,
+                    stable_ref TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    norm_text TEXT NOT NULL,
+                    tokens TEXT NOT NULL,
+                    vec_blob BLOB,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (kind, stable_ref)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_semantic_kind ON semantic_objects(kind);
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO semantic_meta(key, value) VALUES('index_schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (str(self.INDEX_SCHEMA_VERSION),),
+            )
+            conn.commit()
+
+    def _tokenize(self, text: str) -> List[str]:
+        return sorted(set(self._TOKEN_RE.findall((text or "").lower())))
+
+    def upsert_object(self, obj: SemanticObject) -> None:
+        text = obj.text or ""
+        norm = re.sub(r"\s+", " ", text.lower()).strip()
+        tokens = ",".join(self._tokenize(text))
+        vec_blob = None
+        try:
+            vec_blob = self._pack(self._embedder.embed(text))
+        except Exception:
+            vec_blob = None
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO semantic_objects(
+                    kind, stable_ref, title, text, norm_text, tokens, vec_blob, metadata_json, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(kind, stable_ref) DO UPDATE SET
+                    title=excluded.title,
+                    text=excluded.text,
+                    norm_text=excluded.norm_text,
+                    tokens=excluded.tokens,
+                    vec_blob=excluded.vec_blob,
+                    metadata_json=excluded.metadata_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    obj.kind,
+                    obj.stable_ref,
+                    obj.title or obj.stable_ref,
+                    text,
+                    norm,
+                    tokens,
+                    vec_blob,
+                    json_dumps_safe(obj.metadata or {}),
+                    time.time(),
+                ),
+            )
+            conn.commit()
+
+    def search_text(
+        self,
+        query: str,
+        kind: Optional[str] = None,
+        top_k: int = 10,
+        threshold: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        q_tokens = set(self._tokenize(query))
+        if not q_tokens:
+            return []
+        params: List[Any] = []
+        sql = "SELECT kind, stable_ref, title, text, tokens, metadata_json FROM semantic_objects"
+        if kind:
+            sql += " WHERE kind=?"
+            params.append(kind)
+        rows: List[Dict[str, Any]] = []
+        with self._conn() as conn:
+            for row in conn.execute(sql, tuple(params)):
+                row_tokens = set(str(row[4] or "").split(",")) if row[4] else set()
+                if not row_tokens:
+                    continue
+                overlap = len(q_tokens.intersection(row_tokens))
+                score = overlap / max(1, len(q_tokens))
+                if score < float(threshold):
+                    continue
+                rows.append(
+                    {
+                        "kind": str(row[0]),
+                        "stable_ref": str(row[1]),
+                        "title": str(row[2]),
+                        "score": round(score, 4),
+                        "metadata": json_loads_safe(str(row[5] or "{}")),
+                    }
+                )
+        rows.sort(key=lambda r: r["score"], reverse=True)
+        return rows[: max(1, int(top_k))]
+
+    def search_vec(
+        self,
+        query_vec: List[float],
+        kind: Optional[str] = None,
+        top_k: int = 10,
+        threshold: float = 0.4,
+    ) -> List[Dict[str, Any]]:
+        params: List[Any] = []
+        sql = "SELECT kind, stable_ref, title, vec_blob, metadata_json FROM semantic_objects WHERE vec_blob IS NOT NULL"
+        if kind:
+            sql += " AND kind=?"
+            params.append(kind)
+        rows: List[Dict[str, Any]] = []
+        with self._conn() as conn:
+            for row in conn.execute(sql, tuple(params)):
+                blob = bytes(row[3]) if row[3] is not None else b""
+                if not blob:
+                    continue
+                vec = self._unpack(blob)
+                score = _cosine(query_vec, vec)
+                if score < float(threshold):
+                    continue
+                rows.append(
+                    {
+                        "kind": str(row[0]),
+                        "stable_ref": str(row[1]),
+                        "title": str(row[2]),
+                        "similarity": round(float(score), 4),
+                        "metadata": json_loads_safe(str(row[4] or "{}")),
+                    }
+                )
+        rows.sort(key=lambda r: r["similarity"], reverse=True)
+        return rows[: max(1, int(top_k))]
+
+    def semantic_search(
+        self,
+        query: str,
+        kind: Optional[str] = None,
+        top_k: int = 10,
+        threshold: float = 0.4,
+    ) -> List[Dict[str, Any]]:
+        try:
+            qvec = self._embedder.embed(query)
+            rows = self.search_vec(qvec, kind=kind, top_k=top_k, threshold=threshold)
+            if rows:
+                return rows
+        except Exception:
+            pass
+        return self.search_text(query, kind=kind, top_k=top_k, threshold=max(0.0, threshold / 2.0))
+
+    @property
+    def size(self) -> int:
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM semantic_objects").fetchone()
+        return int(row[0] if row else 0)
+
+
+def json_dumps_safe(value: Any) -> str:
+    import json
+
+    try:
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        return "{}"
+
+
+def json_loads_safe(raw: str) -> dict:
+    import json
+
+    try:
+        out = json.loads(raw)
+        return out if isinstance(out, dict) else {}
+    except Exception:
+        return {}

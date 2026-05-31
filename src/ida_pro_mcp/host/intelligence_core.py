@@ -39,7 +39,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from .intelligence_embeddings import FunctionEmbeddingIndex
+from .intelligence_embeddings import FunctionEmbeddingIndex, SemanticObject, SemanticObjectIndex
 from .intelligence_helpers import compact_policy_blob, derive_focus_candidates, prune_policy_store
 from .intelligence_memrl_store import (
     DEFAULT_ALPHA,

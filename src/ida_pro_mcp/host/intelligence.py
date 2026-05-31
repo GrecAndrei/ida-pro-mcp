@@ -11,6 +11,8 @@ import urllib.request
 from .intelligence_core import (
     BgeCodeEmbedder,
     FunctionEmbeddingIndex,
+    SemanticObject,
+    SemanticObjectIndex,
     PreferenceMemoryBank,
     BehaviorClassifier,
     INTEL_PROFILE,
