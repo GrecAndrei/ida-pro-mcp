@@ -79,17 +79,18 @@ With `ida-pro-mcp`, an LLM can:
 python install.py
 ```
 
+Default behavior is interactive on a real terminal (wizard mode). Use `--yes` for fully non-interactive automation.
+
 Installer behavior:
 
-1. Relocates/updates to a stable install directory.
-2. Creates `.venv` and installs dependencies.
-3. Auto-detects IDA install path (`IDADIR`/`IDA_MCP_IDAT` fallback logic included).
-4. Configures supported MCP clients.
-5. Installs Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`) with `router` mode by default (single skill, minimal context).
-6. Sets wiki path automatically when available.
-7. Sets `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1` and `IDA_MCP_TOOLS_LIST_MODE=full` so MCP clients receive full tool descriptions and schemas directly.
-8. Hardcoded MCP client config paths are loaded dynamically from `client_configs.json`.
-9. Adds `ida-pro-mcp-cli` to your `~/.bashrc` as a shell function and PATH entry for direct JSON-safe command use.
+1. Creates a runtime venv in a stable install directory (no repo copy/migration).
+2. Installs the MCP runtime from package source (`--runtime-source auto|local|pypi`).
+3. Auto-detects IDA install path (`IDADIR` / `IDA_MCP_IDAT` fallback logic included).
+4. Configures supported MCP clients with backup files before mutation.
+5. Installs Codex skills into `CODEX_HOME/skills` (default `~/.codex/skills`) using `router` mode by default.
+6. Writes a structured install report to `<install-root>/install-report.json`.
+7. Does not kill IDA processes unless explicitly requested via `--kill-ida`.
+8. Does not modify shell startup files unless explicitly requested via `--install-cli-shim`.
 
 Default install directory:
 
@@ -128,7 +129,7 @@ pip install -e .
 ### Manual run (for development)
 
 ```bash
-python -u ida_mcp_stdio.py
+python -u -m ida_pro_mcp.server
 ```
 
 ### CLI command
@@ -172,6 +173,17 @@ Installer skill modes:
 - `full`: install every skill directory under `.agents/skills`
 - `none`: skip Codex skill installation
 
+Installer safety flags:
+
+- `--dry-run`: plan only, no writes
+- `--rollback-on-fail`: restore backed-up config files if install fails
+- `--kill-ida`: explicitly stop IDA/IDAT before runtime setup
+- `--install-cli-shim`: explicitly add CLI PATH shim to `~/.bashrc`
+- `--interactive` / `--no-interactive`: force or disable wizard mode
+- `--embed-model <path>`: explicitly set `bge-code-v1` GGUF model path
+- `--embed-server-bin <path>`: explicitly set `llama-server` path
+- `--no-embed-auto`: disable automatic embedder/server discovery
+
 Regenerate after tool metadata changes:
 
 ```bash
@@ -193,7 +205,7 @@ Generated tool docs/skills are regenerated from this source and checked in CI fo
 Use installer-managed client config, or run manually:
 
 ```bash
-python -u ida_mcp_stdio.py
+python -u -m ida_pro_mcp.server
 ```
 
 ### 2) Create a session
