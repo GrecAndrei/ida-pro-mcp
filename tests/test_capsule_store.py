@@ -14,7 +14,7 @@ def test_capsule_init_creates_valid_manifest(tmp_path):
         manifest = c.get_manifest()
     assert manifest["format"] == "sideband-capsule"
     assert manifest["format_version"] == 0
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2
     assert manifest["project_name"] == "firmware-audit"
     assert manifest["trust"]["contains_executable_payloads"] is False
 
@@ -157,6 +157,7 @@ def test_capsule_summary_counts_reflect_written_rows(tmp_path):
     assert summary["sessions"] == 1
     assert summary["audit_events"] == 1
     assert summary["objects"] == 1
+    assert summary["semantic_indexes"] == 0
 
 
 def test_capsule_add_embedding_state_roundtrip(tmp_path):
@@ -194,3 +195,51 @@ def test_capsule_verify_detects_blob_hash_mismatch(tmp_path):
         c.conn.commit()
         with pytest.raises(CapsuleVerificationError):
             c.verify()
+
+
+def test_capsule_semantic_tables_roundtrip_and_verify(tmp_path):
+    capsule_path = tmp_path / "semantic.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="semantic")
+        idx = c.add_semantic_index(kind="function", backend="bge-code-v1", dim=1536)
+        vec = c.store_semantic_vector(b"abc123", dim=1536)
+        item = c.upsert_semantic_item(
+            index_id=idx,
+            kind="function",
+            stable_ref="0x401000",
+            title="sub_401000",
+            text_hash="thash",
+            vector_sha256=vec,
+            metadata={"name": "sub_401000"},
+        )
+        c.add_behavior_hit(item_id=item, behavior="network_http", confidence=0.42, explain=["recv/send"])
+        c.add_evidence_card(
+            claim="candidate http parser",
+            claim_type="behavior_triage",
+            confidence=0.42,
+            evidence=[{"type": "behavior", "value": "network_http"}],
+        )
+        sem = c.semantic_summary()
+        assert sem["semantic_indexes"] == 1
+        assert sem["semantic_items"] == 1
+        assert sem["semantic_vectors"] == 1
+        assert sem["behavior_hits"] == 1
+        assert sem["evidence_cards"] == 1
+        assert len(c.list_semantic_indexes()) == 1
+        c.verify()
+
+
+def test_capsule_auto_upgrades_schema_v1_to_v2(tmp_path):
+    capsule_path = tmp_path / "migrate.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="migrate")
+        c.conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+        row = c.conn.execute("SELECT json FROM manifest WHERE id=1").fetchone()
+        assert row is not None
+        manifest = json.loads(row["json"])
+        manifest["schema_version"] = 1
+        c.conn.execute("UPDATE manifest SET json=? WHERE id=1", (json.dumps(manifest),))
+        c.conn.commit()
+        assert int(c.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"]) == 1
+        c.inspect_summary()
+        assert int(c._get_meta("schema_version") or 0) == 2

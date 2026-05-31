@@ -52,6 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
     export_p = sub.add_parser("export-manifest", help="print manifest json")
     export_p.add_argument("capsule")
 
+    sem_sum_p = sub.add_parser("semantic-summary", help="show semantic table counts")
+    sem_sum_p.add_argument("capsule")
+    sem_sum_p.add_argument("--json", action="store_true", dest="as_json")
+
+    sem_idx_p = sub.add_parser("list-indexes", help="list semantic indexes")
+    sem_idx_p.add_argument("capsule")
+    sem_idx_p.add_argument("--json", action="store_true", dest="as_json")
+
+    sem_manifest_p = sub.add_parser("export-semantic-manifest", help="export semantic summary+index manifest")
+    sem_manifest_p.add_argument("capsule")
+
     return p
 
 
@@ -105,6 +116,37 @@ def main(argv: list[str] | None = None) -> int:
             with CapsuleStore.open(Path(args.capsule)) as c:
                 manifest = c.get_manifest()
             print(json.dumps(manifest, indent=2))
+            return 0
+
+        if args.command == "semantic-summary":
+            with CapsuleStore.open(Path(args.capsule)) as c:
+                summary = c.semantic_summary()
+            if args.as_json:
+                print(json.dumps(summary, indent=2))
+            else:
+                for key in ("semantic_indexes", "semantic_items", "semantic_vectors", "behavior_hits", "evidence_cards"):
+                    print(f"{key}: {summary.get(key, 0)}")
+            return 0
+
+        if args.command == "list-indexes":
+            with CapsuleStore.open(Path(args.capsule)) as c:
+                rows = c.list_semantic_indexes()
+            if args.as_json:
+                print(json.dumps(rows, indent=2))
+            else:
+                if not rows:
+                    print("(no semantic indexes)")
+                for row in rows:
+                    print(f"{row.get('id')} {row.get('kind')} {row.get('backend')} dim={row.get('dim')}")
+            return 0
+
+        if args.command == "export-semantic-manifest":
+            with CapsuleStore.open(Path(args.capsule)) as c:
+                payload = {
+                    "semantic_summary": c.semantic_summary(),
+                    "semantic_indexes": c.list_semantic_indexes(),
+                }
+            print(json.dumps(payload, indent=2))
             return 0
 
         parser.print_help()

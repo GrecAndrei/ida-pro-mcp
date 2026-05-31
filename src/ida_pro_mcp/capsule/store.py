@@ -45,6 +45,7 @@ class CapsuleStore:
             conn.execute("PRAGMA journal_mode=WAL")
         except sqlite3.DatabaseError:
             pass
+        initialize_schema(conn)
         return cls(p, conn)
 
     def close(self) -> None:
@@ -77,6 +78,12 @@ class CapsuleStore:
 
     def init(self, project_name: str, created_by: str = "ida-pro-mcp", force: bool = False) -> None:
         if force:
+            self.conn.execute("DROP TABLE IF EXISTS evidence_cards")
+            self.conn.execute("DROP TABLE IF EXISTS behavior_hits")
+            self.conn.execute("DROP TABLE IF EXISTS semantic_vectors")
+            self.conn.execute("DROP TABLE IF EXISTS semantic_items")
+            self.conn.execute("DROP TABLE IF EXISTS semantic_indexes")
+            self.conn.execute("DROP TABLE IF EXISTS embedding_states")
             self.conn.execute("DROP TABLE IF EXISTS notes")
             self.conn.execute("DROP TABLE IF EXISTS audit_events")
             self.conn.execute("DROP TABLE IF EXISTS sessions")
@@ -113,6 +120,30 @@ class CapsuleStore:
         row = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
         if not row:
             raise CapsuleNotInitializedError("capsule schema is not initialized")
+        self._upgrade_schema_if_needed()
+
+    def _upgrade_schema_if_needed(self) -> None:
+        schema_ver = self._get_meta("schema_version")
+        if schema_ver is None:
+            return
+        try:
+            current = int(schema_ver)
+        except ValueError:
+            current = 0
+        if current >= SCHEMA_VERSION:
+            return
+        now = _now()
+        self._set_meta("schema_version", str(SCHEMA_VERSION))
+        self._set_meta("updated_at", now)
+        row = self.conn.execute("SELECT json FROM manifest WHERE id=1").fetchone()
+        if row:
+            manifest = json.loads(str(row["json"]))
+            manifest["schema_version"] = SCHEMA_VERSION
+            self.conn.execute(
+                "UPDATE manifest SET json=?, updated_at=? WHERE id=1",
+                (self._json_dumps(manifest), now),
+            )
+        self.conn.commit()
 
     def is_initialized(self) -> bool:
         try:
@@ -194,6 +225,195 @@ class CapsuleStore:
         )
         self.conn.commit()
         return sid
+
+    def add_semantic_index(
+        self,
+        *,
+        kind: str,
+        backend: str,
+        dim: int,
+        model_id: str = "",
+        model_fingerprint: dict | None = None,
+        anchor_set_hash: str = "",
+        source_fingerprint: str = "",
+        metadata: dict | None = None,
+        index_id: str | None = None,
+    ) -> str:
+        self._assert_initialized()
+        sid = index_id or str(uuid.uuid4())
+        now = _now()
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO semantic_indexes(
+                id, kind, backend, dim, model_id, model_fingerprint_json, anchor_set_hash,
+                source_fingerprint, created_at, updated_at, metadata_json
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sid,
+                kind,
+                backend,
+                int(dim),
+                model_id or None,
+                self._json_dumps(model_fingerprint or {}),
+                anchor_set_hash or None,
+                source_fingerprint or None,
+                now,
+                now,
+                self._json_dumps(metadata or {}),
+            ),
+        )
+        self.conn.commit()
+        return sid
+
+    def upsert_semantic_item(
+        self,
+        *,
+        index_id: str,
+        kind: str,
+        stable_ref: str,
+        text_hash: str,
+        title: str = "",
+        vector_sha256: str = "",
+        metadata: dict | None = None,
+        item_id: str | None = None,
+    ) -> str:
+        self._assert_initialized()
+        sid = item_id or str(uuid.uuid4())
+        now = _now()
+        self.conn.execute(
+            """
+            INSERT INTO semantic_items(
+                id, index_id, kind, stable_ref, title, text_hash, vector_sha256, metadata_json, created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(index_id, kind, stable_ref) DO UPDATE SET
+                title=excluded.title,
+                text_hash=excluded.text_hash,
+                vector_sha256=excluded.vector_sha256,
+                metadata_json=excluded.metadata_json,
+                updated_at=excluded.updated_at
+            """,
+            (
+                sid,
+                index_id,
+                kind,
+                stable_ref,
+                title or None,
+                text_hash,
+                vector_sha256 or None,
+                self._json_dumps(metadata or {}),
+                now,
+                now,
+            ),
+        )
+        row = self.conn.execute(
+            "SELECT id FROM semantic_items WHERE index_id=? AND kind=? AND stable_ref=?",
+            (index_id, kind, stable_ref),
+        ).fetchone()
+        self.conn.commit()
+        return str(row["id"]) if row else sid
+
+    def store_semantic_vector(self, data: bytes, dim: int, dtype: str = "float32") -> str:
+        self._assert_initialized()
+        sha = hashlib.sha256(data).hexdigest()
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO semantic_vectors(vector_sha256, dim, dtype, data, created_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (sha, int(dim), dtype, data, _now()),
+        )
+        self.conn.commit()
+        return sha
+
+    def add_behavior_hit(
+        self,
+        *,
+        item_id: str,
+        behavior: str,
+        confidence: float,
+        anchor_set_hash: str = "",
+        explain: list | None = None,
+        hit_id: str | None = None,
+    ) -> str:
+        self._assert_initialized()
+        hid = hit_id or str(uuid.uuid4())
+        self.conn.execute(
+            """
+            INSERT INTO behavior_hits(id, item_id, behavior, confidence, anchor_set_hash, explain_json, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                hid,
+                item_id,
+                behavior,
+                float(confidence),
+                anchor_set_hash or None,
+                self._json_dumps(explain or []),
+                _now(),
+            ),
+        )
+        self.conn.commit()
+        return hid
+
+    def add_evidence_card(
+        self,
+        *,
+        claim: str,
+        claim_type: str,
+        confidence: float = 0.0,
+        evidence: list | None = None,
+        source_refs: list | None = None,
+        metadata: dict | None = None,
+        card_id: str | None = None,
+    ) -> str:
+        self._assert_initialized()
+        cid = card_id or str(uuid.uuid4())
+        now = _now()
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO evidence_cards(
+                id, created_at, updated_at, claim, claim_type, confidence, evidence_json, source_refs_json, metadata_json
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cid,
+                now,
+                now,
+                claim,
+                claim_type,
+                float(confidence),
+                self._json_dumps(evidence or []),
+                self._json_dumps(source_refs or []),
+                self._json_dumps(metadata or {}),
+            ),
+        )
+        self.conn.commit()
+        return cid
+
+    def list_semantic_indexes(self) -> list[dict]:
+        self._assert_initialized()
+        rows = self.conn.execute(
+            """
+            SELECT id, kind, backend, dim, model_id, anchor_set_hash, source_fingerprint, created_at, updated_at
+            FROM semantic_indexes
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def semantic_summary(self) -> dict:
+        self._assert_initialized()
+        get_count = lambda table: int(self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
+        return {
+            "semantic_indexes": get_count("semantic_indexes"),
+            "semantic_items": get_count("semantic_items"),
+            "semantic_vectors": get_count("semantic_vectors"),
+            "behavior_hits": get_count("behavior_hits"),
+            "evidence_cards": get_count("evidence_cards"),
+        }
 
     def add_audit_event(self, event_type: str, payload: dict, session_id: str | None = None) -> int:
         self._assert_initialized()
@@ -304,6 +524,11 @@ class CapsuleStore:
             "sessions": get_count("sessions"),
             "audit_events": get_count("audit_events"),
             "objects": get_count("objects"),
+            "semantic_indexes": get_count("semantic_indexes"),
+            "semantic_items": get_count("semantic_items"),
+            "semantic_vectors": get_count("semantic_vectors"),
+            "behavior_hits": get_count("behavior_hits"),
+            "evidence_cards": get_count("evidence_cards"),
         }
 
     def verify(self) -> dict:
@@ -340,6 +565,12 @@ class CapsuleStore:
             if digest != row["sha256"]:
                 raise CapsuleVerificationError(f"blob hash mismatch for {row['sha256']}")
 
+        vec_rows = self.conn.execute("SELECT vector_sha256, data FROM semantic_vectors").fetchall()
+        for row in vec_rows:
+            digest = hashlib.sha256(bytes(row["data"])).hexdigest()
+            if digest != row["vector_sha256"]:
+                raise CapsuleVerificationError(f"semantic vector hash mismatch for {row['vector_sha256']}")
+
         verified_at = _now()
         trust["last_verified_at"] = verified_at
         manifest["trust"] = trust
@@ -352,5 +583,6 @@ class CapsuleStore:
                 "required_meta": True,
                 "manifest": True,
                 "blob_hashes": True,
+                "semantic_vector_hashes": True,
             },
         }

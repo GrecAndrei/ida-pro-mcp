@@ -106,3 +106,20 @@ def test_capsule_cli_add_note_persists_content(tmp_path, capsys):
     assert row["kind"] == "finding"
     assert row["title"] == "Parser"
     assert row["body"] == "off-by-one"
+
+
+def test_capsule_cli_semantic_commands(tmp_path, capsys):
+    capsule = tmp_path / "semantic-cli.sideband"
+    assert main(["init", str(capsule), "--project-name", "x"]) == 0
+    capsys.readouterr()
+    with CapsuleStore.open(capsule) as store:
+        store.add_semantic_index(kind="function", backend="bge-code-v1", dim=1536, index_id="IDX1")
+    assert main(["semantic-summary", str(capsule), "--json"]) == 0
+    sem = json.loads(capsys.readouterr().out)
+    assert sem["semantic_indexes"] == 1
+    assert main(["list-indexes", str(capsule), "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["id"] == "IDX1"
+    assert main(["export-semantic-manifest", str(capsule)]) == 0
+    manifest = json.loads(capsys.readouterr().out)
+    assert manifest["semantic_summary"]["semantic_indexes"] == 1
