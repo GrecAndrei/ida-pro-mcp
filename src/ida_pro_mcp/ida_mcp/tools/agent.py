@@ -539,7 +539,7 @@ def agent(
             return result
         
         elif action == "rename_suggestions":
-            # Get AI-friendly context for renaming
+            # Evidence-backed rename suggestions for nearby unnamed functions.
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
@@ -558,7 +558,7 @@ def agent(
                 "strings_used": [],
                 "apis_called": [],
                 "callers": [],
-                "callees": []
+                "callees": [],
             }
             
             # Gather strings
@@ -619,10 +619,12 @@ def agent(
             context["callees"] = context["callees"][:10]
             
             # Pseudocode signature if available
+            pseudo = ""
             if ida_hexrays.init_hexrays_plugin():
                 try:
                     cfunc = ida_hexrays.decompile(func.start_ea)
                     if cfunc:
+                        pseudo = str(cfunc)
                         lines = str(cfunc).split('\n')
                         # Get signature line
                         for line in lines[:5]:
@@ -631,7 +633,162 @@ def agent(
                                 break
                 except Exception:
                     pass
-            
+
+            include_evidence = bool(kwargs.get("include_evidence", True))
+            top_k = max(1, int(kwargs.get("top_k", max_items)))
+            persist_blackboard = bool(kwargs.get("persist_blackboard", True))
+            persist_capsule = bool(kwargs.get("persist_capsule", True))
+            suggestions = []
+
+            try:
+                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex
+            except ImportError:
+                try:
+                    from host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex  # type: ignore
+                except ImportError:
+                    BgeCodeEmbedder = None
+                    BehaviorClassifier = None
+                    FunctionEmbeddingIndex = None
+
+            base_tokens = [
+                t.lower()
+                for t in re.split(r"[^a-zA-Z0-9]+", str(name or ""))
+                if t and not t.lower().startswith("sub")
+            ]
+            api_token = ""
+            if context["apis_called"]:
+                api_token = re.sub(r"[^a-z0-9]", "", str(context["apis_called"][0]).lower())[:20]
+            if not api_token:
+                api_token = "handler"
+
+            if FunctionEmbeddingIndex is not None and BgeCodeEmbedder is not None and pseudo:
+                try:
+                    embedder = BgeCodeEmbedder()
+                    idx = FunctionEmbeddingIndex((idaapi.get_path(idaapi.PATH_TYPE_IDB) or "") + ".embeddings.db", embedder)
+                    idx.index_async(hex(func.start_ea), name, pseudo)
+                    nearest = idx.similar(
+                        pseudo,
+                        top_k=max(top_k * 4, 16),
+                        exclude_ea=hex(func.start_ea),
+                        threshold=0.0,
+                    )
+                    behavior_rows = []
+                    if BehaviorClassifier is not None:
+                        try:
+                            behavior_rows = BehaviorClassifier.instance(embedder).classify(
+                                pseudo,
+                                threshold=0.0,
+                                top_k=3,
+                                block=False,
+                            )
+                        except Exception:
+                            behavior_rows = []
+                    behavior_tag = ""
+                    if behavior_rows:
+                        behavior_tag = str(behavior_rows[0].get("behavior") or "").replace("_", "-")
+
+                    rank = 0
+                    for row in nearest:
+                        target = str(row.get("ea") or "")
+                        current_name = str(row.get("name") or target)
+                        if not current_name.startswith("sub_"):
+                            continue
+                        rank += 1
+                        stem_parts = []
+                        if base_tokens:
+                            stem_parts.extend(base_tokens[:2])
+                        if behavior_tag:
+                            stem_parts.append(behavior_tag)
+                        stem_parts.append(api_token)
+                        stem = "_".join([p for p in stem_parts if p])[:48] or "semantic_handler"
+                        suggested_name = f"{stem}_{target.replace('0x', '')[-4:]}"
+                        conf = max(0.0, min(1.0, float(row.get("similarity") or 0.0)))
+                        ev = []
+                        if include_evidence:
+                            ev = [
+                                {
+                                    "type": "embedding_similarity",
+                                    "value": round(conf, 4),
+                                    "source": "FunctionEmbeddingIndex",
+                                },
+                                {
+                                    "type": "behavior_hint",
+                                    "value": behavior_rows[0].get("behavior") if behavior_rows else "",
+                                    "source": "BehaviorClassifier",
+                                },
+                                {
+                                    "type": "api_token",
+                                    "value": api_token,
+                                    "source": "call-context",
+                                },
+                            ]
+                        suggestions.append(
+                            {
+                                "target": target,
+                                "current_name": current_name,
+                                "suggested_name": suggested_name,
+                                "confidence": round(conf, 4),
+                                "evidence": ev,
+                                "rank": rank,
+                            }
+                        )
+                        if len(suggestions) >= top_k:
+                            break
+                except Exception:
+                    pass
+
+            context["suggestions"] = suggestions
+            context["count"] = len(suggestions)
+
+            if persist_blackboard and suggestions:
+                try:
+                    from ida_pro_mcp.ida_mcp.tools.blackboard import BlackboardStore
+
+                    idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB) or ""
+                    bb = BlackboardStore((idb_path + ".blackboard.db") if idb_path else None)
+                    for s in suggestions[: min(6, len(suggestions))]:
+                        bb.write(
+                            title=f"Rename suggestion {s['target']} -> {s['suggested_name']}",
+                            content=json.dumps(
+                                {
+                                    "addr": s["target"],
+                                    "current_name": s["current_name"],
+                                    "suggested_name": s["suggested_name"],
+                                    "confidence": s["confidence"],
+                                },
+                                ensure_ascii=False,
+                            ),
+                            category="rename_suggestion",
+                            tags=["rename", "semantic", "agent"],
+                            embed=False,
+                        )
+                except Exception:
+                    pass
+
+            if persist_capsule and suggestions:
+                capsule_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
+                if capsule_path:
+                    try:
+                        from ida_pro_mcp.capsule import CapsuleStore
+
+                        with CapsuleStore.open(capsule_path) as cap:
+                            if not cap.is_initialized():
+                                cap.init(project_name="ida-session", created_by="ida-pro-mcp-agent")
+                            for s in suggestions[: min(6, len(suggestions))]:
+                                cap.add_note(
+                                    kind="rename_suggestion",
+                                    title=f"{s['target']} -> {s['suggested_name']}",
+                                    body=f"current={s['current_name']} confidence={s['confidence']}",
+                                    metadata={
+                                        "source": "agent.rename_suggestions",
+                                        "target": s["target"],
+                                        "suggested_name": s["suggested_name"],
+                                        "evidence": s.get("evidence", []),
+                                    },
+                                )
+                    except Exception:
+                        pass
+
             return context
         
         elif action == "batch_context":

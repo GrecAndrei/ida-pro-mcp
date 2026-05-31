@@ -8,7 +8,7 @@ AI-assisted analysis combining semantic embeddings, multi-hop search, and batch 
 - `find_references` — find all references to/from a target; params: `address`
 - `search_all` — broad search across functions, strings, imports; params: `query`
 - `quick` — lightweight one-shot analysis; params: `address`
-- `rename_suggestions` — suggest meaningful names for unnamed functions; params: `address`
+- `rename_suggestions` — suggest names for nearby unnamed functions with evidence-backed confidence; params: `address`, `top_k`, `include_evidence`
 - `batch_context` — gather context for multiple addresses in one call; params: `addresses`
 - `similar` — find semantically similar functions via cosine similarity on bge-code-v1 embeddings; params: `address`, `limit`
 - `bridge_query` — multi-hop entity expansion across xrefs and data flow; params: `query`, `hops`
@@ -30,3 +30,4 @@ AI-assisted analysis combining semantic embeddings, multi-hop search, and batch 
 - `similar` uses FunctionEmbeddingIndex cosine search on bge-code-v1 vectors, not keyword/string matching.
 - `bridge_query` expands entities across multiple hops — useful for tracing indirect relationships (e.g., callback registration chains).
 - `cluster` and `fingerprint` require the embedding index to be built; they operate on the full binary scope.
+- `rename_suggestions` does not auto-rename; it emits suggestions and can persist suggestion notes to blackboard/capsule.
