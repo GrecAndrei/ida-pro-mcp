@@ -1,0 +1,14 @@
+void aes_encrypt_block(uint8_t *out, const uint8_t *in, const uint32_t *rk, int nr) {
+    uint8_t state[16];
+    load_block(state, in);
+    for (int round = 0; round < nr; ++round) {
+        add_round_key(state, rk + round * 4);
+        sub_bytes(state, sbox);
+        shift_rows(state);
+        if (round != nr - 1) {
+            mix_columns(state, gf_mul);
+        }
+    }
+    add_round_key(state, rk + nr * 4);
+    store_block(out, state);
+}
