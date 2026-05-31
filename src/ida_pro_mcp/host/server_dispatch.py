@@ -15,6 +15,8 @@ from .config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
 from .errors import MCPError, make_error
 from .policy import PolicyDecision, build_audit_record, evaluate_policy
 from .schemas import (
+    ADVERTISED_TOOLS,
+    HIDDEN_TOOLS_IN_LIST,
     TOOL_ACTIONS,
     TOOL_ARG_SCHEMAS,
     TOOLS,
@@ -25,6 +27,19 @@ from .server_response import truncate_response
 
 
 class ServerDispatchMixin:
+    @staticmethod
+    def _runtime_alive(runtime: Any) -> bool:
+            """Best-effort runtime liveness check for runtime dict records."""
+            if not isinstance(runtime, dict):
+                return False
+            proc = runtime.get("process")
+            if not proc:
+                return False
+            try:
+                return proc.poll() is None
+            except Exception:
+                return False
+
     def call_tool(self, tool_name, idb_path, **kwargs):
             session = self._resolve_session_from_idb_ref(idb_path)
             if not session:
@@ -35,11 +50,7 @@ class ServerDispatchMixin:
                 )
 
             runtime = self.session_runtimes.get(session.session_id)
-            if (
-                not runtime
-                or not runtime.get("process")
-                or runtime["process"].poll() is not None
-            ):
+            if not self._runtime_alive(runtime):
                 log_rpc(
                     f"Session start/restart needed: {session.session_id} -> {session.idb_path}"
                 )
@@ -47,6 +58,18 @@ class ServerDispatchMixin:
                 if "error" in start_res:
                     return start_res
                 runtime = self.session_runtimes.get(session.session_id)
+            if not isinstance(runtime, dict):
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "Runtime metadata unavailable after startup.",
+                )
+            port = runtime.get("port")
+            if not self._runtime_alive(runtime) or not isinstance(port, int) or port <= 0:
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "Runtime metadata invalid or process not alive.",
+                    details={"has_process": bool(runtime.get("process")), "port": port},
+                )
 
             try:
                 rpc_args = {
@@ -60,9 +83,7 @@ class ServerDispatchMixin:
                         rpc_args = {k: v for k, v in rpc_args.items() if k in allowed}
                 except Exception:
                     pass
-                res = self._send_rpc_raw(
-                    {"tool": tool_name, "args": rpc_args}, runtime["port"]
-                )
+                res = self._send_rpc_raw({"tool": tool_name, "args": rpc_args}, port)
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}
                 res = truncate_response(res, max_tokens=self.default_truncate_tokens)
@@ -100,20 +121,30 @@ class ServerDispatchMixin:
             running = 0
             stale = 0
             for sid, runtime in self.session_runtimes.items():
-                alive = bool(runtime and runtime.is_alive())
+                alive = self._runtime_alive(runtime)
                 if alive:
                     running += 1
                 else:
                     stale += 1
                 if verbose:
+                    runtime_port = runtime.get("port") if isinstance(runtime, dict) else None
                     runtime_states.append(
                         {
                             "session_id": sid,
                             "alive": alive,
-                            "port": runtime.port if runtime else None,
+                            "port": runtime_port,
                         }
                     )
 
+            action_counts = {
+                str(tool): len(list(actions or []))
+                for tool, actions in TOOL_ACTIONS.items()
+            }
+            max_actions_tool = ""
+            max_actions_count = 0
+            if action_counts:
+                max_actions_tool = max(action_counts, key=action_counts.get)
+                max_actions_count = int(action_counts.get(max_actions_tool, 0))
             payload = {
                 "ok": True,
                 "action": "health",
@@ -140,10 +171,22 @@ class ServerDispatchMixin:
                     },
                 },
                 "wiki": {"root": wiki_root or None, "available": wiki_available},
-                "tools": {"registered": len(TOOLS)},
+                "tools": {
+                    "registered": len(TOOLS),
+                    "advertised": len(ADVERTISED_TOOLS),
+                    "hidden_from_tools_list": len(HIDDEN_TOOLS_IN_LIST),
+                    "wrappers": list(WRAPPER_ACTIONS),
+                    "action_surface": {
+                        "tool_count_with_actions": len(action_counts),
+                        "total_actions": sum(action_counts.values()),
+                        "max_actions_tool": max_actions_tool or None,
+                        "max_actions_count": max_actions_count,
+                    },
+                },
             }
             if verbose:
                 payload["sessions"]["runtimes"] = runtime_states
+                payload["tools"]["action_counts_by_tool"] = action_counts
             return payload
 
     def _handle_bookmarks(self, args: dict) -> dict:
