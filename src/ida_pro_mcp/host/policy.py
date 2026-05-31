@@ -227,7 +227,10 @@ class PolicyResult:
 
 
 def normalize_mode(value: Any, default: PolicyMode = PolicyMode.ASSIST) -> PolicyMode:
-    raw = str(value or default.value).strip().lower()
+    if isinstance(value, PolicyMode):
+        return value
+    raw_value = getattr(value, "value", value)
+    raw = str(raw_value or default.value).strip().lower()
     try:
         return PolicyMode(raw)
     except ValueError:

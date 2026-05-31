@@ -86,6 +86,14 @@ class _FakeStore:
         return True
 
 
+class _FakeAudit:
+    def __init__(self):
+        self.records = []
+
+    def log(self, **kwargs):
+        self.records.append(kwargs)
+
+
 class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin):
     def __init__(self):
         self.cache_dir = "/tmp"
@@ -95,6 +103,7 @@ class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin):
         self._analysis_engines = {}
         self._send_notification = lambda _msg: None
         self._store = _FakeStore()
+        self.audit = _FakeAudit()
         self._tool_calls = []
         self._usage_intel = None
         self._guardrail_strict_writes = False
@@ -114,6 +123,67 @@ class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin):
     def call_tool(self, tool_name, idb_path, **kwargs):
         self._tool_calls.append((tool_name, dict(kwargs or {})))
         return {"ok": True, "tool": tool_name, "action": kwargs.get("action"), "idb": idb_path}
+
+
+def test_dispatch_policy_allows_read_only_actions_by_default(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
+    srv = _DummyDispatchServer()
+
+    res = srv._execute_tool_inner("code", "code", {"action": "decompile", "addr": "0x401000"})
+
+    assert res.get("ok") is True
+    assert srv._tool_calls
+    assert srv.audit.records == []
+
+
+def test_dispatch_policy_requires_ack_for_misc_python(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
+    srv = _DummyDispatchServer()
+
+    blocked = srv._execute_tool_inner(
+        "misc",
+        "misc",
+        {"action": "python", "_purpose": "firmware_analysis"},
+    )
+
+    assert blocked.get("error") is True
+    assert "Policy requires explicit acknowledgement" in str(blocked.get("message") or "")
+    assert not srv._tool_calls
+    assert any(r.get("tool") == "misc" and r.get("action") == "python" for r in srv.audit.records)
+
+
+def test_dispatch_policy_ack_allows_misc_python_and_strips_internal_args(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
+    srv = _DummyDispatchServer()
+
+    res = srv._execute_tool_inner(
+        "misc",
+        "misc",
+        {"action": "python", "_purpose": "firmware_analysis", "_risk_ack": True},
+    )
+
+    assert res.get("ok") is True
+    assert srv._tool_calls
+    tool_name, forwarded = srv._tool_calls[-1]
+    assert tool_name == "misc"
+    assert "_purpose" not in forwarded
+    assert "_risk_ack" not in forwarded
+    assert any(r.get("tool") == "misc" and r.get("action") == "python" for r in srv.audit.records)
+
+
+def test_dispatch_policy_blocks_disallowed_purpose_in_enforce_mode(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "enforce")
+    srv = _DummyDispatchServer()
+
+    blocked = srv._execute_tool_inner(
+        "code",
+        "code",
+        {"action": "decompile", "_purpose": "cheating", "_risk_ack": True},
+    )
+
+    assert blocked.get("error") is True
+    assert "Policy blocked this tool action" in str(blocked.get("message") or "")
+    assert not srv._tool_calls
 
 
 def test_dispatch_strict_policy_blocks_non_blackboard_tool_when_stale():
@@ -158,7 +228,11 @@ def test_dispatch_strict_policy_allows_tool_after_fresh_cycle():
 def test_dispatch_phase_prove_blocks_modify_until_receipts():
     srv = _DummyDispatchServer()
     srv._handle_blackboard({"action": "phase_set", "phase": "prove"})
-    res = srv._execute_tool_inner("modify", "modify", {"action": "set_name", "addr": "0x401000", "name": "f_cfg"})
+    res = srv._execute_tool_inner(
+        "modify",
+        "modify",
+        {"action": "set_name", "addr": "0x401000", "name": "f_cfg", "_risk_ack": True},
+    )
     assert res.get("error") is True
     assert "prove phase requires evidence cards" in str(res.get("message") or "").lower()
 
