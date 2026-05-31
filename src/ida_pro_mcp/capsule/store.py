@@ -157,6 +157,44 @@ class CapsuleStore:
         self.conn.commit()
         return rid
 
+    def add_embedding_state(self, state: dict, state_id: str | None = None) -> str:
+        self._assert_initialized()
+        payload = self._json_dumps(state)
+        sid = state_id or str(uuid.uuid4())
+        created_at = str(state.get("created_at") or _now())
+        updated_at = str(state.get("updated_at") or created_at)
+        backend = str(state.get("backend") or "unknown")
+        model_path = state.get("model_path")
+        model_hash = state.get("model_hash")
+        embedding_dim = int(state.get("embedding_dim") or 0)
+        if embedding_dim <= 0:
+            raise CapsuleValidationError("embedding_state.embedding_dim must be > 0")
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO embedding_states(
+                id, created_at, updated_at, backend, model_path, model_hash, embedding_dim,
+                index_metadata_json, anchor_metadata_json, last_indexed_functions_json, thresholds_json, json
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sid,
+                created_at,
+                updated_at,
+                backend,
+                str(model_path) if model_path else None,
+                str(model_hash) if model_hash else None,
+                embedding_dim,
+                self._json_dumps(state.get("index_metadata") or {}),
+                self._json_dumps(state.get("anchor_metadata") or {}),
+                self._json_dumps(state.get("last_indexed_functions") or []),
+                self._json_dumps(state.get("thresholds") or {}),
+                payload,
+            ),
+        )
+        self.conn.commit()
+        return sid
+
     def add_audit_event(self, event_type: str, payload: dict, session_id: str | None = None) -> int:
         self._assert_initialized()
         data = self._json_dumps(payload)

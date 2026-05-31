@@ -159,6 +159,32 @@ def test_capsule_summary_counts_reflect_written_rows(tmp_path):
     assert summary["objects"] == 1
 
 
+def test_capsule_add_embedding_state_roundtrip(tmp_path):
+    capsule_path = tmp_path / "embedder.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="embedder")
+        sid = c.add_embedding_state(
+            {
+                "backend": "bge-code-v1",
+                "model_path": "/tmp/model.gguf",
+                "model_hash": "abc123",
+                "embedding_dim": 1536,
+                "index_metadata": {"db_path_pattern": "<idb_path>.embeddings.db"},
+                "anchor_metadata": {"anchor_hash_sha256": "deadbeef"},
+                "last_indexed_functions": [],
+                "thresholds": {"classification_default": 0.25},
+            }
+        )
+        row = c.conn.execute(
+            "SELECT id, backend, embedding_dim, model_hash FROM embedding_states WHERE id=?",
+            (sid,),
+        ).fetchone()
+    assert row is not None
+    assert row["backend"] == "bge-code-v1"
+    assert row["embedding_dim"] == 1536
+    assert row["model_hash"] == "abc123"
+
+
 def test_capsule_verify_detects_blob_hash_mismatch(tmp_path):
     capsule_path = tmp_path / "tampered-blob.sideband"
     with CapsuleStore.open(capsule_path) as c:

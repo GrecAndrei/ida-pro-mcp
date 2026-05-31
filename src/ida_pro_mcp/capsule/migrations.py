@@ -84,5 +84,20 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             body TEXT NOT NULL,
             metadata_json TEXT NOT NULL DEFAULT '{}'
         );
+
+        CREATE TABLE IF NOT EXISTS embedding_states (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            model_path TEXT,
+            model_hash TEXT,
+            embedding_dim INTEGER NOT NULL,
+            index_metadata_json TEXT NOT NULL DEFAULT '{}',
+            anchor_metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_indexed_functions_json TEXT NOT NULL DEFAULT '[]',
+            thresholds_json TEXT NOT NULL DEFAULT '{}',
+            json TEXT NOT NULL
+        );
         """
     )

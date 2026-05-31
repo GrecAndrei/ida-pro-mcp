@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import sys
@@ -44,6 +46,61 @@ class UI:
 
     def err(self, msg: str) -> None:
         print(f"{self.c_err}[err]{self.c_reset} {msg}")
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _build_embedder_capsule_state(embed_model: str, embed_server: str) -> dict:
+    from ida_pro_mcp.host.intelligence_core import (
+        EMBED_DIM,
+        BehaviorClassifier,
+    )
+
+    anchor_blob = json.dumps(BehaviorClassifier.ANCHORS, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    anchor_hash = hashlib.sha256(anchor_blob).hexdigest()
+    model_hash = ""
+    if embed_model:
+        try:
+            model_hash = _sha256_file(embed_model)
+        except OSError:
+            model_hash = ""
+
+    return {
+        "backend": "bge-code-v1",
+        "model_path": embed_model or "",
+        "model_hash": model_hash,
+        "embedding_dim": EMBED_DIM,
+        "index_metadata": {
+            "implementation": "FunctionEmbeddingIndex",
+            "storage": "sqlite",
+            "table": "func_embeddings",
+            "db_path_pattern": "<idb_path>.embeddings.db",
+            "pseudo_hash": "md5-16",
+        },
+        "anchor_metadata": {
+            "anchor_count": len(BehaviorClassifier.ANCHORS),
+            "anchor_hash_sha256": anchor_hash,
+            "anchor_version": f"sha256:{anchor_hash[:16]}",
+        },
+        "last_indexed_functions": [],
+        "thresholds": {
+            "classification_default": 0.25,
+            "coverage_default_min_similarity": 0.4,
+            "anchor_min_confidence": dict(BehaviorClassifier.ANCHOR_MIN_CONFIDENCE),
+        },
+        "runtime": {
+            "embed_server_bin": embed_server or "",
+        },
+    }
 
 
 def _is_interactive_terminal() -> bool:
@@ -309,6 +366,8 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         opts = _run_interactive_wizard(opts, ui)
         ui.info("Starting installer")
         ui.info(f"Install root: {install_root}")
+        embed_model = ""
+        embed_server = ""
         if opts.dry_run:
             ui.warn("Running in dry-run mode")
 
@@ -442,6 +501,13 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                         name=str(client),
                         kind="mcp-client",
                         config={"configured": True, "server": "ida-pro-mcp"},
+                    )
+                if embed_model:
+                    capsule.add_embedding_state(
+                        _build_embedder_capsule_state(
+                            embed_model=embed_model,
+                            embed_server=embed_server,
+                        )
                     )
                 capsule.add_audit_event(
                     "installer_completed",

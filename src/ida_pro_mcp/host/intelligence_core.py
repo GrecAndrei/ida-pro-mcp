@@ -28,6 +28,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import threading
@@ -61,17 +62,16 @@ _EMBED_LEASE_FILE = os.path.join("/tmp", "ida-mcp-embed-server.json")
 _MODEL_PATH_CACHE = None
 
 def _find_llama_server() -> str:
-    """Locate llama-server binary from env, project dir, or PATH."""
+    """Locate llama-server binary from env, project-local paths, or PATH."""
     env = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
     if env and os.path.isfile(env):
         return env
-    # Known locations relative to project
+    by_path = shutil.which("llama-server")
+    if by_path:
+        return by_path
     candidates = [
         os.path.join(_PROJECT_ROOT, ".opencode-swarm", "llama-server"),
-        os.path.join(os.path.expanduser("~"), "Downloads", "possibly",
-                     "llama.cpp", "build-serm", "bin", "llama-server"),
-        "/usr/local/bin/llama-server",
-        "/usr/bin/llama-server",
+        os.path.join(_PROJECT_ROOT, "bin", "llama-server"),
     ]
     for c in candidates:
         if os.path.isfile(c) and os.access(c, os.X_OK):
@@ -80,7 +80,7 @@ def _find_llama_server() -> str:
 
 
 def _find_model() -> str:
-    """Locate the embedding GGUF from env or common locations."""
+    """Locate the embedding GGUF from env or project-local paths."""
     global _MODEL_PATH_CACHE
     if isinstance(_MODEL_PATH_CACHE, str):
         return _MODEL_PATH_CACHE
@@ -90,27 +90,14 @@ def _find_model() -> str:
         return env
     candidates = [
         os.path.join(_PROJECT_ROOT, ".opencode-swarm", "bge-code-v1-q8_0.gguf"),
-        os.path.join(os.path.dirname(_SCRIPT_DIR), "..", "..", ".opencode-swarm",
-                     "bge-code-v1-q8_0.gguf"),
-        os.path.join(os.path.expanduser("~"), "Downloads", "bge-code-v1-q8_0.gguf"),
-        os.path.join(os.path.expanduser("~"), "models", "bge-code-v1-q8_0.gguf"),
-        os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "bge-code-v1-q8_0.gguf"),
+        os.path.join(_PROJECT_ROOT, "models", "bge-code-v1-q8_0.gguf"),
+        os.path.join(_PROJECT_ROOT, "bge-code-v1-q8_0.gguf"),
     ]
     for c in candidates:
         p = os.path.abspath(c)
         if os.path.isfile(p):
             _MODEL_PATH_CACHE = p
             return p
-    # Glob search in ~/Downloads and ~/models
-    import glob
-    for search_root in (
-        os.path.join(os.path.expanduser("~"), "Downloads"),
-        os.path.join(os.path.expanduser("~"), "models"),
-    ):
-        for p in glob.glob(os.path.join(search_root, "**", "bge-code-v1*.gguf"), recursive=True):
-            if os.path.isfile(p):
-                _MODEL_PATH_CACHE = p
-                return p
     _MODEL_PATH_CACHE = ""
     return ""
 
