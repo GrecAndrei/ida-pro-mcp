@@ -197,6 +197,66 @@ class FunctionEmbeddingIndex:
                     pass
         return out
 
+    def recent_functions(self, limit: int = 64) -> List[Dict[str, Any]]:
+        """Return most recently indexed function refs for capsule snapshots."""
+        rows: List[Dict[str, Any]] = []
+        try:
+            with self._conn() as conn:
+                for row in conn.execute(
+                    """
+                    SELECT ea, name, indexed_at, signature_hash
+                    FROM func_embeddings
+                    ORDER BY indexed_at DESC
+                    LIMIT ?
+                    """,
+                    (max(1, int(limit)),),
+                ):
+                    rows.append(
+                        {
+                            "ea": str(row[0]),
+                            "name": str(row[1] or row[0]),
+                            "indexed_at": row[2],
+                            "signature_hash": str(row[3] or ""),
+                        }
+                    )
+        except Exception:
+            return []
+        return rows
+
+    def capsule_state(
+        self,
+        *,
+        anchor_metadata: Optional[Dict[str, Any]] = None,
+        thresholds: Optional[Dict[str, Any]] = None,
+        recent_limit: int = 64,
+    ) -> Dict[str, Any]:
+        """Build a capsule-ready embedding state payload."""
+        meta = self.metadata()
+        model_head = str(meta.get("model_sha256_head") or "")
+        index_metadata = {
+            "implementation": "FunctionEmbeddingIndex",
+            "db_path": self._db_path,
+            "index_schema_version": int(meta.get("index_schema_version") or self.INDEX_SCHEMA_VERSION),
+            "source_idb_path": str(meta.get("source_idb_path") or ""),
+            "source_binary_path": str(meta.get("source_binary_path") or ""),
+            "source_fingerprint": str(meta.get("source_fingerprint") or ""),
+            "embedding_backend": str(meta.get("embedding_backend") or ""),
+            "function_count": int(self.size),
+            "updated_at": str(meta.get("updated_at") or _now_iso()),
+        }
+        return {
+            "backend": str(meta.get("embedding_backend") or getattr(self._embedder, "backend", "unknown")),
+            "model_path": str(meta.get("model_path") or ""),
+            "model_hash": model_head,
+            "embedding_dim": int(meta.get("embedding_dim") or getattr(self._embedder, "dim", 0) or 0),
+            "index_metadata": index_metadata,
+            "anchor_metadata": anchor_metadata or {},
+            "last_indexed_functions": self.recent_functions(limit=recent_limit),
+            "thresholds": thresholds or {},
+            "created_at": str(meta.get("created_at") or _now_iso()),
+            "updated_at": _now_iso(),
+        }
+
     def verify_metadata(self, current_embedder: Any) -> Dict[str, Any]:
         stored = self.metadata()
         current_backend = str(getattr(current_embedder, "backend", "unknown"))

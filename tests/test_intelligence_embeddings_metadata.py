@@ -71,3 +71,25 @@ def test_verify_metadata_and_needs_rebuild(tmp_path):
     assert mismatch["ok"] is False
     assert "embedding_backend" in mismatch["mismatches"]
     assert idx.needs_rebuild(_DifferentEmbedder()) is True
+
+
+def test_capsule_state_contains_embedder_and_index_snapshot(tmp_path):
+    db = tmp_path / "capsule.i64.embeddings.db"
+    idx = FunctionEmbeddingIndex(str(db), _FakeEmbedder())
+    idx.index("0x401000", "sub_401000", "http send recv parser")
+    idx.index("0x402000", "sub_402000", "aes round key schedule")
+
+    state = idx.capsule_state(
+        anchor_metadata={"anchor_hash_sha256": "deadbeef", "anchor_count": 2},
+        thresholds={"classification_default": 0.25, "similarity_threshold": 0.55},
+        recent_limit=1,
+    )
+
+    assert state["backend"] == "tfidf-fallback"
+    assert state["embedding_dim"] == 1536
+    assert state["index_metadata"]["implementation"] == "FunctionEmbeddingIndex"
+    assert state["index_metadata"]["function_count"] == 2
+    assert state["anchor_metadata"]["anchor_hash_sha256"] == "deadbeef"
+    assert state["thresholds"]["classification_default"] == 0.25
+    assert len(state["last_indexed_functions"]) == 1
+    assert state["last_indexed_functions"][0]["ea"] in {"0x401000", "0x402000"}

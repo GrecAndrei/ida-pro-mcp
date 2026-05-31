@@ -682,6 +682,35 @@ def agent(
                 db_path = idb_path + ".embeddings.db"
                 return FunctionEmbeddingIndex(db_path, embedder), db_path
 
+            def _persist_embedder_state(idx, action_name: str, thresholds: dict | None = None):
+                capsule_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
+                if not capsule_path:
+                    return {"persisted": False, "capsule_path": "", "embedding_state_id": ""}
+                try:
+                    from ida_pro_mcp.capsule import CapsuleStore
+
+                    anchor_hash = hashlib.sha256(
+                        json.dumps(classifier.ANCHORS, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest()
+                    anchor_meta = {
+                        "anchor_count": len(classifier.ANCHORS),
+                        "anchor_hash_sha256": anchor_hash,
+                        "anchor_version": f"sha256:{anchor_hash[:16]}",
+                    }
+                    state = idx.capsule_state(
+                        anchor_metadata=anchor_meta,
+                        thresholds=(thresholds or {}),
+                        recent_limit=64,
+                    )
+                    state.setdefault("index_metadata", {})["source_action"] = action_name
+                    with CapsuleStore.open(capsule_path) as cap:
+                        if not cap.is_initialized():
+                            cap.init(project_name="ida-session", created_by="ida-pro-mcp-agent")
+                        sid = cap.add_embedding_state(state)
+                    return {"persisted": True, "capsule_path": capsule_path, "embedding_state_id": sid}
+                except Exception:
+                    return {"persisted": False, "capsule_path": capsule_path, "embedding_state_id": ""}
+
             if action in ("intelligence_status", "embedder_status"):
                 est = embedder.status(probe=bool(kwargs.get("probe", False)), deep_hash=bool(kwargs.get("deep_hash", False)))
                 loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
@@ -692,6 +721,12 @@ def agent(
                     idx, idx_path = _index_for_current_idb()
                     idx_count = int(idx.size)
                     active_indexes = 1 if idx_path else 0
+                except Exception:
+                    pass
+                persisted_state = {"persisted": False, "capsule_path": "", "embedding_state_id": ""}
+                try:
+                    if idx_count > 0:
+                        persisted_state = _persist_embedder_state(idx, "intelligence_status")
                 except Exception:
                     pass
                 return {
@@ -708,6 +743,7 @@ def agent(
                         "active_binaries": active_indexes,
                         "functions_indexed": idx_count,
                     },
+                    "capsule_embedding_state": persisted_state,
                 }
 
             if action == "anchor_status":
@@ -784,7 +820,14 @@ def agent(
                 idx, db_path = _index_for_current_idb()
                 name = ida_funcs.get_func_name(ea) or hex(ea)
                 idx.index(hex(ea), name, pseudo)
-                return {"ok": True, "addr": hex(ea), "name": name, "index": {"path": db_path, "size": idx.size}}
+                persisted_state = _persist_embedder_state(idx, "index_function")
+                return {
+                    "ok": True,
+                    "addr": hex(ea),
+                    "name": name,
+                    "index": {"path": db_path, "size": idx.size},
+                    "capsule_embedding_state": persisted_state,
+                }
 
             if action == "index_batch":
                 limit = max(1, int(kwargs.get("limit", max_items)))
@@ -805,7 +848,14 @@ def agent(
                         count += 1
                     except Exception:
                         failures += 1
-                return {"ok": True, "indexed": count, "failed": failures, "index": {"path": db_path, "size": idx.size}}
+                persisted_state = _persist_embedder_state(idx, "index_batch")
+                return {
+                    "ok": True,
+                    "indexed": count,
+                    "failed": failures,
+                    "index": {"path": db_path, "size": idx.size},
+                    "capsule_embedding_state": persisted_state,
+                }
 
             if action == "similar_functions":
                 if not addr:
@@ -826,12 +876,18 @@ def agent(
                 qname = ida_funcs.get_func_name(ea) or hex(ea)
                 idx.index_async(hex(ea), qname, pseudo)
                 similar = idx.similar(pseudo, top_k=top_k, exclude_ea=hex(ea), threshold=threshold)
+                persisted_state = _persist_embedder_state(
+                    idx,
+                    "similar_functions",
+                    thresholds={"similarity_threshold": float(threshold)},
+                )
                 return {
                     "ok": True,
                     "query_addr": hex(ea),
                     "query_name": qname,
                     "similar": similar,
                     "index": {"path": db_path, "size": idx.size},
+                    "capsule_embedding_state": persisted_state,
                 }
 
             if action == "export_index_summary":
@@ -841,6 +897,7 @@ def agent(
                     meta = idx.metadata()
                 except Exception:
                     meta = {}
+                persisted_state = _persist_embedder_state(idx, "export_index_summary")
                 return {
                     "ok": True,
                     "index": {
@@ -848,6 +905,7 @@ def agent(
                         "size": idx.size,
                         "metadata": meta,
                     },
+                    "capsule_embedding_state": persisted_state,
                 }
 
             if action == "evidence_card":
