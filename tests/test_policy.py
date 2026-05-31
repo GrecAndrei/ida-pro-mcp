@@ -105,6 +105,20 @@ def test_classify_tool_action_handles_destructive_actions():
     assert classify_tool_action("bookmarks", "delete") == RiskTier.DESTRUCTIVE
 
 
+def test_action_level_read_override_for_misc_health():
+    result = evaluate_policy("misc", "health", purpose="oss_audit")
+
+    assert result.risk == RiskTier.READ
+    assert result.decision == PolicyDecision.ALLOW
+
+
+def test_action_level_read_override_for_funcs_info():
+    result = evaluate_policy("funcs", "info", purpose="oss_audit")
+
+    assert result.risk == RiskTier.READ
+    assert result.decision == PolicyDecision.ALLOW
+
+
 def test_audit_record_contains_policy_result_fields():
     result = evaluate_policy("misc", "python", purpose="education")
     record = build_audit_record(result, session_id="SID_TEST")
