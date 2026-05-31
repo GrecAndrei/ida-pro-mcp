@@ -1,5 +1,5 @@
 {
-  "file": "C:\\Users\\REDACTED\\Downloads\\ida-pro-mcp\\tests\\data\\test_binary.exe",
+  "file": "test_binary.exe",
   "md5": "9e60393da455f93b0ec32cf124432651",
   "base_address": "0x140000000",
   "functions": [

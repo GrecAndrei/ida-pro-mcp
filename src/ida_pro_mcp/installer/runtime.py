@@ -5,6 +5,10 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.request
+import zipfile
 from pathlib import Path
 
 from .common import InstallReport
@@ -99,28 +103,20 @@ def find_embed_model(install_root: Path) -> str:
     if env_val and Path(env_val).is_file():
         return env_val
 
+    # Keep discovery deterministic and workspace-scoped by default.
     candidates = [
         install_root / "bge-code-v1-q8_0.gguf",
         install_root / "bge-code-v1.gguf",
+        install_root / "models" / "bge-code-v1-q8_0.gguf",
+        install_root / "models" / "bge-code-v1.gguf",
         install_root.parent / "bge-code-v1-q8_0.gguf",
-        Path.home() / "models" / "bge-code-v1-q8_0.gguf",
-        Path.home() / "Downloads" / "bge-code-v1-q8_0.gguf",
     ]
     for c in candidates:
         if c.is_file():
             return str(c)
 
-    hf_snapshots = Path.home() / ".cache" / "huggingface" / "hub" / "models--BAAI--bge-code-v1" / "snapshots"
-    if hf_snapshots.is_dir():
-        for snap in sorted(hf_snapshots.iterdir(), reverse=True):
-            for f in snap.glob("*.gguf"):
-                return str(f)
-
-    for root in (Path.home() / ".cache", Path.home() / "models", Path.home() / "Downloads"):
-        if not root.is_dir():
-            continue
-        for f in root.rglob("bge-code-v1*.gguf"):
-            return str(f)
+    for f in install_root.rglob("bge-code-v1*.gguf"):
+        return str(f)
 
     return ""
 
@@ -130,13 +126,11 @@ def find_llama_server_bin(install_root: Path) -> str:
     if env_val and Path(env_val).is_file() and os.access(env_val, os.X_OK):
         return env_val
 
+    binary_name = "llama-server.exe" if sys.platform == "win32" else "llama-server"
     candidates = [
-        install_root / "llama-server",
-        install_root.parent / "llama-server",
-        Path("/usr/local/bin/llama-server"),
-        Path("/usr/bin/llama-server"),
-        Path.home() / ".local" / "bin" / "llama-server",
-        Path.home() / "llama.cpp" / "build" / "bin" / "llama-server",
+        install_root / binary_name,
+        install_root / "bin" / binary_name,
+        install_root.parent / binary_name,
     ]
     for c in candidates:
         if c.is_file() and os.access(str(c), os.X_OK):
@@ -148,6 +142,127 @@ def find_llama_server_bin(install_root: Path) -> str:
             return found
 
     return ""
+
+
+def _platform_asset_hints() -> tuple[list[str], list[str]]:
+    machine = (os.uname().machine if hasattr(os, "uname") else "").lower()
+    if sys.platform == "win32":
+        os_hints = ["win", "windows"]
+        arch_hints = ["arm64"] if "arm" in machine else ["x64", "amd64", "x86_64"]
+    elif sys.platform == "darwin":
+        os_hints = ["macos", "darwin"]
+        arch_hints = ["arm64", "aarch64"] if "arm" in machine else ["x64", "x86_64"]
+    else:
+        os_hints = ["ubuntu", "linux"]
+        if "arm" in machine or "aarch64" in machine:
+            arch_hints = ["arm64", "aarch64"]
+        elif "s390x" in machine:
+            arch_hints = ["s390x"]
+        else:
+            arch_hints = ["x64", "x86_64", "amd64"]
+    return os_hints, arch_hints
+
+
+def _score_release_asset(name: str, os_hints: list[str], arch_hints: list[str]) -> int:
+    low = name.lower()
+    score = 0
+    if "llama" in low and "bin" in low:
+        score += 3
+    if low.endswith(".zip") or low.endswith(".tar.gz") or low.endswith(".tgz"):
+        score += 2
+    if any(h in low for h in os_hints):
+        score += 4
+    if any(h in low for h in arch_hints):
+        score += 4
+    if "cuda" in low or "hip" in low or "vulkan" in low or "openvino" in low or "sycl" in low:
+        score -= 1
+    if "cudart" in low:
+        score -= 3
+    return score
+
+
+def _extract_archive(archive: Path, out_dir: Path) -> None:
+    if archive.name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(out_dir)
+        return
+    if archive.name.endswith(".tar.gz") or archive.name.endswith(".tgz"):
+        with tarfile.open(archive, "r:gz") as tf:
+            tf.extractall(out_dir)
+        return
+    raise RuntimeError(f"Unsupported archive format: {archive.name}")
+
+
+def download_and_install_llama_server(
+    install_root: Path,
+    *,
+    dry_run: bool,
+    report: InstallReport,
+) -> str:
+    """Download latest llama.cpp release archive and install llama-server locally."""
+    binary_name = "llama-server.exe" if sys.platform == "win32" else "llama-server"
+    target_dir = install_root / "bin"
+    target_path = target_dir / binary_name
+    if target_path.exists() and os.access(target_path, os.X_OK):
+        return str(target_path)
+    if dry_run:
+        report.add_step("llama_server", "dry-run", f"would install to {target_path}")
+        return str(target_path)
+
+    api_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+    req = urllib.request.Request(
+        api_url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "ida-pro-mcp-installer"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    assets = payload.get("assets") or []
+    if not isinstance(assets, list) or not assets:
+        raise RuntimeError("No release assets found for llama.cpp latest release")
+
+    os_hints, arch_hints = _platform_asset_hints()
+    best_asset = None
+    best_score = -10_000
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        url = str(asset.get("browser_download_url") or "")
+        if not name or not url:
+            continue
+        score = _score_release_asset(name, os_hints, arch_hints)
+        if score > best_score:
+            best_score = score
+            best_asset = {"name": name, "url": url}
+    if not best_asset or best_score < 4:
+        raise RuntimeError(
+            f"Unable to resolve a suitable llama-server release asset for platform={sys.platform}, arch hints={arch_hints}"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="ida-pro-mcp-llama-") as td:
+        archive_path = Path(td) / best_asset["name"]
+        extract_dir = Path(td) / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        req_asset = urllib.request.Request(
+            best_asset["url"],
+            headers={"User-Agent": "ida-pro-mcp-installer"},
+        )
+        with urllib.request.urlopen(req_asset, timeout=120) as resp:
+            archive_path.write_bytes(resp.read())
+        _extract_archive(archive_path, extract_dir)
+        found = list(extract_dir.rglob(binary_name))
+        if not found:
+            raise RuntimeError(f"Downloaded asset did not contain {binary_name}: {best_asset['name']}")
+        src_bin = found[0]
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_bin, target_path)
+        if sys.platform != "win32":
+            target_path.chmod(0o755)
+
+    report.add_step("llama_server", "ok", f"installed {target_path.name} from {best_asset['name']}")
+    report.metadata["llama_server_asset"] = best_asset["name"]
+    report.metadata["llama_server_bin"] = str(target_path)
+    return str(target_path)
 
 
 def setup_runtime_environment(

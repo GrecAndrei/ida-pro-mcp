@@ -183,6 +183,7 @@ Installer safety flags:
 - `--interactive` / `--no-interactive`: force or disable wizard mode
 - `--embed-model <path>`: explicitly set `bge-code-v1` GGUF model path
 - `--embed-server-bin <path>`: explicitly set `llama-server` path
+- `--install-llama-server`: auto-download and install `llama-server` when embedding model is enabled/found and no server binary is available
 - `--no-embed-auto`: disable automatic embedder/server discovery
 - `--capsule <file.sideband>`: write installer metadata/audit events into a capsule
 

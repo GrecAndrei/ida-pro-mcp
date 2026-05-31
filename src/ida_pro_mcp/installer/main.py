@@ -10,6 +10,7 @@ from .clients import configure_clients, rollback_from_backups
 from .common import InstallReport, InstallerOptions
 from .runtime import (
     build_stdio_config,
+    download_and_install_llama_server,
     find_embed_model,
     find_llama_server_bin,
     detect_ida_install_dir,
@@ -136,7 +137,11 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                 ui.ok(f"Detected llama-server: {auto_embed_server}")
                 opts.embed_server_bin = auto_embed_server
             else:
-                ui.warn("llama-server not found; semantic embeddings can still run without local server acceleration")
+                ui.warn("llama-server not found.")
+                opts.install_llama_server = _prompt_yes_no(
+                    "Download and install llama-server automatically?",
+                    default=True,
+                )
     else:
         ui.warn("No bge-code-v1 model auto-detected. Semantic embedding features stay disabled by default.")
         opts.embed_auto = False
@@ -258,6 +263,11 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--runtime-source", choices=["auto", "local", "pypi"], default="auto", help="choose runtime package source")
     parser.add_argument("--embed-model", default="", help="explicit path to bge-code-v1 GGUF model")
     parser.add_argument("--embed-server-bin", default="", help="explicit path to llama-server binary")
+    parser.add_argument(
+        "--install-llama-server",
+        action="store_true",
+        help="download and install llama-server automatically when embed model is enabled/found",
+    )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument("--skills-mode", choices=["router", "full", "none"], default="router", help="Codex skill installation mode")
     parser.add_argument("--capsule", default="", help="optional path to write installer metadata capsule (.sideband)")
@@ -276,6 +286,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         embed_auto=not args.no_embed_auto,
         embed_model_path=args.embed_model,
         embed_server_bin=args.embed_server_bin,
+        install_llama_server=args.install_llama_server,
         capsule_path=Path(args.capsule).expanduser() if args.capsule else None,
         only=set(args.only),
     )
@@ -332,6 +343,18 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 embed_model = find_embed_model(install_root)
             if opts.embed_auto and not embed_server:
                 embed_server = find_llama_server_bin(install_root)
+            if (
+                opts.install_llama_server
+                and opts.embed_auto
+                and embed_model
+                and not embed_server
+            ):
+                ui.info("Downloading and installing llama-server")
+                embed_server = download_and_install_llama_server(
+                    install_root=install_root,
+                    dry_run=opts.dry_run,
+                    report=report,
+                )
             if embed_model:
                 ui.ok("Embedding model configured for MCP clients")
                 report.metadata["embed_model"] = embed_model
