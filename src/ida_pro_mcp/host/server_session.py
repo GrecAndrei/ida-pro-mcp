@@ -32,6 +32,66 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class ServerSessionMixin(ServerSessionBootstrapMixin):
+    def _resolve_session_capsule(self, sid: str, requested: Any = None) -> str:
+        sid_norm = _normalize_session_id(sid) or str(sid or "").strip().upper()
+        explicit = str(requested or "").strip()
+        if explicit:
+            resolved = os.path.abspath(os.path.expanduser(explicit))
+            self._session_capsules[sid_norm] = resolved
+            return resolved
+        mapped = str(getattr(self, "_session_capsules", {}).get(sid_norm, "") or "").strip()
+        if mapped:
+            return mapped
+        env_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
+        if env_path:
+            resolved = os.path.abspath(os.path.expanduser(env_path))
+            self._session_capsules[sid_norm] = resolved
+            return resolved
+        return ""
+
+    def _sync_session_to_capsule(
+        self,
+        session,
+        *,
+        requested_capsule: Any = None,
+        event_type: str = "session_update",
+        event: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        sid = getattr(session, "session_id", "") if session else ""
+        if not sid:
+            return {"enabled": False, "persisted": False, "capsule": ""}
+        capsule_path = self._resolve_session_capsule(sid, requested=requested_capsule)
+        if not capsule_path:
+            return {"enabled": False, "persisted": False, "capsule": ""}
+        try:
+            from ida_pro_mcp.capsule import CapsuleStore
+
+            payload = session.to_dict() if hasattr(session, "to_dict") else {}
+            with CapsuleStore.open(capsule_path) as cap:
+                if not cap.is_initialized():
+                    project_name = os.path.basename(str(payload.get("binary_path") or "")) or "ida-session"
+                    cap.init(project_name=project_name, created_by="ida-pro-mcp-session")
+                cap.upsert_session(str(sid), payload)
+                cap.add_audit_event(
+                    str(event_type or "session_update"),
+                    event or {"session_id": sid, "idb_path": payload.get("idb_path", "")},
+                    session_id=str(sid),
+                )
+            return {
+                "enabled": True,
+                "persisted": True,
+                "capsule": capsule_path,
+                "event_type": event_type,
+            }
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "persisted": False,
+                "capsule": capsule_path,
+                "event_type": event_type,
+                "error": str(exc),
+            }
+
     @staticmethod
     def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
         import threading
@@ -294,11 +354,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                         f"Session '{existing.session_id}' disappeared during reuse",
                     )
                 self.current_session = updated
-                return {
+                out = {
                     "ok": True,
                     "session": updated.to_dict(),
                     "note": "Reusing existing session. Use force_new=true to create a new session.",
                 }
+                out["capsule"] = self._sync_session_to_capsule(
+                    updated,
+                    requested_capsule=args.get("capsule"),
+                    event_type="session_reuse",
+                    event={"binary_path": binary_path, "reuse": True},
+                )
+                return out
 
             create_note = None
             if existing and not force_new and has_preload_request:
@@ -324,6 +391,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 notes=notes,
             )
             out = {"ok": True, "session": self.current_session.to_dict()}
+            out["capsule"] = self._sync_session_to_capsule(
+                self.current_session,
+                requested_capsule=args.get("capsule"),
+                event_type="session_create",
+                event={"binary_path": binary_path, "analysis_options": bool(analysis_options)},
+            )
             imported_symbol_count = 0
             cross_session_imported = 0
             try:
@@ -499,7 +572,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 new_idb = getattr(session, "idb_path", None)
                 if old_idb and new_idb and old_idb != new_idb:
                     _trigger_session_diff(old_idb, new_idb)
-                return {"ok": True, "session": self.current_session.to_dict()}
+                return {
+                    "ok": True,
+                    "session": self.current_session.to_dict(),
+                    "capsule": self._sync_session_to_capsule(
+                        self.current_session,
+                        event_type="session_switch",
+                        event={"from_idb": old_idb or "", "to_idb": new_idb or ""},
+                    ),
+                }
             return make_error(
                 MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
             )
@@ -514,6 +595,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                     hint="Provide session_id or create/switch to a session first.",
                 )
             self._export_session_hypotheses_to_symbol_db(sid)
+            sess_for_capsule = self.session_mgr.get_session(sid)
+            capsule_info = (
+                self._sync_session_to_capsule(
+                    sess_for_capsule,
+                    event_type="session_close",
+                    event={"session_id": sid, "closed": True},
+                )
+                if sess_for_capsule
+                else {"enabled": False, "persisted": False, "capsule": ""}
+            )
             self._cleanup_runtime(sid)
             closed = self.session_mgr.delete_session(sid)
             if (
@@ -522,7 +613,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 and self.current_session.session_id == sid
             ):
                 self.current_session = None
-            return {"ok": closed, "session_id": sid}
+            if closed:
+                self._session_capsules.pop(str(sid).upper(), None)
+            return {"ok": closed, "session_id": sid, "capsule": capsule_info}
         if action == "status":
             if self.current_session:
                 result = self.current_session.to_dict()
@@ -654,7 +747,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 return make_error(
                     MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
                 )
-            return {"ok": True, "session": result.to_dict()}
+            return {
+                "ok": True,
+                "session": result.to_dict(),
+                "capsule": self._sync_session_to_capsule(
+                    result,
+                    requested_capsule=args.get("capsule"),
+                    event_type="session_update",
+                    event={"updated_fields": sorted([k for k in update_kwargs.keys()])},
+                ),
+            }
         if action == "rename":
             sid, sid_err = _sid_arg()
             if sid_err:

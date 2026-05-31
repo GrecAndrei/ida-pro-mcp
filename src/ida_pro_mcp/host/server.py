@@ -345,6 +345,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         self._session_macros: Dict[str, Dict[str, Any]] = {}
         self.current_session = None
         self.session_runtimes = {}
+        self._session_capsules: Dict[str, str] = {}
         self._runtime_lock = threading.RLock()
         self._semantic_index_lock = threading.RLock()
         self._shutdown = False
