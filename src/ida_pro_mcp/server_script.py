@@ -45,6 +45,11 @@ _ERROR_DETAIL_LEVEL = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic"))
 if _ERROR_DETAIL_LEVEL not in {"none", "basic", "full"}:
     _ERROR_DETAIL_LEVEL = "basic"
 _SESSION_TOKEN = str(os.environ.get("IDA_MCP_SESSION_TOKEN", "") or "")
+try:
+    _MAX_RPC_REQUEST_BYTES = int(os.environ.get("IDA_MCP_MAX_RPC_REQUEST_BYTES", "1048576"))
+except Exception:
+    _MAX_RPC_REQUEST_BYTES = 1048576
+_MAX_RPC_REQUEST_BYTES = max(4096, min(_MAX_RPC_REQUEST_BYTES, 64 * 1024 * 1024))
 
 
 def _trim_text(text, max_len=300):
@@ -232,11 +237,35 @@ def run_server():
                 continue
                 
             length = int.from_bytes(raw_len, 'big')
+            if length <= 0 or length > _MAX_RPC_REQUEST_BYTES:
+                res = _build_error(
+                    "bridge",
+                    f"Invalid request size: {length}",
+                    code="REQUEST_TOO_LARGE",
+                    details={"max_bytes": _MAX_RPC_REQUEST_BYTES},
+                    hint="Reduce payload size or increase IDA_MCP_MAX_RPC_REQUEST_BYTES for trusted local sessions.",
+                )
+                resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
+                conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
+                conn.close()
+                continue
             data = b""
             while len(data) < length:
                 chunk = conn.recv(min(length - len(data), 4096))
                 if not chunk: break
                 data += chunk
+            if len(data) != length:
+                res = _build_error(
+                    "bridge",
+                    "Truncated request body",
+                    code="INVALID_REQUEST",
+                    details={"expected": length, "received": len(data)},
+                    hint="Ensure full request payload is sent with proper length prefix.",
+                )
+                resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
+                conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
+                conn.close()
+                continue
                 
             req = json.loads(data.decode('utf-8'))
             if _SESSION_TOKEN:
