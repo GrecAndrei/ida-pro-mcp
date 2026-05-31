@@ -184,6 +184,8 @@ Source of truth for generation: `src/ida_pro_mcp/host/schemas_data.py`:
 - `TOOL_ACTIONS`
 - `TOOL_ARG_SCHEMAS`
 
+Generated tool docs/skills are regenerated from this source and checked in CI for drift.
+
 ## Quick Start
 
 ### 1) Start server
