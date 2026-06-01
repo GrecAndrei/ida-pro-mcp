@@ -8,6 +8,7 @@ This folder is the canonical documentation source for `ida-pro-mcp`.
 - `TOOLS_REFERENCE.md`: full generated tool/action/argument reference from live schemas.
 - `TECHNICAL_REFERENCE.md`: implementation-level architecture and runtime details.
 - `design/SEMANTIC_MEMORY.md`: local-first semantic memory architecture and capsule workflow.
+- `SEMANTIC_MEMORY_ROADMAP_STATUS.md`: requirement-to-evidence status map for the Sideband semantic roadmap.
 - `CARTOGRAPHER_MU.md`: Cartographer-mu semantic engine design.
 - `ACTIVE_BLACKBOARD_KERNEL.md`: blackboard auto-extraction architecture.
 - `BOOTSTRAP_IMPLEMENTATION_STATUS.md`: bootstrap control loop phase matrix.
