@@ -60,3 +60,13 @@ def test_threat_hunt_conditional_passthrough_is_table_driven():
     assert "elif tool == \"classify\" and action:" not in text
     assert "elif tool == \"summarize\" and action in {" not in text
     assert "elif tool == \"agent\" and action in {\"search_all\", \"find_references\"}:" not in text
+
+
+def test_threat_hunt_default_step_plans_are_centralized_helpers():
+    p = ROOT / "src" / "ida_pro_mcp" / "host" / "server_threat_hunt.py"
+    text = p.read_text(encoding="utf-8")
+    assert "def _threat_default_malware_steps()" in text
+    assert "def _threat_default_vuln_steps()" in text
+    assert "def _threat_default_tracing_steps(" in text
+    assert "step_plan.extend(self._threat_default_malware_steps())" in text
+    assert "step_plan.extend(self._threat_default_tracing_steps(include_loop_analysis=True))" in text

@@ -379,11 +379,7 @@ class ServerThreatHuntMixin:
             }
             steps = trace_map.get(
                 action,
-                [
-                    ("trace", "get", {}),
-                    ("trace_analysis", "analyze_coverage", {}),
-                    ("coverage", "report", {}),
-                ],
+                self._threat_default_tracing_steps(include_loop_analysis=False),
             )
         elif tool in (THREAT_LEGACY_VULN_TOOLS | {"taint"}):
             mapped_module = "vuln"
@@ -413,11 +409,7 @@ class ServerThreatHuntMixin:
             }:
                 steps = [("search", action, passthrough)]
             else:
-                steps = [
-                    ("gadgets", "rop", {}),
-                    ("gadgets", "mitigations", {}),
-                    ("search", "vulnerable", {}),
-                ]
+                steps = self._threat_default_vuln_steps()
         else:
             mapped_module = "malware"
             if tool in THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS and action:
@@ -449,12 +441,7 @@ class ServerThreatHuntMixin:
                         )
                     ]
             else:
-                steps = [
-                    ("deobfuscate", "stack_strings", {}),
-                    ("deobfuscate", "api_hashing", {}),
-                    ("crypto_id", "identify", {}),
-                    ("yara_hunt", "list_rules", {}),
-                ]
+                steps = self._threat_default_malware_steps()
 
         return (
             mapped_module,
@@ -537,24 +524,10 @@ class ServerThreatHuntMixin:
             step_plan.extend(legacy_steps)
 
         if include_malware and not step_plan:
-            step_plan.extend(
-                [
-                    ("deobfuscate", "stack_strings", {}),
-                    ("deobfuscate", "api_hashing", {}),
-                    ("crypto_id", "identify", {}),
-                    ("yara_hunt", "list_rules", {}),
-                ]
-            )
+            step_plan.extend(self._threat_default_malware_steps())
 
         if include_tracing and not step_plan:
-            step_plan.extend(
-                [
-                    ("trace", "get", {}),
-                    ("trace_analysis", "analyze_coverage", {}),
-                    ("trace_analysis", "find_loops", {}),
-                    ("coverage", "report", {}),
-                ]
-            )
+            step_plan.extend(self._threat_default_tracing_steps(include_loop_analysis=True))
 
         step_plan = step_plan[:max_steps]
         steps: list[dict] = []
@@ -650,3 +623,33 @@ class ServerThreatHuntMixin:
                 "raw_findings": raw_findings[: min(300, len(raw_findings))]
             }
         return out
+
+    @staticmethod
+    def _threat_default_malware_steps() -> list[tuple[str, str, dict]]:
+        return [
+            ("deobfuscate", "stack_strings", {}),
+            ("deobfuscate", "api_hashing", {}),
+            ("crypto_id", "identify", {}),
+            ("yara_hunt", "list_rules", {}),
+        ]
+
+    @staticmethod
+    def _threat_default_vuln_steps() -> list[tuple[str, str, dict]]:
+        return [
+            ("gadgets", "rop", {}),
+            ("gadgets", "mitigations", {}),
+            ("search", "vulnerable", {}),
+        ]
+
+    @staticmethod
+    def _threat_default_tracing_steps(
+        *, include_loop_analysis: bool
+    ) -> list[tuple[str, str, dict]]:
+        steps: list[tuple[str, str, dict]] = [
+            ("trace", "get", {}),
+            ("trace_analysis", "analyze_coverage", {}),
+        ]
+        if include_loop_analysis:
+            steps.append(("trace_analysis", "find_loops", {}))
+        steps.append(("coverage", "report", {}))
+        return steps
