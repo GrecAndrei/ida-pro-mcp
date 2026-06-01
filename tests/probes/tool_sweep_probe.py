@@ -159,7 +159,7 @@ def main():
             ("funcs", {"action": "info", "addr": entry_addr}),
             ("segments", {"action": "list"}),
             ("project", {"action": "get_cwd"}),
-            ("plugins", {"action": "list"}),
+            ("misc", {"action": "plugin_list"}),
             ("trace", {"action": "get"}),
             ("fixups", {"action": "list"}),
             ("data_ops", {"action": "make_code", "addr": entry_addr}),

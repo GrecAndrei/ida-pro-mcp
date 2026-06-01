@@ -946,17 +946,13 @@ class ServerDispatchMixin:
                 action = args.get("action")
                 if action == "health":
                     return self._handle_misc_health(args)
-                # New plugin actions under misc.
-                if action == "plugin_list":
-                    args["action"] = "list"
-                    tool_name = "plugins"
-                elif action == "plugin_run":
-                    args["action"] = "run"
-                    tool_name = "plugins"
                 # Backward compatibility for callers still using plugins(...).
-                elif original_tool_name == "plugins":
-                    if action in ("list", "run"):
-                        tool_name = "plugins"
+                # Route everything through misc to avoid maintaining a duplicate plugins tool.
+                if original_tool_name == "plugins":
+                    if action == "list":
+                        args["action"] = "plugin_list"
+                    elif action == "run":
+                        args["action"] = "plugin_run"
                     else:
                         return make_error(
                             MCPError.ACTION_NOT_FOUND,

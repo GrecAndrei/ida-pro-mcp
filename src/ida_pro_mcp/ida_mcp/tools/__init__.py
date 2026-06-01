@@ -19,7 +19,6 @@ __all__ = [
     "funcs",
     "segments",
     "project",
-    "plugins",
     "trace",
     "fixups",
     "data_ops",
