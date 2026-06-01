@@ -202,7 +202,7 @@ Project I/O and file operations. Includes advanced features: evidence_graph, kno
 ### agent
 High-level analysis orchestrator with bridge-conditioned multi-hop search (`bridge_query`) and reasoning bank distillation (`reflect`). Provides context packing, rename suggestions, and similarity analysis.
 
-**Actions:** analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect
+**Actions:** analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, export_index_summary, evidence_card
 
 ### microcode
 Hex-Rays Microcode (IR) access with def-use graph support.
