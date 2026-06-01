@@ -4,6 +4,10 @@ Firmware RE knowledge base and persistent working memory. SQLite-backed, survive
 
 **Read `ida://state` first** — it returns a narrative built from the blackboard. Read `ida://blackboard/next_target` for the highest-priority address to analyze next.
 
+## Full Action Surface
+
+`policy_set`, `policy_status`, `policy_check`, `phase_status`, `phase_set`, `phase_tick`, `quest_board`, `quest_complete`, `memory_compile`, `phase_finalize`, `trace_ingest`, `trace_run`, `trace_status`, `proposal_create`, `proposal_list`, `proposal_accept`, `proposal_reject`, `decision_card`, `working_set`, `state_health`, `notes_export`, `notes_import`, `write`, `read`, `list`, `search`, `semantic_index`, `semantic_rebuild`, `related_by_behavior`, `update`, `delete`, `clear`, `stats`, `prune`, `merge`, `contradict`, `resolve`, `next_target`, `frontier`, `coverage`, `propagate_labels`, `start_crawler`, `stop_crawler`, `crawler_status`, `accept`, `reject`, `add_evidence`, `calibrate`, `campaign_summary`, `auto_tag_propagate`, `accept_proposal`, `reject_proposal`, `add_system`, `add_struct`, `add_gap`, `fill_gap`, `add_state_machine`, `add_peripheral`, `add_attack_surface`, `kg_summary`, `kg_systems`, `kg_gaps`, `kg_structs`, `kg_state_machines`, `kg_attack_surface`, `kg_peripherals`, `export_symbols`, `import_symbols`
+
 ## Categories
 
 | Category | Purpose |
@@ -31,6 +35,18 @@ Firmware RE knowledge base and persistent working memory. SQLite-backed, survive
 {"name": "blackboard", "arguments": {"action": "stats"}}
 {"name": "blackboard", "arguments": {"action": "prune", "min_q_value": 0.3, "older_than_days": 7}}
 ```
+
+## Semantic Memory Lifecycle
+
+```json
+{"name": "blackboard", "arguments": {"action": "semantic_index", "entry_id": "abc12345"}}
+{"name": "blackboard", "arguments": {"action": "semantic_rebuild", "force": false, "limit": 500}}
+{"name": "blackboard", "arguments": {"action": "related_by_behavior", "query": "unsafe memcpy sample", "top_k": 5, "threshold": 0.35}}
+```
+
+- `semantic_index` indexes one or more entries into persistent semantic storage.
+- `semantic_rebuild` re-embeds matching entries (set `force=true` for full rebuild).
+- `related_by_behavior` retrieves behavior-similar notes even when keywords differ.
 
 ## Lifecycle Actions
 

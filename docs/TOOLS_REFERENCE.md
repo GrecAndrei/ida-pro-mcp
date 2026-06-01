@@ -53,9 +53,9 @@ Context Guillotine: deterministic JQ-like filtering for tool outputs. Supports p
 **Actions:** filter
 
 ### blackboard
-Persistent stateful context store for analysis hypotheses and findings. Used for offloading working memory so the LLM doesn't lose state across context windows.
+Persistent stateful context store for analysis hypotheses and findings, now with semantic indexing/retrieval lifecycle and behavior-centric recall (`semantic_index`, `semantic_rebuild`, `related_by_behavior`).
 
-**Actions:** write, read, list, update, delete, clear, stats
+**Actions:** policy_set, policy_status, policy_check, phase_status, phase_set, phase_tick, quest_board, quest_complete, memory_compile, phase_finalize, trace_ingest, trace_run, trace_status, proposal_create, proposal_list, proposal_accept, proposal_reject, decision_card, working_set, state_health, notes_export, notes_import, write, read, list, search, semantic_index, semantic_rebuild, related_by_behavior, update, delete, clear, stats, prune, merge, contradict, resolve, next_target, frontier, coverage, propagate_labels, start_crawler, stop_crawler, crawler_status, accept, reject, add_evidence, calibrate, campaign_summary, auto_tag_propagate, accept_proposal, reject_proposal, add_system, add_struct, add_gap, fill_gap, add_state_machine, add_peripheral, add_attack_surface, kg_summary, kg_systems, kg_gaps, kg_structs, kg_state_machines, kg_attack_surface, kg_peripherals, export_symbols, import_symbols
 
 ### governance
 CyberCane Neuro-Symbolic Governance Layer. Deterministic pre-flight rule engine for all IDB write operations. Blocks dangerous patches, redacts PII, warns on misleading renames. Zero ML, zero external dependencies.
