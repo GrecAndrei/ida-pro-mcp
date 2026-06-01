@@ -399,9 +399,23 @@ class ServerThreatHuntMixin:
                     ("coverage", "report", {}),
                 ],
             )
-        elif tool in {"gadgets", "search"}:
+        elif tool in {"gadgets", "search", "taint"}:
             mapped_module = "vuln"
-            if tool == "gadgets" and action:
+            if tool == "taint" and action:
+                mapped_module = "tracing"
+                steps = [
+                    (
+                        "taint",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k
+                            not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
+            elif tool == "gadgets" and action:
                 steps = [
                     (
                         "gadgets",
@@ -429,7 +443,8 @@ class ServerThreatHuntMixin:
                 steps = [("search", action, passthrough)]
             else:
                 steps = [
-                    ("gadgets", "find_rop", {}),
+                    ("gadgets", "rop", {}),
+                    ("gadgets", "mitigations", {}),
                     ("search", "vulnerable", {}),
                 ]
         else:
