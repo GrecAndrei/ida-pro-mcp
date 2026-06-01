@@ -28,6 +28,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_source_ref(ref: Any) -> dict:
+    """Normalize source refs into backend-neutral semantic shape."""
+    if not isinstance(ref, dict):
+        ref = {}
+    backend = str(ref.get("backend") or "ida")
+    stable_ref = str(ref.get("stable_ref") or ref.get("addr") or "")
+    object_kind = str(ref.get("object_kind") or ref.get("kind") or "function")
+    return {
+        "backend": backend,
+        "binary_id": str(ref.get("binary_id") or ref.get("idb_path") or ""),
+        "object_kind": object_kind,
+        "stable_ref": stable_ref,
+        "name": str(ref.get("name") or ""),
+    }
+
+
 class CapsuleStore:
     def __init__(self, path: Path, conn: sqlite3.Connection):
         self.path = Path(path)
@@ -371,6 +387,7 @@ class CapsuleStore:
         self._assert_initialized()
         cid = card_id or str(uuid.uuid4())
         now = _now()
+        normalized_source_refs = [_normalize_source_ref(r) for r in (source_refs or [])]
         self.conn.execute(
             """
             INSERT OR REPLACE INTO evidence_cards(
@@ -386,7 +403,7 @@ class CapsuleStore:
                 claim_type,
                 float(confidence),
                 self._json_dumps(evidence or []),
-                self._json_dumps(source_refs or []),
+                self._json_dumps(normalized_source_refs),
                 self._json_dumps(metadata or {}),
             ),
         )

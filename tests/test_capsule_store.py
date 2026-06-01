@@ -410,3 +410,43 @@ def test_capsule_export_analysis_capsule_with_vectors_and_audit(tmp_path):
         summary = dst.inspect_summary()
         assert summary["semantic_vectors"] == 1
         assert summary["audit_events"] == 1
+
+
+def test_capsule_evidence_source_refs_normalized_backend_neutral(tmp_path):
+    capsule_path = tmp_path / "src-ref.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="src-ref")
+        cid = c.add_evidence_card(
+            claim="candidate parser",
+            claim_type="behavior_triage",
+            source_refs=[{"kind": "function", "addr": "0x401000", "name": "sub_401000"}],
+        )
+        row = c.conn.execute("SELECT source_refs_json FROM evidence_cards WHERE id=?", (cid,)).fetchone()
+    refs = json.loads(str(row["source_refs_json"]))
+    assert refs and refs[0]["backend"] == "ida"
+    assert refs[0]["object_kind"] == "function"
+    assert refs[0]["stable_ref"] == "0x401000"
+
+
+def test_capsule_evidence_source_refs_preserve_non_ida_backend(tmp_path):
+    capsule_path = tmp_path / "src-ref2.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="src-ref2")
+        cid = c.add_evidence_card(
+            claim="ghidra object",
+            claim_type="behavior_triage",
+            source_refs=[
+                {
+                    "backend": "ghidra",
+                    "binary_id": "prog-1",
+                    "object_kind": "function",
+                    "stable_ref": "FUN_401000",
+                    "name": "FUN_401000",
+                }
+            ],
+        )
+        row = c.conn.execute("SELECT source_refs_json FROM evidence_cards WHERE id=?", (cid,)).fetchone()
+    refs = json.loads(str(row["source_refs_json"]))
+    assert refs and refs[0]["backend"] == "ghidra"
+    assert refs[0]["binary_id"] == "prog-1"
+    assert refs[0]["stable_ref"] == "FUN_401000"

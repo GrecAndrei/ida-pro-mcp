@@ -32,6 +32,13 @@ def test_agent_intelligence_status_reports_anchor_hash_and_index_counts():
     assert "embedder.status(probe=bool(kwargs.get(\"probe\", False))" in src
 
 
+def test_evidence_card_uses_backend_neutral_source_ref_shape():
+    src = Path("src/ida_pro_mcp/ida_mcp/tools/agent.py").read_text(encoding="utf-8")
+    assert '"object_kind": "function"' in src
+    assert '"stable_ref": hex(ea)' in src
+    assert '"backend": "ida"' in src
+
+
 def test_agent_schemas_include_intelligence_actions():
     src = _read("src/ida_pro_mcp/host/schemas_data.py")
     assert "\"intelligence_status\"" in src

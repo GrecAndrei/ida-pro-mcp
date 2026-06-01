@@ -1117,7 +1117,15 @@ def agent(
                     "claim_type": "behavior_triage",
                     "confidence": round(top_conf, 4),
                     "evidence": evidence,
-                    "source_refs": [{"kind": "function", "addr": hex(ea), "name": qname}],
+                    "source_refs": [
+                        {
+                            "backend": "ida",
+                            "binary_id": idaapi.get_path(idaapi.PATH_TYPE_IDB) or "",
+                            "object_kind": "function",
+                            "stable_ref": hex(ea),
+                            "name": qname,
+                        }
+                    ],
                     "required_followup": {
                         "tool": "code",
                         "action": "callers",

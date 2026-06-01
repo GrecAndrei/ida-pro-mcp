@@ -261,6 +261,13 @@ class BlackboardStore:
                     text_hash=thash,
                     vector_sha256=vsha,
                     metadata={
+                        "source_ref": {
+                            "backend": "ida",
+                            "binary_id": self.db_path,
+                            "object_kind": "blackboard_entry",
+                            "stable_ref": str(entry.get("id") or ""),
+                            "name": str(entry.get("title") or ""),
+                        },
                         "category": entry.get("category"),
                         "addr": entry.get("addr"),
                         "confidence": entry.get("confidence"),
