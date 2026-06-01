@@ -44,3 +44,19 @@ def test_threat_hunt_no_redundant_string_ops_passthrough_branch():
     p = ROOT / "src" / "ida_pro_mcp" / "host" / "server_threat_hunt.py"
     text = p.read_text(encoding="utf-8")
     assert "elif tool == \"string_ops\" and action:" not in text
+
+
+def test_threat_hunt_conditional_passthrough_is_table_driven():
+    schema_p = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas_data.py"
+    schema_text = schema_p.read_text(encoding="utf-8")
+    assert "THREAT_LEGACY_CONDITIONAL_PASSTHROUGH" in schema_text
+    assert "\"summarize\":" in schema_text
+    assert "\"agent\":" in schema_text
+
+    p = ROOT / "src" / "ida_pro_mcp" / "host" / "server_threat_hunt.py"
+    text = p.read_text(encoding="utf-8")
+    assert "elif tool in THREAT_LEGACY_CONDITIONAL_PASSTHROUGH and action:" in text
+    assert "allowed_actions = THREAT_LEGACY_CONDITIONAL_PASSTHROUGH.get(tool)" in text
+    assert "elif tool == \"classify\" and action:" not in text
+    assert "elif tool == \"summarize\" and action in {" not in text
+    assert "elif tool == \"agent\" and action in {\"search_all\", \"find_references\"}:" not in text

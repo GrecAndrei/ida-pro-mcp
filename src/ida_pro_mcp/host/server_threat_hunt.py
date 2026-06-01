@@ -11,6 +11,7 @@ from .config import (
 )
 from .errors import MCPError, make_error
 from .schemas_data import (
+    THREAT_LEGACY_CONDITIONAL_PASSTHROUGH,
     THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS,
     THREAT_LEGACY_REDIRECT_TOOLS,
     THREAT_LEGACY_TRACING_TOOLS,
@@ -437,51 +438,16 @@ class ServerThreatHuntMixin:
                         passthrough,
                     )
                 ]
-            elif tool == "classify" and action:
-                steps = [
-                    (
-                        "classify",
-                        action,
-                        passthrough,
-                    )
-                ]
-            elif tool == "summarize" and action in {
-                "security_posture",
-                "statistics",
-                "binary",
-                "function",
-            }:
-                steps = [
-                    (
-                        "summarize",
-                        action,
-                        passthrough,
-                    )
-                ]
-            elif tool == "agent" and action in {"search_all", "find_references"}:
-                steps = [
-                    (
-                        "agent",
-                        action,
-                        passthrough,
-                    )
-                ]
-            elif tool == "protocol" and action:
-                steps = [
-                    (
-                        "protocol",
-                        action,
-                        passthrough,
-                    )
-                ]
-            elif tool == "xref_analysis" and action:
-                steps = [
-                    (
-                        "xref_analysis",
-                        action,
-                        passthrough,
-                    )
-                ]
+            elif tool in THREAT_LEGACY_CONDITIONAL_PASSTHROUGH and action:
+                allowed_actions = THREAT_LEGACY_CONDITIONAL_PASSTHROUGH.get(tool)
+                if allowed_actions is None or action in allowed_actions:
+                    steps = [
+                        (
+                            tool,
+                            action,
+                            passthrough,
+                        )
+                    ]
             else:
                 steps = [
                     ("deobfuscate", "stack_strings", {}),

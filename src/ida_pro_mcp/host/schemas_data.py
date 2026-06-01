@@ -287,6 +287,24 @@ THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
     "string_ops",
 }
 
+# Tool->optional action allowlist for legacy passthrough flows.
+# `None` means any action is accepted.
+THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
+    "classify": None,
+    "protocol": None,
+    "xref_analysis": None,
+    "summarize": {
+        "security_posture",
+        "statistics",
+        "binary",
+        "function",
+    },
+    "agent": {
+        "search_all",
+        "find_references",
+    },
+}
+
 TOOL_DESCRIPTIONS = {
     "abi": "Analyzes calling conventions and ABI details of functions. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
     "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and first-class intelligence operations. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card.",
