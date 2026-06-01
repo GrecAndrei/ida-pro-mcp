@@ -14,6 +14,14 @@ from .vuln_db import VULN_PATTERNS
 
 
 class ServerThreatHuntMixin:
+    @staticmethod
+    def _legacy_passthrough_args(args: dict) -> dict:
+        return {
+            k: v
+            for k, v in args.items()
+            if k not in {"action", "legacy_tool", "legacy_action", "idb"}
+        }
+
     def _threat_hunt_step(
         self, ip: str, tool: str, action: str, step_args: Optional[dict] = None
     ) -> dict:
@@ -304,6 +312,7 @@ class ServerThreatHuntMixin:
         )
         if profile not in {"quick", "balanced", "deep"}:
             profile = "balanced"
+        passthrough = self._legacy_passthrough_args(args)
 
         mapped_module = "findings"
         steps: list[tuple[str, str, dict]] = []
@@ -316,24 +325,14 @@ class ServerThreatHuntMixin:
                     (
                         "trace",
                         "set_options",
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ],
                 "import_trace": [
                     (
                         "trace_analysis",
                         "import_trace",
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ],
                 "analyze_coverage": [("trace_analysis", "analyze_coverage", {})],
@@ -344,36 +343,21 @@ class ServerThreatHuntMixin:
                     (
                         "coverage",
                         "import_drcov",
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ],
                 "import_lighthouse": [
                     (
                         "coverage",
                         "import_lighthouse",
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ],
                 "highlight": [
                     (
                         "coverage",
                         "highlight",
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ],
                 "report": [("coverage", "report", {})],
@@ -382,12 +366,7 @@ class ServerThreatHuntMixin:
                     (
                         "coverage",
                         "filter",
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ],
             }
@@ -407,12 +386,7 @@ class ServerThreatHuntMixin:
                     (
                         "taint",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "gadgets" and action:
@@ -420,12 +394,7 @@ class ServerThreatHuntMixin:
                     (
                         "gadgets",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "search" and action in {
@@ -435,11 +404,6 @@ class ServerThreatHuntMixin:
                 "find",
                 "regex",
             }:
-                passthrough = {
-                    k: v
-                    for k, v in args.items()
-                    if k not in {"action", "legacy_tool", "legacy_action", "idb"}
-                }
                 steps = [("search", action, passthrough)]
             else:
                 steps = [
@@ -454,12 +418,7 @@ class ServerThreatHuntMixin:
                     (
                         tool,
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "c2_detect" and action:
@@ -468,11 +427,7 @@ class ServerThreatHuntMixin:
                     (
                         "string_ops",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "classify" and action:
@@ -480,12 +435,7 @@ class ServerThreatHuntMixin:
                     (
                         "classify",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "summarize" and action in {
@@ -498,12 +448,7 @@ class ServerThreatHuntMixin:
                     (
                         "summarize",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "agent" and action in {"search_all", "find_references"}:
@@ -511,12 +456,7 @@ class ServerThreatHuntMixin:
                     (
                         "agent",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "protocol" and action:
@@ -524,12 +464,7 @@ class ServerThreatHuntMixin:
                     (
                         "protocol",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "xref_analysis" and action:
@@ -537,12 +472,7 @@ class ServerThreatHuntMixin:
                     (
                         "xref_analysis",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             elif tool == "string_ops" and action:
@@ -550,12 +480,7 @@ class ServerThreatHuntMixin:
                     (
                         "string_ops",
                         action,
-                        {
-                            k: v
-                            for k, v in args.items()
-                            if k
-                            not in {"action", "legacy_tool", "legacy_action", "idb"}
-                        },
+                        passthrough,
                     )
                 ]
             else:

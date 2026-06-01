@@ -26,3 +26,10 @@ def test_threat_hunt_legacy_vuln_fallback_uses_canonical_gadget_actions():
     assert "(\"gadgets\", \"rop\", {})" in text
     assert "(\"gadgets\", \"mitigations\", {})" in text
     assert "(\"gadgets\", \"find_rop\", {})" not in text
+
+
+def test_threat_hunt_legacy_route_uses_shared_passthrough_helper():
+    p = ROOT / "src" / "ida_pro_mcp" / "host" / "server_threat_hunt.py"
+    text = p.read_text(encoding="utf-8")
+    assert "def _legacy_passthrough_args(args: dict) -> dict:" in text
+    assert "passthrough = self._legacy_passthrough_args(args)" in text
