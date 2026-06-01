@@ -263,6 +263,30 @@ _EXTRA_TOOL_ALIASES = {
     "policy": "governance",
 }
 
+# Canonical legacy threat-route contract used by host dispatchers.
+THREAT_LEGACY_REDIRECT_TOOLS = {
+    "c2_detect": "string_ops",
+}
+
+THREAT_LEGACY_TRACING_TOOLS = {
+    "trace",
+    "trace_analysis",
+    "coverage",
+    "taint",
+}
+
+THREAT_LEGACY_VULN_TOOLS = {
+    "gadgets",
+    "search",
+}
+
+THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
+    "deobfuscate",
+    "crypto_id",
+    "yara_hunt",
+    "string_ops",
+}
+
 TOOL_DESCRIPTIONS = {
     "abi": "Analyzes calling conventions and ABI details of functions. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
     "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and first-class intelligence operations. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card.",

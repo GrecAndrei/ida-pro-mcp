@@ -10,6 +10,12 @@ from .config import (
     _coerce_bool,
 )
 from .errors import MCPError, make_error
+from .schemas_data import (
+    THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS,
+    THREAT_LEGACY_REDIRECT_TOOLS,
+    THREAT_LEGACY_TRACING_TOOLS,
+    THREAT_LEGACY_VULN_TOOLS,
+)
 from .vuln_db import VULN_PATTERNS
 
 
@@ -316,7 +322,7 @@ class ServerThreatHuntMixin:
 
         mapped_module = "findings"
         steps: list[tuple[str, str, dict]] = []
-        if tool in {"trace", "trace_analysis", "coverage"}:
+        if tool in THREAT_LEGACY_TRACING_TOOLS - {"taint"}:
             mapped_module = "tracing"
             trace_map = {
                 "get": [("trace", "get", {})],
@@ -378,7 +384,7 @@ class ServerThreatHuntMixin:
                     ("coverage", "report", {}),
                 ],
             )
-        elif tool in {"gadgets", "search", "taint"}:
+        elif tool in (THREAT_LEGACY_VULN_TOOLS | {"taint"}):
             mapped_module = "vuln"
             if tool == "taint" and action:
                 mapped_module = "tracing"
@@ -413,7 +419,7 @@ class ServerThreatHuntMixin:
                 ]
         else:
             mapped_module = "malware"
-            if tool in {"deobfuscate", "crypto_id", "yara_hunt", "string_ops"} and action:
+            if tool in THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS and action:
                 steps = [
                     (
                         tool,
@@ -421,11 +427,12 @@ class ServerThreatHuntMixin:
                         passthrough,
                     )
                 ]
-            elif tool == "c2_detect" and action:
+            elif tool in THREAT_LEGACY_REDIRECT_TOOLS and action:
                 # Keep legacy compatibility, but route to canonical string_ops implementation.
+                redirect_tool = THREAT_LEGACY_REDIRECT_TOOLS[tool]
                 steps = [
                     (
-                        "string_ops",
+                        redirect_tool,
                         action,
                         passthrough,
                     )
