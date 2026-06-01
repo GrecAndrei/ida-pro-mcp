@@ -23,8 +23,8 @@ _FUNC_SUMMARY_CACHE_MAX = 512  # prevent unbounded growth
 @tool
 @idaread
 def agent(
-    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint", "intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary", "evidence_card"],
-                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint|intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|export_index_summary|evidence_card"],
+    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint", "intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "semantic_search", "blackboard_search", "export_index_summary", "evidence_card"],
+                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint|intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card"],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Search query or comma-separated addresses"] = None,
     depth: Annotated[int, "Exploration depth"] = 1,
@@ -822,7 +822,7 @@ def agent(
             
             return {"ok": True, "items": results, "count": len(results)}
 
-        elif action in ("intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "export_index_summary", "evidence_card"):
+        elif action in ("intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "semantic_search", "blackboard_search", "export_index_summary", "evidence_card"):
             try:
                 from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex
             except ImportError:
@@ -1045,6 +1045,54 @@ def agent(
                     "similar": similar,
                     "index": {"path": db_path, "size": idx.size},
                     "capsule_embedding_state": persisted_state,
+                }
+
+            if action == "semantic_search":
+                if not query:
+                    return make_error(MCPError.INVALID_ARGS, "query required for semantic_search")
+                top_k = max(1, int(kwargs.get("top_k", max_items)))
+                threshold = float(kwargs.get("threshold", 0.0))
+                idx, db_path = _index_for_current_idb()
+                qvec = embedder.embed(str(query))
+                rows = idx.similar_vec(qvec, top_k=top_k, threshold=threshold)
+                persisted_state = _persist_embedder_state(
+                    idx,
+                    "semantic_search",
+                    thresholds={"semantic_threshold": float(threshold)},
+                )
+                return {
+                    "ok": True,
+                    "query": str(query),
+                    "backend": embedder.backend,
+                    "matches": rows,
+                    "index": {"path": db_path, "size": idx.size},
+                    "capsule_embedding_state": persisted_state,
+                }
+
+            if action == "blackboard_search":
+                if not query:
+                    return make_error(MCPError.INVALID_ARGS, "query required for blackboard_search")
+                try:
+                    from ida_pro_mcp.ida_mcp.tools.blackboard import blackboard as blackboard_tool
+                except Exception:
+                    return make_error(MCPError.IDA_ERROR, "blackboard tool unavailable")
+                top_k = max(1, int(kwargs.get("top_k", max_items)))
+                threshold = float(kwargs.get("threshold", 0.0))
+                try:
+                    res = blackboard_tool(
+                        action="related_by_behavior",
+                        query=str(query),
+                        top_k=top_k,
+                        threshold=threshold,
+                        include_resolved=bool(kwargs.get("include_resolved", False)),
+                    )
+                except Exception as exc:
+                    return make_error(MCPError.IDA_ERROR, f"blackboard_search failed: {exc}")
+                return {
+                    "ok": True,
+                    "query": str(query),
+                    "backend": embedder.backend,
+                    "blackboard": res,
                 }
 
             if action == "export_index_summary":

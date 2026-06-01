@@ -11,6 +11,8 @@ AI-assisted analysis combining semantic embeddings, multi-hop search, and batch 
 - `rename_suggestions` — suggest names for nearby unnamed functions with evidence-backed confidence; params: `address`, `top_k`, `include_evidence`
 - `batch_context` — gather context for multiple addresses in one call; params: `addresses`
 - `similar` — find semantically similar functions via cosine similarity on bge-code-v1 embeddings; params: `address`, `limit`
+- `semantic_search` — semantic text query over function embedding index; params: `query`, `top_k`, `threshold`
+- `blackboard_search` — behavior-centric semantic retrieval from blackboard memory; params: `query`, `top_k`, `threshold`
 - `bridge_query` — multi-hop entity expansion across xrefs and data flow; params: `query`, `hops`
 - `reflect` — introspect current analysis state and suggest next steps
 - `cluster` — batch-embed all functions, k-means cluster, label with BehaviorClassifier; params: `max_items` (k), `func_limit`

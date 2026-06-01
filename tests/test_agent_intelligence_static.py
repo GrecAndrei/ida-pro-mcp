@@ -21,6 +21,8 @@ def test_agent_tool_exposes_intelligence_actions():
     assert "\"index_function\"" in src
     assert "\"index_batch\"" in src
     assert "\"similar_functions\"" in src
+    assert "\"semantic_search\"" in src
+    assert "\"blackboard_search\"" in src
     assert "\"export_index_summary\"" in src
     assert "\"evidence_card\"" in src
 
@@ -44,5 +46,7 @@ def test_agent_schemas_include_intelligence_actions():
     assert "\"intelligence_status\"" in src
     assert "\"classify_text\"" in src
     assert "\"similar_functions\"" in src
+    assert "\"semantic_search\"" in src
+    assert "\"blackboard_search\"" in src
     assert "\"export_index_summary\"" in src
     assert "\"evidence_card\"" in src
