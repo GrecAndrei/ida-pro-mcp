@@ -26,14 +26,14 @@ except ImportError:
 # ============================================================================
 
 try:
-    from ._api_categories import (
+    from ..support._api_categories import (
         DANGEROUS_APIS as _DANGEROUS_APIS,
         MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
         TAG_CATEGORIES as _TAG_CATEGORIES,
         API_TO_TAG as _API_TO_TAG,
     )
 except ImportError:
-    from _api_categories import (
+    from support._api_categories import (
         DANGEROUS_APIS as _DANGEROUS_APIS,
         MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
         TAG_CATEGORIES as _TAG_CATEGORIES,

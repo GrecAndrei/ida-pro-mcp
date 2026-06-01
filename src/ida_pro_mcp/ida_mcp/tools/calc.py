@@ -6,9 +6,9 @@ except ImportError:
 
 import re
 try:
-    from .semantic_matching import normalize_action, semantic_score, semantic_tokens
+    from ..support.semantic_matching import normalize_action, semantic_score, semantic_tokens
 except ImportError:
-    from semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
+    from support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
 
 
 _CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"}

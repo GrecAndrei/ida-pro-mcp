@@ -363,7 +363,7 @@ def test_kmeans_deterministic():
 
 def _load_query_lang():
     path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "ida_mcp", "tools", "query_lang.py")
+                        "ida_pro_mcp", "ida_mcp", "support", "query_lang.py")
     spec = importlib.util.spec_from_file_location("_ql_test", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

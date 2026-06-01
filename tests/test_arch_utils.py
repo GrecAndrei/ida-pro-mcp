@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 # Add source path so we can import arch_utils
 _tools_dir = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
-    "src", "ida_pro_mcp", "ida_mcp", "tools",
+    "src", "ida_pro_mcp", "ida_mcp", "support",
 )
 if _tools_dir not in sys.path:
     sys.path.insert(0, _tools_dir)

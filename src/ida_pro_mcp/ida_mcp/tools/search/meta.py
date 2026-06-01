@@ -11,9 +11,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ..semantic_matching import semantic_score
+    from ...support.semantic_matching import semantic_score
 except ImportError:
-    from semantic_matching import semantic_score  # type: ignore[import-not-found]
+    from support.semantic_matching import semantic_score  # type: ignore[import-not-found]
 
 from .core import (
     clip_text, paginate_records, build_response, resolve_target,

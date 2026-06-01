@@ -21,9 +21,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ..semantic_matching import normalize_action
+    from ...support.semantic_matching import normalize_action
 except ImportError:
-    from semantic_matching import normalize_action  # type: ignore[import-not-found]
+    from support.semantic_matching import normalize_action  # type: ignore[import-not-found]
 
 from .core import (
     SEARCH_ACTIONS, SEARCH_ALIASES, SEARCH_INTENT_PATTERNS,
@@ -36,7 +36,7 @@ from .refs import search_data_ref, search_code_ref, search_regex, search_func_by
 from .unified import search_find, search_semantic, search_callers, search_callees, search_api
 from .advanced import search_vulnerable, search_constants, search_decompiled, search_structured
 from .meta import search_type, search_export, search_summary
-from ..query_lang import run_query_lang
+from ...support.query_lang import run_query_lang
 
 # ============================================================================
 # L1 Insight Index Pre-filtering

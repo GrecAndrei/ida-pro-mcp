@@ -18,9 +18,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ..semantic_matching import normalize_action, semantic_score, semantic_tokens
+    from ...support.semantic_matching import normalize_action, semantic_score, semantic_tokens
 except ImportError:
-    from semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
+    from support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
 
 # ============================================================================
 # VOERA: Module-Level Caches

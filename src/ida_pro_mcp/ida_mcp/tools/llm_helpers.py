@@ -28,9 +28,9 @@ def _adaptive_score_gate(vals):
 # ============================================================================
 
 try:
-    from ._api_categories import API_CATEGORIES as _API_CATEGORIES
+    from ..support._api_categories import API_CATEGORIES as _API_CATEGORIES
 except ImportError:
-    from _api_categories import API_CATEGORIES as _API_CATEGORIES  # type: ignore[import-not-found]
+    from support._api_categories import API_CATEGORIES as _API_CATEGORIES  # type: ignore[import-not-found]
 
 try:
     from ...host.context_density import ContextDensityOptimizer

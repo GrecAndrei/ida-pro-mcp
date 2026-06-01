@@ -98,7 +98,7 @@ def _build_where_clause(constraints: Dict) -> Tuple[str, List[object]]:
     Delegates to HybridQueryBuilder.build_legacy (the single canonical
     implementation) so we don't drift from schemaboot's query dialect.
     """
-    from .hybrid_search import HybridQueryBuilder
+    from ..support.hybrid_search import HybridQueryBuilder
     return HybridQueryBuilder.build_legacy(constraints or {})
 
 

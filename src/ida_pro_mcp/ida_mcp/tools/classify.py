@@ -10,9 +10,9 @@ except ImportError:
 # ============================================================================
 
 try:
-    from ._api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY
+    from ..support._api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY
 except ImportError:
-    from _api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY  # type: ignore[import-not-found]
+    from support._api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY  # type: ignore[import-not-found]
 
 
 def _get_func_callees(func_ea, max_items=200):

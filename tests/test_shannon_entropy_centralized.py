@@ -26,6 +26,7 @@ import re
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 TOOLS = os.path.join(ROOT, "src", "ida_pro_mcp", "ida_mcp", "tools")
+SUPPORT = os.path.join(ROOT, "src", "ida_pro_mcp", "ida_mcp", "support")
 
 
 def _read(path):
@@ -118,7 +119,7 @@ def test_string_ops_underscore_alias_preserved():
 
 def test_firmware_heuristics_shannon_entropy_unique_signature():
     """firmware_heuristics.shannon_entropy takes (byte_hist, total) — not bytes."""
-    src = _read(os.path.join(TOOLS, "firmware_heuristics.py"))
+    src = _read(os.path.join(SUPPORT, "firmware_heuristics.py"))
     funcs = _functions(src)
     assert "shannon_entropy" in funcs
     # The signature contains generics like List[int] so we can't use [^)]+ — match
@@ -188,15 +189,16 @@ def test_callers_no_longer_import_math():
 def test_no_other_module_locally_defines_shannon_entropy():
     """No module other than the 3 intentional ones still has a local def."""
     exempt = {"string_ops.py", "firmware_heuristics.py", "trace_analysis.py"}
-    for name in os.listdir(TOOLS):
-        if not name.endswith(".py"):
-            continue
-        if name in exempt:
-            continue
-        path = os.path.join(TOOLS, name)
-        src = _read(path)
-        # Top-level `def _shannon_entropy(` or `def shannon_entropy(`
-        assert not re.search(r"^def\s+_?shannon_entropy\s*\(", src, re.MULTILINE), (
-            f"{name} still defines shannon_entropy locally; "
-            f"should `from .string_ops import shannon_entropy as _shannon_entropy` instead"
-        )
+    for directory in (TOOLS, SUPPORT):
+        for name in os.listdir(directory):
+            if not name.endswith(".py"):
+                continue
+            if name in exempt:
+                continue
+            path = os.path.join(directory, name)
+            src = _read(path)
+            # Top-level `def _shannon_entropy(` or `def shannon_entropy(`
+            assert not re.search(r"^def\s+_?shannon_entropy\s*\(", src, re.MULTILINE), (
+                f"{name} still defines shannon_entropy locally; "
+                f"should `from .string_ops import shannon_entropy as _shannon_entropy` instead"
+            )

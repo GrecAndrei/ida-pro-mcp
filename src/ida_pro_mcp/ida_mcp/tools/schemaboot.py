@@ -568,7 +568,7 @@ def _build_where_clause(constraints: dict[str, Any]) -> tuple[str, list[Any]]:
     Canonical implementation is delegated to HybridQueryBuilder to avoid
     drift between schemaboot and hybrid_search constraint semantics.
     """
-    from .hybrid_search import HybridQueryBuilder
+    from ..support.hybrid_search import HybridQueryBuilder
 
     normalized = dict(constraints or {})
     addr = normalized.pop("addr", None)
@@ -786,7 +786,7 @@ def schemaboot(
             # Use HybridSearchEngine for Phase 1 + Phase 2 BM25 when we have semantic terms
             if _query_apis or _query_strings:
                 try:
-                    from .hybrid_search import HybridSearchEngine
+                    from ..support.hybrid_search import HybridSearchEngine
                     engine = HybridSearchEngine(db_path)
                     ranked = engine.search_ranked(
                         constraints or {},

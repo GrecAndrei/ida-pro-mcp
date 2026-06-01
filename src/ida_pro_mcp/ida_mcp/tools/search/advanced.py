@@ -284,7 +284,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
 
 def _sql_filterable_keys() -> set:
     """Return set of constraint keys that can be filtered at the SQL level."""
-    from ..hybrid_search import SQL_FILTERABLE_COLUMNS, JUNCTION_TABLES, LEGACY_RANGE_PREFIXES
+    from ...support.hybrid_search import SQL_FILTERABLE_COLUMNS, JUNCTION_TABLES, LEGACY_RANGE_PREFIXES
     keys = set(SQL_FILTERABLE_COLUMNS.keys())
     keys.update(JUNCTION_TABLES.keys())
     keys.update(LEGACY_RANGE_PREFIXES.keys())
@@ -345,7 +345,7 @@ def _sql_pre_filter_functions(
         return None, {"note": "db_not_found", "db_path": db_path}
 
     try:
-        from ..hybrid_search import HybridSearchEngine
+        from ...support.hybrid_search import HybridSearchEngine
         engine = HybridSearchEngine(db_path)
         eas, elapsed_ms, meta = engine.pre_filter(sql_constraints)
         if eas is None:

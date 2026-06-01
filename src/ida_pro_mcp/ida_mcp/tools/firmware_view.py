@@ -26,7 +26,7 @@ import time
 import uuid
 
 try:
-    from .firmware_heuristics import (
+    from ..support.firmware_heuristics import (
         ascii_run_stats,
         build_campaign_execution_plan,
         build_carve_plan,
@@ -41,7 +41,7 @@ try:
         shannon_entropy,
     )
 except ImportError:
-    from firmware_heuristics import (  # type: ignore[import-not-found]
+    from support.firmware_heuristics import (  # type: ignore[import-not-found]
         ascii_run_stats,
         build_campaign_execution_plan,
         build_carve_plan,
