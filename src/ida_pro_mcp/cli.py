@@ -163,11 +163,13 @@ def main() -> int:
             "  ida-pro-mcp-cli rpc tools/list '{}'\n"
             "  ida-pro-mcp-cli tool session '{\"action\":\"status\"}'\n"
             "  ida-pro-mcp-cli raw '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'\n"
+            "  ida-pro-mcp-cli intelligence status\n"
+            "  ida-pro-mcp-cli capsule semantic-summary project.sideband --json\n"
         ),
     )
     parser.add_argument(
         "mode",
-        choices=("rpc", "tool", "raw", "tools-list"),
+        choices=("rpc", "tool", "raw", "tools-list", "intelligence", "capsule"),
         help="Request type to execute",
     )
     parser.add_argument("name", nargs="?", help="RPC method or MCP tool name")
@@ -192,13 +194,35 @@ def main() -> int:
         default=None,
         help="Override JSON-RPC request id",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "extra",
+        nargs="*",
+        help="Additional args (used by capsule mode)",
+    )
+    if "capsule" in sys.argv[1:2]:
+        args, unknown = parser.parse_known_args()
+    else:
+        args = parser.parse_args()
+        unknown = []
 
     payload = None
-    if args.stdin_json:
-        payload = _read_stdin_json(label=args.mode)
-    elif args.payload is not None:
-        payload = _load_json_arg(args.payload, label="payload")
+    if args.mode != "capsule":
+        if args.stdin_json:
+            payload = _read_stdin_json(label=args.mode)
+        elif args.payload is not None:
+            payload = _load_json_arg(args.payload, label="payload")
+
+    if args.mode == "capsule":
+        from ida_pro_mcp.capsule.cli import main as capsule_main
+
+        capsule_args = []
+        if args.name:
+            capsule_args.append(args.name)
+        if args.payload is not None:
+            capsule_args.append(args.payload)
+        capsule_args.extend(args.extra)
+        capsule_args.extend(unknown)
+        return int(capsule_main(capsule_args))
 
     client = MCPStdioClient(_server_cmd())
     try:
@@ -240,6 +264,43 @@ def main() -> int:
             response = client.call(
                 "tools/call",
                 {"name": args.name, "arguments": payload if payload is not None else {}},
+                request_id=args.request_id,
+            )
+            _print_json(_normalize_tool_result(response), pretty=args.pretty)
+            return 0
+
+        if args.mode == "intelligence":
+            action = str(args.name or "status").strip().lower()
+            action_map = {
+                "status": "intelligence_status",
+                "embedder_status": "embedder_status",
+                "anchor_status": "anchor_status",
+                "doctor": "embedder_status",
+            }
+            mapped = action_map.get(action, action)
+            if mapped not in {
+                "intelligence_status",
+                "embedder_status",
+                "anchor_status",
+                "refresh_anchors",
+                "classify_text",
+                "classify_function",
+                "index_function",
+                "index_batch",
+                "similar_functions",
+                "export_index_summary",
+                "evidence_card",
+            }:
+                raise SystemExit(f"unsupported intelligence action: {action}")
+            tool_args = payload if isinstance(payload, dict) else {}
+            tool_args = dict(tool_args)
+            tool_args["action"] = mapped
+            if action == "doctor":
+                tool_args.setdefault("probe", True)
+                tool_args.setdefault("deep_hash", False)
+            response = client.call(
+                "tools/call",
+                {"name": "agent", "arguments": tool_args},
                 request_id=args.request_id,
             )
             _print_json(_normalize_tool_result(response), pretty=args.pretty)

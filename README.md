@@ -69,6 +69,16 @@ ida-pro-mcp-cli tool agent '{"action":"intelligence_status"}'
 python -m ida_pro_mcp.capsule.cli semantic-summary project.sideband --json
 ```
 
+MCP demo workflow:
+
+1. `session(action="create", binary_path="/abs/path/to/binary")`
+2. `code(action="decompile", addr="0x401000")`
+3. `agent(action="classify_function", addr="0x401000")`
+4. `agent(action="similar_functions", addr="0x401000")`
+5. `blackboard(action="write", title="finding", content="...")`
+6. `agent(action="evidence_card", addr="0x401000")`
+7. `python -m ida_pro_mcp.capsule.cli semantic-summary project.sideband --json`
+
 ## Why LLM Agents Use It
 
 Without MCP, an LLM has to infer analysis state from screenshots, logs, and pasted snippets.

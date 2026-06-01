@@ -1,8 +1,10 @@
 import os
 import sys
+import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import ida_pro_mcp.cli as cli_mod
 from ida_pro_mcp.cli import _normalize_tool_result
 
 
@@ -55,3 +57,56 @@ def test_normalize_tool_result_keeps_non_text_items():
         ],
         "isError": False,
     }
+
+
+def test_cli_intelligence_status_shortcut(monkeypatch, capsys):
+    calls = []
+
+    class _FakeClient:
+        def __init__(self, _cmd):
+            pass
+
+        def call(self, method, params=None, request_id=None):
+            calls.append((method, params, request_id))
+            if method == "initialize":
+                return {"result": {"ok": True}}
+            return {
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps({"ok": True, "echo": params})}],
+                    "isError": False,
+                }
+            }
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(cli_mod, "MCPStdioClient", _FakeClient)
+    monkeypatch.setattr(sys, "argv", ["ida-pro-mcp-cli", "intelligence", "status"])
+    rc = cli_mod.main()
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "intelligence_status" in out
+    # initialize + tools/call
+    assert any(c[0] == "tools/call" for c in calls)
+
+
+def test_cli_capsule_passthrough(monkeypatch):
+    captured = {}
+
+    def _fake_capsule_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    import ida_pro_mcp.capsule.cli as cap_cli
+
+    monkeypatch.setattr(cap_cli, "main", _fake_capsule_main)
+    monkeypatch.setattr(sys, "argv", [
+        "ida-pro-mcp-cli",
+        "capsule",
+        "semantic-summary",
+        "project.sideband",
+        "--json",
+    ])
+    rc = cli_mod.main()
+    assert rc == 0
+    assert captured["argv"] == ["semantic-summary", "project.sideband", "--json"]
