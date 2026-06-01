@@ -256,6 +256,301 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
     }
 
 
+# =============================================================================
+# Chip-aware post-load bootstrap helpers (formerly firmware_bootstrap.py)
+# =============================================================================
+
+
+try:
+    from typing import List, Dict
+except ImportError:  # Python 3.9+
+    pass
+
+
+def _fwb_safe_bounds() -> tuple[int, int]:
+    try:
+        mn = int(_inf_min_ea())
+        mx = int(_inf_max_ea())
+        if mn == 0 and mx == 0:
+            raise ValueError("inf returned 0,0")
+        return mn, mx
+    except Exception:
+        for ea in idautils.Segments():
+            seg = idaapi.getseg(ea)
+            if seg:
+                return seg.start_ea, seg.end_ea
+        return 0, 0
+
+
+def _fwb_int_addr(v: Any) -> Optional[int]:
+    try:
+        if isinstance(v, str):
+            return int(v, 16) if v.lower().startswith("0x") else int(v)
+        return int(v)
+    except Exception:
+        return None
+
+
+def _fwb_annotate_mmio(peripherals: List[Dict[str, Any]]) -> Dict[str, Any]:
+    annotated = 0
+    for p in peripherals:
+        if not isinstance(p, dict):
+            continue
+        name = str(p.get("name") or p.get("peripheral_name") or "").strip()
+        base = _fwb_int_addr(p.get("addr") or p.get("base"))
+        if not name or base is None:
+            continue
+        sym = name.upper().replace(" ", "_")
+        if not sym.endswith("_BASE"):
+            sym += "_BASE"
+        idc.set_name(base, sym, ida_name.SN_FORCE)
+        idc.set_cmt(base, f"MMIO base for {name}", 1)
+        annotated += 1
+    return {"peripherals_annotated": annotated}
+
+
+def _fwb_define_ascii_strings(limit: int = 256) -> Dict[str, Any]:
+    try:
+        idaapi.build_strlist()
+    except Exception:
+        pass
+    defined = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else 0
+    return {"strings_defined": min(defined, limit)}
+
+
+def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
+    res = firmware_view(action="detect_vector_table", auto_blackboard=False)
+    vectors = res.get("vectors") if isinstance(res, dict) else []
+    if not isinstance(vectors, list):
+        vectors = []
+
+    mn, mx = _fwb_safe_bounds()
+    created = 0
+    entries = 0
+    reset_addr = None
+    code_failures = []
+    func_failures = []
+
+    # Fix ALL segments: ensure CODE type/class/perm so create_insn() and
+    # add_func() work. IDA's processor-module loader creates BSS/DATA
+    # segments for raw binaries; we upgrade every segment here.
+    seg_fix_count = 0
+    for seg_ea in idautils.Segments():
+        try:
+            seg = idaapi.getseg(seg_ea)
+            if not seg:
+                continue
+            cur_class = ida_segment.get_segm_class(seg)
+            if cur_class != "CODE":
+                ida_segment.set_segm_class(seg, "CODE")
+            if seg.type != idaapi.SEG_CODE:
+                seg.type = idaapi.SEG_CODE
+                ida_segment.update_segm(seg)
+            if not (seg.perm & idaapi.SEGPERM_EXEC):
+                seg.perm |= idaapi.SEGPERM_EXEC
+                ida_segment.update_segm(seg)
+            seg_fix_count += 1
+        except Exception:
+            pass
+
+    handler_addrs = []
+    skipped_oob = []
+    for vec in vectors:
+        if not isinstance(vec, dict):
+            continue
+        if str(vec.get("type") or "") == "stack_pointer":
+            continue
+        h = _fwb_int_addr(vec.get("handler") or vec.get("value"))
+        if h is None or h < mn or h >= mx:
+            skipped_oob.append(hex(vec.get("handler") or vec.get("value") or 0))
+            continue
+        handler_addrs.append((h, vec))
+
+    if handler_addrs:
+        try:
+            proc = (_inf_procname() or "").lower()
+        except Exception:
+            proc = ""
+        if "arm" in proc:
+            try:
+                sr_auto = getattr(idc, "SR_auto", 2)
+                idc.split_sreg_range(mn, "T", 1, sr_auto)
+            except Exception:
+                try:
+                    import ida_segregs
+                    ida_segregs.split_sreg_range(mn, "T", 1, 2)
+                except Exception:
+                    pass
+        for h, _ in handler_addrs:
+            if "arm" in proc:
+                try:
+                    sr_auto = getattr(idc, "SR_auto", 2)
+                    idc.split_sreg_range(h, "T", 1, sr_auto)
+                except Exception:
+                    try:
+                        import ida_segregs
+                        ida_segregs.split_sreg_range(h, "T", 1, 2)
+                    except Exception:
+                        pass
+        for h, _ in handler_addrs:
+            if not ida_bytes.is_code(ida_bytes.get_flags(h)):
+                created_insn = False
+                try:
+                    import ida_ua
+                    insn_len = ida_ua.create_insn(h)
+                    created_insn = insn_len > 0
+                except Exception:
+                    pass
+                if not created_insn:
+                    try:
+                        insn_len = idc.create_insn(h)
+                        created_insn = insn_len > 0
+                    except Exception:
+                        pass
+                if not created_insn:
+                    code_failures.append(hex(h))
+                if not created_insn:
+                    try:
+                        ida_bytes.del_items(h, ida_bytes.DELIT_SIMPLE, 16)
+                        if hasattr(ida_auto, "auto_make_code"):
+                            ida_auto.auto_make_code(h)
+                    except Exception:
+                        pass
+                    try:
+                        import ida_ua
+                        insn_len = ida_ua.create_insn(h)
+                        created_insn = insn_len > 0
+                    except Exception:
+                        created_insn = idc.create_insn(h) > 0
+
+    add_func_results = []
+    for h, vec in handler_addrs:
+        fn = ida_funcs.get_func(h)
+        if not fn:
+            ok = ida_funcs.add_func(h)
+            if not ok:
+                try:
+                    bound = min(h + 256, mx)
+                    ok = ida_funcs.add_func(h, bound)
+                except Exception:
+                    pass
+            add_func_results.append({"addr": hex(h), "ok": bool(ok), "is_code": ida_bytes.is_code(ida_bytes.get_flags(h))})
+            if ok:
+                created += 1
+                fn = ida_funcs.get_func(h)
+            else:
+                func_failures.append(hex(h))
+        if fn:
+            entries += 1
+            idx = int(vec.get("index", -1) or -1)
+            if idx == 1:
+                idc.set_name(fn.start_ea, "Reset_Handler", ida_name.SN_FORCE)
+                reset_addr = fn.start_ea
+            elif idx > 1:
+                nm = str(vec.get("name") or "")
+                if nm and nm.endswith("_Handler"):
+                    idc.set_name(fn.start_ea, nm, ida_name.SN_FORCE)
+    primary_seg_ea = mn if mn > 0 else next(idautils.Segments(), idaapi.BADADDR)
+    primary_seg = idaapi.getseg(primary_seg_ea) if primary_seg_ea != idaapi.BADADDR else None
+    seg_code_verified = bool(
+        primary_seg and primary_seg.type == idaapi.SEG_CODE
+    ) if primary_seg else False
+    seg_class_verified = str(ida_segment.get_segm_class(primary_seg)) if primary_seg else "N/A"
+    seg_count = seg_fix_count
+
+    result = {
+        "vectors_detected": len(vectors),
+        "entry_points_defined": entries,
+        "functions_created": created,
+        "segment_code_flag": seg_code_verified,
+        "segment_class": seg_class_verified,
+        "segments_fixed": seg_count,
+        "reset_handler": (hex(reset_addr) if reset_addr is not None else None),
+    }
+    if code_failures or func_failures or skipped_oob or not seg_code_verified:
+        result["_debug"] = {
+            "handler_count": len(handler_addrs),
+            "segments_fixed": seg_count,
+            "primary_seg_code": seg_code_verified,
+            "primary_seg_class": seg_class_verified,
+            "skipped_oob": skipped_oob[:10],
+            "add_func_sample": add_func_results[:10],
+            "code_failures": code_failures[:10],
+            "func_failures": func_failures[:10],
+        }
+        if not seg_code_verified:
+            result["_debug"]["segment_note"] = (
+                "Segment was not CODE after fix attempt. create_insn/add_func will likely fail. "
+                "Try setting the processor/loader with -Tbin before calling firmware_view(bootstrap)."
+            )
+        result["_status"] = "partial" if (created > 0 or entries > 0) else "failed"
+    return result
+
+
+def _fwb_base_bootstrap_report(chip_family: str, load_base: Optional[int], actions: List[str]) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "chip_family": chip_family,
+        "load_base": (hex(int(load_base)) if isinstance(load_base, int) else load_base),
+        "actions": list(actions),
+        "functions_created": 0,
+        "entry_points_defined": 0,
+        "peripherals_annotated": 0,
+        "strings_defined": 0,
+        "reset_handler": None,
+        "details": {},
+    }
+
+
+def run_firmware_bootstrap(
+    chip_family: str,
+    load_base: Optional[int] = None,
+    memory_map: Optional[List[Dict[str, Any]]] = None,
+    peripheral_addresses: Optional[List[Dict[str, Any]]] = None,
+    post_load_actions: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    actions = list(post_load_actions or ["define_vector_table", "annotate_mmio", "reanalyze", "define_strings"])
+    report: Dict[str, Any] = _fwb_base_bootstrap_report(chip_family, load_base, actions)
+    report["processor"] = str(_inf_procname() or "")
+
+    for action in actions:
+        if action == "define_vector_table":
+            r = _fwb_run_vector_bootstrap()
+            report["details"][action] = r
+            report["functions_created"] += int(r.get("functions_created", 0) or 0)
+            report["entry_points_defined"] += int(r.get("entry_points_defined", 0) or 0)
+            report["reset_handler"] = report.get("reset_handler") or r.get("reset_handler")
+        elif action == "annotate_mmio":
+            r = _fwb_annotate_mmio(list(peripheral_addresses or []))
+            report["details"][action] = r
+            report["peripherals_annotated"] += int(r.get("peripherals_annotated", 0) or 0)
+        elif action == "reanalyze":
+            try:
+                import ida_auto as _ida_auto
+                mn, mx = _fwb_safe_bounds()
+                if mn < mx:
+                    if hasattr(_ida_auto, "plan_range"):
+                        _ida_auto.plan_range(mn, mx)
+                    elif hasattr(_ida_auto, "auto_mark_range"):
+                        _ida_auto.auto_mark_range(mn, mx, _ida_auto.AU_FINAL)
+                report["details"][action] = {"ok": True, "note": "scheduled (non-blocking)"}
+            except Exception as e:
+                report["details"][action] = {"ok": False, "error": str(e)}
+        elif action == "define_strings":
+            r = _fwb_define_ascii_strings()
+            report["details"][action] = r
+            report["strings_defined"] += int(r.get("strings_defined", 0) or 0)
+        else:
+            report["details"][action] = {"ok": False, "note": "unknown action"}
+
+    try:
+        fn_count = sum(1 for _ in idautils.Functions())
+    except Exception:
+        fn_count = -1
+    report["function_count_after"] = fn_count
+    return report
+
+
 @tool
 @idawrite
 def firmware_view(
@@ -1974,10 +2269,8 @@ def firmware_view(
 
         if action == "bootstrap":
             # Explicit bootstrap entrypoint for already-loaded binaries.
-            try:
-                from .firmware_bootstrap import run_firmware_bootstrap
-            except Exception:
-                from firmware_bootstrap import run_firmware_bootstrap  # type: ignore
+            # `run_firmware_bootstrap` is defined in this module (formerly in
+            # the deleted `firmware_bootstrap.py` tool).
             try:
                 from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile
             except Exception:

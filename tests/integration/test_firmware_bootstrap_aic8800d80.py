@@ -34,7 +34,7 @@ import ida_segment
 import ida_bytes
 import ida_funcs
 import ida_name
-from firmware_bootstrap import run_firmware_bootstrap
+from firmware_view import run_firmware_bootstrap  # formerly firmware_bootstrap.run_firmware_bootstrap
 from ida_pro_mcp.host.chip_db import find_chip_profile
 
 min_ea = idaapi.inf_get_min_ea()

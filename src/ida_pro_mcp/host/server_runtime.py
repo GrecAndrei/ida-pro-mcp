@@ -1234,15 +1234,16 @@ for seg_ea in idautils.Segments():
                 chip_family = str(opts.get("chip_family") or bootstrap_knowledge.get("chip_family") or "").strip()
                 if chip_family:
                     fw_args = {
+                        "action": "bootstrap",
                         "chip_family": chip_family,
                         "load_base": opts.get("baseaddr"),
                         "memory_map": opts.get("memory_map") or [],
                         "peripheral_addresses": opts.get("peripheral_addresses") or [],
                         "post_load_actions": opts.get("post_load_actions") or [],
                     }
-                    fw_res = self._send_rpc_raw({"tool": "firmware_bootstrap", "args": fw_args}, port)
+                    fw_res = self._send_rpc_raw({"tool": "firmware_view", "args": fw_args}, port)
                     if isinstance(fw_res, dict) and not fw_res.get("error"):
-                        bootstrap_report = fw_res
+                        bootstrap_report = fw_res.get("bootstrap_report") or fw_res
             except Exception:
                 bootstrap_report = None
 

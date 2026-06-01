@@ -61,7 +61,11 @@ result = {{
         "name": search_loaded[1],
         "error": search_loaded[2],
     }},
-    "firmware_bootstrap_loaded": "firmware_bootstrap" in loaded_tools,
+    "firmware_view_loaded": "firmware_view" in loaded_tools,
+    "firmware_bootstrap_alias_resolved": (
+        "firmware_bootstrap" not in loaded_tools
+        and "firmware_view" in loaded_tools
+    ),
     "firmware_import_errors": firmware_import_errors,
 }}
 
@@ -76,6 +80,8 @@ with open(RESULT_PATH, "w") as f:
     assert result.get("search_loaded", {}).get("name") == "search", result
     assert result.get("search_loaded", {}).get("error") is None, result
     assert int(result.get("tool_count", 0)) >= 10, result
+    assert result.get("firmware_view_loaded") is True, result
+    assert result.get("firmware_bootstrap_alias_resolved") is True, result
 
 
 def test_inf_readiness_pe():

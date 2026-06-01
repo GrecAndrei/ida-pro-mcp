@@ -70,7 +70,6 @@ __all__ = [
     "filter",
     "governance",
     "knowledge",
-    "firmware_bootstrap",
 ]
 
 # Mapping from tool name to module name (when they differ)

@@ -392,7 +392,7 @@ def test_firmware_suite(mcp_client):
         warnings.warn(
             f"firmware bootstrap returned function_count_after=0 — likely caused by "
             f"idaapi.auto_wait() crashing IDA in socket server context. "
-            f"Fix: replace auto_wait calls in firmware_bootstrap.py with non-blocking checks."
+            f"Fix: replace auto_wait calls in firmware_view._fwb_run_vector_bootstrap with non-blocking checks."
         )
 
     mcp_client.call_tool("session", action="create", binary_path=TEST_BINARY)
