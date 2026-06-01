@@ -1,7 +1,7 @@
 """
 ContextAssembler policy / focus feedback mixin.
 
-Extracted from intelligence_context_state.py to keep state orchestration focused
+Extracted from intelligence_context.py to keep state orchestration focused
 on enrichment and retrieval flow.
 """
 
