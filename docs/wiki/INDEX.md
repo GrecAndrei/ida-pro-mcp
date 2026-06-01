@@ -50,8 +50,6 @@ Auto-generated from wiki file structure.
 
 - [colorize](tools/colorize.md)
 
-- [comment_mgr](tools/comment_mgr.md)
-
 - [compare](tools/compare.md)
 
 - [coverage](tools/coverage.md)

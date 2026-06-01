@@ -12,7 +12,7 @@ This project keeps a small canonical MCP surface and supports older names via al
 
 - `plugins` -> `misc` (use `misc(action="plugin_list"|"plugin_run")`)
 - `xfer_analysis` -> `xref_analysis`
-- `comments_ai` -> `comment_mgr`
+- `comments_ai` -> `annotation`
 - `annotations_ai` -> `annotation`
 - `strings_xref` -> `xref_analysis`
 - `emulate` -> `static_trace`
@@ -21,8 +21,7 @@ This project keeps a small canonical MCP surface and supports older names via al
 ## Workflow Canonicals
 
 - Commenting and annotation
-  - Canonical: `comment_mgr` for comment CRUD/export/import
-  - Canonical: `annotation` for bulk semantic annotation passes
+  - Canonical: `annotation` for comment CRUD/export/import + bulk semantic annotation passes
   - Keep `modify(action="comment")` as low-level primitive
 
 - Tracing and coverage
@@ -43,7 +42,6 @@ Added action alias normalization for overlapping terms on:
 - `agent`
 - `llm_helpers`
 - `trace_analysis`
-- `comment_mgr`
 - `annotation`
 
 This reduces duplicate action naming in clients without widening the canonical API.

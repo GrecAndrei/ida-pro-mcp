@@ -741,7 +741,6 @@ _TOOL_CATEGORY_ADVANCED = {
     "lumina",
     "export",
     "history",
-    "comment_mgr",
     "colorize",
     "data_ops",
     "fixups",

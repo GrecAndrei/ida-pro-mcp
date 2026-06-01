@@ -37,7 +37,6 @@ __all__ = [
     "history",
     "entropy",
     "imports_deep",
-    "comment_mgr",
     "nav",
     "colorize",
     "trace_analysis",

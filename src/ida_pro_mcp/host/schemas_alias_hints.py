@@ -192,14 +192,15 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         "analyze_coverage": {"coverage", "coverage_report", "analyze_trace"},
         "extract_api_calls": {"api_calls", "apis", "extract_apis"},
     },
-    "comment_mgr": {
-        "get_context": {"context", "comments_context", "comment_context"},
-        "set_structured": {"set_comment", "annotate", "comment"},
-        "bulk_set": {"bulk_comment", "set_many", "annotate_many"},
-    },
     "annotation": {
         "auto_comment": {"comment", "annotate", "auto_annotate"},
         "cleanup": {"clean", "sanitize", "normalize"},
+        "get_context": {"context", "comments_context", "comment_context"},
+        "set_structured": {"set_comment", "comment"},
+        "bulk_set": {"bulk_comment", "set_many", "annotate_many"},
+        "export_md": {"export_comments", "md_export"},
+        "import_md": {"import_comments", "md_import"},
+        "summary": {"comment_summary", "coverage_stats"},
     },
     "search": {
         "bytes": {"byte", "opcode_bytes", "hex_bytes"},

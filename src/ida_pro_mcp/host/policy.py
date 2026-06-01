@@ -53,7 +53,6 @@ READ_ONLY_TOOLS = {
     "cfg_analysis",
     "classify",
     "code",
-    "comment_mgr",
     "compare",
     "coverage",
     "crypto_id",

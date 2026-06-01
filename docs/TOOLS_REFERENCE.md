@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Current canonical tool surface: **72 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
+Current canonical tool surface: **71 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
 
 Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `build_input_schema`).
 
@@ -17,7 +17,7 @@ Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `buil
 |---|---|
 | `plugins` | `misc` |
 | `xfer_analysis` | `xref_analysis` |
-| `comments_ai` | `comment_mgr` |
+| `comments_ai` | `annotation` |
 | `emulate` | `static_trace` |
 | `edit` | *(delegated to `modify`, `funcs`, `bulk`)* |
 
@@ -141,7 +141,7 @@ Bulk rename/comment/type operations. Supports `continue_on_error` for resilient 
 ### annotation
 Intelligent bulk annotation (writes to DB, supports dry_run). Includes neuro-symbolic validation for contradiction and PII detection.
 
-**Actions:** auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup
+**Actions:** auto_comment, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, get_context, set_structured, bulk_set, export_md, import_md, summary
 
 ---
 
@@ -280,11 +280,6 @@ Database export in multiple formats.
 Undo/redo and database snapshots with diff support.
 
 **Actions:** undo, redo, list, snapshot, restore, diff
-
-### comment_mgr
-Comment management with structured context, bulk operations, and Markdown import/export. Legacy alias: `comments_ai`.
-
-**Actions:** get_context, set_structured, bulk_set, export_md, import_md, summary
 
 ### colorize
 Visual highlighting for functions, ranges, instructions, and patterns.
