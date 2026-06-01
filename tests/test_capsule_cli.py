@@ -224,3 +224,18 @@ def test_capsule_cli_export_analysis(tmp_path, capsys):
         summary = dst.inspect_summary()
         assert summary["objects"] == 0
         assert summary["semantic_vectors"] == 0
+
+
+def test_capsule_cli_list_evidence(tmp_path, capsys):
+    capsule = tmp_path / "evidence-list.sideband"
+    assert main(["init", str(capsule), "--project-name", "x"]) == 0
+    capsys.readouterr()
+
+    with CapsuleStore.open(capsule) as c:
+        c.add_evidence_card(claim="http", claim_type="behavior_triage", confidence=0.6)
+        c.add_evidence_card(claim="cfg", claim_type="control_flow", confidence=0.5)
+
+    assert main(["list-evidence", str(capsule), "--json", "--claim-type", "behavior_triage", "--limit", "5"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 1
+    assert rows[0]["claim_type"] == "behavior_triage"

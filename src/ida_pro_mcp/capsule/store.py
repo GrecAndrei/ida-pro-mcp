@@ -421,6 +421,37 @@ class CapsuleStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_evidence_cards(self, limit: int = 100, claim_type: str = "") -> list[dict]:
+        self._assert_initialized()
+        lim = max(1, min(int(limit or 100), 5000))
+        params: list[Any] = []
+        sql = (
+            "SELECT id, created_at, updated_at, claim, claim_type, confidence, "
+            "evidence_json, source_refs_json, metadata_json FROM evidence_cards"
+        )
+        if claim_type:
+            sql += " WHERE claim_type=?"
+            params.append(str(claim_type))
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(lim)
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        out = []
+        for row in rows:
+            out.append(
+                {
+                    "id": str(row["id"]),
+                    "created_at": str(row["created_at"]),
+                    "updated_at": str(row["updated_at"]),
+                    "claim": str(row["claim"]),
+                    "claim_type": str(row["claim_type"]),
+                    "confidence": float(row["confidence"]),
+                    "evidence": json.loads(str(row["evidence_json"] or "[]")),
+                    "source_refs": json.loads(str(row["source_refs_json"] or "[]")),
+                    "metadata": json.loads(str(row["metadata_json"] or "{}")),
+                }
+            )
+        return out
+
     def semantic_summary(self) -> dict:
         self._assert_initialized()
         get_count = lambda table: int(self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])

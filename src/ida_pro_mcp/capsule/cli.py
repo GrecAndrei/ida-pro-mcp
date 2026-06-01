@@ -63,6 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     sem_manifest_p = sub.add_parser("export-semantic-manifest", help="export semantic summary+index manifest")
     sem_manifest_p.add_argument("capsule")
 
+    evidence_p = sub.add_parser("list-evidence", help="list evidence cards")
+    evidence_p.add_argument("capsule")
+    evidence_p.add_argument("--json", action="store_true", dest="as_json")
+    evidence_p.add_argument("--limit", type=int, default=100)
+    evidence_p.add_argument("--claim-type", default="")
+
     import_idx_p = sub.add_parser("import-function-index", help="import a .embeddings.db into capsule semantic tables")
     import_idx_p.add_argument("capsule")
     import_idx_p.add_argument("index_db")
@@ -168,6 +174,18 @@ def main(argv: list[str] | None = None) -> int:
                     "semantic_indexes": c.list_semantic_indexes(),
                 }
             print(json.dumps(payload, indent=2))
+            return 0
+
+        if args.command == "list-evidence":
+            with CapsuleStore.open(Path(args.capsule)) as c:
+                rows = c.list_evidence_cards(limit=int(args.limit), claim_type=str(args.claim_type or ""))
+            if args.as_json:
+                print(json.dumps(rows, indent=2))
+            else:
+                if not rows:
+                    print("(no evidence cards)")
+                for row in rows:
+                    print(f"{row.get('id')} {row.get('claim_type')} conf={row.get('confidence')} claim={row.get('claim')}")
             return 0
 
         if args.command == "import-function-index":

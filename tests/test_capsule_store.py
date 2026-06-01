@@ -450,3 +450,15 @@ def test_capsule_evidence_source_refs_preserve_non_ida_backend(tmp_path):
     assert refs and refs[0]["backend"] == "ghidra"
     assert refs[0]["binary_id"] == "prog-1"
     assert refs[0]["stable_ref"] == "FUN_401000"
+
+
+def test_capsule_list_evidence_cards_roundtrip(tmp_path):
+    capsule_path = tmp_path / "evidence.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="evidence")
+        c.add_evidence_card(claim="http parser", claim_type="behavior_triage", confidence=0.6)
+        c.add_evidence_card(claim="crypto", claim_type="behavior_triage", confidence=0.7)
+        c.add_evidence_card(claim="flow", claim_type="control_flow", confidence=0.8)
+        rows = c.list_evidence_cards(limit=2, claim_type="behavior_triage")
+    assert len(rows) == 2
+    assert all(r["claim_type"] == "behavior_triage" for r in rows)
