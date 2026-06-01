@@ -902,127 +902,30 @@ def code(
                 results.append({"ok": True, "addr": addr, "blocks": "\n".join(block_lines), "count": block_count})
             
             elif action == "analyze":
-                # Comprehensive function analysis
+                # Deprecated: the comprehensive analysis shape is now
+                # produced by `agent(action="analyze_function", addr=...)`
+                # which is the canonical one-stop shop. This branch is
+                # kept as a thin shim for back-compat — it just returns
+                # a decompile + a hint.
                 func = idaapi.get_func(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
-                
-                fname = ida_funcs.get_func_name(func.start_ea)
-                info = {"ok": True, "addr": hex_ea(func.start_ea), "name": fname, "size": hex_size(func.end_ea - func.start_ea)}
-                
-                # Decompile
-                cfunc = None
+                # Return a redirect marker so callers can update.
+                info = {
+                    "ok": True,
+                    "addr": hex_ea(func.start_ea),
+                    "deprecated": True,
+                    "hint": "code(action=\"analyze\") is deprecated; use agent(action=\"analyze_function\", addr=...) instead",
+                }
+                # Provide a quick decompile snapshot so the response
+                # is still useful.
                 try:
-                    cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
-                    info["pseudocode"] = str(cfunc) if cfunc else None
-                    if dec_err:
-                        info["decompiler_error"] = {
-                            "code": dec_err.get("code"),
-                            "message": dec_err.get("message"),
-                            "hint": dec_err.get("hint"),
-                        }
+                    cfunc, _ = _decompile_with_diagnostics(func.start_ea)
+                    if cfunc:
+                        info["pseudocode"] = str(cfunc)
                 except Exception:
-                    info["pseudocode"] = None
-                
-                # Prototype
-                try:
-                    info["prototype"] = get_prototype(func)
-                except Exception:
-                    info["prototype"] = None
-
-                # Enrichment (same as smart_decompile)
-                if cfunc and info.get("pseudocode"):
-                    pseudo = info["pseudocode"]
-                    import re as _re
-                    _KNOWN_APIS = [
-                        "malloc","free","memcpy","memset","strcpy","strncpy","sprintf","snprintf",
-                        "recv","send","socket","connect","bind","listen","accept","recvfrom","sendto",
-                        "fopen","fread","fwrite","fclose","system","exec","execve","popen",
-                        "CreateFile","ReadFile","WriteFile","VirtualAlloc","CreateProcess",
-                        "CryptEncrypt","CryptDecrypt","AES_encrypt","SHA256_Update","MD5_Update",
-                        "memcmp","strcmp","strstr","sscanf","gets","scanf","vsprintf",
-                    ]
-                    found_apis = [a for a in _KNOWN_APIS if a in pseudo]
-                    if found_apis:
-                        info["api_calls"] = found_apis[:12]
-                    xor_count = pseudo.count(" ^ ") + pseudo.count("^=")
-                    crypto_hints = []
-                    pseudo_lower = pseudo.lower()
-                    for algo, sigs in {"AES":["0x63636363","aes_encrypt"],"SHA256":["0x6a09e667","sha256"],
-                                       "MD5":["0xefcdab89","md5_"],"RC4":["rc4_"]}.items():
-                        if any(s.lower() in pseudo_lower for s in sigs):
-                            crypto_hints.append(algo)
-                    if xor_count >= 4:
-                        crypto_hints.append(f"XOR_heavy({xor_count})")
-                    if crypto_hints:
-                        info["crypto_hints"] = crypto_hints
-                    dangerous = []
-                    if any(a in found_apis for a in ["strcpy","sprintf","gets","scanf","vsprintf"]):
-                        dangerous.append("unsafe_string_ops")
-                    if any(a in found_apis for a in ["system","exec","execve","popen"]):
-                        dangerous.append("command_execution")
-                    if dangerous:
-                        info["dangerous_patterns"] = dangerous
-                    var_hints = _extract_var_rename_hints(cfunc)
-                    if var_hints:
-                        info["var_rename_hints"] = var_hints
-                    info["complexity"] = {
-                        "lines": len(pseudo.splitlines()),
-                        "calls": len(_re.findall(r'\w+\s*\(', pseudo)),
-                        "branches": len(_re.findall(r'\bif\s*\(', pseudo)),
-                        "loops": len(_re.findall(r'\b(for|while|do)\b', pseudo)),
-                    }
-                    bb_ctx = _get_blackboard_context_for_addr(hex_ea(func.start_ea))
-                    if bb_ctx:
-                        info["blackboard_context"] = bb_ctx
-                
-                # Callees
-                try:
-                    callees = set()
-                    for item in idautils.FuncItems(func.start_ea):
-                        for xref in idautils.XrefsFrom(item, 0):
-                            if xref.iscode:
-                                tf = idaapi.get_func(xref.to)
-                                if tf and tf.start_ea != func.start_ea:
-                                    callees.add((hex_ea(tf.start_ea), ida_funcs.get_func_name(tf.start_ea)))
-                    info["callees"] = "\n".join(f"{a}  {n}" for a, n in sorted(list(callees))[:50])
-                except Exception:
-                    info["callees"] = ""
-                
-                # Callers
-                try:
-                    callers = set()
-                    for xref in idautils.XrefsTo(func.start_ea, 0):
-                        if xref.iscode:
-                            cf = idaapi.get_func(xref.frm)
-                            if cf:
-                                callers.add((hex_ea(cf.start_ea), ida_funcs.get_func_name(cf.start_ea)))
-                    info["callers"] = "\n".join(f"{a}  {n}" for a, n in sorted(list(callers))[:50])
-                except Exception:
-                    info["callers"] = ""
-                
-                # Strings
-                try:
-                    strings = []
-                    for item in idautils.FuncItems(func.start_ea):
-                        for xref in idautils.XrefsFrom(item, 0):
-                            if not xref.iscode:
-                                s = idc.get_strlit_contents(xref.to)
-                                if s:
-                                    if isinstance(s, bytes):
-                                        s = s.decode("utf-8", errors="replace")
-                                    strings.append(f"{hex_ea(xref.to)}  {s}")
-                    info["strings"] = "\n".join(strings[:25])
-                except Exception:
-                    info["strings"] = ""
-                
-                # Stack vars
-                try:
-                    info["stack_vars"] = get_stack_frame_variables_internal(func.start_ea, False)
-                except Exception:
-                    info["stack_vars"] = []
-                
+                    pass
                 results.append(info)
             
             elif action == "callgraph":

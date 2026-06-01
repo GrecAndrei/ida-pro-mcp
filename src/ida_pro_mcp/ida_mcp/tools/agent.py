@@ -114,8 +114,12 @@ def agent(
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
 
-            # Aggregate multi-modal analysis
-            code_res = code_tool(action="analyze", addrs=addr)
+            # Aggregate multi-modal analysis. We no longer call
+            # code_tool(action="analyze") because that action is
+            # deprecated (was a thin shim). Instead we run
+            # code(action="decompile") and the small inline enrichments
+            # we used to delegate.
+            code_res = code_tool(action="decompile", addrs=addr)
             logic_res = ctree_tool(action="get_logic_flow", addr=addr)
             graph_res = graph_tool(action="cfg", addr=addr, format="mermaid")
             ctx_res = agent(action="context_pack", addr=addr, include_pseudocode=False, max_items=max_items, use_cache=use_cache)

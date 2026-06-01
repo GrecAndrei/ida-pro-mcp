@@ -70,7 +70,7 @@ QUICKREF_TEXT = """\
 - `code(action="disasm", addr="0x401000")` - Get assembly listing
 - `code(action="xrefs_to", addr="0x401000")` - Who calls this?
 - `code(action="xrefs_from", addr="0x401000")` - What does this call?
-- `code(action="analyze", addr="main")` - Full analysis (decompile + callees + callers + strings)
+- `agent(action="analyze_function", addr="main")` - Comprehensive analysis (decompile + callees + callers + strings + behavior tags + CFG + call-graph + rename hint)
 - `code(action="diff_functions", addrs=["0x401000", "0x402000"])` - Compare two functions
 
 ## Search
@@ -152,7 +152,7 @@ WORKFLOW_TRIAGE = """\
 3. **Check Imports**: `data(action="imports")` → API usage patterns
 4. **Identify Main**: Look at entrypoints, find main() or WinMain()
 5. **Decompile Entry**: `code(action="decompile", addr="main")` → understand program flow
-6. **Follow Key Calls**: `code(action="analyze", addr="main")` → callees, callers, strings
+6. **Follow Key Calls**: `agent(action="analyze_function", addr="main")` → callees, callers, strings, behavior tags
 7. **Search for Patterns**: `search(action="vulnerable")` → security issues
 8. **Document Findings**: Use `modify(action="rename/comment")` to annotate
 """
