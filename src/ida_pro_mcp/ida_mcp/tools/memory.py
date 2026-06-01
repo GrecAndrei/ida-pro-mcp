@@ -4,7 +4,6 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import math
 import re
 from collections import Counter
 
@@ -15,12 +14,7 @@ MAX_HEXDUMP_SIZE = 4096
 # MEMORY - Read/Write/Search/Analyze operations
 # ============================================================================
 
-def _shannon_entropy(data):
-    if not data:
-        return 0.0
-    counts = Counter(data)
-    length = len(data)
-    return round(-sum((c / length) * math.log2(c / length) for c in counts.values()), 4)
+from .string_ops import shannon_entropy as _shannon_entropy
 
 
 def _extract_strings(data, min_len=4):

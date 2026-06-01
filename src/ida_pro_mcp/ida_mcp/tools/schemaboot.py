@@ -33,7 +33,6 @@ except ImportError:
 import os
 import re
 import json
-import math
 import time
 import sqlite3
 import tempfile
@@ -146,12 +145,7 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _shannon_entropy(data: bytes) -> float:
-    if not data:
-        return 0.0
-    counts = Counter(data)
-    length = len(data)
-    return round(-sum((c / length) * math.log2(c / length) for c in counts.values()), 4)
+from .string_ops import shannon_entropy as _shannon_entropy
 
 
 def _extract_function_attributes(func_ea: int) -> dict[str, Any]:

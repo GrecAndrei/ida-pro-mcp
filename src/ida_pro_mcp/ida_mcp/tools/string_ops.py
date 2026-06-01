@@ -215,12 +215,15 @@ def _match_pattern(strings, pattern, limit, extract_groups=False):
     return results
 
 
-def _shannon_entropy(data):
+def shannon_entropy(data):
     if not data:
         return 0.0
     counts = Counter(data)
     length = len(data)
     return round(-sum((c / length) * math.log2(c / length) for c in counts.values()), 4)
+
+
+_shannon_entropy = shannon_entropy
 
 
 def _get_func_name_for_ea(ea):

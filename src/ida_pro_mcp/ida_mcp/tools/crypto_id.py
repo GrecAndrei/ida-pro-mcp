@@ -5,8 +5,6 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 import struct
-import math
-from collections import Counter
 
 
 # ============================================================================
@@ -171,12 +169,7 @@ def _get_context_at(ea, count=5):
     return lines
 
 
-def _shannon_entropy(data):
-    if not data:
-        return 0.0
-    counts = Counter(data)
-    length = len(data)
-    return round(-sum((c / length) * math.log2(c / length) for c in counts.values()), 4)
+from .string_ops import shannon_entropy as _shannon_entropy
 
 
 def _detect_aes_ni(limit):
