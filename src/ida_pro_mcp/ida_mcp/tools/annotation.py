@@ -230,7 +230,7 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False) -> dict:
 def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_type: str) -> dict:
     """Deterministic symbolic rule-check before annotation commit.
 
-    Delegates to CyberCane governance engine for consistent enforcement
+    Delegates to governance engine for consistent enforcement
     across all write operations.
 
     Returns {"approved": bool, "violations": list[str], "redacted_comment": str}
@@ -255,7 +255,7 @@ def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_
             if tif.get_func_details(fi):
                 metadata["arg_count"] = fi.size()
 
-    # Delegate to CyberCane
+    # Delegate to governance engine
     gov_result = evaluate_operation(
         operation_type="annotation",
         addr=addr,
@@ -264,7 +264,7 @@ def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_
         metadata=metadata,
     )
 
-    # Convert CyberCane result to annotation.py's expected format
+    # Convert governance result to annotation.py's expected format
     violations = []
     for v in gov_result.get("violations", []):
         desc = v.get("description", "")

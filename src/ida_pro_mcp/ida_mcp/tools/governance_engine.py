@@ -19,7 +19,7 @@ Integration:
     value = result.get("redacted_content", value)
 
 Example:
-    >>> gov = CyberCaneGovernance()
+    >>> gov = GovernanceEngine()
     >>> result = gov.evaluate_operation("patch", addr=0x401000,
     ...     proposed_value="nop", metadata={"section_type": ".idata"})
     >>> result["approved"]
@@ -74,8 +74,7 @@ class REOntology:
     Formal OWL-style ontology for reverse engineering safety.
 
     Defines classes, properties, and axioms for RE operation governance.
-    Implements a simplified OWL reasoner using axiom satisfaction scoring
-    (Algorithm 1 from CyberCane paper).
+    Implements a simplified OWL-style reasoner using axiom satisfaction scoring.
 
     Each class is defined by:
         - universal_axioms: all must be satisfied
@@ -487,14 +486,14 @@ class NoRenameLibraryFunctionsRule(RERule):
 
 
 # ============================================================================
-# SECTION 4: CyberCaneGovernance Engine
+# SECTION 4: Governance Engine
 # ============================================================================
 
-class CyberCaneGovernance:
+class GovernanceEngine:
     """
     Main governance engine: evaluates operations against rule set and ontology.
 
-    Implements the dual-phase CyberCane architecture:
+    Implements the dual-phase governance architecture:
     Phase 1: Deterministic symbolic rules (always runs first)
     Phase 2: Ontology classification (adds formal reasoning)
 
@@ -505,7 +504,7 @@ class CyberCaneGovernance:
     - JSON-exportable audit trail
 
     Example:
-        >>> gov = CyberCaneGovernance()
+        >>> gov = GovernanceEngine()
         >>> result = gov.evaluate_operation(
         ...     "comment", addr=0x401000,
         ...     proposed_value="C2 at 192.168.1.1")
@@ -776,14 +775,14 @@ class CyberCaneGovernance:
 # ============================================================================
 
 # Module-level singleton for fast repeated lookups
-_governance_instance: Optional[CyberCaneGovernance] = None
+_governance_instance: Optional[GovernanceEngine] = None
 
 
-def get_governance() -> CyberCaneGovernance:
-    """Return the singleton CyberCaneGovernance instance."""
+def get_governance() -> GovernanceEngine:
+    """Return the singleton governance engine instance."""
     global _governance_instance
     if _governance_instance is None:
-        _governance_instance = CyberCaneGovernance()
+        _governance_instance = GovernanceEngine()
     return _governance_instance
 
 
@@ -820,7 +819,7 @@ def list_rules() -> List[Dict[str, str]]:
 
 
 def redact_pii(text: str) -> str:
-    """Redact PII from text using the CyberCane PII rule."""
+    """Redact PII from text using the governance PII rule."""
     for rule in get_governance().rules:
         if isinstance(rule, NoPIIInCommentsRule):
             return rule.redact(text)
@@ -858,7 +857,7 @@ def governance(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """
-    CyberCane Neuro-Symbolic Governance Layer.
+    Deterministic Governance Layer.
 
     Deterministic pre-flight rule engine for all IDB write operations.
     No ML, no external APIs — uses regex + ontology reasoning only.
@@ -928,3 +927,7 @@ def governance(
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# Backward compatibility alias for older imports/tests.
+CyberCaneGovernance = GovernanceEngine

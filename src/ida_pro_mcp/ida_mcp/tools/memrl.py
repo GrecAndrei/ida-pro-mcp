@@ -50,7 +50,7 @@ REWARD_ACCEPT = 1.0      # Analyst accepts suggestion (no manual override)
 REWARD_PARTIAL = 0.5     # Suggestion partially correct (analyst minor edit)
 REWARD_NEUTRAL = 0.0     # No feedback (suggestion ignored)
 REWARD_REJECT = -0.5     # Suggestion incorrect (analyst rejects or reverts)
-REWARD_DANGEROUS = -1.0  # Suggestion dangerous (CyberCane blocked it)
+REWARD_DANGEROUS = -1.0  # Suggestion dangerous (governance blocked it)
 
 Q_FLOOR = -1.0
 Q_CEILING = 1.0
@@ -457,7 +457,7 @@ class MemRLBank:
           +0.5  partial    Suggestion partially correct (analyst minor edit)
            0.0  neutral    No feedback (suggestion ignored)
           -0.5  reject     Suggestion incorrect (analyst rejects or reverts)
-          -1.0  dangerous  Suggestion dangerous (CyberCane blocked it)
+          -1.0  dangerous  Suggestion dangerous (governance blocked it)
 
         TD(0) update (MemRL Eq. 4):
             Q_new = Q_old + alpha * (reward - Q_old)
@@ -985,7 +985,7 @@ def memrl(
       +0.5  partial    Suggestion partially correct (analyst minor edit)
        0.0  neutral    No feedback (suggestion ignored)
       -0.5  reject     Suggestion incorrect (analyst rejects or reverts)
-      -1.0  dangerous  Suggestion dangerous (CyberCane blocked it)
+      -1.0  dangerous  Suggestion dangerous (governance blocked it)
 
     TD(0) update:
         Q_new = Q_old + alpha * (reward - Q_old)

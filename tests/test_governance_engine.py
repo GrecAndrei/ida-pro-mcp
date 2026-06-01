@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test suite for CyberCane Neuro-Symbolic Governance Layer.
+Test suite for deterministic governance engine.
 
 Run with: python3 -m pytest tests/test_governance_engine.py -v
 Or standalone: python3 tests/test_governance_engine.py
@@ -20,7 +20,7 @@ _governance_engine = importlib.util.module_from_spec(_spec)
 sys.modules["_governance_engine_test_mod"] = _governance_engine
 _spec.loader.exec_module(_governance_engine)
 
-CyberCaneGovernance = _governance_engine.CyberCaneGovernance
+GovernanceEngine = _governance_engine.GovernanceEngine
 OperationType = _governance_engine.OperationType
 Severity = _governance_engine.Severity
 Verdict = _governance_engine.Verdict
@@ -328,7 +328,7 @@ def run_all_tests():
     failed = 0
 
     print("=" * 60)
-    print("CyberCane Governance Test Suite")
+    print("Governance Engine Test Suite")
     print("=" * 60)
 
     for test in tests:

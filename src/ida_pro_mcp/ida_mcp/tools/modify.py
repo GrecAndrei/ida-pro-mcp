@@ -29,7 +29,7 @@ import hashlib
 # ============================================================================
 
 def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
-    """Gather IDA-specific metadata for CyberCane governance checks."""
+    """Gather IDA-specific metadata for governance checks."""
     metadata: dict = {}
 
     if action == "patch_asm":
@@ -178,7 +178,7 @@ def modify(
     asm: Annotated[Optional[str], "Alias for value (when action=patch_asm)"] = None,
     comment_type: Annotated[Literal["regular", "repeatable", "anterior", "posterior"],
                             "Comment type (for action=comment)"] = "regular",
-    governed: Annotated[bool, "Enable CyberCane neuro-symbolic governance pre-check"] = True,
+    governed: Annotated[bool, "Enable deterministic governance pre-check"] = True,
     feedback: Annotated[Optional[Literal["accept", "reject", "partial", "skip"]],
                          "Optional feedback signal to MemRL after this operation"] = None,
     memrl_suggestion_id: Annotated[Optional[str],
@@ -200,7 +200,7 @@ def modify(
     Arguments:
     - value (or name/text/type_str/asm): The content to apply.
     - comment_type: One of 'regular', 'repeatable', 'anterior', 'posterior'.
-    - governed: If True (default), run CyberCane governance pre-check before
+    - governed: If True (default), run governance pre-check before
       committing. Blocks dangerous patches, redacts PII, warns on misleading
       renames. Set to False to bypass (not recommended).
     - feedback: Optional feedback signal to MemRL:
@@ -233,7 +233,7 @@ def modify(
             return error
 
         # ----------------------------------------------------------------
-        # CyberCane Governance Pre-Check
+        # Governance pre-check
         # ----------------------------------------------------------------
         if governed:
             op_type_map = {
@@ -256,7 +256,7 @@ def modify(
                 if not gov_result["approved"]:
                     return make_error(
                         MCPError.GOVERNANCE_BLOCKED,
-                        f"CyberCane blocked {action}: {gov_result['verdict']}",
+                        f"Governance blocked {action}: {gov_result['verdict']}",
                         {
                             "violations": gov_result["violations"],
                             "ontology_class": gov_result.get("ontology_class"),
