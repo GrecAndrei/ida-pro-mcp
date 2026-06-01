@@ -959,27 +959,6 @@ class ServerDispatchMixin:
                             f"Unsupported plugins action: '{action}'",
                             hint="Use misc(action='plugin_list') or misc(action='plugin_run', name='...', arg=0).",
                         )
-            if tool_name == "project":
-                action = args.get("action")
-                # Consolidate generic host file I/O into misc.
-                if action == "read":
-                    args["action"] = "read_file"
-                    tool_name = "misc"
-                elif action == "write":
-                    args["action"] = "write_file"
-                    tool_name = "misc"
-                elif action == "sessions":
-                    return make_error(
-                        MCPError.NOT_IMPLEMENTED,
-                        "Use 'session' tool for session management",
-                        hint="sessions/list is handled by the host-level session tool.",
-                    )
-                elif action == "batch":
-                    return make_error(
-                        MCPError.NOT_IMPLEMENTED,
-                        "Use host-level batch/session orchestration for multi-file analysis",
-                        hint="Use batch(calls=[...]) and session actions instead of project(action='batch').",
-                    )
             if tool_name == "session":
                 return self._handle_session(args)
 
