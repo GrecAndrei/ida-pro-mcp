@@ -120,7 +120,7 @@ QUICKREF_TEXT = """\
 - `search(action="regex", pattern="system\\(|popen\\(|_popen\\(|exec\\(")` - Command injection hotspots
 - `gadgets(action="mitigations")` - Check ASLR/DEP/canary/CFI
 - `gadgets(action="rop")` - Find ROP gadgets
-- `c2_detect(action="indicators")` - Detect C2/malware behavior
+- `string_ops(action="indicators")` - Detect C2/malware behavior
 - `code(action="xrefs_to", addr="<sink>")` - Trace dangerous sinks to callers
 
 ## Deobfuscation & Crypto
@@ -179,14 +179,14 @@ WORKFLOW_MALWARE = """\
 2. **Get Overview**: `summarize(action="binary")` → LLM-friendly binary summary
 3. **Classify Functions**: `classify(action="binary")` → categorize all functions by purpose
 4. **Check Imports**: `summarize(action="imports_by_category")` → API usage by category
-5. **Find C2/Network**: `c2_detect(action="indicators")` → detect C2 behavior patterns
-6. **Find Persistence**: `c2_detect(action="persistence")` → registry, services, scheduled tasks
-7. **Find Evasion**: `c2_detect(action="evasion")` → anti-debug, anti-VM, anti-analysis
+5. **Find C2/Network**: `string_ops(action="indicators")` → detect C2 behavior patterns
+6. **Find Persistence**: `string_ops(action="persistence")` → registry, services, scheduled tasks
+7. **Find Evasion**: `string_ops(action="evasion")` → anti-debug, anti-VM, anti-analysis
 8. **Find Crypto**: `crypto_id(action="identify")` → encryption algorithms
 9. **Decode Strings**: `deobfuscate(action="xor_scan")` → XOR-encoded strings
 10. **Stack Strings**: `deobfuscate(action="stack_strings")` → char-by-char constructed strings
 11. **API Hashing**: `deobfuscate(action="api_hashing")` → hash-resolved API calls
-12. **Extract IOCs**: `c2_detect(action="ioc_extract")` → URLs, IPs, domains, file paths
+12. **Extract IOCs**: `string_ops(action="ioc_extract")` → URLs, IPs, domains, file paths
 13. **Find URLs**: `string_ops(action="find_urls")` → extract URLs from strings
 14. **Map Structure**: `graph(action="callgraph", addr="main")` → understand program flow
 """

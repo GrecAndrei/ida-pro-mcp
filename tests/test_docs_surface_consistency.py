@@ -34,3 +34,21 @@ def test_technical_reference_reports_live_schema_surface_counts():
     assert int(tools_m.group(1)) == len(TOOLS)
     assert int(adv_m.group(1)) == len(ADVERTISED_TOOLS)
     assert int(hidden_m.group(1)) == len(HIDDEN_TOOLS_IN_LIST)
+
+
+def test_prompts_prefer_canonical_string_ops_for_c2_flows():
+    p = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "prompts.py"
+    text = p.read_text(encoding="utf-8")
+    assert "c2_detect(action=" not in text
+    assert "string_ops(action=\"indicators\")" in text
+
+
+def test_tools_reference_does_not_mark_canonical_tools_as_legacy_only():
+    p = ROOT / "docs" / "TOOLS_REFERENCE.md"
+    text = p.read_text(encoding="utf-8")
+    assert "Tools not in `TOOLS` but still reachable through compatibility routing:" in text
+    legacy_line = next(
+        line for line in text.splitlines()
+        if line.startswith("Tools not in `TOOLS` but still reachable through compatibility routing:")
+    )
+    assert "`taint`" not in legacy_line

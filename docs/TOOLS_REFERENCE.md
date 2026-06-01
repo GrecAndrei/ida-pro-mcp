@@ -7,7 +7,7 @@ Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `buil
 ## Notes
 
 - `session(action="create")` requires `binary_path` and does not accept `idb_path`/`use_existing`.
-- `threat_hunt` is the consolidated malware/vulnerability/tracing orchestration tool and supports legacy inheritance routing for `vuln_scan`, `c2_detect`, and archived threat-family tools. Those archived tools remain compatibility-callable via `action="legacy"` but are no longer exposed in `tools/list`.
+- `threat_hunt` is the consolidated malware/vulnerability/tracing orchestration tool and supports legacy inheritance routing for archived threat-family tools (for example `vuln_scan`). The canonical surface remains `threat_hunt`, `string_ops`, and `taint`.
 - Host normalization is intentionally permissive for noisy LLM calls on `threat_hunt`, `search`, `session`, and `code` (wrapped action names, noisy arg keys, bracketed address/list values) when mapping is unambiguous.
 - All tool responses include `llm_pointer_note` (ALL CAPS) reminding agents to use `calc`/`memory` for pointer/address arithmetic instead of mental math.
 
@@ -21,7 +21,7 @@ Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `buil
 | `emulate` | `static_trace` |
 | `edit` | *(delegated to `modify`, `funcs`, `bulk`)* |
 
-Tools not in `TOOLS` but still reachable through legacy action routing in `threat_hunt` and host-side resolution: `vuln_scan`, `c2_detect`, `taint`, `diff`, `structs`.
+Tools not in `TOOLS` but still reachable through compatibility routing: `vuln_scan`, `c2_detect`, `diff`, `structs`.
 
 ---
 
