@@ -77,7 +77,7 @@ __all__ = [
 
 # Mapping from tool name to module name (when they differ)
 _TOOL_MODULE_MAP = {
-    "governance": "cybercane",
+    "governance": "governance_engine",
 }
 
 

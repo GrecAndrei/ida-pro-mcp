@@ -259,7 +259,6 @@ _EXTRA_TOOL_ALIASES = {
     "xref": "xref_analysis",
     "xrefs": "xref_analysis",
     "govern": "governance",
-    "cybercane": "governance",
     "rules": "governance",
     "policy": "governance",
 }

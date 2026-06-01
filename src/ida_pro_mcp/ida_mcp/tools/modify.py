@@ -5,9 +5,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from .cybercane import evaluate_operation
+    from .governance_engine import evaluate_operation
 except ImportError:
-    from cybercane import evaluate_operation  # type: ignore[import-not-found]
+    from governance_engine import evaluate_operation  # type: ignore[import-not-found]
 
 try:
     from .memrl import emit_memrl_suggestion, REWARD_ACCEPT, REWARD_PARTIAL, REWARD_REJECT

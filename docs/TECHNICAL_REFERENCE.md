@@ -65,7 +65,7 @@ Key categories:
 - **Threat hunting:** `threat_hunt.py`, `yara_hunt.py`, `gadgets.py`, `trace.py`, `trace_analysis.py`
 - **Classification:** `classify.py`, `schemaboot.py`, `summarize.py`
 - **LLM optimization:** `llm_helpers.py`, `memrl.py`, `turboquant.py`, `bridgerag.py`, `mbagcn.py`, `hybrid_search.py`
-- **Governance:** `governance.py`, `cybercane.py`
+- **Governance:** `governance_engine.py`
 - **Infrastructure:** `blackboard.py`, `filter.py`, `protocol.py`, `abi.py`, `project.py`, `query.py`, `query_lang.py`
 - **Utilities:** `misc.py`, `calc.py`, `nav.py`, `wiki.py`, `batch.py`, `history.py`, `bookmarks` (via session)
 
@@ -492,7 +492,7 @@ The full response enrichment pipeline (applied after tool execution):
 | `test_cartographer_mu.py` | Cartographer-μ semantic engine |
 | `test_memrl_bridgerag.py` | MemRL + BridgeRAGLite |
 | `test_turboquant.py` | TurboQuantLite quantization |
-| `test_cybercane.py` | Governance rule engine |
+| `test_governance_engine.py` | Governance rule engine |
 | `test_host_wiki_and_hardening.py` | Wiki, audit, rate limiting |
 | `test_mcp_client.py` | Full client-server round trips |
 | `test_session_features.py` | Notebook, hypotheses, skills |
