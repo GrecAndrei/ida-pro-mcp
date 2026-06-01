@@ -92,37 +92,14 @@ def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
     return base
 
 
-def _build_where_clause_local(constraints: Dict) -> Tuple[str, List[object]]:
-    conditions: List[str] = []
-    params: List[object] = []
-    for key, val in (constraints or {}).items():
-        if val is None:
-            continue
-        if key == "apis":
-            conditions.append(
-                "EXISTS (SELECT 1 FROM function_apis WHERE function_apis.func_ea = function_attrs.ea AND function_apis.api_name = ?)"
-            )
-            params.append(val)
-        elif key in ("strings_like", "string_contains"):
-            conditions.append(
-                "EXISTS (SELECT 1 FROM function_strings WHERE function_strings.func_ea = function_attrs.ea AND function_strings.string_text LIKE ?)"
-            )
-            params.append(f"%{val}%")
-        elif key == "name_like":
-            conditions.append("name LIKE ?")
-            params.append(f"%{val}%")
-        elif key == "segment":
-            conditions.append("segment = ?")
-            params.append(val)
-        elif key == "min_size":
-            conditions.append("size >= ?")
-            params.append(int(val))
-        elif key == "max_size":
-            conditions.append("size <= ?")
-            params.append(int(val))
-    if not conditions:
-        return "", []
-    return "WHERE " + " AND ".join(conditions), params
+def _build_where_clause(constraints: Dict) -> Tuple[str, List[object]]:
+    """Build SQL WHERE clause for seed selection from a SchemaBoot constraint dict.
+
+    Delegates to HybridQueryBuilder.build_legacy (the single canonical
+    implementation) so we don't drift from schemaboot's query dialect.
+    """
+    from .hybrid_search import HybridQueryBuilder
+    return HybridQueryBuilder.build_legacy(constraints or {})
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +499,7 @@ class BridgeRAGSearch:
         cur = conn.cursor()
 
         # Step 1: Find seed functions
-        where, params = _build_where_clause_local(query_constraints or {})
+        where, params = _build_where_clause(query_constraints or {})
         sql = (
             "SELECT ea, name, segment, size, entropy, bb_count, call_count, "
             "cyclomatic_complexity, api_count, string_count, (incoming_xrefs + outgoing_xrefs) AS xref_count, "
