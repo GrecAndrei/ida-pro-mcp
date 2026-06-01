@@ -11,6 +11,7 @@ import tomli_w
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 import glob
+from ida_pro_mcp.legacy_names import LEGACY_SERVER_NAMES
 
 if TYPE_CHECKING:
     from ida_pro_mcp.ida_mcp.zeromcp import McpServer
@@ -188,7 +189,11 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
         "Visual Studio 2022": (None, "servers"),  # servers at top level
         "Opencode": ("mcp", None),  # OpenCode schema uses top-level "mcp" object
     }
-    legacy_remote_keys = ("github.com/GrecAndrei/ida-pro-mcp",)
+    legacy_remote_keys = tuple(
+        key
+        for key in LEGACY_SERVER_NAMES
+        if isinstance(key, str) and key.startswith("github.com/")
+    )
 
     def ensure_server_container(config: dict, client_name: str, is_toml: bool):
         """Return mutable server container for the given client config schema."""

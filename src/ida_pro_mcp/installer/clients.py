@@ -8,13 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .common import InstallReport
-
-
-LEGACY_SERVER_NAMES = (
-    "github.com/GrecAndrei/ida-pro-mcp",
-    "ida_mcp",
-    "ida-pro-mcp-server",
-)
+from ..legacy_names import LEGACY_SERVER_NAMES
 
 
 def load_client_map(source_root: Path) -> dict:
