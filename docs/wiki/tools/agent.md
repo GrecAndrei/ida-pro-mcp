@@ -30,4 +30,4 @@ AI-assisted analysis combining semantic embeddings, multi-hop search, and batch 
 - `similar` uses FunctionEmbeddingIndex cosine search on bge-code-v1 vectors, not keyword/string matching.
 - `bridge_query` expands entities across multiple hops — useful for tracing indirect relationships (e.g., callback registration chains).
 - `cluster` and `fingerprint` require the embedding index to be built; they operate on the full binary scope.
-- `rename_suggestions` does not auto-rename; it emits suggestions and can persist suggestion notes to blackboard/capsule.
+- `rename_suggestions` does not auto-rename; it emits suggestions by default and persistence to blackboard/capsule is opt-in (`persist_blackboard=true`, `persist_capsule=true`).

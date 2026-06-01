@@ -636,8 +636,8 @@ def agent(
 
             include_evidence = bool(kwargs.get("include_evidence", True))
             top_k = max(1, int(kwargs.get("top_k", max_items)))
-            persist_blackboard = bool(kwargs.get("persist_blackboard", True))
-            persist_capsule = bool(kwargs.get("persist_capsule", True))
+            persist_blackboard = bool(kwargs.get("persist_blackboard", False))
+            persist_capsule = bool(kwargs.get("persist_capsule", False))
             suggestions = []
 
             try:
