@@ -188,6 +188,39 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
         "Visual Studio 2022": (None, "servers"),  # servers at top level
         "Opencode": ("mcp", None),  # OpenCode schema uses top-level "mcp" object
     }
+    legacy_remote_keys = ("github.com/GrecAndrei/ida-pro-mcp",)
+
+    def ensure_server_container(config: dict, client_name: str, is_toml: bool):
+        """Return mutable server container for the given client config schema."""
+        if is_toml:
+            config.setdefault("mcp_servers", {})
+            return config["mcp_servers"]
+
+        if client_name in special_json_structures:
+            top_key, nested_key = special_json_structures[client_name]
+            if top_key is None:
+                # servers at top level (e.g., Visual Studio 2022)
+                config.setdefault(nested_key, {})
+                return config[nested_key]
+            if nested_key is None:
+                # top-level object container (e.g., OpenCode uses mcp.<name>)
+                config.setdefault(top_key, {})
+                return config[top_key]
+            # nested structure (e.g., VS Code uses mcp.servers)
+            config.setdefault(top_key, {})
+            config[top_key].setdefault(nested_key, {})
+            return config[top_key][nested_key]
+
+        # Default: mcpServers at top level
+        config.setdefault("mcpServers", {})
+        return config["mcpServers"]
+
+    def migrate_legacy_server_keys(mcp_servers: dict, canonical_name: str) -> None:
+        for legacy_key in legacy_remote_keys:
+            if legacy_key in mcp_servers:
+                mcp_servers[canonical_name] = mcp_servers[legacy_key]
+                del mcp_servers[legacy_key]
+                break
 
     def client_server_config(client_name: str):
         base = generate_mcp_config(stdio=stdio)
@@ -676,47 +709,8 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                                 )
                             continue
 
-        # Handle TOML vs JSON structure
-        if is_toml:
-            if "mcp_servers" not in config:
-                config["mcp_servers"] = {}
-            mcp_servers = config["mcp_servers"]
-        else:
-            # Check if this client uses a special JSON structure
-            if name in special_json_structures:
-                top_key, nested_key = special_json_structures[name]
-                if top_key is None:
-                    # servers at top level (e.g., Visual Studio 2022)
-                    if nested_key not in config:
-                        config[nested_key] = {}
-                    mcp_servers = config[nested_key]
-                elif nested_key is None:
-                    # top-level object container (e.g., OpenCode uses mcp.<name>)
-                    if top_key not in config:
-                        config[top_key] = {}
-                    mcp_servers = config[top_key]
-                else:
-                    # nested structure (e.g., VS Code uses mcp.servers)
-                    if top_key not in config:
-                        config[top_key] = {}
-                    if nested_key not in config[top_key]:
-                        config[top_key][nested_key] = {}
-                    mcp_servers = config[top_key][nested_key]
-            else:
-                # Default: mcpServers at top level
-                if "mcpServers" not in config:
-                    config["mcpServers"] = {}
-                mcp_servers = config["mcpServers"]
-
-        # Migrate legacy remote-style server keys to canonical `ida-pro-mcp`.
-        legacy_remote_keys = (
-            "github.com/GrecAndrei/ida-pro-mcp",
-        )
-        for legacy_key in legacy_remote_keys:
-            if legacy_key in mcp_servers:
-                mcp_servers[mcp.name] = mcp_servers[legacy_key]
-                del mcp_servers[legacy_key]
-                break
+        mcp_servers = ensure_server_container(config, name, is_toml)
+        migrate_legacy_server_keys(mcp_servers, mcp.name)
 
         if uninstall:
             if mcp.name not in mcp_servers:
