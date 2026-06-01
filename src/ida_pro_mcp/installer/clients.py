@@ -66,6 +66,29 @@ def _prune_legacy_entries(container: dict, server_name: str) -> None:
         container.pop(key, None)
 
 
+def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup_file(path, report, dry_run)
+
+
+def _load_json_config(path: Path, *, allow_comments: bool = False) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        content = path.read_text(encoding="utf-8")
+        if allow_comments:
+            content = re.sub(r"//.*?$", "", content, flags=re.MULTILINE)
+            content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        return json.loads(content)
+    except Exception:
+        return {}
+
+
+def _upsert_server_entry(container: dict, server_name: str, server_cfg: dict) -> None:
+    _prune_legacy_entries(container, server_name)
+    container[server_name] = server_cfg
+
+
 def _toml_key(key: str) -> str:
     if re.match(r"^[A-Za-z0-9_-]+$", key):
         return key
@@ -152,18 +175,10 @@ def get_config_paths(source_root: Path) -> dict[str, Path]:
 
 
 def update_json_config(path: Path, server_name: str, server_cfg: dict, report: InstallReport, dry_run: bool) -> bool:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    backup_file(path, report, dry_run)
-    config = {}
-    if path.exists():
-        try:
-            config = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            config = {}
-    if "mcpServers" not in config:
-        config["mcpServers"] = {}
-    _prune_legacy_entries(config["mcpServers"], server_name)
-    config["mcpServers"][server_name] = server_cfg
+    _prepare_config_path(path, report, dry_run)
+    config = _load_json_config(path, allow_comments=False)
+    config.setdefault("mcpServers", {})
+    _upsert_server_entry(config["mcpServers"], server_name, server_cfg)
     if not dry_run:
         path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     report.add_modified(path)
@@ -171,26 +186,17 @@ def update_json_config(path: Path, server_name: str, server_cfg: dict, report: I
 
 
 def update_opencode_config(path: Path, server_name: str, server_cfg: dict, report: InstallReport, dry_run: bool) -> bool:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    backup_file(path, report, dry_run)
-    config = {}
-    if path.exists():
-        content = path.read_text(encoding="utf-8")
-        content = re.sub(r"//.*?$", "", content, flags=re.MULTILINE)
-        content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-        try:
-            config = json.loads(content)
-        except Exception:
-            config = {}
+    _prepare_config_path(path, report, dry_run)
+    config = _load_json_config(path, allow_comments=True)
     config.setdefault("$schema", "https://opencode.ai/config.json")
     config.setdefault("mcp", {})
-    _prune_legacy_entries(config["mcp"], server_name)
-    config["mcp"][server_name] = {
+    opencode_entry = {
         "type": "local",
         "command": [server_cfg["command"], *server_cfg.get("args", [])],
         "enabled": True,
         "environment": server_cfg.get("env", {}),
     }
+    _upsert_server_entry(config["mcp"], server_name, opencode_entry)
     if not dry_run:
         path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     report.add_modified(path)
@@ -208,8 +214,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
     except ImportError:
         tomli_w = None
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    backup_file(path, report, dry_run)
+    _prepare_config_path(path, report, dry_run)
     config = {}
     if path.exists():
         try:
@@ -217,8 +222,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
         except Exception:
             config = {}
     config.setdefault("mcp_servers", {})
-    _prune_legacy_entries(config["mcp_servers"], server_name)
-    config["mcp_servers"][server_name] = server_cfg
+    _upsert_server_entry(config["mcp_servers"], server_name, server_cfg)
     if not dry_run:
         if tomli_w is not None:
             with open(path, "wb") as f:
