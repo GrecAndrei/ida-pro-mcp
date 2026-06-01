@@ -15,16 +15,35 @@ import fcntl
 import threading
 
 
+def _default_state_dir() -> str:
+    xdg_state = os.environ.get("XDG_STATE_HOME")
+    if xdg_state:
+        return os.path.join(xdg_state, "ida-pro-mcp")
+    return os.path.expanduser("~/.local/state/ida-pro-mcp")
+
+
+def _default_data_dirs() -> list[str]:
+    dirs: list[str] = []
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    if xdg_data:
+        dirs.append(os.path.join(xdg_data, "ida-pro-mcp"))
+    dirs.extend(
+        [
+            os.path.expanduser("~/.local/share/ida-pro-mcp"),
+            os.path.expanduser("~/.ida-pro-mcp"),
+            "/opt/ida-pro-mcp",
+            "/usr/local/share/ida-pro-mcp",
+        ]
+    )
+    return dirs
+
+
 def _discover_venv_python():
     """Find the MCP venv Python interpreter."""
-    candidates = [
-        os.path.expanduser("~/.local/share/ida-pro-mcp/.venv/bin/python3"),
-        os.path.expanduser("~/.local/share/ida-pro-mcp/.venv/bin/python"),
-        os.path.expanduser("~/.ida-pro-mcp/.venv/bin/python3"),
-        os.path.expanduser("~/.ida-pro-mcp/.venv/bin/python"),
-        "/opt/ida-pro-mcp/.venv/bin/python3",
-        "/usr/local/share/ida-pro-mcp/.venv/bin/python3",
-    ]
+    candidates: list[str] = []
+    for base in _default_data_dirs():
+        candidates.append(os.path.join(base, ".venv", "bin", "python3"))
+        candidates.append(os.path.join(base, ".venv", "bin", "python"))
     for path in candidates:
         if os.path.isfile(path):
             return path
@@ -50,12 +69,7 @@ class MCPClient:
         
         # Auto-detect IDA if not set
         if "IDADIR" not in run_env:
-            for ida_dir in [
-                "/opt/ida-pro-9.2",
-                os.path.expanduser("~/ida-pro-9.2"),
-                "/opt/ida-pro",
-                "/usr/local/ida-pro",
-            ]:
+            for ida_dir in ["/opt/ida-pro", "/usr/local/ida-pro"]:
                 if os.path.isdir(ida_dir):
                     run_env["IDADIR"] = ida_dir
                     break
@@ -70,8 +84,8 @@ class MCPClient:
         
         # Use unique cache dir to avoid conflicts with other servers
         if "IDA_MCP_CACHE_DIR" not in run_env:
-            run_env["IDA_MCP_CACHE_DIR"] = os.path.expanduser(
-                f"~/.local/state/ida-pro-mcp/test-{os.getpid()}"
+            run_env["IDA_MCP_CACHE_DIR"] = os.path.join(
+                _default_state_dir(), f"test-{os.getpid()}"
             )
         
         self._stderr_lines = []
