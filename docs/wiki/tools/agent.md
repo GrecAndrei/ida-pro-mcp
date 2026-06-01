@@ -10,7 +10,7 @@ AI-assisted analysis combining semantic embeddings, multi-hop search, and batch 
 - `search_structs` — structure/type-oriented search expansion; params: `query`
 - `context_pack` — compact context pack for an address/query
 - `quick` — lightweight one-shot analysis; params: `address`
-- `rename_suggestions` — suggest names for nearby unnamed functions with evidence-backed confidence; params: `address`, `top_k`, `include_evidence`
+- `rename_suggestions` — suggest names with evidence-backed confidence. If `address` is provided, target that function; without `address`, runs batch suggestions over unnamed functions. Params: `address` (optional), `limit`, `top_k`, `threshold`, `include_evidence`
 - `batch_context` — gather context for multiple addresses in one call; params: `addresses`
 - `similar` — find semantically similar functions via cosine similarity on bge-code-v1 embeddings; params: `address`, `limit`
 - `intelligence_status` — summarize local intelligence stack status (embedder/index/classifier readiness)
@@ -45,4 +45,5 @@ AI-assisted analysis combining semantic embeddings, multi-hop search, and batch 
 - `similar` uses FunctionEmbeddingIndex cosine search on bge-code-v1 vectors, not keyword/string matching.
 - `bridge_query` expands entities across multiple hops — useful for tracing indirect relationships (e.g., callback registration chains).
 - `cluster` and `fingerprint` require the embedding index to be built; they operate on the full binary scope.
+- `rename_suggestions` and `funcs(action="suggest_names")` share the same embedding-backed suggestion engine to keep behavior consistent across tools.
 - `rename_suggestions` does not auto-rename; it emits suggestions by default and persistence to blackboard/capsule is opt-in (`persist_blackboard=true`, `persist_capsule=true`).

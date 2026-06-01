@@ -539,203 +539,65 @@ def agent(
             return result
         
         elif action == "rename_suggestions":
-            # Evidence-backed rename suggestions for nearby unnamed functions.
-            if not addr:
-                return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr, require_func=True)
-            if err:
-                return err
-            
-            func = idaapi.get_func(ea)
-            name = ida_funcs.get_func_name(func.start_ea)
-            
-            context = {
-                "ok": True,
-                "addr": hex(func.start_ea),
-                "current_name": name,
-                "is_auto_named": name.startswith("sub_"),
-                "size": func.end_ea - func.start_ea,
-                "strings_used": [],
-                "apis_called": [],
-                "callers": [],
-                "callees": [],
-            }
-            
-            # Gather strings
-            _fi_count = 0
-            for item in idautils.FuncItems(func.start_ea):
-                _fi_count += 1
-                if _fi_count > 2000:
-                    break
-                for xref in idautils.XrefsFrom(item, 0):
-                    if not xref.iscode:
-                        s = idc.get_strlit_contents(xref.to)
-                        if s:
-                            context["strings_used"].append((s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s))[:100])
-            context["strings_used"] = context["strings_used"][:10]
-            
-            # Gather API calls
-            _fi_count = 0
-            for item in idautils.FuncItems(func.start_ea):
-                _fi_count += 1
-                if _fi_count > 2000:
-                    break
-                for xref in idautils.XrefsFrom(item, 0):
-                    if xref.type in (idaapi.fl_CF, idaapi.fl_CN, idaapi.fl_JF, idaapi.fl_JN, idaapi.fl_F):
-                        callee_name = idc.get_name(xref.to)
-                        if callee_name and not callee_name.startswith("sub_"):
-                            context["apis_called"].append(callee_name)
-            context["apis_called"] = list(set(context["apis_called"]))[:15]
-            
-            # Callers
-            _xref_count = 0
-            for xref in idautils.XrefsTo(func.start_ea, 0):
-                _xref_count += 1
-                if _xref_count > 2000:
-                    break
-                if xref.iscode:
-                    cf = idaapi.get_func(xref.frm)
-                    if cf:
-                        caller_name = ida_funcs.get_func_name(cf.start_ea)
-                        if not caller_name.startswith("sub_"):
-                            context["callers"].append(caller_name)
-            context["callers"] = list(set(context["callers"]))[:10]
-            
-            # Callees (non-API)
-            seen = set()
-            _fi_count = 0
-            for item in idautils.FuncItems(func.start_ea):
-                _fi_count += 1
-                if _fi_count > 2000:
-                    break
-                for xref in idautils.XrefsFrom(item, 0):
-                    if xref.type in (idaapi.fl_CF, idaapi.fl_CN, idaapi.fl_JF, idaapi.fl_JN, idaapi.fl_F):
-                        callee = idaapi.get_func(xref.to)
-                        if callee and callee.start_ea not in seen:
-                            seen.add(callee.start_ea)
-                            callee_name = ida_funcs.get_func_name(callee.start_ea)
-                            if not callee_name.startswith("sub_") and callee_name not in context["apis_called"]:
-                                context["callees"].append(callee_name)
-            context["callees"] = context["callees"][:10]
-            
-            # Pseudocode signature if available
-            pseudo = ""
-            if ida_hexrays.init_hexrays_plugin():
-                try:
-                    cfunc = ida_hexrays.decompile(func.start_ea)
-                    if cfunc:
-                        pseudo = str(cfunc)
-                        lines = str(cfunc).split('\n')
-                        # Get signature line
-                        for line in lines[:5]:
-                            if '(' in line and ')' in line:
-                                context["signature"] = line.strip()
-                                break
-                except Exception:
-                    pass
+            # Shared rename suggestion engine (deduped with funcs.suggest_names).
+            from .funcs import _embedding_rename_suggestions
 
-            include_evidence = bool(kwargs.get("include_evidence", True))
             top_k = max(1, int(kwargs.get("top_k", max_items)))
+            include_evidence = bool(kwargs.get("include_evidence", True))
             persist_blackboard = bool(kwargs.get("persist_blackboard", False))
             persist_capsule = bool(kwargs.get("persist_capsule", False))
+            sugg = _embedding_rename_suggestions(
+                addr=addr,
+                limit=int(kwargs.get("limit") or 100),
+                threshold=(float(kwargs["threshold"]) if kwargs.get("threshold") is not None else None),
+                nearest_top_k=max(top_k * 4, 16),
+            )
+            if not isinstance(sugg, dict) or not sugg.get("ok"):
+                return sugg if isinstance(sugg, dict) else make_error(MCPError.IDA_ERROR, "rename suggestion engine failed")
+
+            rows = list(sugg.get("suggestions") or [])
+            if addr:
+                ea, err = validate_addr(addr, require_func=True)
+                if err:
+                    return err
+                func = idaapi.get_func(ea)
+                name = ida_funcs.get_func_name(func.start_ea)
+                context = {
+                    "ok": True,
+                    "addr": hex(func.start_ea),
+                    "current_name": name,
+                    "is_auto_named": name.startswith("sub_"),
+                    "size": func.end_ea - func.start_ea,
+                    "suggestions": [],
+                    "count": 0,
+                }
+            else:
+                context = {
+                    "ok": True,
+                    "mode": "batch",
+                    "suggestions": [],
+                    "count": 0,
+                }
+
             suggestions = []
-
-            try:
-                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex
-            except ImportError:
-                try:
-                    from host.intelligence import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex  # type: ignore
-                except ImportError:
-                    BgeCodeEmbedder = None
-                    BehaviorClassifier = None
-                    FunctionEmbeddingIndex = None
-
-            base_tokens = [
-                t.lower()
-                for t in re.split(r"[^a-zA-Z0-9]+", str(name or ""))
-                if t and not t.lower().startswith("sub")
-            ]
-            api_token = ""
-            if context["apis_called"]:
-                api_token = re.sub(r"[^a-z0-9]", "", str(context["apis_called"][0]).lower())[:20]
-            if not api_token:
-                api_token = "handler"
-
-            if FunctionEmbeddingIndex is not None and BgeCodeEmbedder is not None and pseudo:
-                try:
-                    embedder = BgeCodeEmbedder()
-                    idx = FunctionEmbeddingIndex((idaapi.get_path(idaapi.PATH_TYPE_IDB) or "") + ".embeddings.db", embedder)
-                    idx.index_async(hex(func.start_ea), name, pseudo)
-                    nearest = idx.similar(
-                        pseudo,
-                        top_k=max(top_k * 4, 16),
-                        exclude_ea=hex(func.start_ea),
-                        threshold=0.0,
-                    )
-                    behavior_rows = []
-                    if BehaviorClassifier is not None:
-                        try:
-                            behavior_rows = BehaviorClassifier.instance(embedder).classify(
-                                pseudo,
-                                threshold=0.0,
-                                top_k=3,
-                                block=False,
-                            )
-                        except Exception:
-                            behavior_rows = []
-                    behavior_tag = ""
-                    if behavior_rows:
-                        behavior_tag = str(behavior_rows[0].get("behavior") or "").replace("_", "-")
-
-                    rank = 0
-                    for row in nearest:
-                        target = str(row.get("ea") or "")
-                        current_name = str(row.get("name") or target)
-                        if not current_name.startswith("sub_"):
-                            continue
-                        rank += 1
-                        stem_parts = []
-                        if base_tokens:
-                            stem_parts.extend(base_tokens[:2])
-                        if behavior_tag:
-                            stem_parts.append(behavior_tag)
-                        stem_parts.append(api_token)
-                        stem = "_".join([p for p in stem_parts if p])[:48] or "semantic_handler"
-                        suggested_name = f"{stem}_{target.replace('0x', '')[-4:]}"
-                        conf = max(0.0, min(1.0, float(row.get("similarity") or 0.0)))
-                        ev = []
-                        if include_evidence:
-                            ev = [
-                                {
-                                    "type": "embedding_similarity",
-                                    "value": round(conf, 4),
-                                    "source": "FunctionEmbeddingIndex",
-                                },
-                                {
-                                    "type": "behavior_hint",
-                                    "value": behavior_rows[0].get("behavior") if behavior_rows else "",
-                                    "source": "BehaviorClassifier",
-                                },
-                                {
-                                    "type": "api_token",
-                                    "value": api_token,
-                                    "source": "call-context",
-                                },
-                            ]
-                        suggestions.append(
-                            {
-                                "target": target,
-                                "current_name": current_name,
-                                "suggested_name": suggested_name,
-                                "confidence": round(conf, 4),
-                                "evidence": ev,
-                                "rank": rank,
-                            }
-                        )
-                        if len(suggestions) >= top_k:
-                            break
-                except Exception:
-                    pass
+            for i, row in enumerate(rows[:top_k], start=1):
+                conf = max(0.0, min(1.0, float(row.get("confidence") or 0.0)))
+                ev = []
+                if include_evidence:
+                    ev = [
+                        {"type": "embedding_similarity", "value": round(conf, 4), "source": "FunctionEmbeddingIndex"},
+                        {"type": "nearest_named_function", "value": str(row.get("source_addr") or ""), "source": "FunctionEmbeddingIndex"},
+                    ]
+                suggestions.append(
+                    {
+                        "target": str(row.get("addr") or ""),
+                        "current_name": str(row.get("current_name") or ""),
+                        "suggested_name": str(row.get("suggested_name") or ""),
+                        "confidence": round(conf, 4),
+                        "evidence": ev,
+                        "rank": i,
+                    }
+                )
 
             context["suggestions"] = suggestions
             context["count"] = len(suggestions)
