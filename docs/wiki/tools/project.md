@@ -45,6 +45,8 @@ Project-level operations: save, open, close IDBs, manage working directory, and 
 
 ## Notes
 - `load_binary` creates a new IDB from a raw binary; use `session(action="create")` for session-managed workflows.
+- File content I/O was deduplicated out of `project`; use `misc(action="read_file"|"write_file")` for host filesystem reads/writes.
+- Session listing and orchestration are canonical under `session`/`batch` tools, not `project`.
 - `evidence_graph` builds a directed graph of findings showing support/contradiction relationships — useful for validating conclusions.
 - `knowledge_merge` combines findings from multiple sessions, resolving conflicts by evidence weight.
 - `casefile_export` bundles all analysis artifacts for sharing, archival, or ingestion by external tools.

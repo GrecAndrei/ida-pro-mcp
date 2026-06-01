@@ -3,10 +3,6 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
-try:
-    from .misc import read_file_impl, write_file_impl
-except ImportError:
-    from misc import read_file_impl, write_file_impl  # type: ignore[import-not-found]
 
 import glob
 import hashlib
@@ -35,12 +31,12 @@ def project(
     action: Annotated[Literal[
         "save", "close", "open", "load_binary",
         "list_recent", "get_cwd", "set_cwd", 
-        "list_dir", "exists", "read", "write", "sessions", "batch",
+        "list_dir", "exists",
         "evidence_graph", "knowledge_merge", "confidence_model", "replay_pipeline",
         "hypothesis_tracker", "temporal_reasoning", "semantic_artifact_diff",
         "ai_governance", "knowledge_debt", "casefile_export"
     ], "Action"],
-    path: Annotated[Optional[str], "File path or JSON array of paths for batch"] = None,
+    path: Annotated[Optional[str], "File path"] = None,
     base_addr: Annotated[Optional[str], "Base address for load_binary"] = None,
     content: Annotated[Optional[str], "Content to write, or mode for open"] = None,
     **kwargs
@@ -60,17 +56,6 @@ def project(
           - "overwrite": Forces new database creation (deletes existing)
           - Custom flags: Pass IDA CLI flags like "-c -B -A"
         
-    batch - MULTI-FILE BATCH ANALYSIS (headless mode only!)
-        Params: path (JSON array of paths OR directory path)
-        Returns: {analyzed, failed, total, results: [{path, ok, functions, md5}]}
-        Example: files(action="batch", path='["file1.exe", "file2.exe"]')
-        Example: files(action="batch", path="C:/samples/")
-        Note: Requires idalib-mcp headless mode. Analyzes each file sequentially.
-        
-    sessions - List all spawned IDA sessions
-        Returns: {sessions: [{pid, path, port, started}], current: {pid, path}}
-        Example: files(action="sessions")
-        
     evidence_graph - Build/store evidence-linked findings graph
     knowledge_merge - Merge two session metadata records with conflict analysis
     confidence_model - Score rename/type findings by provenance signal quality
@@ -88,7 +73,7 @@ def project(
     list_recent - List recently opened files
     get_cwd/set_cwd - Working directory management
     list_dir - Directory listing
-    exists/read/write - File system operations
+    exists - File system existence checks
     """
     try:
         import os
@@ -208,24 +193,7 @@ def project(
                     return item
             return None
         
-        if action == "sessions":
-            current = {
-                "pid": os.getpid(),
-                "binary_path": idaapi.get_input_file_path() if hasattr(idaapi, "get_input_file_path") else None,
-                "idb_path": idc.get_idb_path() if hasattr(idc, "get_idb_path") else None,
-                "cwd": os.getcwd(),
-                "runtime_dir": _runtime_root(),
-            }
-            sessions = _discover_sessions()
-            return {
-                "ok": True,
-                "current": current,
-                "sessions": sessions,
-                "count": len(sessions),
-                "note": "Host session tool is preferred, but project.sessions now provides runtime-discovered session metadata.",
-            }
-        
-        elif action == "save":
+        if action == "save":
             import ida_loader
             if ida_loader.save_database(path or "", 0):
                 return {"ok": True, "path": path or idc.get_idb_path()}
@@ -385,85 +353,6 @@ def project(
             if err: return err
             return {"ok": True, "path": path, "exists": os.path.exists(path), "is_file": os.path.isfile(path), "is_dir": os.path.isdir(path)}
         
-        elif action == "read":
-            if not path: return make_error(MCPError.INVALID_ARGS, "path required")
-            out = read_file_impl(path, encoding="utf-8")
-            if out.get("error"):
-                return make_error(MCPError.IDA_ERROR, str(out.get("message") or "read failed"))
-            return {"ok": True, "path": out.get("path"), "content": out.get("content", "")}
-        
-        elif action == "write":
-            if not path or content is None: return make_error(MCPError.INVALID_ARGS, "path and content required")
-            out = write_file_impl(path, str(content), encoding="utf-8")
-            if out.get("error"):
-                return make_error(MCPError.IDA_ERROR, str(out.get("message") or "write failed"))
-            return {"ok": True, "path": out.get("path"), "size": int(out.get("size") or 0)}
-        
-        elif action == "batch":
-            if not path: return make_error(MCPError.INVALID_ARGS, "path required")
-            candidates = []
-            raw = str(path).strip()
-            if raw.startswith("["):
-                try:
-                    parsed = json.loads(raw)
-                    if isinstance(parsed, list):
-                        candidates = [str(p) for p in parsed]
-                except Exception:
-                    return make_error(MCPError.INVALID_ARGS, "Invalid JSON list for batch path")
-            elif os.path.isdir(raw):
-                for name in sorted(os.listdir(raw)):
-                    full = os.path.join(raw, name)
-                    if os.path.isfile(full):
-                        candidates.append(full)
-            else:
-                candidates = [raw]
-
-            if not candidates:
-                return make_error(MCPError.INVALID_ARGS, "No files found for batch analysis")
-
-            out = []
-            analyzed = 0
-            failed = 0
-            for item in candidates:
-                try:
-                    resolved, err = validate_path_safe(item)
-                    if err:
-                        failed += 1
-                        out.append({"path": item, "ok": False, "error": err.get("message", "invalid path")})
-                        continue
-                    if not os.path.isfile(resolved):
-                        failed += 1
-                        out.append({"path": resolved, "ok": False, "error": "not a file"})
-                        continue
-
-                    size = os.path.getsize(resolved)
-                    digest = hashlib.sha256()
-                    with open(resolved, "rb") as fh:
-                        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                            digest.update(chunk)
-                    out.append(
-                        {
-                            "path": resolved,
-                            "ok": True,
-                            "size": size,
-                            "sha256": digest.hexdigest(),
-                            "name": os.path.basename(resolved),
-                        }
-                    )
-                    analyzed += 1
-                except Exception as e:
-                    failed += 1
-                    out.append({"path": item, "ok": False, "error": str(e)})
-
-            return {
-                "ok": True,
-                "analyzed": analyzed,
-                "failed": failed,
-                "total": len(candidates),
-                "results": out,
-                "note": "Batch path now performs portable pre-analysis metadata extraction. Use host session/batch for full multi-runtime analysis.",
-            }
-
         elif action == "evidence_graph":
             pdir = _provenance_dir()
             findings_path = os.path.join(pdir, "findings.json")
