@@ -887,11 +887,11 @@ class TestSearchCalcSemanticRegressions(unittest.TestCase):
         self.assertIn("heapq.heapreplace", self.search_source)
 
     def test_execute_tool_legacy_bridge_does_not_capture_search(self):
-        marker = "legacy_threat_tools = {"
-        idx = self.server_source.find(marker)
-        self.assertGreaterEqual(idx, 0)
-        snippet = self.server_source[idx : idx + 700]
-        self.assertNotIn('"search"', snippet)
+        for line in self.server_source.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            self.assertNotIn("legacy_threat_tools = {", stripped)
 
 
     def test_decompilation_tools_expose_advanced_action_sets(self):

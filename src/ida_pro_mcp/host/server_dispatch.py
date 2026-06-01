@@ -1004,30 +1004,6 @@ class ServerDispatchMixin:
             if tool_name == "truncation":
                 return self._handle_truncation(args)
 
-            legacy_threat_tools = {
-                "trace",
-                "trace_analysis",
-                "coverage",
-                "agent",
-            }
-            if tool_name in legacy_threat_tools:
-                bridged = dict(args or {})
-                legacy_action = str(bridged.get("action") or "").strip()
-                bridged["action"] = "legacy"
-                bridged["legacy_tool"] = tool_name
-                if legacy_action:
-                    bridged["legacy_action"] = legacy_action
-                bridged.setdefault("legacy_passthrough", True)
-                bridged.setdefault("include_evidence", False)
-                bridged.setdefault("profile", "balanced")
-                result = self._handle_threat_hunt(bridged)
-                if isinstance(result, dict) and result.get("ok"):
-                    result = dict(result)
-                    result["legacy_tool"] = tool_name
-                    if legacy_action:
-                        result["legacy_action"] = legacy_action
-                return result
-
             ip = args.pop(
                 "idb", self.current_session.idb_path if self.current_session else None
             )
