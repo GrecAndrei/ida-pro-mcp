@@ -927,7 +927,3 @@ def governance(
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
-
-
-# Backward compatibility alias for older imports/tests.
-CyberCaneGovernance = GovernanceEngine
