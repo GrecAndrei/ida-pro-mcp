@@ -10,7 +10,7 @@ Consolidated malware analysis, vulnerability scanning, and taint/tracing pipelin
 - `findings` — List accumulated threat hunt findings; params: `category`, `severity`
 - `quick` — Fast surface-level triage scan; params: `scope`
 - `deep` — Deep recursive analysis with full call-graph traversal; params: `address`, `max_depth`
-- `legacy` — Route legacy tool calls (vuln_scan, c2_detect, taint); params: `original_tool`, `original_action`
+- `legacy` — Route archived/legacy tool calls (vuln_scan and older threat-family aliases); params: `original_tool`, `original_action`
 
 ## Examples
 ```json

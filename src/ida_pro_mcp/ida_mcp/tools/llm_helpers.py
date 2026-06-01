@@ -1366,7 +1366,7 @@ def llm_helpers(
                 steps.extend([
                     "4. Check imports: imports_deep(action='summary')",
                     "5. Find suspicious strings: string_ops(action='suspicious')",
-                    "6. Check for C2 indicators: c2_detect(action='summary')",
+                    "6. Check for C2 indicators: string_ops(action='indicators')",
                     "7. Detect crypto: crypto_id(action='scan')",
                     "8. Analyze entry point: llm_helpers(action='function_digest', addr='entry')",
                     "9. Check for obfuscation: cfg_analysis(action='flatten_detect', addr='main')",

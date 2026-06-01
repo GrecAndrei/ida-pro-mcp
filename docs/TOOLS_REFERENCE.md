@@ -21,7 +21,7 @@ Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `buil
 | `emulate` | `static_trace` |
 | `edit` | *(delegated to `modify`, `funcs`, `bulk`)* |
 
-Tools not in `TOOLS` but still reachable through compatibility routing: `vuln_scan`, `c2_detect`, `diff`, `structs`.
+Tools not in `TOOLS` but still reachable through compatibility routing: `vuln_scan`, `diff`, `structs`.
 
 ---
 
@@ -329,7 +329,7 @@ YARA scanning with context and cross-reference attribution.
 ## 15. Security & Vulnerability Analysis
 
 ### threat_hunt
-Consolidated malware/vulnerability/tracing orchestration hub. Executes end-to-end pipelines across existing tools and can route legacy actions from archived tools (`vuln_scan`, `c2_detect`, etc.). Returns step-by-step status with deduplicated findings.
+Consolidated malware/vulnerability/tracing orchestration hub. Executes end-to-end pipelines across existing tools and can route legacy actions from archived tools (`vuln_scan`, etc.). Returns step-by-step status with deduplicated findings.
 
 **Actions:** run, malware, vuln, tracing, findings, quick, deep, legacy
 

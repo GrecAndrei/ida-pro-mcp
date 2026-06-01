@@ -43,6 +43,13 @@ def test_prompts_prefer_canonical_string_ops_for_c2_flows():
     assert "string_ops(action=\"indicators\")" in text
 
 
+def test_llm_helpers_prefer_canonical_string_ops_for_c2_flows():
+    p = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "llm_helpers.py"
+    text = p.read_text(encoding="utf-8")
+    assert "c2_detect(action=" not in text
+    assert "string_ops(action='indicators')" in text
+
+
 def test_tools_reference_does_not_mark_canonical_tools_as_legacy_only():
     p = ROOT / "docs" / "TOOLS_REFERENCE.md"
     text = p.read_text(encoding="utf-8")
@@ -52,3 +59,4 @@ def test_tools_reference_does_not_mark_canonical_tools_as_legacy_only():
         if line.startswith("Tools not in `TOOLS` but still reachable through compatibility routing:")
     )
     assert "`taint`" not in legacy_line
+    assert "`c2_detect`" not in legacy_line

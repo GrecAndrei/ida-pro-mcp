@@ -434,10 +434,7 @@ class ServerThreatHuntMixin:
                 ]
         else:
             mapped_module = "malware"
-            if (
-                tool in {"c2_detect", "deobfuscate", "crypto_id", "yara_hunt"}
-                and action
-            ):
+            if tool in {"deobfuscate", "crypto_id", "yara_hunt", "string_ops"} and action:
                 steps = [
                     (
                         tool,
@@ -447,6 +444,19 @@ class ServerThreatHuntMixin:
                             for k, v in args.items()
                             if k
                             not in {"action", "legacy_tool", "legacy_action", "idb"}
+                        },
+                    )
+                ]
+            elif tool == "c2_detect" and action:
+                # Keep legacy compatibility, but route to canonical string_ops implementation.
+                steps = [
+                    (
+                        "string_ops",
+                        action,
+                        {
+                            k: v
+                            for k, v in args.items()
+                            if k not in {"action", "legacy_tool", "legacy_action", "idb"}
                         },
                     )
                 ]
@@ -735,4 +745,3 @@ class ServerThreatHuntMixin:
                 "raw_findings": raw_findings[: min(300, len(raw_findings))]
             }
         return out
-
