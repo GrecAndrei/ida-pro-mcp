@@ -813,16 +813,6 @@ def _funcs_impl(
         return handle_error(e)
 
 
-@idaread
-def _funcs_read_dispatch(**kwargs):
-    return _funcs_impl(**kwargs)
-
-
-@idawrite
-def _funcs_write_dispatch(**kwargs):
-    return _funcs_impl(**kwargs)
-
-
 @tool
 def funcs(
     action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar", "suggest_names"],
@@ -885,10 +875,13 @@ def funcs(
         "include_xrefs": include_xrefs,
         **kwargs,
     }
-    normalized_action = "set_name" if action == "rename" else action
-    if normalized_action in ("list", "info"):
-        return _funcs_read_dispatch(**call_kwargs)
-    return _funcs_write_dispatch(**call_kwargs)
+    # The previous implementation routed read-only actions through
+    # `_funcs_read_dispatch` (decorated with @idaread) and everything
+    # else through `_funcs_write_dispatch` (@idawrite). Both
+    # functions were no-ops that simply called `_funcs_impl(**kwargs)`,
+    # so the read/write split added two layers of indirection with
+    # no observable effect. Inline the call.
+    return _funcs_impl(**call_kwargs)
 
 
 # ============================================================================
