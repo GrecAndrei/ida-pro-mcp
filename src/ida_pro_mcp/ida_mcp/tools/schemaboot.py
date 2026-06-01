@@ -570,124 +570,20 @@ def _add_global_facts(facts: list[tuple[str, str, str, float]]) -> None:
 
 def _build_where_clause(constraints: dict[str, Any]) -> tuple[str, list[Any]]:
     """Build SQL WHERE clause from structured constraints.
-    
-    Supports legacy format (min_size, max_size, apis, etc.) and
-    operator format ({"size": (">=", 100), "name": ("~", "pattern")}).
+
+    Canonical implementation is delegated to HybridQueryBuilder to avoid
+    drift between schemaboot and hybrid_search constraint semantics.
     """
-    conditions: list[str] = []
-    params: list[Any] = []
+    from .hybrid_search import HybridQueryBuilder
 
-    # Try operator format first: value is (op, val) tuple
-    operator_format = any(
-        isinstance(v, (list, tuple)) and len(v) == 2 and str(v[0]) in ("==", "!=", "<", ">", "<=", ">=", "contains", "~")
-        for v in constraints.values()
-    )
+    normalized = dict(constraints or {})
+    addr = normalized.pop("addr", None)
+    if addr is not None:
+        ea, err = validate_addr(addr)
+        if not err:
+            normalized["ea"] = ea
 
-    if operator_format:
-        # Route through hybrid search query builder
-        from .hybrid_search import HybridQueryBuilder
-        where_clause, wc_params, _ = HybridQueryBuilder.build(constraints, table_alias="function_attrs")
-        if where_clause:
-            # Strip the "WHERE " prefix added by HybridQueryBuilder
-            where_clause = where_clause.replace("WHERE ", "", 1) if where_clause.startswith("WHERE ") else where_clause
-            return where_clause, wc_params
-        return "", []
-
-    # Legacy format handling
-    for key, val in constraints.items():
-        if val is None:
-            continue
-        if key == "apis":
-            conditions.append(
-                "EXISTS (SELECT 1 FROM function_apis WHERE function_apis.func_ea = function_attrs.ea AND function_apis.api_name = ?)"
-            )
-            params.append(val)
-        elif key == "strings_like":
-            conditions.append(
-                "EXISTS (SELECT 1 FROM function_strings WHERE function_strings.func_ea = function_attrs.ea AND function_strings.string_text LIKE ?)"
-            )
-            params.append(f"%{val}%")
-        elif key == "string_contains":
-            conditions.append(
-                "EXISTS (SELECT 1 FROM function_strings WHERE function_strings.func_ea = function_attrs.ea AND function_strings.string_text LIKE ?)"
-            )
-            params.append(f"%{val}%")
-        elif key == "name_like":
-            conditions.append("name LIKE ?")
-            params.append(f"%{val}%")
-        elif key == "segment":
-            conditions.append("segment = ?")
-            params.append(val)
-        elif key == "min_size":
-            conditions.append("size >= ?")
-            params.append(int(val))
-        elif key == "max_size":
-            conditions.append("size <= ?")
-            params.append(int(val))
-        elif key == "min_entropy":
-            conditions.append("entropy >= ?")
-            params.append(float(val))
-        elif key == "max_entropy":
-            conditions.append("entropy <= ?")
-            params.append(float(val))
-        elif key == "min_bb_count":
-            conditions.append("bb_count >= ?")
-            params.append(int(val))
-        elif key == "max_bb_count":
-            conditions.append("bb_count <= ?")
-            params.append(int(val))
-        elif key == "has_loops":
-            conditions.append("has_loops = ?")
-            params.append(1 if val else 0)
-        elif key == "has_crypto_constants":
-            conditions.append("has_crypto_constants = ?")
-            params.append(1 if val else 0)
-        elif key == "is_thunk":
-            conditions.append("is_thunk = ?")
-            params.append(1 if val else 0)
-        elif key == "is_library":
-            conditions.append("is_library = ?")
-            params.append(1 if val else 0)
-        elif key == "min_api_count":
-            conditions.append("api_count >= ?")
-            params.append(int(val))
-        elif key == "min_string_count":
-            conditions.append("string_count >= ?")
-            params.append(int(val))
-        elif key == "min_xor_count":
-            conditions.append("xor_count >= ?")
-            params.append(int(val))
-        elif key == "min_call_count":
-            conditions.append("call_count >= ?")
-            params.append(int(val))
-        elif key == "min_cyclomatic":
-            conditions.append("cyclomatic_complexity >= ?")
-            params.append(int(val))
-        elif key == "max_cyclomatic":
-            conditions.append("cyclomatic_complexity <= ?")
-            params.append(int(val))
-        elif key == "min_data_ref_count":
-            conditions.append("data_ref_count >= ?")
-            params.append(int(val))
-        elif key == "min_xor_ratio":
-            conditions.append("xor_ratio >= ?")
-            params.append(float(val))
-        elif key == "max_xor_ratio":
-            conditions.append("xor_ratio <= ?")
-            params.append(float(val))
-        elif key == "min_max_loop_depth":
-            conditions.append("max_loop_depth >= ?")
-            params.append(int(val))
-        elif key == "addr":
-            ea, err = validate_addr(val)
-            if err:
-                continue
-            conditions.append("ea = ?")
-            params.append(ea)
-
-    if conditions:
-        return "WHERE " + " AND ".join(conditions), params
-    return "", []
+    return HybridQueryBuilder.build_legacy(normalized)
 
 
 # ---------------------------------------------------------------------------
