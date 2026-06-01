@@ -275,44 +275,52 @@ def search_semantic(pattern, include_context, range_start, range_end, offset, li
     return result
 
 
-def search_callers(pattern, include_context, offset, limit, semantic_min_score, include_alternatives, include_items):
-    """Find functions calling target."""
-    target_ea, error, sem_meta = resolve_target(
-        pattern, require_function=True, include_imports=False,
-        semantic_min_score=semantic_min_score, include_alternatives=include_alternatives
-    )
-    if error:
-        return build_response(
-            [],
-            offset,
-            limit,
-            0,
-            False,
-            target=str(pattern),
-            note="Target is not a function address/name. Returning empty callers list.",
-        )
+def _build_call_graph_rows(func, get_relations):
+    """Build a {func_start_ea -> row} map of callers/callees for `func`.
 
-    func = idaapi.get_func(target_ea)
-    if not func:
-        return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
+    `get_relations(func)` is a callable that yields (other_ea, site_ea) pairs:
+      - (caller_ea, call_site) for callers
+      - (callee_ea, call_site) for callees
+    The pair represents one cross-reference edge.
 
-    callers = {}
-    for xref in idautils.XrefsTo(func.start_ea, 0):
-        if not xref.iscode:
+    Returns dict keyed by other_ea with shape:
+        {address_ea, address, name, call_sites: [site_ea, ...]}
+    """
+    rows = {}
+    for other_ea, site_ea in get_relations(func):
+        other_func = idaapi.get_func(other_ea)
+        if not other_func:
             continue
-        caller_func = idaapi.get_func(xref.frm)
-        if not caller_func:
-            continue
-        key = caller_func.start_ea
-        if key not in callers:
-            callers[key] = {
+        key = other_func.start_ea
+        if key not in rows:
+            rows[key] = {
                 "address_ea": key, "address": hex(key),
                 "name": ida_funcs.get_func_name(key), "call_sites": [],
             }
-        callers[key]["call_sites"].append(xref.frm)
+        rows[key]["call_sites"].append(site_ea)
+    return rows
+
+
+def _format_call_graph_response(
+    rows, func, target_ea, sem_meta,
+    *, include_context, offset, limit, include_items, empty_note,
+):
+    """Rank, format, paginate, and return a call-graph response payload.
+
+    `rows` is the {func_ea -> {address_ea, address, name, call_sites}} dict
+    produced by `_build_call_graph_rows`. `empty_note` is the response
+    `note` shown when the graph is empty.
+    """
+    if not rows:
+        return build_response(
+            [], offset, limit, 0, False,
+            target=idc.get_name(target_ea) or hex(target_ea),
+            target_addr=hex(func.start_ea),
+            note=empty_note,
+        )
 
     ranked = []
-    for row in callers.values():
+    for row in rows.values():
         call_sites = sorted(set(row["call_sites"]))
         first_site = call_sites[0] if call_sites else row["address_ea"]
         line = f"{row['address']}  {row['name']}  calls={len(call_sites)}  first@{hex(first_site)}"
@@ -338,6 +346,42 @@ def search_callers(pattern, include_context, offset, limit, semantic_min_score, 
             for r in page
         ]
     return result
+
+
+def search_callers(pattern, include_context, offset, limit, semantic_min_score, include_alternatives, include_items):
+    """Find functions calling target."""
+    target_ea, error, sem_meta = resolve_target(
+        pattern, require_function=True, include_imports=False,
+        semantic_min_score=semantic_min_score, include_alternatives=include_alternatives
+    )
+    if error:
+        return build_response(
+            [],
+            offset,
+            limit,
+            0,
+            False,
+            target=str(pattern),
+            note="Target is not a function address/name. Returning empty callers list.",
+        )
+
+    func = idaapi.get_func(target_ea)
+    if not func:
+        return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
+
+    def _iter_caller_edges(target_func):
+        for xref in idautils.XrefsTo(target_func.start_ea, 0):
+            if not xref.iscode:
+                continue
+            yield (xref.frm, xref.frm)
+
+    rows = _build_call_graph_rows(func, _iter_caller_edges)
+    return _format_call_graph_response(
+        rows, func, target_ea, sem_meta,
+        include_context=include_context,
+        offset=offset, limit=limit, include_items=include_items,
+        empty_note="Target has no callers.",
+    )
 
 
 def search_callees(pattern, include_context, offset, limit, semantic_min_score, include_alternatives, include_items):
@@ -361,49 +405,20 @@ def search_callees(pattern, include_context, offset, limit, semantic_min_score, 
     if not func:
         return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
 
-    callees = {}
-    for item in idautils.FuncItems(func.start_ea):
-        for xref in idautils.XrefsFrom(item, 0):
-            if xref.type not in CALL_XREF_TYPES:
-                continue
-            callee_func = idaapi.get_func(xref.to)
-            if not callee_func:
-                continue
-            key = callee_func.start_ea
-            if key not in callees:
-                callees[key] = {
-                    "address_ea": key, "address": hex(key),
-                    "name": ida_funcs.get_func_name(key), "call_sites": [],
-                }
-            callees[key]["call_sites"].append(item)
+    def _iter_callee_edges(target_func):
+        for item in idautils.FuncItems(target_func.start_ea):
+            for xref in idautils.XrefsFrom(item, 0):
+                if xref.type not in CALL_XREF_TYPES:
+                    continue
+                yield (xref.to, item)
 
-    ranked = []
-    for row in callees.values():
-        call_sites = sorted(set(row["call_sites"]))
-        first_site = call_sites[0] if call_sites else row["address_ea"]
-        line = f"{row['address']}  {row['name']}  calls={len(call_sites)}  first@{hex(first_site)}"
-        if include_context and call_sites:
-            disasm_line = safe_generate_disasm_line(first_site)
-            line += f"  {clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else '')}"
-        row["line"] = line
-        row["score"] = len(call_sites)
-        row["first_site"] = hex(first_site)
-        ranked.append(row)
-
-    page, total, is_truncated = paginate_records(
-        ranked, offset, limit, sort_key=lambda r: (r["score"], r["address_ea"])
+    rows = _build_call_graph_rows(func, _iter_callee_edges)
+    return _format_call_graph_response(
+        rows, func, target_ea, sem_meta,
+        include_context=include_context,
+        offset=offset, limit=limit, include_items=include_items,
+        empty_note="Target calls no functions.",
     )
-    result = build_response(
-        [r["line"] for r in page], offset, limit, total, is_truncated,
-        target=idc.get_name(target_ea) or hex(target_ea), target_addr=hex(func.start_ea)
-    )
-    result.update(sem_meta)
-    if include_items:
-        result["items"] = [
-            {"address": r["address"], "name": r["name"], "call_count": r["score"], "first_call_site": r["first_site"]}
-            for r in page
-        ]
-    return result
 
 
 def search_api(pattern, include_context, offset, limit, include_items, include_breakdown):
