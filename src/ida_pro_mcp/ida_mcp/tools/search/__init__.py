@@ -1,6 +1,6 @@
 """SEARCH - Unified pattern, reference, and semantic search for LLM-centric RE.
 
-VOERA Architecture:
+Architecture:
 - Neuro-Symbolic Governance: semantic target resolution with score thresholds
 - Structured Semantic Retrieval: schema-based pre-filtering via structured action
 - Context Density Optimization: compact text output with optional structured items

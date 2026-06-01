@@ -294,8 +294,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         except Exception:
             pass
 
-    def _observe_memrl(self, tool_name: str, action: str, payload: dict) -> None:
-        """No-op stub — MemRL feedback now runs via auto_reward_for_addr in _record_activity."""
+    def _observe_preference(self, tool_name: str, action: str, payload: dict) -> None:
+        """No-op stub — preference feedback now runs via auto_reward_for_addr in _record_activity."""
         pass
 
     def _collect_hex_addresses(self, value: Any, max_items: int = 8) -> list[str]:
@@ -711,10 +711,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         except Exception:
                             pass
                     
-                    # Phase 2: BridgeRAG multi-hop relation discovery
+                    # Phase 2: multi-hop bridge-conditioned relation discovery
                     if addr and tool_name in ("code", "data", "search"):
                         try:
-                            bridge_res = self._execute_tool("bridgerag", {
+                            bridge_res = self._execute_tool("bridge_search", {
                                 "action": "bridges",
                                 "func_ea": addr,
                                 "bridge_types": ["apis", "strings"],
@@ -725,7 +725,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                     ghost_results["bridge_entities"] = {
                                         "apis": bridges.get("apis", [])[:5],
                                         "strings": bridges.get("strings", [])[:5],
-                                        "note": "Shared APIs/strings with other functions. Use bridgerag.search for full discovery."
+                                        "note": "Shared APIs/strings with other functions. Use bridge_search.search for full discovery."
                                     }
                         except Exception:
                             pass

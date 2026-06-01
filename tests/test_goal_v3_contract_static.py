@@ -283,7 +283,7 @@ def test_server_ghost_chain_is_not_code_only():
     assert "if tool_name == \"code\" and addr and ghost_action in (\"decompile\", \"semantic_decompile\")" not in src
 
 
-def test_server_bridgerag_and_related_enrichment_are_addr_gated():
+def test_server_bridge_search_and_related_enrichment_are_addr_gated():
     src = _read("src/ida_pro_mcp/host/server.py")
     assert "if addr and tool_name in (\"code\", \"data\", \"search\"):" in src
 

@@ -167,7 +167,7 @@ def main():
             ("agent", {"action": "context_pack", "addr": entry_addr}),
             ("microcode", {"action": "get", "addr": entry_addr}),
             ("graph", {"action": "cfg", "addr": entry_addr}),
-            ("bridgerag", {"action": "bridges", "func_name": "wWinMainCRTStartup", "bridge_types": ["apis"]}),
+            ("bridge_search", {"action": "bridges", "func_name": "wWinMainCRTStartup", "bridge_types": ["apis"]}),
             ("agent", {"action": "cfg_stats"}),
             ("bulk", {"action": "comment", "items": [{"addr": entry_addr, "value": "probe bulk"}]}),
             ("ctree", {"action": "get", "addr": entry_addr}),

@@ -43,7 +43,7 @@ def test_canonical_modules_are_importable():
         SemanticObject,
         SemanticObjectIndex,
         _extract_signature,
-        emit_memrl_suggestion,
+        emit_preference_suggestion,
     )
     from ida_pro_mcp.host.intelligence_context import ContextAssembler, get_assembler
     # Smoke-construct: classes are reachable
@@ -56,5 +56,5 @@ def test_canonical_modules_are_importable():
     assert SemanticObjectIndex is not None
     assert PreferenceMemoryBank is not None
     assert _extract_signature is not None
-    assert emit_memrl_suggestion is not None
+    assert emit_preference_suggestion is not None
     assert isinstance(INTEL_PROFILE, bool)

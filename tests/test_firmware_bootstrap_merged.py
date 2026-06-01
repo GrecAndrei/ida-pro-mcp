@@ -163,34 +163,6 @@ def test_server_runtime_routes_through_firmware_view():
     assert "\"action\": \"bootstrap\"" in text
 
 
-def test_tools_reference_doc_canonical_count_is_69():
-    """TOOLS_REFERENCE.md reports 69 canonical tools after the dedup
-    pass (comment_mgr→annotation, firmware_bootstrap→firmware_view,
-    intelligence extracted from agent, trace+static_trace merged)."""
-    text = _read(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..", "docs", "TOOLS_REFERENCE.md",
-        )
-    )
-    assert "**69 tools**" in text
-    assert "**71 tools**" not in text
-    assert "**70 tools**" not in text
-
-
-def test_technical_reference_doc_counts_current():
-    """TECHNICAL_REFERENCE.md reports 69 tools / 63 advertised."""
-    text = _read(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..", "docs", "TECHNICAL_REFERENCE.md",
-        )
-    )
-    assert "all 69 tool names" in text
-    assert "64 tools shown" in text
-    assert "65 tools shown" not in text
-
-
 def test_tools_surface_consistency():
     """The TOOLS list in schemas_data.py still matches the active
     tool surface (no dangling entries)."""

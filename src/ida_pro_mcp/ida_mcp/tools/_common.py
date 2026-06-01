@@ -66,7 +66,7 @@ except (ImportError, ValueError):
         require_arg, require_one_of, validate_action, validate_count
     )
 
-# Centralized API categories (VOERA deduplication)
+# Centralized API categories (deduplication)
 try:
     from ..support._api_categories import (
         API_CATEGORIES, API_TO_CATEGORY, DANGEROUS_APIS,

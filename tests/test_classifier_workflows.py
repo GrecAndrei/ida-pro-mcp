@@ -298,7 +298,7 @@ class TestFirmwareViewBounds(unittest.TestCase):
             setattr(eh_mod, name, lambda *args, **kwargs: None)
         sys.modules["error_handling"] = eh_mod
         memrl_mod = types.ModuleType("memrl")
-        memrl_mod.emit_memrl_suggestion = lambda *args, **kwargs: ""
+        memrl_mod.emit_preference_suggestion = lambda *args, **kwargs: ""
         sys.modules["memrl"] = memrl_mod
         bb_mod = types.ModuleType("blackboard")
         bb_mod.BlackboardStore = None

@@ -1,4 +1,11 @@
-"""MemRL preference store and reward constants."""
+"""Preference memory store and reward constants.
+
+SQLite-backed intent/experience utility memory used for ranking
+retrieval candidates by learned utility rather than pure similarity,
+and for tracking suggestion lifecycles. The legacy
+``ida_mcp.tools.memrl`` module was a duplicate of this file and has
+been removed.
+"""
 
 from __future__ import annotations
 
@@ -25,11 +32,12 @@ DEFAULT_ALPHA = 0.15
 
 class PreferenceMemoryBank:
     """
-    SQLite-backed intent/expression utility memory.
+    SQLite-backed intent/experience utility memory.
 
-    This is the canonical runtime backend for MemRL-style ranking and
-    suggestion tracking. The legacy `ida_mcp.tools.memrl` module remains as a
-    compatibility surface for tests and direct imports.
+    Stores (intent_key, experience_key, q_value) triplets and updates
+    Q-values via TD(0) on analyst feedback. Also tracks a separate
+    suggestions table with accept/reject/partial/undo feedback
+    lifecycles.
     """
 
     def __init__(self, db_path: Optional[str] = None):

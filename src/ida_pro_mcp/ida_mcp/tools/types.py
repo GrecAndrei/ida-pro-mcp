@@ -4,7 +4,7 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-# Ensure VOERA utility functions for local var type modification are available
+# Ensure utility functions for local var type modification are available
 try:
     from ida_mcp.utils import my_modifier_t, refresh_decompiler_ctext
 except ImportError:

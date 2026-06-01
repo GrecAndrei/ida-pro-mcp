@@ -10,17 +10,35 @@ except ImportError:
     from governance_engine import evaluate_operation  # type: ignore[import-not-found]
 
 try:
-    from .memrl import emit_memrl_suggestion, REWARD_ACCEPT, REWARD_PARTIAL, REWARD_REJECT
+    from ..host.intelligence_core import (
+        emit_preference_suggestion,
+        REWARD_ACCEPT,
+        REWARD_PARTIAL,
+        REWARD_REJECT,
+    )
 except ImportError:
     try:
-        from memrl import emit_memrl_suggestion, REWARD_ACCEPT, REWARD_PARTIAL, REWARD_REJECT  # type: ignore[import-not-found]
+        from ida_pro_mcp.host.intelligence_core import (  # type: ignore[import-not-found]
+            emit_preference_suggestion,
+            REWARD_ACCEPT,
+            REWARD_PARTIAL,
+            REWARD_REJECT,
+        )
     except ImportError:
-        # No-op fallback if MemRL not available
-        def emit_memrl_suggestion(*args, **kwargs):  # type: ignore
-            return ""
-        REWARD_ACCEPT = 1.0
-        REWARD_PARTIAL = 0.5
-        REWARD_REJECT = -0.5
+        try:
+            from host.intelligence_core import (  # type: ignore[import-not-found]
+                emit_preference_suggestion,
+                REWARD_ACCEPT,
+                REWARD_PARTIAL,
+                REWARD_REJECT,
+            )
+        except ImportError:
+            # No-op fallback if preference store not available
+            def emit_preference_suggestion(*args, **kwargs):  # type: ignore
+                return ""
+            REWARD_ACCEPT = 1.0
+            REWARD_PARTIAL = 0.5
+            REWARD_REJECT = -0.5
 import hashlib
 
 
@@ -71,11 +89,11 @@ def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# MemRL feedback helper
+# Preference feedback helper
 # ---------------------------------------------------------------------------
 
 def _apply_memrl_feedback(suggestion_id: str, feedback_type: str) -> dict:
-    """Apply a feedback signal to a MemRL suggestion.
+    """Apply a feedback signal to a preference suggestion.
 
     Maps human-readable feedback types to reward values:
 
@@ -84,7 +102,7 @@ def _apply_memrl_feedback(suggestion_id: str, feedback_type: str) -> dict:
         'skip'    ->  0.0
         'reject'  -> -0.5
 
-    Uses the MemRLBank directly. Returns {"ok": True/False, ...}.
+    Uses PreferenceMemoryBank directly. Returns {"ok": True/False, ...}.
     """
     reward_map = {
         "accept": REWARD_ACCEPT,
@@ -100,12 +118,9 @@ def _apply_memrl_feedback(suggestion_id: str, feedback_type: str) -> dict:
         from ida_pro_mcp.host.intelligence_core import PreferenceMemoryBank
     except Exception:
         try:
-            from .memrl import MemRLBank as PreferenceMemoryBank
+            from host.intelligence_core import PreferenceMemoryBank  # type: ignore[import-not-found]
         except ImportError:
-            try:
-                from memrl import MemRLBank as PreferenceMemoryBank  # type: ignore[import-not-found]
-            except ImportError:
-                return {"ok": False, "error": "MemRLBank not available"}
+            return {"ok": False, "error": "PreferenceMemoryBank not available"}
 
     bank = PreferenceMemoryBank()
     return bank.process_feedback(suggestion_id, reward)
@@ -180,9 +195,9 @@ def modify(
                             "Comment type (for action=comment)"] = "regular",
     governed: Annotated[bool, "Enable deterministic governance pre-check"] = True,
     feedback: Annotated[Optional[Literal["accept", "reject", "partial", "skip"]],
-                         "Optional feedback signal to MemRL after this operation"] = None,
+                         "Optional feedback signal to preference store after this operation"] = None,
     memrl_suggestion_id: Annotated[Optional[str],
-                                    "Suggestion ID from a prior MemRL ingest for feedback attribution"] = None,
+                                    "Suggestion ID from a prior preference store ingest for feedback attribution"] = None,
     **kwargs
 ) -> dict:
     """
@@ -203,13 +218,13 @@ def modify(
     - governed: If True (default), run governance pre-check before
       committing. Blocks dangerous patches, redacts PII, warns on misleading
       renames. Set to False to bypass (not recommended).
-    - feedback: Optional feedback signal to MemRL:
+    - feedback: Optional feedback signal to preference store:
         'accept' = +1.0 (analyst accepted suggestion)
         'partial' = +0.5 (analyst made minor edits)
         'reject' = -0.5 (analyst rejected suggestion)
         'skip' = 0.0 (suggestion ignored)
     - memrl_suggestion_id: If provided, the feedback is applied to this
-      specific MemRL suggestion instead of creating a new one.
+      specific preference suggestion instead of creating a new one.
     """
     try:
         # Support multiple parameter names for compatibility
@@ -290,9 +305,9 @@ def modify(
                 result = {"ok": True, "addr": addr, "name": value}
                 if gov_warnings:
                     result["governance_warnings"] = gov_warnings
-                # Auto-ingest suggestion to MemRL
+                # Auto-ingest suggestion to preference store
                 try:
-                    sug_id = emit_memrl_suggestion(
+                    sug_id = emit_preference_suggestion(
                         "modify", "rename", addr, value
                     )
                     if sug_id:
@@ -329,9 +344,9 @@ def modify(
             result = {"ok": True, "addr": addr, "comment_type": comment_type, "comment": value}
             if gov_warnings:
                 result["governance_warnings"] = gov_warnings
-            # Auto-ingest suggestion to MemRL
+            # Auto-ingest suggestion to preference store
             try:
-                sug_id = emit_memrl_suggestion(
+                sug_id = emit_preference_suggestion(
                     "modify", "comment", addr, value
                 )
                 if sug_id:
@@ -351,9 +366,9 @@ def modify(
                 result = {"ok": True, "addr": addr, "type": str(tif)}
                 if gov_warnings:
                     result["governance_warnings"] = gov_warnings
-                # Auto-ingest suggestion to MemRL
+                # Auto-ingest suggestion to preference store
                 try:
-                    sug_id = emit_memrl_suggestion(
+                    sug_id = emit_preference_suggestion(
                         "modify", "set_type", addr, value
                     )
                     if sug_id:
@@ -412,9 +427,9 @@ def modify(
                 result = {"ok": True, "addr": addr, "total_size": total_size, "instructions": patched, "count": len(patched)}
             if gov_warnings:
                 result["governance_warnings"] = gov_warnings
-            # Auto-ingest suggestion to MemRL
+            # Auto-ingest suggestion to preference store
             try:
-                sug_id = emit_memrl_suggestion(
+                sug_id = emit_preference_suggestion(
                     "modify", "patch_asm", addr, "; ".join(instructions)
                 )
                 if sug_id:

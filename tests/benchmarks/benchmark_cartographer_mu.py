@@ -7,7 +7,7 @@ Measures:
   2. Accuracy: relevance ranking quality vs baselines
   3. Memory: footprint and scalability
   4. Determinism: consistency guarantees
-  5. Learning: MemRL convergence speed
+  5. Learning: preference convergence speed
   6. Scalability: performance vs blackboard size
 """
 import os

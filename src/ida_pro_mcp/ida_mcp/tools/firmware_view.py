@@ -4,13 +4,16 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from .memrl import emit_memrl_suggestion
+    from ..host.intelligence_core import emit_preference_suggestion
 except ImportError:
     try:
-        from memrl import emit_memrl_suggestion  # type: ignore[import-not-found]
+        from ida_pro_mcp.host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
     except ImportError:
-        def emit_memrl_suggestion(*args, **kwargs):  # type: ignore
-            return ""
+        try:
+            from host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
+        except ImportError:
+            def emit_preference_suggestion(*args, **kwargs):  # type: ignore
+                return ""
 
 try:
     from .blackboard import BlackboardStore
@@ -605,8 +608,8 @@ def firmware_view(
         def _log_ml(result: dict, act: str, details: str):
             try:
                 sug = ""
-                if callable(emit_memrl_suggestion):
-                    sug = emit_memrl_suggestion("firmware_view", act, hex(s_ea), details)
+                if callable(emit_preference_suggestion):
+                    sug = emit_preference_suggestion("firmware_view", act, hex(s_ea), details)
                 if sug:
                     result["memrl_suggestion_id"] = sug
             except Exception:

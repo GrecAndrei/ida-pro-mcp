@@ -38,7 +38,7 @@ Auto-generated from wiki file structure.
 
 - [bookmarks](tools/bookmarks.md)
 
-- [bridgerag](tools/bridgerag.md)
+- [bridge_search](tools/bridge_search.md)
 
 - [bulk](tools/bulk.md)
 

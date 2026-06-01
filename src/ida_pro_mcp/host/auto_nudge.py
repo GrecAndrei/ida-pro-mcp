@@ -173,7 +173,7 @@ class AutoNudge:
             if count >= 3:
                 nudge["redundant"] = f"You have searched for '{q}' {count} times already"
 
-        # 4. Smart tool suggestions (Z-score normalized, behavior-tag aware, MemRL-informed)
+        # 4. Smart tool suggestions (Z-score normalized, behavior-tag aware, preference-informed)
         suggestions = suggest_smart_tools(
             tool, action, response,
             behavior_tags=response.get("_digest", {}).get("behavior_tags", []) if isinstance(response, dict) else [],
@@ -234,7 +234,7 @@ _TOOL_SUGGESTION_BASE = {
     # When analyzing a function
     "code:decompile": {"base": 0, "triggers": [], "next": [
         ("code:callers", 0.3), ("code:callees", 0.3), ("code:blocks", 0.2),
-        ("ctree:get", 0.2), ("bridgerag:search", 0.3), ("stack_analysis:analyze_frame", 0.15),
+        ("ctree:get", 0.2), ("bridge_search:search", 0.3), ("stack_analysis:analyze_frame", 0.15),
         ("crypto_id:detect", 0.2), ("code:strings_in_func", 0.15),
     ]},
     "data:functions": {"base": 0, "triggers": [], "next": [
@@ -268,7 +268,7 @@ _TOOL_SUGGESTION_BASE = {
         ("binary_info:checksums", 0.15), ("binary_info:relocations", 0.1),
     ]},
     # Bridgerag triggers
-    "bridgerag:search": {"base": 0, "triggers": [], "next": [
+    "bridge_search:search": {"base": 0, "triggers": [], "next": [
         ("code:decompile", 0.35), ("xref_analysis:call_chain", 0.25),
         ("compare:functions", 0.15), ("code:decompile_chain", 0.1),
     ]},
@@ -427,7 +427,7 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
                 suggestions.append(f"code.callers(addr='{addr}') — find what calls this function")
             if callee_count == 0:
                 suggestions.append(f"code.callees(addr='{addr}') — find what this function calls")
-            suggestions.append(f"bridgerag.search from '{addr}' — find structurally related functions")
+            suggestions.append(f"bridge_search.search from '{addr}' — find structurally related functions")
             suggestions.append(f"ctree.get(addr='{addr}') — examine the abstract syntax tree")
             
             return {
@@ -471,7 +471,7 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
                     "redirect": [
                         "Take a step back. Check session.dashboard() for progress.",
                         "Try pivoting: search for a different pattern, or look at a different part of the binary.",
-                        "Use bridgerag.search to find related functions from a different starting point.",
+                        "Use bridge_search.search to find related functions from a different starting point.",
                     ],
                 }
     else:

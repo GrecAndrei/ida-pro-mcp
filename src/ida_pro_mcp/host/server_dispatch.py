@@ -87,9 +87,9 @@ class ServerDispatchMixin:
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}
                 res = truncate_response(res, max_tokens=self.default_truncate_tokens)
-                # MemRL observation for IDA-side tools
+                # Preference observation for IDA-side tools
                 if isinstance(res, dict):
-                    self._observe_memrl(
+                    self._observe_preference(
                         tool_name,
                         str(kwargs.get("action") or ""),
                         res,
@@ -830,7 +830,7 @@ class ServerDispatchMixin:
                     args = new_args
                     action = new_args.get("action", "")
                     reroute_applied = True
-                    # Wire MemRL feedback: mark this reroute as successful
+                    # Wire preference feedback: mark this reroute as successful
                     try:
                         from .auto_nudge import record_tool_call as nudge_record
                         idb_key = (self.current_session.idb_path if self.current_session else "")

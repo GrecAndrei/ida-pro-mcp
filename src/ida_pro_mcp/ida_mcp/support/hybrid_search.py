@@ -16,8 +16,8 @@ Architecture (SSR-style):
             (caller can fall through to full search)
 
 Design references:
-  - AnnoRetrieve (arXiv:2604.02690): SchemaBoot + SSR hybrid retrieval
-  - flexvec (arXiv:2603.22587): SQL pre-filtering before vector search
+  - AnnoRetrieve: SchemaBoot + SSR hybrid retrieval
+  - flexvec: SQL pre-filtering before vector search
 """
 
 import re

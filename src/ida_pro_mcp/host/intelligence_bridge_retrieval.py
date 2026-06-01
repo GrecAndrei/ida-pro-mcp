@@ -1,68 +1,47 @@
-"""
-BridgeRAG: Bridge-conditioned Multi-Hop Search for Reverse Engineering.
+"""Multi-Hop Bridge-Conditioned Retrieval.
 
-Deterministic multi-hop retrieval that finds structurally related functions
-through shared bridge entities (APIs, strings, xrefs).  Uses SchemaBoot's
-SQLite index as the bridge source.  No LLM required.
+Deterministic multi-hop retrieval that finds structurally related
+functions through shared bridge entities (APIs, strings, xrefs).  Uses
+SchemaBoot's SQLite index as the bridge source.  No LLM required for
+the algorithm itself (an optional embedder improves scoring).
 
-Inspired by VOERA's BridgeRAG architecture:
+The scoring model is
   s(q, b, c) = conditional utility of candidate c given query q and bridge b.
+
+This module is the canonical host-layer implementation.  The thin MCP
+tool wrapper lives in ``ida_mcp.tools.bridge_search`` so the
+``bridge_search(...)`` action continues to be exposed to LLM clients.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import sqlite3
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
-    from ._common import *
-except ImportError:
+    from .intelligence_core import BgeCodeEmbedder
+except Exception:  # pragma: no cover - test/import flexibility
     try:
-        from _common import *  # type: ignore[import-not-found]
-    except ImportError:
-        pass
-
-# Safety fallbacks if _common import partially failed
-if "tool" not in globals():
-    tool = lambda f: f  # type: ignore
-if "idaread" not in globals():
-    idaread = lambda f: f  # type: ignore
-if "idawrite" not in globals():
-    idawrite = lambda f: f  # type: ignore
-if "IDAError" not in globals():
-    IDAError = Exception  # type: ignore
-
-try:
-    from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
-except Exception:
-    try:
-        from host.intelligence_core import BgeCodeEmbedder# type: ignore
+        from intelligence_core import BgeCodeEmbedder  # type: ignore[import-not-found]
     except Exception:
         BgeCodeEmbedder = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# SchemaBoot DB helpers (reused from schemaboot to avoid import issues)
+# SchemaBoot DB helpers
 # ---------------------------------------------------------------------------
 
-def _db_path() -> str:
-    try:
-        import ida_loader
-        return ida_loader.get_path(ida_loader.PATH_TYPE_IDB) + ".schemaboot.db"
-    except Exception:
-        pass
-    try:
-        import idautils
-        import idc
-        return idc.get_idb_path() + ".schemaboot.db"
-    except Exception:
-        pass
-    return "unknown.schemaboot.db"
-
-
 def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
-    base = candidate or _db_path()
+    """Resolve the SchemaBoot DB path.
+
+    Tries the explicit candidate first, then walks a list of common
+    variations (.i64.schemaboot.db vs .schemaboot.db vs sibling files
+    in the same directory) and returns the first one whose tables
+    actually exist.
+    """
+    base = candidate or "unknown.schemaboot.db"
     candidates = [base]
     if base.endswith(".i64.schemaboot.db"):
         candidates.append(base.replace(".i64.schemaboot.db", ".schemaboot.db"))
@@ -82,7 +61,9 @@ def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
         try:
             conn = sqlite3.connect(path)
             cur = conn.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='function_attrs'")
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='function_attrs'"
+            )
             ok = cur.fetchone() is not None
             conn.close()
             if ok:
@@ -98,22 +79,33 @@ def _build_where_clause(constraints: Dict) -> Tuple[str, List[object]]:
     Delegates to HybridQueryBuilder.build_legacy (the single canonical
     implementation) so we don't drift from schemaboot's query dialect.
     """
-    from ..support.hybrid_search import HybridQueryBuilder
+    try:
+        from .hybrid_search import HybridQueryBuilder
+    except Exception:
+        from support.hybrid_search import HybridQueryBuilder  # type: ignore[import-not-found]
     return HybridQueryBuilder.build_legacy(constraints or {})
 
 
 # ---------------------------------------------------------------------------
-# BridgeRAG Engine
+# Multi-hop bridge-conditioned retrieval
 # ---------------------------------------------------------------------------
 
-class BridgeRAGSearch:
-    """
-    Multi-hop search using SchemaBoot as the bridge entity source.
+class MultiHopBridgeIndex:
+    """Multi-hop search using SchemaBoot as the bridge entity source.
+
+    The retrieval pipeline is:
+        seed  --(extract_bridges)-->  bridge entities
+        bridges  --(search_via_bridges)-->  candidate functions
+        candidates  --(optional hop 3)-->  expanded candidate set
+
+    Ranking uses an IDF-weighted tripartite scorer
+    s(q, b, c) with percentile-rank (PIT) fusion between the judge
+    score and a raw bridge-overlap signal.
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, embedder: Optional[Any] = None):
         self.db_path = _resolve_schemaboot_db_path(db_path)
-        self._embedder = None
+        self._embedder = embedder
 
     def _get_embedder(self):
         if self._embedder is not None:
@@ -140,9 +132,9 @@ class BridgeRAGSearch:
         bridge_types: Tuple[str, ...] = ("apis", "strings"),
         max_bridges: int = 10,
     ) -> Dict[str, List[str]]:
-        """
-        Extract bridge entities from a seed function.
-        Returns {"apis": [...], "strings": [...]} sorted by frequency.
+        """Extract bridge entities from a seed function.
+
+        Returns ``{"apis": [...], "strings": [...]}`` sorted by frequency.
         """
         bridges: Dict[str, List[str]] = {}
 
@@ -209,15 +201,14 @@ class BridgeRAGSearch:
     def _compute_bridge_idf(
         self, bridge_apis: List[str], bridge_strings: List[str]
     ) -> Dict[str, float]:
-        """
-        IDF weights for bridge entities.  Rare bridges (appearing in few
-        functions) are more discriminative: IDF(b) = log(N / DF(b) + 1).
+        """IDF weights for bridge entities.
 
-        This is the key improvement over flat per-entity counting — a bridge
-        that appears in every function tells us nothing; one that appears in
-        only 3 functions is highly informative.
+        Rare bridges (appearing in few functions) are more discriminative:
+        IDF(b) = log(N / DF(b) + 1).
+
+        A bridge that appears in every function tells us nothing; one
+        that appears in only 3 functions is highly informative.
         """
-        import math as _math
         idf: Dict[str, float] = {}
         try:
             conn = self._conn()
@@ -233,7 +224,7 @@ class BridgeRAGSearch:
                 )
                 r = cur.fetchone()
                 df = r[0] if r else 1
-                idf[api] = _math.log(N / max(df, 1) + 1)
+                idf[api] = math.log(N / max(df, 1) + 1)
 
             for s in bridge_strings:
                 cur.execute(
@@ -242,7 +233,7 @@ class BridgeRAGSearch:
                 )
                 r = cur.fetchone()
                 df = r[0] if r else 1
-                idf[s] = _math.log(N / max(df, 1) + 1)
+                idf[s] = math.log(N / max(df, 1) + 1)
 
             conn.close()
         except Exception:
@@ -258,14 +249,12 @@ class BridgeRAGSearch:
         candidate_attrs: Dict,
         idf_weights: Optional[Dict[str, float]] = None,
     ) -> float:
-        """
-        Tripartite scorer s(q, b, c): conditional utility of candidate c
-        given query q and bridge b.
+        """Tripartite scorer s(q, b, c).
+
+        Conditional utility of candidate c given query q and bridge b.
 
         Implements IDF-weighted bridge overlap so rare APIs/strings count
-        more than ubiquitous ones (e.g. malloc, free).  This is the key
-        mechanism from the BridgeRAG paper — conditioning on bridge entity
-        specificity rather than raw co-occurrence counts.
+        more than ubiquitous ones (e.g. malloc, free).
 
         Returns score in [0, 1].
         """
@@ -289,7 +278,7 @@ class BridgeRAGSearch:
         )
 
         embedder = self._get_embedder()
-        if embedder is not None:
+        if embedder is not None and BgeCodeEmbedder is not None:
             try:
                 sv = embedder.embed(seed_text[:1200])
                 cv = embedder.embed(cand_text[:1200])
@@ -313,9 +302,8 @@ class BridgeRAGSearch:
         bridge_scores: List[float],
         alpha: float = 0.1,
     ) -> List[float]:
-        """
-        Percentile-rank (PIT) fusion of tripartite judge scores and bridge similarity.
-        
+        """Percentile-rank (PIT) fusion of tripartite judge scores and bridge similarity.
+
         F(i) = (1 - alpha) * PIT_judge(i) + alpha * PIT_bridge(i)
         """
         def _pit(scores: List[float]) -> List[float]:
@@ -329,10 +317,10 @@ class BridgeRAGSearch:
             for rank, idx in enumerate(sorted_idx):
                 ranks[idx] = rank / float(len(scores) - 1)
             return ranks
-        
+
         pit_judge = _pit(judge_scores)
         pit_bridge = _pit(bridge_scores)
-        
+
         fused = []
         for i in range(len(judge_scores)):
             f = (1 - alpha) * pit_judge[i] + alpha * pit_bridge[i]
@@ -346,8 +334,8 @@ class BridgeRAGSearch:
         exclude_ea: Optional[int] = None,
         seed_ea: Optional[int] = None,
     ) -> List[Dict]:
-        """
-        Find functions that share bridge entities with the seed.
+        """Find functions that share bridge entities with the seed.
+
         Uses tripartite judging + PIT fusion for ranking.
         """
         if not bridges or not any(bridges.values()):
@@ -440,15 +428,15 @@ class BridgeRAGSearch:
                 "has_loops": bool(row[11]), "is_thunk": bool(row[12]),
                 "is_library": bool(row[13]),
             }
-            
-            # IDF-weighted tripartite scoring (core of the BridgeRAG algorithm)
+
+            # IDF-weighted tripartite scoring (core of the multi-hop bridge algorithm)
             judge_score = self._tripartite_score(
                 seed_attrs, seed_attrs, cand_attrs, idf_weights=idf_weights
             ) if seed_attrs else 0.5
-            
+
             # Bridge overlap count for observability (not used for ranking).
             bscore = bridge_scores.get(ea, 0.0)
-            
+
             candidates.append({
                 "ea": hex(ea),
                 "attrs": cand_attrs,
@@ -462,7 +450,7 @@ class BridgeRAGSearch:
         judge_scores = [c["judge_score"] for c in candidates]
         bridge_scores_list = [c["bridge_score"] for c in candidates]
         fused_scores = self._pit_fusion(judge_scores, bridge_scores_list, alpha=0.1)
-        
+
         for i, c in enumerate(candidates):
             c["fused_score"] = round(fused_scores[i], 4)
             # Merge attrs into result
@@ -487,8 +475,7 @@ class BridgeRAGSearch:
         top_k: int = 20,
         hops: int = 2,
     ) -> Dict:
-        """
-        Full BridgeRAG pipeline.
+        """Full multi-hop pipeline.
 
         1. Query SchemaBoot for seed functions matching *query_constraints*.
         2. Extract bridge entities from the top seed.
@@ -569,77 +556,8 @@ class BridgeRAGSearch:
         }
 
 
-# ---------------------------------------------------------------------------
-# MCP Tool Interface
-# ---------------------------------------------------------------------------
-
-from typing import Annotated, Literal
-
-
-@tool
-@idaread
-def bridgerag(
-    action: Annotated[Literal["search", "bridges"], "BridgeRAG action"] = "search",
-    db_path: Annotated[Optional[str], "Override path to SchemaBoot SQLite DB"] = None,
-    query_constraints: Annotated[Optional[Dict], "Structured query constraints for 'search' action"] = None,
-    func_ea: Annotated[Optional[str], "Hex address of seed function (for action='bridges')"] = None,
-    func_name: Annotated[Optional[str], "Name of seed function (for action='bridges')"] = None,
-    bridge_types: Annotated[Optional[List[str]], "Bridge types: ['apis'], ['strings'], or ['apis', 'strings']"] = None,
-    top_k: Annotated[int, "Max candidates to return"] = 20,
-    hops: Annotated[int, "Number of hops (2=standard, >2=extended)"] = 2,
-) -> Dict:
-    """
-    Bridge-conditioned Multi-Hop Search using SchemaBoot as the bridge index.
-
-    Parameters
-    ----------
-    action : str
-        "search"   - full multi-hop pipeline (query -> bridges -> candidates)
-        "bridges"  - extract bridge entities from a specific function
-        "candidates" - find candidates given pre-computed bridges (not exposed directly)
-    db_path : str
-        Override path to SchemaBoot SQLite DB.
-    query_constraints : dict
-        SchemaBoot-style constraints for seed selection.
-        e.g. {"apis": "VirtualAlloc", "min_size": 100}
-    func_ea : str
-        Hex address of seed function (for action="bridges").
-    func_name : str
-        Name of seed function (for action="bridges").
-    bridge_types : list[str]
-        Which bridge types to use: ["apis"], ["strings"], or ["apis", "strings"].
-    top_k : int
-        Max candidates to return.
-    hops : int
-        Number of hops (2 = standard BridgeRAG, >2 = extended search).
-    """
-    engine = BridgeRAGSearch(db_path=db_path)
-    btypes = tuple(bridge_types or ("apis", "strings"))
-
-    if action == "search":
-        if not query_constraints:
-            return {"ok": False, "error": "query_constraints required for action=search"}
-        return engine.multi_hop_search(
-            query_constraints=query_constraints,
-            bridge_types=btypes,
-            top_k=top_k,
-            hops=hops,
-        )
-
-    elif action == "bridges":
-        ea_int = None
-        if func_ea is not None:
-            try:
-                ea_int = int(func_ea, 16)
-            except (ValueError, TypeError):
-                return {"ok": False, "error": f"Invalid func_ea: {func_ea}"}
-        bridges = engine.extract_bridges(
-            func_ea=ea_int,
-            func_name=func_name,
-            bridge_types=btypes,
-            max_bridges=15,
-        )
-        return {"ok": True, "bridges": bridges}
-
-    else:
-        return {"ok": False, "error": f"Unknown action: {action}"}
+__all__ = [
+    "MultiHopBridgeIndex",
+    "_resolve_schemaboot_db_path",
+    "_build_where_clause",
+]

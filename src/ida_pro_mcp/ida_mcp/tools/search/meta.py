@@ -1,6 +1,6 @@
 """SEARCH.META - Type, export, and summary searches.
 
-VOERA Architecture:
+Architecture:
 - Context Density Optimization: summary action returns compact counts only
 - Structured Semantic Retrieval: type search uses semantic matching on type names
 """

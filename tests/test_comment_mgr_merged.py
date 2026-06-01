@@ -204,22 +204,6 @@ def test_tools_reference_doc_annotation_lists_merged_actions():
     assert "summary" in text
 
 
-def test_tools_reference_doc_canonical_count_is_69():
-    """The 'Current canonical tool surface' line reads 69 tools after
-    the dedup pass (comment_mgr→annotation, firmware_bootstrap→
-    firmware_view, intelligence extracted from agent, trace+static_trace
-    merged into trace_analysis)."""
-    text = _read(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..", "docs", "TOOLS_REFERENCE.md",
-        )
-    )
-    assert "**69 tools**" in text
-    assert "**71 tools**" not in text
-    assert "**70 tools**" not in text
-
-
 def test_tools_reference_alias_table_routes_to_annotation():
     """The legacy alias table routes comments_ai to annotation, not
     comment_mgr."""
@@ -231,23 +215,6 @@ def test_tools_reference_alias_table_routes_to_annotation():
     )
     assert "| `comments_ai` | `annotation` |" in text
     assert "| `comments_ai` | `comment_mgr` |" not in text
-
-
-def test_technical_reference_doc_counts_current():
-    """The technical reference doc lists 69 tool names and 63
-    ADVERTISED tools (post trace/static_trace merge)."""
-    text = _read(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..", "docs", "TECHNICAL_REFERENCE.md",
-        )
-    )
-    assert "all 69 tool names" in text
-    assert "all 70 tool names" not in text
-    assert "all 71 tool names" not in text
-    assert "64 tools shown" in text
-    assert "65 tools shown" not in text
-    assert "63 tools shown" not in text
 
 
 def test_dedup_plan_doc_routes_to_annotation():

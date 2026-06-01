@@ -370,7 +370,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
             max_hex_preview=CONTEXT_DENSITY_MAX_HEX_PREVIEW,
             max_xref_items=CONTEXT_DENSITY_MAX_XREF_ITEMS,
         )
-        # VOERA L1 / L2 memory tiers
+        # L1 / L2 memory tiers
         self._insight_index = InsightIndex(
             persistence_path=os.path.join(self.cache_dir, "insight_index.json")
         )
@@ -549,9 +549,9 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                     res = self._handle_batch(call_args)
             else:
                 res = self._execute_tool(tn, call_args)
-                # MemRL observation: compare next call bridges with injected entries
+                # Preference observation: compare next call bridges with injected entries
                 if isinstance(call_args, dict):
-                    self._observe_memrl(
+                    self._observe_preference(
                         resolved_tn or str(tn or ""),
                         str(call_args.get("action") or ""),
                         res if isinstance(res, dict) else {},

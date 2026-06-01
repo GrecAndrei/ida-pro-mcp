@@ -149,7 +149,7 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
       - security_notes: Security-relevant observations
       - complexity: Complexity metrics (from both parsing and SchemaBoot)
       - string_refs: Inferred string references
-      - behavior_classification: Inferred behavior tags (MemRL-compatible)
+      - behavior_classification: Inferred behavior tags (preference-bank-compatible)
       - density: Information density of the pseudocode
     """
     if not pseudocode or not isinstance(pseudocode, str):
@@ -230,7 +230,7 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
     for match in _STRING_IN_CODE_RE.finditer(pseudocode):
         digest["string_refs"].append(match.group(0))
     
-    # Behavior classification (MemRL-compatible tags)
+    # Behavior classification (preference-bank-compatible tags)
     api_cats = digest.get("api_categories", set())
     if "network" in api_cats:
         digest["behavior_tags"].append("network")

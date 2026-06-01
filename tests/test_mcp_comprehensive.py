@@ -686,11 +686,11 @@ class TestEdgeCases:
 
 
 # =============================================================================
-# 5. VOERA Tool Tests (host-side, no IDA)
+# 5. Tool Tests (host-side, no IDA)
 # =============================================================================
 
-class TestVOERAToolsNoSession:
-    """Edge case: VOERA tools require an active session (they are IDA-side tools)."""
+class TestHostToolsNoSession:
+    """Edge case: host tools require an active session (they are IDA-side tools)."""
 
     def _assert_session_required(self, result):
         assert isinstance(result, dict)
@@ -708,12 +708,12 @@ class TestVOERAToolsNoSession:
         result = mcp_client.call_tool("turboquant", action="query", query_key="0x401000")
         self._assert_session_required(result)
 
-    def test_bridgerag_bridges_no_session(self, mcp_client):
-        result = mcp_client.call_tool("bridgerag", action="bridges", func_ea="0x401000")
+    def test_bridge_search_bridges_no_session(self, mcp_client):
+        result = mcp_client.call_tool("bridge_search", action="bridges", func_ea="0x401000")
         self._assert_session_required(result)
 
-    def test_bridgerag_search_no_session(self, mcp_client):
-        result = mcp_client.call_tool("bridgerag", action="search")
+    def test_bridge_search_search_no_session(self, mcp_client):
+        result = mcp_client.call_tool("bridge_search", action="search")
         self._assert_session_required(result)
 
     def test_memrl_record_no_session(self, mcp_client):
@@ -801,9 +801,9 @@ class TestIDAIntegration:
         result2 = ida_client.call_tool("turboquant", action="stats")
         assert result2.get("total_vectors", 0) > 0
 
-    def test_bridgerag_search(self, ida_client):
+    def test_bridge_search_search(self, ida_client):
         ida_client.call_tool("schemaboot", action="ingest")
-        result = ida_client.call_tool("bridgerag", action="search", query_constraints={"min_size": 100}, top_k=5)
+        result = ida_client.call_tool("bridge_search", action="search", query_constraints={"min_size": 100}, top_k=5)
         assert result.get("ok") is True
 
     def test_memrl_end_to_end(self, ida_client):

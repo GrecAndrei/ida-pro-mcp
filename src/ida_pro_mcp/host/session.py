@@ -73,7 +73,7 @@ _ANALYSIS_PHASES = {
     "behavior_mapping": {
         "order": 3,
         "threshold": {"functions_analyzed": 50, "xrefs_traced": 30},
-        "suggested_tools": ["xref_analysis.call_chain", "bridgerag.search", "code.callers"],
+        "suggested_tools": ["xref_analysis.call_chain", "bridge_search.search", "code.callers"],
         "description": "Map control flow and cross-reference chains.",
     },
     "vulnerability": {

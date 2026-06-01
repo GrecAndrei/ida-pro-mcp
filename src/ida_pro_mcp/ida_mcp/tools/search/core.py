@@ -1,6 +1,6 @@
 """SEARCH.CORE - Shared utilities, constants, and base helpers for search actions.
 
-VOERA Architecture:
+Architecture:
 - Context Density Optimization: compact output, line clipping
 - Neuro-Symbolic Governance: embedding-first semantic target resolution
 - Structured Semantic Retrieval: schema helpers
@@ -23,7 +23,7 @@ except ImportError:
     from support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
 
 # ============================================================================
-# VOERA: Module-Level Caches
+# Module-Level Caches
 # ============================================================================
 
 _SEARCH_CACHE: OrderedDict[str, object] = OrderedDict()

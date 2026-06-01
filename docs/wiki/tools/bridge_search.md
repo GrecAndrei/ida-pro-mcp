@@ -1,4 +1,4 @@
-# bridgerag
+# bridge_search
 
 Multi-hop bridge-conditioned search via the schemaboot index for discovering indirect relationships.
 
@@ -10,10 +10,10 @@ Multi-hop bridge-conditioned search via the schemaboot index for discovering ind
 
 ## Examples
 ```json
-{"name": "bridgerag", "arguments": {"action": "multi_hop_search", "query": "crypto key derivation", "hops": 2}}
+{"name": "bridge_search", "arguments": {"action": "multi_hop_search", "query": "crypto key derivation", "hops": 2}}
 ```
 ```json
-{"name": "bridgerag", "arguments": {"action": "bridges", "source": "recv", "target": "decrypt"}}
+{"name": "bridge_search", "arguments": {"action": "bridges", "source": "recv", "target": "decrypt"}}
 ```
 
 ## Notes

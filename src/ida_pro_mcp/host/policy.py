@@ -48,7 +48,7 @@ READ_ONLY_TOOLS = {
     "analysis",
     "binary_info",
     "bookmarks",
-    "bridgerag",
+    "bridge_search",
     "calc",
     "cfg_analysis",
     "classify",

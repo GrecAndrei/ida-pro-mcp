@@ -11,14 +11,17 @@ except ImportError:
     from governance_engine import evaluate_operation  # type: ignore[import-not-found]
 
 try:
-    from .memrl import emit_memrl_suggestion
+    from ..host.intelligence_core import emit_preference_suggestion
 except ImportError:
     try:
-        from memrl import emit_memrl_suggestion  # type: ignore[import-not-found]
+        from ida_pro_mcp.host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
     except ImportError:
-        # No-op fallback if MemRL not available
-        def emit_memrl_suggestion(*args, **kwargs):  # type: ignore
-            return ""
+        try:
+            from host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
+        except ImportError:
+            # No-op fallback if preference store not available
+            def emit_preference_suggestion(*args, **kwargs):  # type: ignore
+                return ""
 
 
 # ============================================================================
@@ -224,7 +227,7 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False) -> dict:
 
 
 # ============================================================================
-# VOERA: Neuro-Symbolic Governance Layer for Annotations
+# Neuro-Symbolic Governance Layer for Annotations
 # ============================================================================
 
 def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_type: str) -> dict:
@@ -904,9 +907,9 @@ def annotation(
                 "redacted_comment": result["redacted_comment"],
                 "original_comment": proposed,
             }
-            # Log the validation to MemRL as a suggestion
+            # Log the validation to the preference store as a suggestion
             try:
-                sug_id = emit_memrl_suggestion(
+                sug_id = emit_preference_suggestion(
                     "annotation", "validate", addr, proposed
                 )
                 if sug_id:

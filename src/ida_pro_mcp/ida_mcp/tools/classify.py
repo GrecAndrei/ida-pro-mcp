@@ -147,7 +147,7 @@ def _collect_schema_hints(fn, fname: str, callees: list[str], insn_count: int, x
 
 
 # ============================================================================
-# VOERA: Schema Induction for Structured Semantic Retrieval
+# Schema Induction for Structured Semantic Retrieval
 # ============================================================================
 
 def _induce_function_schema(func_ea: int) -> dict:
@@ -318,7 +318,7 @@ def classify(
         Params: limit
         Returns: {orphans}
 
-    induce_schema - Induce structured attribute-value schema for a function (VOERA SchemaBoot).
+    induce_schema - Induce structured attribute-value schema for a function (SchemaBoot).
         Params: addr (required)
         Returns: {schema: {behavior_tags, dangerous_apis, string_refs, vuln_class, compiler_hints, structural_features}}
         Use for structured semantic retrieval and precise filtering.
@@ -704,7 +704,7 @@ def classify(
             return {"ok": True, "orphans": orphans, "count": len(orphans)}
 
         # ----------------------------------------------------------------
-        # ACTION: induce_schema (VOERA SchemaBoot for RE)
+        # ACTION: induce_schema (SchemaBoot for RE)
         # ----------------------------------------------------------------
         elif action == "induce_schema":
             if not addr:

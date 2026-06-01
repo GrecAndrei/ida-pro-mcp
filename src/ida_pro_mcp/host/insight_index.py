@@ -2,12 +2,12 @@
 """
 L1 Insight Index — Fast in-memory routing index for hierarchical memory tiering.
 
-Part of the VOERA architecture (L0-L4):
+Memory tiering (L0-L4):
   L0: Meta Rules (schemas.py — TOOL_ACTIONS)
   L1: Insight Index (this module)
   L2: Global Facts (patterns.py — GlobalFactsDatabase)
   L3: Task Skills (session.py — crystallize_skill)
-  L4: Session Archive (blackboard.py + memrl.py)
+  L4: Session Archive (blackboard.py + preference store)
 
 The Insight Index provides O(1) tag-based routing to functions and memory
 tiers. It is always resident in memory and aggressively pruned to stay

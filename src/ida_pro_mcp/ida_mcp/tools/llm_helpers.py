@@ -675,7 +675,7 @@ def _estimate_tokens(text):
 
 
 # ============================================================================
-# VOERA: Context Density Optimizer for RE-specific compaction
+# Context Density Optimizer for RE-specific compaction
 # ============================================================================
 
 _RE_COMPACTION_RULES = [
@@ -693,7 +693,7 @@ _RE_COMPACTION_RULES = [
 def _clean_re_content(raw_message: str, max_lines: int = 30, max_line_len: int = 200) -> str:
     """Aggressively prune RE-specific verbose content to maximize context density.
     
-    Implements VOERA Contextual Information Density Maximization principles:
+    Implements Contextual Information Density Maximization principles:
     - Strip IDA markup tags
     - Compress hex dumps to previews
     - Truncate long xref lists to histograms
@@ -763,11 +763,11 @@ def _llm_summarize_output(data: dict) -> str:
         total = data.get("total_matches", len(data.get("functions", [])))
         return f"Found {total} function(s) matching constraints"
     if "candidates" in data:
-        return f"BridgeRAG found {len(data.get('candidates', []))} candidate(s) via {data.get('bridges', {})}"
+        return f"Bridge search found {len(data.get('candidates', []))} candidate(s) via {data.get('bridges', {})}"
     if "results" in data and "compression_ratio" in data:
         return f"TurboQuant: {data.get('ingested', 0)} vectors, {data.get('compression_ratio', 0)}x compression"
     if "ranked" in data:
-        return f"MemRL ranked {len(data.get('ranked', []))} candidate(s) by Q-value"
+        return f"Preference store ranked {len(data.get('ranked', []))} candidate(s) by Q-value"
     if "ingested" in data:
         return f"Ingested {data.get('ingested', 0)} function(s)"
     if "stats" in data:
@@ -1477,7 +1477,7 @@ def llm_helpers(
                         confidence = 0.1
                         suggestions.append("Broaden constraints or use schemaboot(action='stats') to see index coverage")
 
-                # BridgeRAG results
+                # Bridge search results
                 if "candidates" in data and "bridges" in data:
                     nc = len(data.get("candidates", []))
                     nb = sum(len(v) for v in data.get("bridges", {}).values())
@@ -1493,7 +1493,7 @@ def llm_helpers(
                     confidence = 0.85
                     suggestions.append("Use turboquant(action='query', query_key=..., top_k=10) for similarity search")
 
-                # MemRL results
+                # Preference store results
                 if "ranked" in data:
                     nr = len(data.get("ranked", []))
                     confidence = min(0.9, 0.6 + nr * 0.05)

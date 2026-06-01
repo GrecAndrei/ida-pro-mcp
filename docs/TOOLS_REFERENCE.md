@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Current canonical tool surface: **69 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
+Current canonical tool surface: **67 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
 
 Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `build_input_schema`).
 
@@ -458,7 +458,7 @@ Deterministic function attribute extraction and structured search (VOERA Structu
 
 **Actions:** ingest, query, stats, delete
 
-### bridgerag
+### bridge_search
 Bridge-conditioned Multi-Hop Search (VOERA retrieval). Finds structurally related functions through shared bridge entities (APIs, strings, xrefs) using SchemaBoot as the bridge source. Implements tripartite scoring s(query, bridge, candidate).
 
 **Actions:** search, bridges

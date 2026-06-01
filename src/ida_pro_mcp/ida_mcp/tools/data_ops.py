@@ -5,13 +5,16 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from .memrl import emit_memrl_suggestion
+    from ..host.intelligence_core import emit_preference_suggestion
 except ImportError:
     try:
-        from memrl import emit_memrl_suggestion  # type: ignore[import-not-found]
+        from ida_pro_mcp.host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
     except ImportError:
-        def emit_memrl_suggestion(*args, **kwargs):  # type: ignore
-            return ""
+        try:
+            from host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
+        except ImportError:
+            def emit_preference_suggestion(*args, **kwargs):  # type: ignore
+                return ""
 
 try:
     from .blackboard import BlackboardStore
@@ -92,7 +95,7 @@ def data_ops(
 
         def _attach_ml_context(result: dict, act: str, detail: str = "") -> dict:
             try:
-                sug = emit_memrl_suggestion("data_ops", act, addr, detail or act)
+                sug = emit_preference_suggestion("data_ops", act, addr, detail or act)
                 if sug:
                     result["memrl_suggestion_id"] = sug
             except Exception:

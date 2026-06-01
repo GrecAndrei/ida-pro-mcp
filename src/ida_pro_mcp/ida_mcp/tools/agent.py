@@ -59,7 +59,7 @@ def agent(
         Use when: You found one function and want to find related ones
         Example: Found decrypt_string, use similar to find other crypto functions
 
-    bridge_query - Bridge-conditioned multi-hop search (VOERA-inspired).
+    bridge_query - Bridge-conditioned multi-hop search.
         Params: query (natural language query requiring intermediate bridge entity),
                 addr (optional bridge address), max_items
         Returns: {bridge, expanded_queries, candidates, ranked}

@@ -253,7 +253,7 @@ def filter(
         filter(data=schemaboot_result, query=".functions[?size > 100] | sort(-entropy) | first(10)")
 
         # Count candidates
-        filter(data=bridgerag_result, query=".candidates | count")
+        filter(data=bridge_search_result, query=".candidates | count")
 
         # Get unique API names
         filter(data=schemaboot_result, query=".functions | pluck(apis) | unique")

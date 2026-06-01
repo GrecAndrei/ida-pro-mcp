@@ -82,7 +82,7 @@ def test_call_tool_restarts_dead_runtime_before_rpc():
     server._start_server = Mock(side_effect=_start)
     server._send_rpc_raw = Mock(return_value={"ok": True, "result": "pong"})
     server.default_truncate_tokens = 2000
-    server._observe_memrl = Mock()
+    server._observe_preference = Mock()
 
     res = server.call_tool("idb", session.idb_path, action="summary")
     assert res.get("ok") is True

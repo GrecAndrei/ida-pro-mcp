@@ -471,14 +471,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
 
-            # MemRL auto-reward: when the LLM navigates to an address we previously
+            # preference store auto-reward: when the LLM navigates to an address we previously
             # suggested, record an implicit accept reward (~0.7) to close the feedback
             # loop without requiring explicit LLM cooperation.  This is the missing
             # link that keeps Q-values from being frozen at their initial 0.5.
             if deduped_addresses:
                 try:
-                    from ida_pro_mcp.ida_mcp.tools.memrl import MemRLBank
-                    bank = MemRLBank()
+                    from ida_pro_mcp.host.intelligence_core import PreferenceMemoryBank
+                    bank = PreferenceMemoryBank()
                     for addr in deduped_addresses[:4]:
                         bank.auto_reward_for_addr(addr, reward=0.7)
                 except Exception:

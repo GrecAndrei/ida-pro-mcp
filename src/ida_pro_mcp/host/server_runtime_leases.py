@@ -297,7 +297,7 @@ class ServerRuntimeLeasesMixin:
                     self._usage_intel.stop()
                 except Exception:
                     pass
-            # Persist VOERA memory tiers
+            # Persist memory tiers
             try:
                 if hasattr(self, "_insight_index"):
                     self._insight_index.save()
