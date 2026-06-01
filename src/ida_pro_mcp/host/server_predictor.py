@@ -220,7 +220,7 @@ class ServerPredictorMixin:
             idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
             if idb_path:
                 try:
-                    from .intelligence import get_assembler
+                    from .intelligence_context import get_assembler
                     asm = get_assembler()
                     next_targets = asm.suggest_next_targets(idb_path, limit=3)
                 except Exception:
@@ -344,7 +344,7 @@ class ServerPredictorMixin:
                 try:
                     idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
                     if idb_path:
-                        from .intelligence import get_assembler
+                        from .intelligence_context import get_assembler
                         asm = get_assembler()
                         idx = asm._get_index(idb_path)
                         if getattr(idx, "size", 0) > 0:
@@ -415,7 +415,7 @@ class ServerPredictorMixin:
             schema_targets = []
             if idb_path:
                 try:
-                    from .intelligence import get_assembler
+                    from .intelligence_context import get_assembler
                     asm = get_assembler()
                     schema_targets = asm.suggest_next_targets(idb_path, limit=limit)
                 except Exception:
@@ -435,7 +435,7 @@ class ServerPredictorMixin:
                 try:
                     idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
                     if idb_path:
-                        from .intelligence import get_assembler
+                        from .intelligence_context import get_assembler
                         asm = get_assembler()
                         idx = asm._get_index(idb_path)
                         if getattr(idx, "size", 0) > 0:
@@ -571,7 +571,7 @@ class ServerPredictorMixin:
             idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
             if idb_path:
                 try:
-                    from .intelligence import get_assembler
+                    from .intelligence_context import get_assembler
                     asm = get_assembler()
                     targets = asm.suggest_next_targets(idb_path, limit=5)
                     if targets and target_tool == "code" and target_action == "decompile":

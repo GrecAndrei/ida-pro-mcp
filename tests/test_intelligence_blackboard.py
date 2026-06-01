@@ -6,8 +6,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import ida_pro_mcp.host.intelligence as intel_mod
-from ida_pro_mcp.host.intelligence import ContextAssembler
+import ida_pro_mcp.host.intelligence_core as intel_mod
+from ida_pro_mcp.host.intelligence_context import ContextAssembler
 from ida_pro_mcp.host.intelligence_helpers import prune_policy_store
 
 

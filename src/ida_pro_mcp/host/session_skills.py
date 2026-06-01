@@ -582,7 +582,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             ctx_vec = None
             if ctx_has_text:
                 try:
-                    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+                    from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
                     embedder = BgeCodeEmbedder()
                     ctx_vec = embedder.embed((context or "")[:1200])
                 except Exception:

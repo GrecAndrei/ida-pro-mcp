@@ -40,10 +40,10 @@ from .intelligence_api_patterns import (
 
 
 def _intel_profile_enabled() -> bool:
-    mod = sys.modules.get("ida_pro_mcp.host.intelligence")
-    if mod is not None and hasattr(mod, "INTEL_PROFILE"):
-        return bool(getattr(mod, "INTEL_PROFILE"))
-    return bool(INTEL_PROFILE)
+    # Look up the canonical symbol at call time so tests/runtime can toggle the
+    # profile flag by mutating the module attribute on intelligence_core.
+    from . import intelligence_core
+    return bool(intelligence_core.INTEL_PROFILE)
 
 
 

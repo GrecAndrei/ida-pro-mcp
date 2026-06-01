@@ -417,7 +417,7 @@ def compare(
             warning = None
             method_used = "embedding+structural"
             try:
-                from ida_pro_mcp.host.intelligence import get_assembler
+                from ida_pro_mcp.host.intelligence_context import get_assembler
                 asm = get_assembler()
                 p1 = "\n".join(_decompile_lines(ea1))[:8000]
                 p2 = "\n".join(_decompile_lines(ea2))[:8000]

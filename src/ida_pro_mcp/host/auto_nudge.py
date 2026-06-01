@@ -309,7 +309,7 @@ def suggest_smart_tools(tool: str, action: str, response: dict, behavior_tags: O
 
     ranked_with_sim: List[Tuple[str, float, float]] = []
     try:
-        from .intelligence import BgeCodeEmbedder
+        from .intelligence_core import BgeCodeEmbedder
         emb = BgeCodeEmbedder()
         qv = emb.embed(query_text[:1200])
         for (ta, base), ctext in zip(suggestions, candidate_texts):

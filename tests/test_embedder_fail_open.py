@@ -9,7 +9,7 @@ SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
 
 
 class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
@@ -35,7 +35,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         emb._consecutive_rpc_failures = 0
 
         with mock.patch(
-            "ida_pro_mcp.host.intelligence.urllib.request.urlopen",
+            "ida_pro_mcp.host.intelligence_core.urllib.request.urlopen",
             side_effect=urllib.error.URLError("forced timeout"),
         ):
             out1 = emb.embed("first request")
@@ -61,7 +61,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         good_response.__enter__.return_value = good_response
         good_response.__exit__.return_value = False
         with mock.patch(
-            "ida_pro_mcp.host.intelligence.urllib.request.urlopen",
+            "ida_pro_mcp.host.intelligence_core.urllib.request.urlopen",
             return_value=good_response,
         ):
             emb.embed("healthy request")
@@ -78,7 +78,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         emb._consecutive_rpc_failures = 0
 
         with mock.patch(
-            "ida_pro_mcp.host.intelligence.urllib.request.urlopen",
+            "ida_pro_mcp.host.intelligence_core.urllib.request.urlopen",
             side_effect=urllib.error.URLError("forced batch timeout"),
         ):
             out = emb.embed_batch(["a", "b", "c"])
@@ -102,7 +102,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         good_response.__enter__.return_value = good_response
         good_response.__exit__.return_value = False
         with mock.patch(
-            "ida_pro_mcp.host.intelligence.urllib.request.urlopen",
+            "ida_pro_mcp.host.intelligence_core.urllib.request.urlopen",
             return_value=good_response,
         ):
             out = emb.embed_batch(["x", "y"])

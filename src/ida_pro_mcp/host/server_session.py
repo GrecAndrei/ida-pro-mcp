@@ -97,7 +97,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         import threading
         def _diff():
             try:
-                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
                 return
             try:

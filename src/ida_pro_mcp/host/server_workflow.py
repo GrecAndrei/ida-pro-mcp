@@ -678,7 +678,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             ).strip()
             if EMBEDDING_FIRST_MODE and plan_text:
                 try:
-                    from .intelligence import BgeCodeEmbedder
+                    from .intelligence_core import BgeCodeEmbedder
                     embedder = BgeCodeEmbedder()
                     qv = embedder.embed(plan_text)
                     anchors = [

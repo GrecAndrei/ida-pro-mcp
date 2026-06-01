@@ -4,10 +4,10 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+    from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
 except ImportError:
     try:
-        from host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+        from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
     except ImportError:
         BehaviorClassifier = None
 

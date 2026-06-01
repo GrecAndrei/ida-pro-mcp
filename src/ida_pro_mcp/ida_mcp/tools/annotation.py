@@ -201,7 +201,7 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False) -> dict:
         fn = idaapi.get_func(addr_ea)
         if fn:
             try:
-                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
                 pseudo = ""
                 try:
                     pseudo = str(idaapi.decompile(fn.start_ea) or "")

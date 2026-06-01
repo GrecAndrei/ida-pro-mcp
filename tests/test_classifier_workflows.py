@@ -11,8 +11,9 @@ TOOLS = os.path.join(SRC, "ida_pro_mcp", "ida_mcp", "tools")
 if TOOLS not in sys.path:
     sys.path.insert(0, TOOLS)
 
-import ida_pro_mcp.host.intelligence as intel_mod
-from ida_pro_mcp.host.intelligence import BehaviorClassifier, ContextAssembler
+import ida_pro_mcp.host.intelligence_core as intel_mod
+from ida_pro_mcp.host.intelligence_core import BehaviorClassifier
+from ida_pro_mcp.host.intelligence_context import ContextAssembler
 
 
 class _FakeEmbedder:

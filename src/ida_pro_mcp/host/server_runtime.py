@@ -39,7 +39,7 @@ from .config import (
 from .context_density import ContextDensityOptimizer
 from .errors import MCPError, make_error
 from .insight_index import InsightIndex
-from .intelligence import get_assembler
+from .intelligence_context import get_assembler
 from .patterns import GlobalFactsDatabase
 from .rate_limit import RateLimiter
 from .server_runtime_leases import ServerRuntimeLeasesMixin

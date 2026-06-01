@@ -97,7 +97,7 @@ def _apply_memrl_feedback(suggestion_id: str, feedback_type: str) -> dict:
         return {"ok": False, "error": f"Unknown feedback type: {feedback_type}"}
 
     try:
-        from ida_pro_mcp.host.intelligence import PreferenceMemoryBank
+        from ida_pro_mcp.host.intelligence_core import PreferenceMemoryBank
     except Exception:
         try:
             from .memrl import MemRLBank as PreferenceMemoryBank
@@ -450,10 +450,10 @@ def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
 
     def _propagate():
         try:
-            from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+            from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
         except ImportError:
             try:
-                from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature  # type: ignore
+                from host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
             except ImportError:
                 return
         try:

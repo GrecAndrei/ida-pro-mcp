@@ -683,7 +683,7 @@ def _score_strings_c2(all_strings):
     """
     classifier = None
     try:
-        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
         classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
     except Exception:
         pass
@@ -766,7 +766,7 @@ def _c2_family_guess(api_findings, string_scores):
     families = []
     classifier = None
     try:
-        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
         classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
     except Exception:
         pass

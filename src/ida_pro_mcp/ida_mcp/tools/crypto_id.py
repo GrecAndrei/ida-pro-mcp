@@ -286,9 +286,9 @@ def crypto_id(
                             pass
                         if pseudo:
                             try:
-                                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
                             except ImportError:
-                                from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+                                from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
                             embedder = BgeCodeEmbedder()
                             classifier = BehaviorClassifier.instance(embedder)
                             behavior_tags = classifier.classify(pseudo, threshold=0.0, top_k=6)

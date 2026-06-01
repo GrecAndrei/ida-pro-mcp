@@ -11,10 +11,10 @@ import re
 
 # BehaviorClassifier-based protocol detection
 try:
-    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+    from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
 except ImportError:
     try:
-        from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+        from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
     except ImportError:
         BgeCodeEmbedder = None  # type: ignore
         BehaviorClassifier = None  # type: ignore

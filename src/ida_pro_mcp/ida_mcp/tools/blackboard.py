@@ -99,11 +99,11 @@ def _resolve_db_path(db_path: Optional[str] = None) -> str:
 
 def _get_embedder():
     try:
-        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
         return BgeCodeEmbedder()
     except ImportError:
         try:
-            from host.intelligence import BgeCodeEmbedder  # type: ignore
+            from host.intelligence_core import BgeCodeEmbedder# type: ignore
             return BgeCodeEmbedder()
         except ImportError:
             return None

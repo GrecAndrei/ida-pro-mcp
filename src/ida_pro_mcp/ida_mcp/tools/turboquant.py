@@ -604,9 +604,9 @@ def turboquant(
 
     def _load_index():
         try:
-            from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+            from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex
         except Exception:
-            from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex  # type: ignore
+            from host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex# type: ignore
         return FunctionEmbeddingIndex(index_path, BgeCodeEmbedder())
 
     if action == "delete":

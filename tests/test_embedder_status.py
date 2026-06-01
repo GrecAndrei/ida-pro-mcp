@@ -4,7 +4,7 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
-from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
 
 
 def _reset_singleton():
@@ -85,7 +85,7 @@ def test_embed_batch_fallback_preserves_length(monkeypatch):
         emb._port = 9
         emb._max_rpc_failures = 1
         with mock.patch(
-            "ida_pro_mcp.host.intelligence.urllib.request.urlopen",
+            "ida_pro_mcp.host.intelligence_core.urllib.request.urlopen",
             side_effect=urllib.error.URLError("timeout"),
         ):
             out = emb.embed_batch(["a", "b", "c", "d"])

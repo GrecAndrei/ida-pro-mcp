@@ -260,7 +260,7 @@ class ServerThreatHuntMixin:
         addr = str(finding.get("addr") or finding.get("address") or finding.get("ea") or "")
         if EMBEDDING_FIRST_MODE and text:
             try:
-                from .intelligence import BgeCodeEmbedder
+                from .intelligence_core import BgeCodeEmbedder
                 embedder = BgeCodeEmbedder()
                 query_vec = embedder.embed(text)
                 anchors = [

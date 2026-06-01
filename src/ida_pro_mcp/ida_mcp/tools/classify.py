@@ -373,9 +373,9 @@ def classify(
                     pass
                 if pseudo:
                     try:
-                        from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
                     except ImportError:
-                        from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+                        from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
                     embedder = BgeCodeEmbedder()
                     classifier = BehaviorClassifier.instance(embedder)
                     behavior_tags = classifier.classify(pseudo, threshold=0.0, top_k=6)
@@ -469,7 +469,7 @@ def classify(
             # Try to get BehaviorClassifier for unnamed functions
             _classifier = None
             try:
-                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
                 _classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
             except Exception:
                 pass
@@ -724,9 +724,9 @@ def classify(
 
         elif action == "anchor_coverage":
             try:
-                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
             except ImportError:
-                from host.intelligence import BgeCodeEmbedder, BehaviorClassifier  # type: ignore
+                from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
             bc = BehaviorClassifier.instance(BgeCodeEmbedder())
             max_funcs = max(1, int(limit))
             rep = bc.anchor_coverage_report(min_similarity=0.4, max_funcs=max_funcs)

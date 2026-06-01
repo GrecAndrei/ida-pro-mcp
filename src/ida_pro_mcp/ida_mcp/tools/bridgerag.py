@@ -34,10 +34,10 @@ if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
 try:
-    from ida_pro_mcp.host.intelligence import BgeCodeEmbedder
+    from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
 except Exception:
     try:
-        from host.intelligence import BgeCodeEmbedder  # type: ignore
+        from host.intelligence_core import BgeCodeEmbedder# type: ignore
     except Exception:
         BgeCodeEmbedder = None  # type: ignore
 

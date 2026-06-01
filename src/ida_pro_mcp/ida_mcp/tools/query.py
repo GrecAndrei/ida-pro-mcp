@@ -184,9 +184,9 @@ def query(
             if not q:
                 return make_error(MCPError.INVALID_ARGS, "q required")
             try:
-                from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
-                from host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+                from host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex
             embedder = BgeCodeEmbedder()
             idb_path = ""
             try:
@@ -213,10 +213,10 @@ def query(
             results = idx.similar_vec(q_vec, top_k=top_k * 3, threshold=0.0)
             expansion_queries = []
             try:
-                from ida_pro_mcp.host.intelligence import BehaviorClassifier
+                from ida_pro_mcp.host.intelligence_core import BehaviorClassifier
             except ImportError:
                 try:
-                    from host.intelligence import BehaviorClassifier  # type: ignore
+                    from host.intelligence_core import BehaviorClassifier# type: ignore
                 except ImportError:
                     BehaviorClassifier = None  # type: ignore
             if "BehaviorClassifier" in locals() and BehaviorClassifier is not None:

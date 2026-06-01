@@ -93,7 +93,7 @@ class ServerWikiMixin:
         if cached is not None:
             return cached
         try:
-            from .intelligence import BgeCodeEmbedder
+            from .intelligence_core import BgeCodeEmbedder
             embedder = BgeCodeEmbedder()
             vec = embedder.embed(key)
         except Exception:
@@ -468,7 +468,7 @@ class ServerWikiMixin:
         body_vec = self._wiki_embed_text(body_text) if qvec is not None else None
         if qvec is not None and title_vec is not None:
             try:
-                from .intelligence import BgeCodeEmbedder
+                from .intelligence_core import BgeCodeEmbedder
                 s_title = float(BgeCodeEmbedder.cosine(qvec, title_vec))
                 s_body = float(BgeCodeEmbedder.cosine(qvec, body_vec)) if body_vec is not None else 0.0
                 sim = (0.7 * s_title) + (0.3 * s_body)

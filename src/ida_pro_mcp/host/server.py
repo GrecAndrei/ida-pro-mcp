@@ -37,7 +37,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 from .resources import list_resources, ResourceResolver
 from .audit import AuditLogger
 from .rate_limit import RateLimiter
-from .intelligence import get_assembler
+from .intelligence_context import get_assembler
 from .config import (
     CACHE_DIR,
     BRIDGE_LOG,
@@ -725,7 +725,7 @@ def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
     import threading
     def _diff():
         try:
-            from ida_pro_mcp.host.intelligence import BgeCodeEmbedder, FunctionEmbeddingIndex
+            from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex
         except ImportError:
             return
         try:

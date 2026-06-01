@@ -1087,7 +1087,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
 
     def _get_classifier(self):
         try:
-            from .intelligence import BehaviorClassifier
+            from .intelligence_core import BehaviorClassifier
             return BehaviorClassifier()
         except Exception:
             return None

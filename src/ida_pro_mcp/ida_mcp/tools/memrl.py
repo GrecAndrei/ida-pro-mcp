@@ -859,7 +859,7 @@ def emit_memrl_suggestion(
         Override MemRL database path.
     """
     try:
-        from ida_pro_mcp.host.intelligence import PreferenceMemoryBank
+        from ida_pro_mcp.host.intelligence_core import PreferenceMemoryBank
         bank = PreferenceMemoryBank(db_path=db_path)
     except Exception:
         bank = MemRLBank(db_path=db_path)
@@ -991,7 +991,7 @@ def memrl(
         Q_new = Q_old + alpha * (reward - Q_old)
     """
     try:
-        from ida_pro_mcp.host.intelligence import PreferenceMemoryBank
+        from ida_pro_mcp.host.intelligence_core import PreferenceMemoryBank
         bank = PreferenceMemoryBank(db_path=db_path)
     except Exception:
         bank = MemRLBank(db_path=db_path)
