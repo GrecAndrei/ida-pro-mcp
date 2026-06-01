@@ -1443,7 +1443,14 @@ def code(
                 })
 
             elif action == "annotate":
-                # Add a comment to a function or address. Shortcut for modify(comment).
+                # Deprecated: the canonical comment-write path is now
+                # `modify(action="comment", addr=..., value=..., comment_type=...)`
+                # which runs governance checks, redactions, and supports
+                # regular / repeatable / anterior / posterior comment types.
+                # The old 'code(annotate)' shortcut only set a repeatable
+                # function-or-address comment, so any host still calling
+                # it should migrate to modify(comment) for the richer
+                # behavior.
                 if not comment:
                     results.append(make_error(MCPError.INVALID_ARGS, "comment required for annotate"))
                     continue
@@ -1456,9 +1463,11 @@ def code(
                         idc.set_cmt(ea, comment, 1)
                     results.append({
                         "ok": True,
+                        "deprecated": True,
                         "addr": hex_ea(target_ea),
                         "comment": comment,
                         "type": "function_comment" if func else "address_comment",
+                        "hint": "use modify(action='comment', addr=..., value=...) instead",
                     })
                 except Exception as e:
                     results.append({"addr": addr, "error": str(e)})
