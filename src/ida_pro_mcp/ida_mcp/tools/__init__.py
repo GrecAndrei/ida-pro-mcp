@@ -70,7 +70,6 @@ __all__ = [
     "blackboard",
     "filter",
     "governance",
-    "mbagcn",
     "knowledge",
     "firmware_bootstrap",
 ]

@@ -1304,7 +1304,7 @@ for seg_ea in idautils.Segments():
             }
 
     def _background_index(self, session_id: str, server_port: int):
-            """Run schemaboot + turboquant + mbagcn indexing in background thread."""
+            """Run schemaboot + turboquant + cfg_stats indexing in background thread."""
             import threading
 
             def _run():
@@ -1329,13 +1329,13 @@ for seg_ea in idautils.Segments():
                     log_rpc(f"[bg-index] turboquant failed (non-fatal): {e}")
                 try:
                     self._send_rpc_raw(
-                        {"tool": "mbagcn", "args": {"action": "stats"}},
+                        {"tool": "agent", "args": {"action": "cfg_stats"}},
                         server_port,
                         timeout=30.0,
                     )
-                    log_rpc(f"[bg-index] mbagcn complete for {session_id}")
+                    log_rpc(f"[bg-index] cfg_stats complete for {session_id}")
                 except Exception as e:
-                    log_rpc(f"[bg-index] mbagcn failed (non-fatal): {e}")
+                    log_rpc(f"[bg-index] cfg_stats failed (non-fatal): {e}")
                 # Mark indexing as complete in session metadata
                 try:
                     sess = self.session_mgr.sessions.get(session_id)

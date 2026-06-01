@@ -730,11 +730,11 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         except Exception:
                             pass
                     
-                    # Phase 3: MbaGCN structural similarity
+                    # Phase 3: spectral-CFG structural similarity (agent.cfg_similar)
                     if addr and tool_name in ("code", "data", "search"):
                         try:
-                            mbagcn_res = self._execute_tool("mbagcn", {
-                                "action": "similar",
+                            mbagcn_res = self._execute_tool("agent", {
+                                "action": "cfg_similar",
                                 "addr": addr,
                                 "top_k": 3,
                             })

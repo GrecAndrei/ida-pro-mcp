@@ -733,7 +733,6 @@ _TOOL_CATEGORY_ADVANCED = {
     "microcode",
     "graph",
     "ctree",
-    "mbagcn",
     "static_trace",
     "entropy",
     "imports_deep",

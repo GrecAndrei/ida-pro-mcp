@@ -110,7 +110,6 @@ TOOLS = [
     "turboquant",
     "bridgerag",
     "memrl",
-    "mbagcn",
     # --- New infrastructure tools ---
     "blackboard",
     "filter",
@@ -307,7 +306,7 @@ THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
 
 TOOL_DESCRIPTIONS = {
     "abi": "Analyzes calling conventions and ABI details of functions. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
-    "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and first-class intelligence operations. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card.",
+    "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and first-class intelligence operations. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card, cfg_encode, cfg_similar, cfg_stats.",
     "analysis": "Controls IDA analysis engine settings and triggers reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait.",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate.",
     "batch": "Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.",
@@ -347,7 +346,6 @@ TOOL_DESCRIPTIONS = {
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
     "llm_helpers": "Context-optimized helpers for LLM agents. START HERE: bootstrap gives a concrete first-turn playbook; cheatsheet returns full tool reference with concrete examples. context_window/function_digest/binary_digest/explain_address: compact analysis helpers. suggest_next/progress_report/focus_area: navigation and planning. behavioral_signature_search: find functions by behavior tag using BehaviorClassifier. function_role_classifier: entry_point/callback/dispatcher/wrapper via structural+embedding signals. dangerous_pattern_explainer: why a pattern is dangerous + exploitation path + mitigation. api_contract_extractor: infer preconditions/postconditions from call sites. global_state_influence_mapper: which globals a function reads/writes. interprocedural_data_lineage_graph: trace data flow across function boundaries. semantic_diff_explainer: embedding+BehaviorClassifier diff between two functions. decompile_disasm_consistency_search: find decompiler/disasm disagreements. argument_semantics_search: find functions by argument role. path_constrained_search: BFS from addr filtered by behavior tag. cross_artifact_correlation_search: correlate strings/names/blackboard by query.",
     "lumina": "Interface to Hex-Rays Lumina server for collaborative function metadata sharing. Actions: pull, push, status, history, search, get_metadata.",
-    "mbagcn": "Mamba-based GCN encoder for CFG similarity search across functions. Actions: encode, similar, stats.",
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram.",
     "memrl": "Compatibility wrapper over the intelligence-backed preference memory store for skill ranking, strategy suggestion, and usage feedback tracking. Actions: record, update, rank, stats, top, get_q, suggest, feedback.",
     "microcode": "Access Hex-Rays microcode IR for a function at various maturity levels. Actions: get, blocks, instructions, def_use_graph.",
@@ -422,6 +420,9 @@ TOOL_ACTIONS = {
         "blackboard_search",
         "export_index_summary",
         "evidence_card",
+        "cfg_encode",
+        "cfg_similar",
+        "cfg_stats",
     ],
     "analysis": [
         "get_options",
@@ -956,11 +957,6 @@ TOOL_ACTIONS = {
         "history",
         "search",
         "get_metadata",
-    ],
-    "mbagcn": [
-        "encode",
-        "similar",
-        "stats",
     ],
     "memory": [
         "read",
@@ -1828,12 +1824,6 @@ TOOL_ARG_SCHEMAS = {
         "addr": {"type": "string"},
         "query": {"type": "string"},
         "depth": {"type": "integer"},
-    },
-    "mbagcn": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["mbagcn"]},
-        "addr": {"type": "string"},
-        "top_k": {"type": "integer"},
-        "db_path": {"type": "string"},
     },
     "entropy": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["entropy"]},

@@ -23,8 +23,8 @@ _FUNC_SUMMARY_CACHE_MAX = 512  # prevent unbounded growth
 @tool
 @idaread
 def agent(
-    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint", "intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "semantic_search", "blackboard_search", "export_index_summary", "evidence_card"],
-                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint|intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card"],
+    action: Annotated[Literal["analyze_function", "explore_address", "find_references", "search_all", "search_structs", "context_pack", "quick", "rename_suggestions", "batch_context", "similar", "bridge_query", "reflect", "cluster", "fingerprint", "intelligence_status", "embedder_status", "anchor_status", "refresh_anchors", "classify_text", "classify_function", "index_function", "index_batch", "similar_functions", "semantic_search", "blackboard_search", "export_index_summary", "evidence_card", "cfg_encode", "cfg_similar", "cfg_stats"],
+                      "Action: analyze_function|explore_address|find_references|search_all|search_structs|context_pack|quick|rename_suggestions|batch_context|similar|bridge_query|reflect|cluster|fingerprint|intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|cfg_encode|cfg_similar|cfg_stats"],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Search query or comma-separated addresses"] = None,
     depth: Annotated[int, "Exploration depth"] = 1,
@@ -1563,6 +1563,9 @@ def agent(
                 "backend": embedder.backend,
             }
 
+        elif action in ("cfg_encode", "cfg_similar", "cfg_stats"):
+            return _cfg_similarity_action(action, addr, kwargs)
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
@@ -1599,8 +1602,111 @@ def _kmeans_numpy(vecs, k: int, max_iter: int = 30):
         for j in range(k):
             members = X[labels == j]
             if len(members):
-                centers[j] = members.mean(axis=0)
+                centers[j] = X[labels == j].mean(axis=0)
     return labels.tolist(), centers
+
+
+def _cfg_similarity_action(action: str, addr, kwargs) -> dict:
+    """
+    Backbone for cfg_encode / cfg_similar / cfg_stats.
+
+    Uses the spectral-CFG engine in host/mbagcn_engine.py (formerly
+    exposed as the standalone `mbagcn` tool). Returns the same payload
+    shape as the original tool so existing call sites work unchanged.
+    """
+    try:
+        from ida_pro_mcp.host.mbagcn_engine import (
+            CFGExtractor,
+            GraphEmbeddingStore,
+            MbaGCNEncoder,
+            default_db_path,
+            is_available,
+        )
+    except ImportError:
+        from host.mbagcn_engine import (  # type: ignore
+            CFGExtractor,
+            GraphEmbeddingStore,
+            MbaGCNEncoder,
+            default_db_path,
+            is_available,
+        )
+
+    if not is_available():
+        return {
+            "ok": False,
+            "error": "numpy is not available in the IDA Python environment",
+            "hint": "Install numpy into IDA's Python or run IDA with a venv that includes numpy.",
+        }
+
+    db_path = kwargs.get("db_path") if isinstance(kwargs, dict) else None
+    if not db_path:
+        db_path = default_db_path()
+
+    store = GraphEmbeddingStore(db_path)
+    encoder = MbaGCNEncoder(input_dim=64, hidden_dim=256, output_dim=4096)
+
+    if action == "cfg_stats":
+        return {"ok": True, **store.stats()}
+
+    if not addr:
+        return {"ok": False, "error": f"addr required for {action}"}
+
+    try:
+        ea = int(addr, 16)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": f"Invalid address: {addr}"}
+
+    if action == "cfg_encode":
+        node_features, adjacency = CFGExtractor.extract_from_ida(ea)
+        if node_features.shape[0] == 0:
+            return {"ok": False, "error": "Could not extract CFG"}
+        embedding = encoder.encode_function(node_features, adjacency)
+        try:
+            import idc
+            name = idc.get_func_name(ea) or hex(ea)
+        except Exception:
+            name = hex(ea)
+        store.store(ea, name, embedding, node_features.shape[0], int(adjacency.sum()))
+        return {
+            "ok": True,
+            "func_ea": hex(ea),
+            "func_name": name,
+            "nodes": int(node_features.shape[0]),
+            "edges": int(adjacency.sum()),
+            "embedding_dim": int(embedding.shape[0]),
+        }
+
+    if action == "cfg_similar":
+        top_k = kwargs.get("top_k", 10) if isinstance(kwargs, dict) else 10
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            top_k = 10
+        query_emb = store.load(ea)
+        if query_emb is None:
+            node_features, adjacency = CFGExtractor.extract_from_ida(ea)
+            if node_features.shape[0] == 0:
+                return {"ok": False, "error": "Could not extract CFG"}
+            query_emb = encoder.encode_function(node_features, adjacency)
+            try:
+                import idc
+                name = idc.get_func_name(ea) or hex(ea)
+            except Exception:
+                name = hex(ea)
+            store.store(ea, name, query_emb, node_features.shape[0], int(adjacency.sum()))
+        results = store.find_similar(query_emb, top_k=top_k)
+        query_hex = hex(ea)
+        return {
+            "ok": True,
+            "query": query_hex,
+            "results": [
+                {"ea": hex(r_ea), "name": r_name, "similarity": round(score, 4)}
+                for r_ea, r_name, score in results
+                if hex(r_ea) != query_hex
+            ],
+        }
+
+    return {"ok": False, "error": f"Unknown cfg action: {action}"}
 
 
 # ============================================================================

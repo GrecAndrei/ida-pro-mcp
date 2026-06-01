@@ -793,11 +793,11 @@ class ResourceResolver:
         return _make_json_content(result)
 
     def _read_function_embedding(self, addr: str) -> Dict:
-        result = self._exec("mbagcn", action="encode", addr=addr)
+        result = self._exec("agent", action="cfg_encode", addr=addr)
         return _make_json_content(result)
 
     def _read_function_similar(self, addr: str) -> Dict:
-        result = self._exec("mbagcn", action="similar", addr=addr, top_k=10)
+        result = self._exec("agent", action="cfg_similar", addr=addr, top_k=10)
         return _make_json_content(result)
 
     # ------------------------------------------------------------------

@@ -49,8 +49,9 @@ class FunctionEmbeddingIndex:
     Stores 1536-dim float32 embeddings of decompiled functions,
     one SQLite database per binary (<idb_path>.embeddings.db).
 
-    Replaces MbaGCN (untrained random SSM) and TurboQuant (quantization
-    of tabular features it was never designed for).
+    Replaces the spectral-CFG encoder (MbaGCN — untrained random SSM)
+    and TurboQuant (quantization of tabular features it was never
+    designed for).
     """
 
     INDEX_SCHEMA_VERSION = 2
