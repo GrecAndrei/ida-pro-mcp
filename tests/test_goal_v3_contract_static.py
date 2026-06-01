@@ -247,7 +247,7 @@ def test_debug_add_bp_exposes_idc_condition_language():
 
 
 def test_static_trace_eval_expr_marks_idc_language():
-    src = _read("src/ida_pro_mcp/ida_mcp/tools/static_trace.py")
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/trace_analysis.py")
     assert "\"language\": \"idc\"" in src
 
 

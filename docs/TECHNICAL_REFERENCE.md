@@ -62,7 +62,7 @@ Key categories:
 - **Modification:** `modify.py`, `funcs.py`, `segments.py`, `bulk.py`, `annotation.py`
 - **Analysis:** `ctree.py`, `graph.py`, `entropy.py`, `crypto_id.py`, `cfg_analysis.py`, `stack_analysis.py`, `deobfuscate.py`
 - **Comparison:** `compare.py`, `lumina.py`
-- **Threat hunting:** `threat_hunt.py`, `yara_hunt.py`, `gadgets.py`, `trace.py`, `trace_analysis.py`
+- **Threat hunting:** `threat_hunt.py`, `yara_hunt.py`, `gadgets.py`, `trace_analysis.py`
 - **Classification:** `classify.py`, `schemaboot.py`, `summarize.py`
 - **LLM optimization:** `llm_helpers.py`, `memrl.py`, `turboquant.py`, `bridgerag.py`, `mbagcn.py`, `hybrid_search.py`
 - **Governance:** `governance_engine.py`
@@ -565,9 +565,9 @@ Three QoL profiles control the trade-off between context efficiency and detail:
 ## 10. Tool Schema Contract
 
 Source of truth is in `src/ida_pro_mcp/host/schemas.py`:
-- `TOOLS` — ordered list of all 71 tool names
-- `ADVERTISED_TOOLS` — 65 tools shown in `tools/list`
-- `HIDDEN_TOOLS_IN_LIST` — 6 tools callable via alias/name but hidden from listings
+- `TOOLS` — ordered list of all 69 tool names
+- `ADVERTISED_TOOLS` — 64 tools shown in `tools/list`
+- `HIDDEN_TOOLS_IN_LIST` — 5 tools callable via alias/name but hidden from listings
 - `TOOL_DESCRIPTIONS` — per-tool description text
 - `TOOL_ACTIONS` — per-tool valid action list
 - `TOOL_ARG_SCHEMAS` — JSON Schema for each tool's arguments

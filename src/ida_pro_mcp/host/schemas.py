@@ -726,14 +726,13 @@ _TOOL_CATEGORY_ANALYSIS = {
     "calc",
     "nav",
 }
-_TOOL_CATEGORY_DEBUG = {"debug", "trace", "coverage", "trace_analysis"}
+_TOOL_CATEGORY_DEBUG = {"debug", "coverage", "trace_analysis"}
 _TOOL_CATEGORY_PROJECT = {"project", "misc"}
 _TOOL_CATEGORY_ADVANCED = {
     "agent",
     "microcode",
     "graph",
     "ctree",
-    "static_trace",
     "entropy",
     "imports_deep",
     "patterns",

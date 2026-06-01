@@ -32,16 +32,31 @@ def trace_analysis(
             "trace_entropy",
             "api_sequence",
             "loop_analysis",
+            "get",
+            "clear",
+            "set_options",
+            "static_trace",
+            "decrypt_strings",
+            "eval_expr",
         ],
-        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis",
+        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis|get|clear|set_options|static_trace|decrypt_strings|eval_expr",
     ],
     path: Annotated[Optional[str], "Path to trace file"] = None,
     addr: Annotated[Optional[str], "Function or address to analyze"] = None,
     trace_data: Annotated[Optional[list], "List of executed addresses"] = None,
+    count: Annotated[int, "Max trace entries to return (action=get)"] = 1000,
+    enable_insn: Annotated[Optional[bool], "Enable instruction tracing (action=set_options)"] = None,
+    enable_func: Annotated[Optional[bool], "Enable function tracing (action=set_options)"] = None,
+    enable_bblk: Annotated[Optional[bool], "Enable basic block tracing (action=set_options)"] = None,
+    max_steps: Annotated[int, "Max instructions in static_trace"] = 1000,
+    follow_calls: Annotated[bool, "Follow call edges in static_trace"] = False,
+    max_depth: Annotated[int, "Max call depth in static_trace"] = 1,
+    include_blocks: Annotated[bool, "Include basic block CFG info in static_trace"] = True,
+    expr: Annotated[Optional[str], "Expression for eval_expr"] = None,
     **kwargs
 ) -> dict:
     """
-    Post-mortem execution trace analysis.
+    Post-mortem execution trace analysis and runtime/static trace utilities.
 
     Actions:
     - import_trace: Load a list of addresses from a file or 'trace_data' parameter.
@@ -57,6 +72,12 @@ def trace_analysis(
     - trace_entropy: Find high-entropy execution regions (crypto/packing) using address and instruction entropy.
     - api_sequence: Extract ordered API call sequences from trace for behavioral analysis.
     - loop_analysis: Detailed loop iteration counts, back-edge detection, hot spot identification, and nesting analysis.
+    - get: Read current execution trace entries (IDA debugger runtime trace).
+    - clear: Clear the runtime execution trace.
+    - set_options: Configure runtime trace options (enable_insn/enable_func/enable_bblk).
+    - static_trace: Statically walk control flow from addr (no register changes), with optional call following.
+    - decrypt_strings: Heuristic search for string-decryption calls reaching addr.
+    - eval_expr: Evaluate an IDC expression, or dump memory at addr.
     """
     try:
         import bisect
@@ -971,10 +992,337 @@ def trace_analysis(
                 "unique_addresses": len(set(trace_list)),
             }
 
+        elif action in ("get", "clear", "set_options", "static_trace", "decrypt_strings", "eval_expr"):
+            return _trace_analysis_merged_dispatch(action, kwargs)
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
+
+
+# ---- Runtime trace (was: src/ida_pro_mcp/ida_mcp/tools/trace.py) ----
+
+_TRACE_SOFT_OPTIONS = {
+    "enable_insn": None,
+    "enable_func": None,
+    "enable_bblk": None,
+}
+
+
+def _runtime_trace_get(addr: Optional[str], count: int) -> dict:
+    try:
+        import ida_dbg
+    except Exception:
+        return {
+            "ok": True,
+            "traces": [],
+            "count": 0,
+            "trace_api": "unavailable",
+            "note": "ida_dbg unavailable in this runtime.",
+        }
+    has_tev = all(hasattr(ida_dbg, a) for a in ("tev_t", "get_tev_qty", "get_tev_info"))
+    if not has_tev:
+        return {
+            "ok": True,
+            "traces": [],
+            "count": 0,
+            "trace_api": "unavailable",
+            "note": "Trace event API is unavailable in this IDA runtime; import external trace data for analysis.",
+        }
+    traces = []
+    tev = ida_dbg.tev_t()
+    for i in range(min(ida_dbg.get_tev_qty(), count)):
+        if ida_dbg.get_tev_info(i, tev):
+            entry = {"idx": i, "addr": hex(tev.ea), "type": tev.type}
+            if addr and hex(tev.ea) != addr:
+                continue
+            traces.append(entry)
+    payload = {"ok": True, "traces": traces, "count": len(traces), "trace_api": "tev"}
+    soft = {k: v for k, v in _TRACE_SOFT_OPTIONS.items() if v is not None}
+    if soft:
+        payload["requested_options"] = soft
+    return payload
+
+
+def _runtime_trace_clear() -> dict:
+    try:
+        import ida_dbg
+    except Exception:
+        return {"ok": True, "cleared": False, "note": "ida_dbg unavailable in this runtime."}
+    clear_fn = getattr(ida_dbg, "clear_trace", None)
+    if callable(clear_fn):
+        clear_fn()
+        return {"ok": True, "cleared": True}
+    return {"ok": True, "cleared": False, "note": "Trace clear API is unavailable in this IDA runtime."}
+
+
+def _runtime_trace_set_options(enable_insn, enable_func, enable_bblk) -> dict:
+    import ida_dbg
+    err = check_debugger(require_active=True)
+    if err:
+        return err
+    changed: dict = {}
+    unsupported: list = []
+
+    def _try_set_via_func(fn_names, value):
+        for n in fn_names:
+            fn = getattr(ida_dbg, n, None)
+            if callable(fn):
+                fn(value)
+                return True
+        return False
+
+    def _try_set_via_flags(flag_names, value):
+        get_opts = getattr(ida_dbg, "get_step_trace_options", None)
+        set_opts = getattr(ida_dbg, "set_step_trace_options", None)
+        if not callable(get_opts) or not callable(set_opts):
+            return False
+        opts = get_opts()
+        for n in flag_names:
+            f = getattr(ida_dbg, n, None)
+            if isinstance(f, int):
+                if value:
+                    opts |= f
+                else:
+                    opts &= ~f
+                set_opts(opts)
+                return True
+        return False
+
+    if enable_insn is not None:
+        applied = _try_set_via_func(["enable_insn_trace", "enable_step_trace"], bool(enable_insn))
+        if not applied:
+            applied = _try_set_via_flags(
+                ["ST_TRACE_INSN", "ST_TRACE_INSTRUCTIONS", "ST_INSN_TRACE", "ST_OVER_LIB_FUNC"],
+                bool(enable_insn),
+            )
+        if applied:
+            changed["enable_insn"] = bool(enable_insn)
+        else:
+            unsupported.append("enable_insn")
+
+    if enable_func is not None:
+        applied = _try_set_via_func(["enable_func_trace", "enable_function_trace"], bool(enable_func))
+        if not applied:
+            applied = _try_set_via_flags(
+                ["ST_TRACE_FUNC", "ST_TRACE_FUNCTIONS", "ST_FUNC_TRACE"],
+                bool(enable_func),
+            )
+        if applied:
+            changed["enable_func"] = bool(enable_func)
+        else:
+            unsupported.append("enable_func")
+
+    if enable_bblk is not None:
+        applied = _try_set_via_func(["enable_bblk_trace", "enable_basic_block_trace"], bool(enable_bblk))
+        if not applied:
+            applied = _try_set_via_flags(
+                ["ST_TRACE_BBLK", "ST_TRACE_BASIC_BLOCKS", "ST_BBLK_TRACE"],
+                bool(enable_bblk),
+            )
+        if applied:
+            changed["enable_bblk"] = bool(enable_bblk)
+        else:
+            unsupported.append("enable_bblk")
+
+    if not changed and unsupported:
+        requested = {}
+        if enable_insn is not None:
+            _TRACE_SOFT_OPTIONS["enable_insn"] = bool(enable_insn)
+            requested["enable_insn"] = bool(enable_insn)
+        if enable_func is not None:
+            _TRACE_SOFT_OPTIONS["enable_func"] = bool(enable_func)
+            requested["enable_func"] = bool(enable_func)
+        if enable_bblk is not None:
+            _TRACE_SOFT_OPTIONS["enable_bblk"] = bool(enable_bblk)
+            requested["enable_bblk"] = bool(enable_bblk)
+        return {
+            "ok": True,
+            "changed": {},
+            "applied": False,
+            "requested": requested,
+            "soft_state": {k: v for k, v in _TRACE_SOFT_OPTIONS.items() if v is not None},
+            "warning": "Trace option APIs are unavailable in this IDA build; options were recorded only (not enforced by debugger runtime).",
+            "unsupported": unsupported,
+        }
+    result = {"ok": True, "changed": changed, "applied": True}
+    if unsupported:
+        result["warning"] = f"Unsupported options: {', '.join(unsupported)}"
+    get_opts = getattr(ida_dbg, "get_step_trace_options", None)
+    if callable(get_opts):
+        result["options"] = get_opts()
+    soft = {k: v for k, v in _TRACE_SOFT_OPTIONS.items() if v is not None}
+    if soft:
+        result["soft_options"] = soft
+    return result
+
+
+# ---- Static trace (was: src/ida_pro_mcp/ida_mcp/tools/static_trace.py) ----
+
+def _static_trace_walk(ea: int, max_steps: int, follow_calls: bool, max_depth: int, include_blocks: bool) -> dict:
+    func = ida_funcs.get_func(ea)
+    trace: list = []
+    visited: set = set()
+    queue: list = [(ea, 0)]
+    edges: list = []
+    while queue and len(trace) < max_steps:
+        curr, depth = queue.pop(0)
+        if curr in visited:
+            continue
+        visited.add(curr)
+        insn = idaapi.insn_t()
+        if idaapi.decode_insn(insn, curr) <= 0:
+            continue
+        disasm = idc.generate_disasm_line(curr, 0)
+        trace.append({"addr": hex(curr), "disasm": ida_lines.tag_remove(disasm) if disasm else ""})
+        is_ret_fn = getattr(idaapi, "is_ret_insn", None) or getattr(__import__("ida_idp"), "is_ret_insn", None)
+        if is_ret_fn and is_ret_fn(insn):
+            continue
+        next_heads: list = []
+        for xref in idautils.XrefsFrom(curr, 0):
+            if not xref.iscode:
+                continue
+            if not follow_calls and xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
+                continue
+            next_heads.append(xref.to)
+            edges.append({"from": hex(curr), "to": hex(xref.to)})
+        if not next_heads:
+            fall = idc.next_head(curr)
+            if fall != idaapi.BADADDR:
+                next_heads.append(fall)
+                edges.append({"from": hex(curr), "to": hex(fall)})
+        for n in next_heads:
+            if n != idaapi.BADADDR:
+                if func and not (func.start_ea <= n < func.end_ea):
+                    if follow_calls and depth < max_depth:
+                        queue.append((n, depth + 1))
+                    continue
+                queue.append((n, depth))
+    blocks: list = []
+    if include_blocks and func:
+        try:
+            fc = idaapi.FlowChart(func)
+            for b in fc:
+                blocks.append({
+                    "start": hex(b.start_ea),
+                    "end": hex(b.end_ea),
+                    "succs": [hex(s.start_ea) for s in b.succs()],
+                    "preds": [hex(p.start_ea) for p in b.preds()],
+                })
+        except Exception:
+            blocks = []
+    return {
+        "ok": True,
+        "start": hex(ea),
+        "trace": trace,
+        "edges": edges,
+        "count": len(trace),
+        "blocks": blocks,
+    }
+
+
+def _static_trace_decrypt_strings(ea: int) -> dict:
+    calls: list = []
+    for xref in idautils.XrefsTo(ea):
+        if xref.iscode:
+            prev = xref.frm
+            for _ in range(12):
+                prev = idc.prev_head(prev)
+                if prev == idaapi.BADADDR:
+                    break
+                for op_n in range(2):
+                    val = idc.get_operand_value(prev, op_n)
+                    if not val:
+                        continue
+                    s = idc.get_strlit_contents(val)
+                    if s:
+                        if isinstance(s, bytes):
+                            s = s.decode("utf-8", errors="replace")
+                        calls.append({
+                            "call_site": hex(xref.frm),
+                            "string_addr": hex(val),
+                            "string": s,
+                            "xref": hex(prev),
+                        })
+                        if len(calls) >= 50:
+                            break
+                if len(calls) >= 50:
+                    break
+        if len(calls) >= 50:
+            break
+    return {"ok": True, "decrypt_function": hex(ea), "potential_calls": calls, "count": len(calls)}
+
+
+def _static_trace_eval_expr(addr: Optional[str], expr: Optional[str]) -> dict:
+    if not addr and not expr:
+        return make_error(MCPError.INVALID_ARGS, "addr or expr required")
+    if expr:
+        try:
+            val = idc.eval_idc(expr)
+            return {"ok": True, "expr": expr, "value": val, "language": "idc"}
+        except Exception as e:
+            return make_error(MCPError.IDA_ERROR, f"Expression eval failed: {e}")
+    ea, err = validate_addr(addr)
+    if err:
+        return err
+    return {
+        "ok": True,
+        "addr": hex(ea),
+        "u8": ida_bytes.get_byte(ea),
+        "u16": ida_bytes.get_word(ea),
+        "u32": ida_bytes.get_dword(ea),
+        "u64": ida_bytes.get_qword(ea),
+        "name": idc.get_name(ea),
+    }
+
+
+# ---- Dispatcher hook for the merged actions ----
+# The original trace() and static_trace() tools were @tool @idaread entry
+# points; we now route their action names into the same dispatcher. The
+# callers (CLI, server, RPC) should call trace_analysis with the same
+# action name. We use a thin wrapper to keep behaviour identical.
+
+def _trace_analysis_merged_dispatch(action, kwargs) -> dict:
+    """Dispatch the actions merged from trace.py and static_trace.py.
+
+    The wrapper preserves the exact return shape of the original tools.
+    """
+    if action == "get":
+        return _runtime_trace_get(kwargs.get("addr"), int(kwargs.get("count", 1000)))
+    if action == "clear":
+        return _runtime_trace_clear()
+    if action == "set_options":
+        return _runtime_trace_set_options(
+            kwargs.get("enable_insn"),
+            kwargs.get("enable_func"),
+            kwargs.get("enable_bblk"),
+        )
+    if action == "static_trace":
+        addr = kwargs.get("addr")
+        if not addr:
+            return make_error(MCPError.INVALID_ARGS, "addr required")
+        ea, err = validate_addr(addr)
+        if err:
+            return err
+        return _static_trace_walk(
+            ea,
+            int(kwargs.get("max_steps", 1000)),
+            bool(kwargs.get("follow_calls", False)),
+            int(kwargs.get("max_depth", 1)),
+            bool(kwargs.get("include_blocks", True)),
+        )
+    if action == "decrypt_strings":
+        addr = kwargs.get("addr")
+        if not addr:
+            return make_error(MCPError.INVALID_ARGS, "addr required")
+        ea, err = validate_addr(addr)
+        if err:
+            return err
+        return _static_trace_decrypt_strings(ea)
+    if action == "eval_expr":
+        return _static_trace_eval_expr(kwargs.get("addr"), kwargs.get("expr"))
+    return make_error(MCPError.INVALID_ARGS, f"Unknown merged action: {action}")
 
 
 # ============================================================================
