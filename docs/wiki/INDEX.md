@@ -26,6 +26,8 @@ Auto-generated from wiki file structure.
 
 - [analysis](tools/analysis.md)
 
+- [intelligence](tools/intelligence.md)
+
 - [annotation](tools/annotation.md)
 
 - [batch](tools/batch.md)

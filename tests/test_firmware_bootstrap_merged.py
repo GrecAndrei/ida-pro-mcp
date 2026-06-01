@@ -163,31 +163,32 @@ def test_server_runtime_routes_through_firmware_view():
     assert "\"action\": \"bootstrap\"" in text
 
 
-def test_tools_reference_doc_canonical_count_drops_to_70():
-    """TOOLS_REFERENCE.md reports 70 canonical tools (was 72; comment_mgr
-    merge dropped to 71, firmware_bootstrap merge dropped to 70)."""
+def test_tools_reference_doc_canonical_count_is_71():
+    """TOOLS_REFERENCE.md reports 71 canonical tools after the dedup
+    pass (comment_mgr→annotation, firmware_bootstrap→firmware_view,
+    intelligence extracted from agent)."""
     text = _read(
         os.path.join(
             os.path.dirname(__file__),
             "..", "docs", "TOOLS_REFERENCE.md",
         )
     )
-    assert "**70 tools**" in text
+    assert "**71 tools**" in text
     assert "**72 tools**" not in text
-    assert "**71 tools**" not in text
+    assert "**70 tools**" not in text
 
 
-def test_technical_reference_doc_counts_drop():
-    """TECHNICAL_REFERENCE.md reports 70 tools / 64 advertised."""
+def test_technical_reference_doc_counts_current():
+    """TECHNICAL_REFERENCE.md reports 71 tools / 65 advertised."""
     text = _read(
         os.path.join(
             os.path.dirname(__file__),
             "..", "docs", "TECHNICAL_REFERENCE.md",
         )
     )
-    assert "all 70 tool names" in text
-    assert "64 tools shown" in text
-    assert "65 tools shown" not in text
+    assert "all 71 tool names" in text
+    assert "65 tools shown" in text
+    assert "64 tools shown" not in text
 
 
 def test_tools_surface_consistency():

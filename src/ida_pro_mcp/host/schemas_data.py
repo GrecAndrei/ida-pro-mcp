@@ -70,6 +70,8 @@ TOOLS = [
     # Documentation and YARA
     "wiki",
     "yara_hunt",
+    # Intelligence subsystem (extracted from agent)
+    "intelligence",
     # --- New LLM-optimized tools ---
     # Security & vulnerability analysis
     "threat_hunt",
@@ -165,6 +167,7 @@ ADVERTISED_TOOLS = [
     "classify",
     "coverage",
     "crypto_id",
+    "intelligence",
     "data_ops",
     "deobfuscate",
     "entropy",
@@ -187,6 +190,9 @@ ADVERTISED_TOOLS = [
 ]
 
 _EXTRA_TOOL_ALIASES = {
+    "embeddings": "intelligence",
+    "ai_classifier": "intelligence",
+    "agent_intelligence": "intelligence",
     "analysis_tool": "analysis",
     "annotate": "annotation",
     "annotations": "annotation",
@@ -303,7 +309,7 @@ THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
 
 TOOL_DESCRIPTIONS = {
     "abi": "Analyzes calling conventions and ABI details of functions. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
-    "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and first-class intelligence operations. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card, cfg_encode, cfg_similar, cfg_stats.",
+    "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and CFG similarity. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, cfg_encode, cfg_similar, cfg_stats.",
     "analysis": "Controls IDA analysis engine settings and triggers reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait.",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "batch": "Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.",
@@ -339,6 +345,7 @@ TOOL_DESCRIPTIONS = {
     "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile.",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
+    "intelligence": "Intelligence subsystem: embedding-based function classification, indexing, similarity search, and evidence-card production. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card.",
     "llm_helpers": "Context-optimized helpers for LLM agents. START HERE: bootstrap gives a concrete first-turn playbook; cheatsheet returns full tool reference with concrete examples. context_window/function_digest/binary_digest/explain_address: compact analysis helpers. suggest_next/progress_report/focus_area: navigation and planning. behavioral_signature_search: find functions by behavior tag using BehaviorClassifier. function_role_classifier: entry_point/callback/dispatcher/wrapper via structural+embedding signals. dangerous_pattern_explainer: why a pattern is dangerous + exploitation path + mitigation. api_contract_extractor: infer preconditions/postconditions from call sites. global_state_influence_mapper: which globals a function reads/writes. interprocedural_data_lineage_graph: trace data flow across function boundaries. semantic_diff_explainer: embedding+BehaviorClassifier diff between two functions. decompile_disasm_consistency_search: find decompiler/disasm disagreements. argument_semantics_search: find functions by argument role. path_constrained_search: BFS from addr filtered by behavior tag. cross_artifact_correlation_search: correlate strings/names/blackboard by query.",
     "lumina": "Interface to Hex-Rays Lumina server for collaborative function metadata sharing. Actions: pull, push, status, history, search, get_metadata.",
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram.",
@@ -402,6 +409,11 @@ TOOL_ACTIONS = {
         "reflect",
         "cluster",
         "fingerprint",
+        "cfg_encode",
+        "cfg_similar",
+        "cfg_stats",
+    ],
+    "intelligence": [
         "intelligence_status",
         "embedder_status",
         "anchor_status",
@@ -415,9 +427,6 @@ TOOL_ACTIONS = {
         "blackboard_search",
         "export_index_summary",
         "evidence_card",
-        "cfg_encode",
-        "cfg_similar",
-        "cfg_stats",
     ],
     "analysis": [
         "get_options",
@@ -1778,6 +1787,12 @@ TOOL_ARG_SCHEMAS = {
         "include_pseudocode": {"type": "boolean"},
         "max_items": {"type": "integer"},
         "use_cache": {"type": "boolean"},
+    },
+    "intelligence": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["intelligence"]},
+        "addr": {"type": "string"},
+        "query": {"type": "string"},
+        "max_items": {"type": "integer"},
         "threshold": {"type": "number"},
         "top_k": {"type": "integer"},
         "block": {"type": "boolean"},

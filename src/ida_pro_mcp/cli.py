@@ -300,7 +300,7 @@ def main() -> int:
                 tool_args.setdefault("deep_hash", False)
             response = client.call(
                 "tools/call",
-                {"name": "agent", "arguments": tool_args},
+                {"name": "intelligence", "arguments": tool_args},
                 request_id=args.request_id,
             )
             _print_json(_normalize_tool_result(response), pretty=args.pretty)

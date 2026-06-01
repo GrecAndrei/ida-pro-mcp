@@ -204,38 +204,19 @@ def test_tools_reference_doc_annotation_lists_merged_actions():
     assert "summary" in text
 
 
-def test_tools_reference_doc_canonical_count_drops_to_70():
-    """The 'Current canonical tool surface' line now reads 70 tools
-    (after the comment_mgr merge dropped it from 73, then the
-    firmware_bootstrap merge dropped it from 71)."""
+def test_tools_reference_doc_canonical_count_is_71():
+    """The 'Current canonical tool surface' line reads 71 tools after
+    the dedup pass (comment_mgr→annotation, firmware_bootstrap→
+    firmware_view, intelligence extracted from agent)."""
     text = _read(
         os.path.join(
             os.path.dirname(__file__),
             "..", "docs", "TOOLS_REFERENCE.md",
         )
     )
-    assert "**70 tools**" in text
+    assert "**71 tools**" in text
     assert "**72 tools**" not in text
-    assert "**71 tools**" not in text
-
-
-def test_tools_reference_doc_annotation_lists_merged_actions():
-    """The annotation section in TOOLS_REFERENCE.md lists the 6 new
-    actions."""
-    text = _read(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..", "docs", "TOOLS_REFERENCE.md",
-        )
-    )
-    # The annotation section should mention all 6 actions in its
-    # "Actions:" line.
-    assert "get_context" in text
-    assert "set_structured" in text
-    assert "bulk_set" in text
-    assert "export_md" in text
-    assert "import_md" in text
-    assert "summary" in text
+    assert "**70 tools**" not in text
 
 
 def test_tools_reference_alias_table_routes_to_annotation():
@@ -251,20 +232,20 @@ def test_tools_reference_alias_table_routes_to_annotation():
     assert "| `comments_ai` | `comment_mgr` |" not in text
 
 
-def test_technical_reference_doc_counts_drop():
-    """The technical reference doc updates tool count to 70 and
-    ADVERTISED to 64."""
+def test_technical_reference_doc_counts_current():
+    """The technical reference doc lists 71 tool names and 65
+    ADVERTISED tools (post-intelligence extraction)."""
     text = _read(
         os.path.join(
             os.path.dirname(__file__),
             "..", "docs", "TECHNICAL_REFERENCE.md",
         )
     )
-    assert "all 70 tool names" in text
+    assert "all 71 tool names" in text
+    assert "all 70 tool names" not in text
     assert "all 72 tool names" not in text
-    assert "all 71 tool names" not in text
-    assert "64 tools shown" in text
-    assert "65 tools shown" not in text
+    assert "65 tools shown" in text
+    assert "64 tools shown" not in text
     assert "66 tools shown" not in text
 
 

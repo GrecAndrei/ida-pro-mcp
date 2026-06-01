@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Current canonical tool surface: **70 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
+Current canonical tool surface: **71 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
 
 Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `build_input_schema`).
 
@@ -202,7 +202,12 @@ Project I/O and file operations. Includes advanced features: evidence_graph, kno
 ### agent
 High-level analysis orchestrator with bridge-conditioned multi-hop search (`bridge_query`) and reasoning bank distillation (`reflect`). Provides context packing, rename suggestions, and similarity analysis.
 
-**Actions:** analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card
+**Actions:** analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, cfg_encode, cfg_similar, cfg_stats
+
+### intelligence
+Intelligence subsystem: embedding-based function classification, indexing, similarity search, and evidence-card production. Extracted from `agent` in the dedup pass.
+
+**Actions:** intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card
 
 ### microcode
 Hex-Rays Microcode (IR) access with def-use graph support.

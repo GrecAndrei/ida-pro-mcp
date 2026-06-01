@@ -86,6 +86,9 @@ def test_cli_intelligence_status_shortcut(monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "intelligence_status" in out
+    # Tool name was extracted from `agent` to `intelligence` during the dedup pass.
+    # json.dumps emits no whitespace by default so look for compact "name":"intelligence".
+    assert '"name":"intelligence"' in out
     # initialize + tools/call
     assert any(c[0] == "tools/call" for c in calls)
 

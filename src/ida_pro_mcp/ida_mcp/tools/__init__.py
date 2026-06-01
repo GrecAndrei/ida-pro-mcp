@@ -42,6 +42,7 @@ __all__ = [
     "trace_analysis",
     "hooks",
     "coverage",
+    "intelligence",
     "wiki",
     "yara_hunt",
     "analysis",

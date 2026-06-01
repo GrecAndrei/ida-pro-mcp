@@ -565,8 +565,8 @@ Three QoL profiles control the trade-off between context efficiency and detail:
 ## 10. Tool Schema Contract
 
 Source of truth is in `src/ida_pro_mcp/host/schemas.py`:
-- `TOOLS` — ordered list of all 70 tool names
-- `ADVERTISED_TOOLS` — 64 tools shown in `tools/list`
+- `TOOLS` — ordered list of all 71 tool names
+- `ADVERTISED_TOOLS` — 65 tools shown in `tools/list`
 - `HIDDEN_TOOLS_IN_LIST` — 6 tools callable via alias/name but hidden from listings
 - `TOOL_DESCRIPTIONS` — per-tool description text
 - `TOOL_ACTIONS` — per-tool valid action list
