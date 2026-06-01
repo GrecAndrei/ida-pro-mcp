@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 from pathlib import Path
 
@@ -44,31 +45,32 @@ def main() -> int:
     _ = clf.classify(fixtures[1], threshold=0.2, top_k=4, block=False)
     t5 = time.perf_counter()
 
-    tmp_db = Path("/tmp/sideband-benchmark.embeddings.db")
-    idx = FunctionEmbeddingIndex(str(tmp_db), emb)
-    t6 = time.perf_counter()
-    for i, text in enumerate(fixtures):
-        idx.index(f"0x40{i:04x}", f"sub_{i}", text)
-    t7 = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="sideband-benchmark-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        idx = FunctionEmbeddingIndex(str(tmp_path / "embeddings.db"), emb)
+        t6 = time.perf_counter()
+        for i, text in enumerate(fixtures):
+            idx.index(f"0x40{i:04x}", f"sub_{i}", text)
+        t7 = time.perf_counter()
 
-    t8 = time.perf_counter()
-    _ = idx.similar(fixtures[0], top_k=3, threshold=0.0)
-    t9 = time.perf_counter()
+        t8 = time.perf_counter()
+        _ = idx.similar(fixtures[0], top_k=3, threshold=0.0)
+        t9 = time.perf_counter()
 
-    sem_idx = SemanticObjectIndex("/tmp/sideband-semantic-objects.db", emb)
-    for i, text in enumerate(fixtures):
-        sem_idx.upsert_object(
-            SemanticObject(
-                kind="function",
-                stable_ref=f"fx_{i}",
-                title=f"fixture_{i}",
-                text=text,
-                metadata={"fixture": i},
+        sem_idx = SemanticObjectIndex(str(tmp_path / "semantic-objects.db"), emb)
+        for i, text in enumerate(fixtures):
+            sem_idx.upsert_object(
+                SemanticObject(
+                    kind="function",
+                    stable_ref=f"fx_{i}",
+                    title=f"fixture_{i}",
+                    text=text,
+                    metadata={"fixture": i},
+                )
             )
-        )
-    t10 = time.perf_counter()
-    _ = sem_idx.semantic_search("http recv parser", kind="function", top_k=3, threshold=0.0)
-    t11 = time.perf_counter()
+        t10 = time.perf_counter()
+        _ = sem_idx.semantic_search("http recv parser", kind="function", top_k=3, threshold=0.0)
+        t11 = time.perf_counter()
 
     payload = {
         "backend": emb.backend,

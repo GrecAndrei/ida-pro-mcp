@@ -1,7 +1,7 @@
 # Sideband Semantic Memory Roadmap Status
 
 This file tracks completion evidence for:
-`/home/grec-alexander/Downloads/sideband_semantic_memory_codex_roadmap.md`
+`docs/design/sideband_semantic_memory_codex_roadmap.md`
 
 ## Phase Status
 

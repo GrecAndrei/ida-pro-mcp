@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and knowledge graph. write/read/list/search/update/delete/clear/prune/stats/merge: CRUD. frontier: ranked unvisited functions by embedding proximity + xref + entropy (read when choosing what to analyze next). coverage: analyzed vs unvisited per embedding cluster (read to understand progress). propagate_labels: spread LLM labels to embedding-similar neighbors via FrontierEngine. next_target: priority queue (confidence × time_decay × xref_boost). contradict/resolve/add_evidence/calibrate: evidence lifecycle. campaign_summary/auto_tag_propagate: batch operations. start_crawler/stop_crawler/crawler_status/accept/reject: background xref crawler. KG actions: kg_add_system/kg_add_struct/kg_add_gap/kg_add_state_machine/kg_add_attack_surface/kg_add_peripheral + read variants.
+Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and knowledge graph. write/read/list/search/update/delete/clear/prune/stats/merge: CRUD. semantic_index/semantic_rebuild: persistent semantic vector lifecycle for entries. related_by_behavior: behavior-centric semantic retrieval over stored notes. frontier: ranked unvisited functions by embedding proximity + xref + entropy (read when choosing what to analyze next). coverage: analyzed vs unvisited per embedding cluster (read to understand progress). propagate_labels: spread LLM labels to embedding-similar neighbors via FrontierEngine. next_target: priority queue (confidence × time_decay × xref_boost). contradict/resolve/add_evidence/calibrate: evidence lifecycle. campaign_summary/auto_tag_propagate: batch operations. start_crawler/stop_crawler/crawler_status/accept/reject: background xref crawler. KG actions: kg_add_system/kg_add_struct/kg_add_gap/kg_add_state_machine/kg_add_attack_surface/kg_add_peripheral + read variants.
 
 ## Actions
 - `policy_set` (tool-specific)
@@ -35,6 +35,9 @@ Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and know
 - `read` (read/discovery)
 - `list` (read/discovery)
 - `search` (read/discovery)
+- `semantic_index` (tool-specific)
+- `semantic_rebuild` (tool-specific)
+- `related_by_behavior` (tool-specific)
 - `update` (tool-specific)
 - `delete` (destructive)
 - `clear` (destructive)
@@ -89,19 +92,25 @@ Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and know
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `65`
+- `action`: `string` - allowed_count: `68`
 - `addr`: `string` - Associated address
 - `category`: `string` - Category (default: general)
 - `confidence`: `number` - Confidence score 0-1
 - `content`: `string` - Content/body text
 - `db_path`: `string` - Override path to blackboard SQLite DB
 - `entry_id`: `string` - Entry ID for read/update/delete
+- `force`: `boolean` - Force semantic_rebuild to re-embed all matching entries
+- `include_contradicted`: `boolean` - Include contradicted entries in semantic retrieval
+- `include_resolved`: `boolean` - Include resolved entries in semantic retrieval
 - `limit`: `integer` - Max entries to return
 - `min_confidence`: `number` - Minimum confidence filter
 - `offset`: `integer` - Pagination offset
+- `query`: `string` - Semantic/behavior query for search and related_by_behavior
 - `tag`: `string` - Filter by single tag
 - `tags`: `array` - Tags for categorization
+- `threshold`: `number` - Similarity threshold for semantic retrieval
 - `title`: `string` - Title for write/update
+- `top_k`: `integer` - Top-K results for semantic retrieval
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
