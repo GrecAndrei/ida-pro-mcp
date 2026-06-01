@@ -482,14 +482,6 @@ class ServerThreatHuntMixin:
                         passthrough,
                     )
                 ]
-            elif tool == "string_ops" and action:
-                steps = [
-                    (
-                        "string_ops",
-                        action,
-                        passthrough,
-                    )
-                ]
             else:
                 steps = [
                     ("deobfuscate", "stack_strings", {}),

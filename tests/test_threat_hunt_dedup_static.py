@@ -38,3 +38,9 @@ def test_threat_hunt_legacy_route_uses_shared_passthrough_helper():
     text = p.read_text(encoding="utf-8")
     assert "def _legacy_passthrough_args(args: dict) -> dict:" in text
     assert "passthrough = self._legacy_passthrough_args(args)" in text
+
+
+def test_threat_hunt_no_redundant_string_ops_passthrough_branch():
+    p = ROOT / "src" / "ida_pro_mcp" / "host" / "server_threat_hunt.py"
+    text = p.read_text(encoding="utf-8")
+    assert "elif tool == \"string_ops\" and action:" not in text
