@@ -3,6 +3,10 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+try:
+    from .misc import read_file_impl, write_file_impl
+except ImportError:
+    from misc import read_file_impl, write_file_impl  # type: ignore[import-not-found]
 
 import glob
 import hashlib
@@ -383,19 +387,17 @@ def project(
         
         elif action == "read":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
-            path, err = validate_path_safe(path)
-            if err: return err
-            if not os.path.exists(path): return make_error(MCPError.FILE_NOT_FOUND, path)
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                return {"ok": True, "path": path, "content": f.read()}
+            out = read_file_impl(path, encoding="utf-8")
+            if out.get("error"):
+                return make_error(MCPError.IDA_ERROR, str(out.get("message") or "read failed"))
+            return {"ok": True, "path": out.get("path"), "content": out.get("content", "")}
         
         elif action == "write":
             if not path or content is None: return make_error(MCPError.INVALID_ARGS, "path and content required")
-            path, err = validate_path_safe(path)
-            if err: return err
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            return {"ok": True, "path": path, "size": len(content)}
+            out = write_file_impl(path, str(content), encoding="utf-8")
+            if out.get("error"):
+                return make_error(MCPError.IDA_ERROR, str(out.get("message") or "write failed"))
+            return {"ok": True, "path": out.get("path"), "size": int(out.get("size") or 0)}
         
         elif action == "batch":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")

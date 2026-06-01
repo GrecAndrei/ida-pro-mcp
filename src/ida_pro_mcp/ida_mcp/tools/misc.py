@@ -5,6 +5,54 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+
+def read_file_impl(path: str, encoding: Optional[str] = None) -> dict:
+    """Shared filesystem read implementation for misc/project actions."""
+    import os as _os
+    try:
+        resolved, path_err = validate_path_safe(path)
+        if path_err:
+            return path_err
+        if not _os.path.exists(resolved):
+            return {"error": True, "message": f"File not found: {resolved}"}
+        if not _os.path.isfile(resolved):
+            return {"error": True, "message": f"Not a file: {resolved}"}
+        enc = (encoding or "utf-8").strip().lower()
+        if enc == "binary":
+            with open(resolved, "rb") as f:
+                data = f.read()
+            return {"ok": True, "path": resolved, "size": len(data), "content": data.hex(), "encoding": "binary"}
+        with open(resolved, "r", encoding=enc, errors="replace") as f:
+            text = f.read()
+        return {"ok": True, "path": resolved, "size": len(text), "content": text, "encoding": enc}
+    except Exception:
+        return {"error": True, "message": traceback.format_exc()}
+
+
+def write_file_impl(path: str, content: str, encoding: Optional[str] = None) -> dict:
+    """Shared filesystem write implementation for misc/project actions."""
+    import os as _os
+    try:
+        resolved, path_err = validate_path_safe(path)
+        if path_err:
+            return path_err
+        parent = _os.path.dirname(resolved)
+        if parent and not _os.path.exists(parent):
+            _os.makedirs(parent, exist_ok=True)
+        enc = (encoding or "utf-8").strip().lower()
+        if enc == "binary":
+            data = bytes.fromhex(content)
+            with open(resolved, "wb") as f:
+                f.write(data)
+            return {"ok": True, "path": resolved, "size": len(data), "encoding": "binary"}
+        with open(resolved, "w", encoding=enc) as f:
+            f.write(content)
+        return {"ok": True, "path": resolved, "size": len(content), "encoding": enc}
+    except ValueError as ve:
+        return {"error": True, "message": f"Invalid hex content for binary mode: {ve}"}
+    except Exception:
+        return {"error": True, "message": traceback.format_exc()}
+
 @tool
 def misc(
     action: Literal["python", "idc", "load_sig", "cache_stats", "read_file", "write_file", "plugin_list", "plugin_run", "health"] = "python",
@@ -81,54 +129,13 @@ def misc(
     if action == "read_file":
         if not path:
             return {"error": True, "message": "path required for read_file"}
-        import os as _os
-        try:
-            resolved, path_err = validate_path_safe(path)
-            if path_err:
-                return path_err
-            if not _os.path.exists(resolved):
-                return {"error": True, "message": f"File not found: {resolved}"}
-            if not _os.path.isfile(resolved):
-                return {"error": True, "message": f"Not a file: {resolved}"}
-            enc = (encoding or "utf-8").strip().lower()
-            if enc == "binary":
-                with open(resolved, "rb") as f:
-                    data = f.read()
-                return {"ok": True, "path": resolved, "size": len(data), "content": data.hex(), "encoding": "binary"}
-            else:
-                with open(resolved, "r", encoding=enc, errors="replace") as f:
-                    text = f.read()
-                return {"ok": True, "path": resolved, "size": len(text), "content": text, "encoding": enc}
-        except Exception:
-            return {"error": True, "message": traceback.format_exc()}
+        return read_file_impl(path, encoding=encoding)
     if action == "write_file":
         if not path:
             return {"error": True, "message": "path required for write_file"}
         if content is None:
             return {"error": True, "message": "content required for write_file"}
-        import os as _os
-        try:
-            resolved, path_err = validate_path_safe(path)
-            if path_err:
-                return path_err
-            # Ensure parent directory exists
-            parent = _os.path.dirname(resolved)
-            if parent and not _os.path.exists(parent):
-                _os.makedirs(parent, exist_ok=True)
-            enc = (encoding or "utf-8").strip().lower()
-            if enc == "binary":
-                data = bytes.fromhex(content)
-                with open(resolved, "wb") as f:
-                    f.write(data)
-                return {"ok": True, "path": resolved, "size": len(data), "encoding": "binary"}
-            else:
-                with open(resolved, "w", encoding=enc) as f:
-                    f.write(content)
-                return {"ok": True, "path": resolved, "size": len(content), "encoding": enc}
-        except ValueError as ve:
-            return {"error": True, "message": f"Invalid hex content for binary mode: {ve}"}
-        except Exception:
-            return {"error": True, "message": traceback.format_exc()}
+        return write_file_impl(path, content, encoding=encoding)
     if action == "plugin_list":
         try:
             import ida_loader
