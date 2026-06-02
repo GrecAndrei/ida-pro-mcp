@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and CFG similarity. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, cfg_encode, cfg_similar, cfg_stats.
+High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and CFG similarity. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, cfg_encode, cfg_similar, cfg_stats. NOTE: similar and cluster overlap functionally with intelligence.similar_functions (embedding-based nearest neighbors); for embedding-indexed similarity prefer intelligence.*, for the older 'structured context pack' workflow use agent.*. cfg_encode/cfg_similar/cfg_stats are agent-specific structural CFG features not present in graph.*.
 
 ## Actions
 - `analyze_function` (tool-specific)

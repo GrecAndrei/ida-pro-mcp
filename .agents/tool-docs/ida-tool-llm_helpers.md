@@ -43,7 +43,6 @@ Context-optimized helpers for LLM agents. START HERE: bootstrap gives a concrete
 - `persistent_search_collections` (tool-specific)
 - `auto_expansion_search_chains` (tool-specific)
 - `function_role_classifier` (tool-specific)
-- `protocol_format_reconstruction_assistant` (tool-specific)
 - `global_state_influence_mapper` (tool-specific)
 - `api_contract_extractor` (tool-specific)
 - `interprocedural_data_lineage_graph` (tool-specific)

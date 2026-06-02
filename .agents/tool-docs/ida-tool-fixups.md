@@ -1,24 +1,18 @@
-# IDA MCP Tool Doc: `query`
+# IDA MCP Tool Doc: `fixups`
 <!-- GENERATED: scripts/generate_tool_skills.py -->
 
 ## Purpose
-- Reference contract for the `query` MCP tool.
+- Reference contract for the `fixups` MCP tool.
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Unified query interface combining data, search, code, types, symbols, and natural-language queries. Actions: data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch. NOTE: query.nl and search.nl both expose natural-language search. query.nl routes through the unified query dispatcher (multi-domain NL over the indexed IDB), search.nl uses the bge-code-v1 embedding ranker directly. Use search.nl for behaviorally-precise RE queries; use query.nl when you want the unified dispatcher to pick a target domain.
+Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, get, add, delete.
 
 ## Actions
-- `data` (tool-specific)
-- `search` (read/discovery)
-- `idb` (tool-specific)
-- `code` (tool-specific)
-- `types` (tool-specific)
-- `imports_deep` (tool-specific)
-- `symbols` (tool-specific)
-- `patterns` (tool-specific)
-- `nl` (tool-specific)
-- `nl_batch` (tool-specific)
+- `list` (read/discovery)
+- `get` (read/discovery)
+- `add` (write/mutate)
+- `delete` (destructive)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -29,31 +23,36 @@ Unified query interface combining data, search, code, types, symbols, and natura
 - `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
-- Canonical wiki page: `wiki(action='read', topic='tools/query')`.
+- Canonical wiki page: `wiki(action='read', topic='tools/fixups')`.
 - Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch`
-- `args`: `object`
-- `subaction`: `string`
+- `action`: `string` - allowed: `list, get, add, delete`
+- `addr`: `string` - Address of the fixup
+- `count`: `integer` - Max entries (0=all)
+- `end`: `string` - End address for list range
+- `fixup_type`: `integer` - Fixup type id (processor specific)
+- `offset`: `integer` - Pagination offset
+- `start`: `string` - Start address for list range
+- `target`: `string` - Target address (for add)
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json
 {
-  "name": "query",
+  "name": "fixups",
   "arguments": {
-    "action": "data"
+    "action": "list"
   }
 }
 ```
 ```json
 {
-  "name": "query",
+  "name": "fixups",
   "arguments": {
     "action": "grep",
-    "source_action": "data",
+    "source_action": "list",
     "pattern": "<needle>"
   }
 }

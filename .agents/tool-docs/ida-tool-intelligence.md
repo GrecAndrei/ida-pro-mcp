@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Intelligence subsystem: embedding-based function classification, indexing, similarity search, and evidence-card production. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card.
+Intelligence subsystem: embedding-based function classification, indexing, similarity search, and evidence-card production. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card. NOTE: similar_functions is the canonical embedding-driven nearest-neighbor search; agent.similar overlaps functionally but is the older 'context pack' workflow. Prefer intelligence.similar_functions for new code; agent.similar is kept for back-compat.
 
 ## Actions
 - `intelligence_status` (tool-specific)
