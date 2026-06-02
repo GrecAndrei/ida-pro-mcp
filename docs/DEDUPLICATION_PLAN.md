@@ -176,3 +176,51 @@ The mixin/response layer was likely tightened in a prior dedupe pass
 `aa6bb72 Target D: merge xref_analysis into graph` both predate this
 session). Phase 4 is recorded as audited-with-no-targets and no
 code change is committed.
+
+## Phase 5 Audit (2026-06-02)
+
+The Phase 5 plan called for dead/legacy code cleanup. The candidates
+from the plan were:
+
+- **Orphaned `xref_analysis.py`** (33 KB on disk in
+  `src/ida_pro_mcp/ida_mcp/tools/xref_analysis.py`).
+  Not actually orphaned: `ida_mcp/tools/__init__.py:59` still imports
+  the module via the `_TOOL_MODULE_MAP` resolver and the IDA-side
+  plugin loads it directly. The host-side routing in
+  `host/schemas_data.py:12` aliases `xref_analysis → graph` so JSON-RPC
+  calls land on the canonical `graph` tool. The file stays for
+  back-compat (any external script that imports from
+  `ida_pro_mcp.tools.xref_analysis` still works). **No change.**
+
+- **`build/` artifacts.**
+  Already in `.gitignore:5` (`build/`). The directory exists locally
+  as a `python -m build` output but is not tracked. **No change.**
+
+- **`memrl` references.**
+  The `WRITE_IDB_TOOLS` entry was removed in Phase 1.4. The only
+  remaining `memrl` strings are the SQLite table names
+  (`memrl_triplets`, `memrl_suggestions`) inside
+  `host/intelligence_preference_store.py` and a docstring at the top
+  of that file noting that `ida_mcp.tools.memrl` was already removed.
+  The table names are part of the on-disk schema and must not change
+  (existing user DBs would break). **No change.**
+
+- **`host/errors.py` (19 codes) vs `ida_mcp/error_handling.py` (120
+  codes) MCPError classes.**
+  These are intentionally separate: `host/errors.py` is the canonical
+  host-layer error registry (used by `server_*.py`); the much larger
+  `ida_mcp/error_handling.py` is the tool-layer registry with the
+  full enum. Merging them would invert the `host ← ida_mcp`
+  dependency direction. They share no runtime state and have
+  different hint tables. **No change.**
+
+- **Search for other dead code.**
+  No files contain `DEPRECATED`, `REMOVED`, or `DEAD CODE` markers.
+  No `NotImplementedError`-only stubs. Largest source files
+  (`firmware_view.py` 2320 lines, `llm_helpers.py` 2265 lines,
+  `server_blackboard.py` 2208 lines) are all actively imported. The
+  largest "uncommitted" footprint is `xref_analysis.py` at 33 KB,
+  which stays for the reason above.
+
+Phase 5 is recorded as audited-with-no-targets and no code change is
+committed.
