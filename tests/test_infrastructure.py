@@ -495,8 +495,13 @@ class TestRegistryIntegrity:
         assert len(TOOLS) == len(set(TOOLS)), f"Duplicate tools: {[t for t in TOOLS if TOOLS.count(t) > 1]}"
 
     def test_all_tools_have_actions(self):
+        # batch is action-less by design: it takes a 'calls' array of tool
+        # invocations, not an action enum.
+        action_less = {"batch"}
         for t in TOOLS:
             assert t in TOOL_ACTIONS, f"Tool '{t}' missing from TOOL_ACTIONS"
+            if t in action_less:
+                continue
             assert len(TOOL_ACTIONS[t]) > 0, f"Tool '{t}' has no actions"
 
     def test_blackboard_and_filter_registered(self):

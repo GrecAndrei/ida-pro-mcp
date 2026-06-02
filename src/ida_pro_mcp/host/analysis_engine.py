@@ -31,6 +31,7 @@ try:
         cosine_similarity as _cosine,
         pack_floats as _pack,
         unpack_floats as _unpack,
+        quantile as _q,
     )
 except ImportError:
     _helpers_path = Path(__file__).with_name("intelligence_helpers.py")
@@ -44,6 +45,7 @@ except ImportError:
     _cosine = _helpers_mod.cosine_similarity
     _pack = _helpers_mod.pack_floats
     _unpack = _helpers_mod.unpack_floats
+    _q = _helpers_mod.quantile
 
 try:
     from .analysis_engine_kg import AnalysisEngineKnowledgeGraphMixin
@@ -612,7 +614,6 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
     ):
         """Scan other session embedding DBs for similar functions."""
         import sqlite3
-        from .intelligence_helpers import quantile as _q
 
         best_sim = -1.0
         best_match = None

@@ -26,6 +26,7 @@ from .intelligence_core import (
 )
 from .intelligence_context_policy import ContextAssemblerPolicyMixin
 from .intelligence_context_semantic import ContextAssemblerSemanticMixin
+from . import intelligence_helpers as _helpers
 from .intelligence_api_patterns import (
     ALL_INTERESTING_APIS,
     actions_from_apis,
@@ -854,9 +855,8 @@ class ContextAssembler(
     @staticmethod
     def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
         """Deterministic quantile helper with sane fallback."""
-        from .intelligence_helpers import quantile
         try:
-            return quantile(vals, q, default)
+            return _helpers.quantile(vals, q, default)
         except Exception:
             return float(default)
 
@@ -1300,8 +1300,7 @@ class ContextAssembler(
         if not os.path.exists(db):
             return None
         try:
-            from .intelligence_helpers import coerce_int
-            ea = coerce_int(addr)
+            ea = _helpers.coerce_int(addr)
             conn = sqlite3.connect(db)
             cur = conn.cursor()
             cur.execute("""
@@ -1662,8 +1661,7 @@ class ContextAssembler(
             eas: List[int] = []
             for a in addresses[:limit]:
                 try:
-                    from .intelligence_helpers import coerce_int
-                    eas.append(coerce_int(a))
+                    eas.append(_helpers.coerce_int(a))
                 except (ValueError, TypeError):
                     pass
             if not eas:
@@ -1690,8 +1688,7 @@ class ContextAssembler(
             enriched = []
             for a_str in addresses[:limit]:
                 try:
-                    from .intelligence_helpers import coerce_int
-                    ea_int = coerce_int(a_str)
+                    ea_int = _helpers.coerce_int(a_str)
                 except (ValueError, TypeError):
                     continue
                 row = rows.get(ea_int)
