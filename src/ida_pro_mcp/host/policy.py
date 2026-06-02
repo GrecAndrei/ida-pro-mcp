@@ -89,7 +89,6 @@ READ_ONLY_TOOLS = {
     "types",
     "wiki",
     "workflow",
-    "xref_analysis",
     "yara_hunt",
 }
 

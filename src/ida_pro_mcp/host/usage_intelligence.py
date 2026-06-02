@@ -219,7 +219,7 @@ class DriftDetector:
     - LATENCY_SPIKE: sudden increase in average latency
     """
 
-    ANALYSIS_TOOLS = {"code", "search", "xref_analysis", "cfg_analysis",
+    ANALYSIS_TOOLS = {"code", "search", "graph", "cfg_analysis",
                       "classify", "summarize", "deobfuscate"}
     RECORD_TOOLS = {"blackboard", "modify", "annotation", "bookmarks"}
 

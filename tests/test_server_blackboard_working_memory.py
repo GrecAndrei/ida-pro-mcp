@@ -141,7 +141,7 @@ class _DummyServer(ServerBlackboardMixin):
 
     def _execute_tool(self, tool_name, args):
         self._tool_calls.append((tool_name, dict(args)))
-        if tool_name == "xref_analysis":
+        if tool_name in {"xref_analysis", "graph"}:
             return {"ok": True, "action": "influence", "items": [{"addr": args.get("addr"), "name": "decrypt_config"}]}
         if tool_name == "search":
             return {"ok": True, "matches": [f"{args.get('query')} at 0x401000"]}
@@ -491,7 +491,7 @@ def test_quest_board_and_memory_compile_actions():
             "quest_type": "verify_this",
             "status": "completed",
             "result": "verified via xrefs and strings",
-            "evidence": ["xref_analysis influence", "code callers"],
+            "evidence": ["graph influence", "code callers"],
             "entry_id": "",
             "addr": "0x401000",
         }
@@ -560,7 +560,7 @@ def test_prove_receipts_require_tool_cited_evidence():
             "action": "decision_card",
             "lane": "lane_hypotheses",
             "claim": "strong evidence",
-            "evidence_for": ["code: caller fanout from reset", "xref_analysis: influence depth=2"],
+            "evidence_for": ["code: caller fanout from reset", "graph: influence depth=2"],
             "addr": "0x401000",
         }
     )

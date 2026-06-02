@@ -597,7 +597,7 @@ class ContextAssembler(
                 "intent": "malware_triage",
                 "first_calls": [
                     {"tool": "code", "action": "callers", "addr": addr},
-                    {"tool": "xref_analysis", "action": "call_chain", "addr": addr},
+                    {"tool": "graph", "action": "call_chain", "addr": addr},
                 ],
             }
         intent = (self._llm_query_intent(pack) or {}).get("intent", "function_understanding")
@@ -606,7 +606,7 @@ class ContextAssembler(
                 "intent": "malware_triage",
                 "first_calls": [
                     {"tool": "code", "action": "callers", "addr": addr},
-                    {"tool": "xref_analysis", "action": "call_chain", "addr": addr},
+                    {"tool": "graph", "action": "call_chain", "addr": addr},
                 ],
             }
         if intent == "obfuscation_or_packer":
@@ -661,7 +661,7 @@ class ContextAssembler(
             return {"loop_detected": False}
         return {
             "loop_detected": True,
-            "required_followup_call": {"tool": "xref_analysis", "action": "call_chain", "addr": addr},
+            "required_followup_call": {"tool": "graph", "action": "call_chain", "addr": addr},
             "secondary": {"tool": "firmware_view", "action": "campaign", "start": addr, "end": addr},
         }
 
@@ -684,10 +684,10 @@ class ContextAssembler(
     def _mode_profile(self, pack: Dict[str, Any]) -> Dict[str, Any]:
         apis = set(pack.get("api_calls") or [])
         if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
-            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "xref_analysis.call_chain"]}
+            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "graph.call_chain"]}
         intent = (self._llm_query_intent(pack) or {}).get("intent", "")
         if intent == "malware_behavior":
-            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "xref_analysis.call_chain"]}
+            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "graph.call_chain"]}
         if intent == "obfuscation_or_packer":
             return {"mode": "firmware_mode", "mandatory_sequence": ["firmware_view.region_profile", "firmware_view.pointer_clusters", "firmware_view.carve_plan"]}
         return {"mode": "analysis_mode", "mandatory_sequence": ["code.decompile", "code.callers"]}
@@ -785,7 +785,7 @@ class ContextAssembler(
     def _llm_verification_checklist(self, pack: Dict[str, Any], addr: str) -> List[str]:
         checks = [
             f"run code.callers at {addr}",
-            f"run xref_analysis.call_chain at {addr}",
+            f"run graph.call_chain at {addr}",
         ]
         if not pack.get("related_findings"):
             checks.append("write one blackboard note for newly verified behavior")
@@ -1126,7 +1126,7 @@ class ContextAssembler(
                     "pivot_suggestions": [
                         f"code(action='callers', addr='{addr}')",
                         f"code(action='callees', addr='{addr}')",
-                        f"xref_analysis(action='call_chain', addr='{addr}')",
+                        f"graph(action='call_chain', addr='{addr}')",
                         "data(action='imports') — review imports for context",
                     ],
                 }
@@ -1212,7 +1212,7 @@ class ContextAssembler(
         # When a search returns a list of addresses, enrich each with
         # schemaboot structural data so the LLM doesn't need extra tool calls
         # to assess which hits are interesting.
-        is_search = tool in ("search", "xref_analysis", "code") and action in (
+        is_search = tool in ("search", "graph", "code") and action in (
             "find", "api", "callers", "callees", "xrefs_to", "xrefs_from",
             "data_ref", "code_ref", "name", "string", "bytes",
             "call_chain", "common_callers", "hub_functions",

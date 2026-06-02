@@ -22,4 +22,4 @@ Load only one tool doc at a time to keep context small.
 - If unsure, list docs under `.agents/tool-docs/` and pick exact match.
 
 ## Available Tool Count
-- `66`
+- `65`

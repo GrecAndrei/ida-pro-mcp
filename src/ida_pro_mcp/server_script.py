@@ -38,7 +38,7 @@ os.environ["IDA_MCP_BYPASS_SYNC"] = "1"
 TOOLS = {}
 TOOL_ALIASES = {
     # Compatibility typo used by some wrappers.
-    "xfer_analysis": "xref_analysis",
+    "xfer_analysis": "graph",
     "c2_detect": "string_ops",
 }
 _ERROR_DETAIL_LEVEL = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()

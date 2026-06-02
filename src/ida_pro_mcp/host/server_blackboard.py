@@ -163,7 +163,7 @@ _ADDR_NAME_RE = re.compile(
 _EVIDENCE_TOOL_HINTS = {
     "code",
     "search",
-    "xref_analysis",
+    "graph",
     "firmware_view",
     "types",
     "data",
@@ -491,7 +491,7 @@ class ServerBlackboardMixin:
             return {"ok": False, "reason": "no_addr_or_runtime"}
         pulls = []
         probes = [
-            ("xref_analysis", {"action": "influence", "addr": addr, "depth": 2, "limit": 8}),
+            ("graph", {"action": "influence", "addr": addr, "depth": 2, "limit": 8}),
             ("code", {"action": "callers", "addr": addr, "limit": 8}),
             ("code", {"action": "callees", "addr": addr, "limit": 8}),
             ("code", {"action": "strings_in_func", "addr": addr, "limit": 8}),
@@ -1317,7 +1317,7 @@ class ServerBlackboardMixin:
             if hasattr(self, "_execute_tool"):
                 try:
                     xr = self._execute_tool(
-                        "xref_analysis",
+                        "graph",
                         {"action": "influence", "addr": addr, "depth": depth, "limit": 12, "include_items": True},
                     )
                     if isinstance(xr, dict):

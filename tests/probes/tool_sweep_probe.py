@@ -177,7 +177,7 @@ def main():
                         ("static_trace", {"action": "eval_expr", "addr": entry_addr}),
             ("export", {"action": "json"}),
             ("history", {"action": "list"}),
-            ("xref_analysis", {"action": "dependency_graph", "addr": entry_addr, "depth": 1, "direction": "forward", "limit": 20}),
+            ("graph", {"action": "dependency_graph", "addr": entry_addr, "depth": 1, "direction": "forward", "limit": 20}),
             ("entropy", {"action": "section"}),
             ("imports_deep", {"action": "api_sets"}),
             ("annotation", {"action": "get_context", "addr": entry_addr}),

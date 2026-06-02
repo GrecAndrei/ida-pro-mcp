@@ -651,7 +651,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "firmware_view": "firmware",
                 "llm_helpers": "guidance",
                 "code": "code",
-                "xref_analysis": "graph",
+                "graph": "graph",
                 "compare": "diff",
             }
             category_counts: dict[str, int] = {}
@@ -768,7 +768,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "code.disasm": "Gets opcode-level view at target address for patch semantics.",
                 "code.xrefs_to": "Shows inbound dependency impact into the patch location.",
                 "code.xrefs_from": "Shows outbound behavior impact from patched block.",
-                "xref_analysis.dependency_graph": "Summarizes near-neighbor call/data dependencies around patch.",
+                "graph.dependency_graph": "Summarizes near-neighbor call/data dependencies around patch.",
                 "compare.functions": "Captures structural/functional differences for regression risk review.",
             }
             explained_steps = []
@@ -983,7 +983,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "code", "arguments": {"action": "disasm", "addr": addr}},
                 {"name": "code", "arguments": {"action": "xrefs_to", "addr": addr, "limit": limit}},
                 {"name": "code", "arguments": {"action": "xrefs_from", "addr": addr, "limit": limit}},
-                {"name": "xref_analysis", "arguments": {"action": "dependency_graph", "addr": addr, "depth": 1, "limit": limit}},
+                {"name": "graph", "arguments": {"action": "dependency_graph", "addr": addr, "depth": 1, "limit": limit}},
                 {"name": "compare", "arguments": {"action": "functions", "addr": addr, "addr2": addr}},
             ]
         else:

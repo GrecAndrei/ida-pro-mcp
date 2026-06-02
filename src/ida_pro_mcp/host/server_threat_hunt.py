@@ -296,7 +296,7 @@ class ServerThreatHuntMixin:
             score += 1.4
         elif tool in {"trace_analysis", "coverage", "trace"}:
             score += 1.1
-        elif tool in {"search", "string_ops", "xref_analysis"}:
+        elif tool in {"search", "string_ops", "graph"}:
             score += 0.9
         if action in {"identify", "find_c2", "ioc_extract", "vulnerable", "detect"}:
             score += 1.0

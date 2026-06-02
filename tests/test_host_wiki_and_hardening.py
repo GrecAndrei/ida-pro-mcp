@@ -483,7 +483,7 @@ class TestHostHardening(unittest.TestCase):
 
     def test_tool_alias_generation_covers_all_tools(self):
         covered = {target for target in TOOL_ALIASES.values() if target in TOOLS}
-        missing = sorted(t for t in TOOLS if t not in covered and t not in {"plugins", "xfer_analysis"})
+        missing = sorted(t for t in TOOLS if t not in covered and t not in {"plugins", "xfer_analysis", "xref_analysis"})
         self.assertEqual(missing, [])
 
     def test_normalize_action_handles_malformed_llm_fragment(self):

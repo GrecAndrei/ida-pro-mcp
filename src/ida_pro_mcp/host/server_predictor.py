@@ -328,7 +328,7 @@ class ServerPredictorMixin:
             if dead_end and isinstance(dead_end, dict):
                 dtype = str(dead_end.get("type") or "")
                 if dtype == "repeated_decompile":
-                    pivots = ["code:callers", "code:callees", "xref_analysis:dependency_graph"]
+                    pivots = ["code:callers", "code:callees", "graph:dependency_graph"]
                 elif dtype == "repeated_search":
                     pivots = ["search:structured", "schemaboot:query", "string_ops:indicators"]
                 elif dtype == "tool_loop":
@@ -555,10 +555,10 @@ class ServerPredictorMixin:
                 last = recent_tools[-1]
                 NATURAL_NEXT = {
                     "code.decompile": ["crypto_id.identify", "code.callers", "code.callees",
-                                        "annotation.mark_dangerous", "xref_analysis.call_chain"],
-                    "search.api": ["code.decompile", "xref_analysis.call_chain"],
+                                        "annotation.mark_dangerous", "graph.call_chain"],
+                    "search.api": ["code.decompile", "graph.call_chain"],
                     "search.find": ["code.decompile", "data.functions"],
-                    "code.callers": ["code.decompile", "xref_analysis.call_chain"],
+                    "code.callers": ["code.decompile", "graph.call_chain"],
                 }
                 if ta_key in NATURAL_NEXT.get(last, []):
                     weights["markov_transition_probability"] = 0.8

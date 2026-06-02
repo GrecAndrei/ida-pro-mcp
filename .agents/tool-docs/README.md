@@ -7,4 +7,4 @@
 These are per-tool reference docs intentionally not exposed as skills.
 
 ## Count
-`66` docs
+`65` docs

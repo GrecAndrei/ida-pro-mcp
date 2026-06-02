@@ -51,7 +51,7 @@ _API_COMBOS: List[Tuple[frozenset, List[Dict[str, Any]]]] = [
     (frozenset({"VirtualAllocEx", "WriteProcessMemory"}), [
         {"tool": "annotation", "action": "mark_dangerous",
          "reason": "VirtualAllocEx + WriteProcessMemory = classic process injection"},
-        {"tool": "xref_analysis", "action": "call_chain",
+        {"tool": "graph", "action": "call_chain",
          "reason": "Trace injection chain to find where shellcode originates"},
         {"tool": "code", "action": "callers", "reason": "Find what triggers this injection"},
     ]),
@@ -79,7 +79,7 @@ _API_COMBOS: List[Tuple[frozenset, List[Dict[str, Any]]]] = [
     ]),
     (frozenset({"AdjustTokenPrivileges"}), [
         {"tool": "annotation", "action": "mark_dangerous", "reason": "Token privilege manipulation — privilege escalation"},
-        {"tool": "xref_analysis", "action": "call_chain", "reason": "Trace escalation path"},
+        {"tool": "graph", "action": "call_chain", "reason": "Trace escalation path"},
     ]),
     (frozenset({"CreateProcess", "CreateProcessW"}) | frozenset({"ShellExecuteEx"}), [
         {"tool": "string_ops", "action": "find_commands", "reason": "Process spawning — extract command-line arguments"},
@@ -137,7 +137,7 @@ def actions_from_apis(apis: List[str], addr: str) -> List[Dict[str, Any]]:
                     seen.add(key)
                     item = dict(act)
                     if addr and act.get("tool") in (
-                        "annotation", "xref_analysis", "crypto_id", "code", "string_ops"
+                        "annotation", "graph", "crypto_id", "code", "string_ops"
                     ):
                         item.setdefault("addr", addr)
                     actions.append(item)

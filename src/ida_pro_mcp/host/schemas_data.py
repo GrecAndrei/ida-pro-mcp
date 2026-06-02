@@ -9,7 +9,8 @@ from .schemas_alias_hints import (
 
 BASE_TOOL_ALIASES = {
     "plugins": "misc",
-    "xfer_analysis": "xref_analysis",
+    "xref_analysis": "graph",
+    "xfer_analysis": "graph",
 }
 
 TOOLS = [
@@ -92,8 +93,6 @@ TOOLS = [
     "protocol",
     # Intelligent annotation
     "annotation",
-    # Deep cross-reference analysis
-    "xref_analysis",
     # String operations
     "string_ops",
     # CFG analysis
@@ -243,7 +242,7 @@ _EXTRA_TOOL_ALIASES = {
     # Legacy/compat aliases kept for older clients and scripts.
     "comments_ai": "annotation",
     "annotations_ai": "annotation",
-    "strings_xref": "xref_analysis",
+    "strings_xref": "graph",
     "emulate": "trace_analysis",
     "searches": "search",
     "segment": "segments",
@@ -251,8 +250,8 @@ _EXTRA_TOOL_ALIASES = {
     "strings": "string_ops",
     "symbols_tool": "symbols",
     "trace_analyze": "trace_analysis",
-    "xref": "xref_analysis",
-    "xrefs": "xref_analysis",
+    "xref": "graph",
+    "xrefs": "graph",
     "govern": "governance",
     "rules": "governance",
     "policy": "governance",
@@ -287,7 +286,6 @@ THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
 THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
     "classify": None,
     "protocol": None,
-    "xref_analysis": None,
     "summarize": {
         "security_posture",
         "statistics",
@@ -332,7 +330,7 @@ TOOL_DESCRIPTIONS = {
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
     "knowledge": "Cross-session firmware knowledge base: chip family identification, persistent symbol memory, and symbol transfer across binaries. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
-    "graph": "Generate call graphs, CFGs, and xref graphs. Actions: callgraph, cfg, dominators, xref_graph.",
+    "graph": "Generate call graphs, CFGs, xref graphs, and cross-reference graph analysis. Actions: callgraph, cfg, dominators, xref_graph, call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
     "history": "Undo/redo IDB changes, create snapshots, restore, and diff states. Actions: undo, redo, list, snapshot, restore, diff.",
     "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile.",
@@ -365,7 +363,6 @@ TOOL_DESCRIPTIONS = {
     "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph.",
     "wiki": "Accesses built-in documentation and tool usage guides within MCP context. Actions: list_topics, read, search, semantic_search, index, sections, suggest.",
     "workflow": "Executes predefined multi-step analysis workflows for common RE tasks. audit_plan validates and scores a plan before execution. execute_plan runs a planned call list (or generated plan) through batch execution with execution metadata. prioritize reorders a dry-run plan by strategy (original/coverage/risk_first). compose merges multiple workflow plans into one deduplicated dry-run execution plan. estimate returns dry-run complexity/risk/category projections. explain returns a dry-run plan plus per-step rationale. plan previews another workflow action without executing it. catalog returns available workflows and required inputs. triage_fast auto-checks idb overview and, for firmware-like binaries, injects firmware_view(action='triage_snapshot') plus guided analysis. recon_sweep runs broader orientation + structured retrieval + protocol + security posture in one pass. Supports dry_run plan preview and include/exclude tool filtering for controlled orchestration. Actions: audit_plan, execute_plan, prioritize, compose, estimate, explain, plan, catalog, triage_fast, malware_deep, vuln_audit, recon_sweep, patch_review.",
-    "xref_analysis": "Performs cross-reference graph analysis: call chains, dominators, hubs, dead code, and dependency graphs. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
     "yara_hunt": "Scans the binary with YARA rules and provides match context and xref correlation. Actions: scan, compile, list_rules, match_context, extract_strings, xref_matches.",
 }
 
@@ -824,12 +821,16 @@ TOOL_ACTIONS = {
         "cfg",
         "dominators",
         "xref_graph",
-        "down",
-        "up",
-        "both",
-        "json",
-        "dot",
-        "mermaid",
+        "call_chain",
+        "common_callers",
+        "common_callees",
+        "hub_functions",
+        "leaf_functions",
+        "recursive",
+        "dominator",
+        "influence",
+        "dependency_graph",
+        "dead_functions",
     ],
     "history": [
         "undo",
@@ -1313,21 +1314,6 @@ TOOL_ACTIONS = {
         "vuln_audit",
         "recon_sweep",
         "patch_review",
-    ],
-    "xref_analysis": [
-        "call_chain",
-        "common_callers",
-        "common_callees",
-        "hub_functions",
-        "leaf_functions",
-        "recursive",
-        "dominator",
-        "influence",
-        "dependency_graph",
-        "dead_functions",
-        "forward",
-        "backward",
-        "both",
     ],
     "yara_hunt": [
         "scan",

@@ -269,7 +269,7 @@ _TOOL_SUGGESTION_BASE = {
     ]},
     # Bridgerag triggers
     "bridge_search:search": {"base": 0, "triggers": [], "next": [
-        ("code:decompile", 0.35), ("xref_analysis:call_chain", 0.25),
+        ("code:decompile", 0.35), ("graph:call_chain", 0.25),
         ("compare:functions", 0.15), ("code:decompile_chain", 0.1),
     ]},
 }

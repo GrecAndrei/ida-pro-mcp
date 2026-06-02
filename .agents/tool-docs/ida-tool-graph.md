@@ -6,19 +6,23 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Generate call graphs, CFGs, and xref graphs. Actions: callgraph, cfg, dominators, xref_graph.
+Generate call graphs, CFGs, xref graphs, and cross-reference graph analysis. Actions: callgraph, cfg, dominators, xref_graph, call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.
 
 ## Actions
 - `callgraph` (tool-specific)
 - `cfg` (tool-specific)
 - `dominators` (tool-specific)
 - `xref_graph` (tool-specific)
-- `down` (tool-specific)
-- `up` (tool-specific)
-- `both` (tool-specific)
-- `json` (tool-specific)
-- `dot` (tool-specific)
-- `mermaid` (tool-specific)
+- `call_chain` (tool-specific)
+- `common_callers` (tool-specific)
+- `common_callees` (tool-specific)
+- `hub_functions` (tool-specific)
+- `leaf_functions` (tool-specific)
+- `recursive` (tool-specific)
+- `dominator` (tool-specific)
+- `influence` (tool-specific)
+- `dependency_graph` (tool-specific)
+- `dead_functions` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

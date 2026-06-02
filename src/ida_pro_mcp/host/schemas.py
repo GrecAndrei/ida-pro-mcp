@@ -751,7 +751,6 @@ _TOOL_CATEGORY_SECURITY = {
     "protocol",
     "gadgets",
     "annotation",
-    "xref_analysis",
     "string_ops",
     "cfg_analysis",
     "binary_info",

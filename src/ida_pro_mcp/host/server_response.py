@@ -332,7 +332,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
     def _guardrail_reason_tags(self, tool_name: str, call_args: Any, payload: Any) -> list[str]:
         tags: list[str] = []
         tn = str(tool_name or "").lower()
-        if tn in {"code", "xref_analysis", "graph", "ctree", "static_trace", "memory", "calc"}:
+        if tn in {"code", "graph", "graph", "ctree", "static_trace", "memory", "calc"}:
             tags.append("address-heavy-tool")
         if isinstance(call_args, dict):
             keys = {str(k).lower() for k in call_args.keys()}
@@ -886,7 +886,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         )
                     else:
                         # Periodic reminder for long analysis chains to externalize state.
-                        if tool_name in {"code", "search", "xref_analysis", "threat_hunt", "predictor"}:
+                        if tool_name in {"code", "search", "graph", "threat_hunt", "predictor"}:
                             compacted.setdefault(
                                 "llm_state_sync_hint",
                                 {
