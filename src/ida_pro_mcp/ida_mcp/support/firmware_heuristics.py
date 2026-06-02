@@ -4,15 +4,18 @@ import math
 import hashlib
 from typing import Dict, List
 
-def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
-    if not vals:
-        return float(default)
-    s = sorted(float(v) for v in vals)
-    if len(s) == 1:
-        return s[0]
-    i = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
-    i = max(0, min(len(s) - 1, i))
-    return float(s[i])
+try:
+    from ida_pro_mcp.host.intelligence_helpers import quantile as _quantile
+except ImportError:
+    def _quantile(vals, q, default=0.0):
+        if not vals:
+            return float(default)
+        s = sorted(float(v) for v in vals)
+        if len(s) == 1:
+            return s[0]
+        i = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
+        i = max(0, min(len(s) - 1, i))
+        return float(s[i])
 
 
 def _robust_norm(v: float, samples: List[float], default_span: float = 1.0) -> float:

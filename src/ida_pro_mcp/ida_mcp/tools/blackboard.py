@@ -57,15 +57,33 @@ if "idawrite" not in globals():
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
-def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
-    if not vals:
-        return float(default)
-    s = sorted(float(v) for v in vals)
-    if len(s) == 1:
-        return s[0]
-    idx = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
-    idx = max(0, min(len(s) - 1, idx))
-    return float(s[idx])
+try:
+    from ida_pro_mcp.host.intelligence_helpers import (
+        dot_product as _cosine,
+        pack_floats as _pack_vec,
+        quantile as _quantile,
+        unpack_floats as _unpack_vec,
+    )
+except ImportError:
+    def _quantile(vals, q, default=0.0):
+        if not vals:
+            return float(default)
+        s = sorted(float(v) for v in vals)
+        if len(s) == 1:
+            return s[0]
+        idx = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
+        idx = max(0, min(len(s) - 1, idx))
+        return float(s[idx])
+
+    def _pack_vec(vec):
+        return struct.pack(f"{len(vec)}f", *vec)
+
+    def _unpack_vec(blob):
+        n = len(blob) // 4
+        return list(struct.unpack(f"{n}f", blob))
+
+    def _cosine(a, b):
+        return sum(x * y for x, y in zip(a, b))
 
 
 def _resolve_db_path(db_path: Optional[str] = None) -> str:
@@ -107,19 +125,6 @@ def _get_embedder():
             return BgeCodeEmbedder()
         except ImportError:
             return None
-
-
-def _pack_vec(vec: List[float]) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec)
-
-
-def _unpack_vec(blob: bytes) -> List[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f"{n}f", blob))
-
-
-def _cosine(a: List[float], b: List[float]) -> float:
-    return sum(x * y for x, y in zip(a, b))
 
 
 class BlackboardStore:

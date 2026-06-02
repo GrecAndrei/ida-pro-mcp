@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
+import struct
 import time
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Sequence
 
 def _q(vals: List[float], q: float, default: float = 0.0) -> float:
     if not vals:
@@ -12,6 +14,39 @@ def _q(vals: List[float], q: float, default: float = 0.0) -> float:
     i = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
     i = max(0, min(len(s) - 1, i))
     return float(s[i])
+
+
+# Public alias for the quantile helper. ``_q`` is kept for back-compat with
+# existing imports; new code should use ``quantile``.
+quantile = _q
+
+
+def dot_product(a: Sequence[float], b: Sequence[float]) -> float:
+    """Sum of elementwise products. Equivalent to cosine similarity when
+    both inputs are pre-normalized to unit length — the convention used by
+    the BgeCodeEmbedder output vectors."""
+    return sum(float(x) * float(y) for x, y in zip(a, b))
+
+
+def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
+    """True cosine similarity with safe zero-norm fallback."""
+    dot = dot_product(a, b)
+    na = math.sqrt(sum(float(x) * float(x) for x in a))
+    nb = math.sqrt(sum(float(x) * float(x) for x in b))
+    if na < 1e-9 or nb < 1e-9:
+        return 0.0
+    return dot / (na * nb)
+
+
+def pack_floats(vec: Sequence[float]) -> bytes:
+    """Pack a list of floats into a raw little-endian float32 blob."""
+    return struct.pack(f"{len(vec)}f", *vec)
+
+
+def unpack_floats(blob: bytes) -> List[float]:
+    """Inverse of :func:`pack_floats`."""
+    n = len(blob) // 4
+    return list(struct.unpack(f"{n}f", blob))
 
 
 def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:

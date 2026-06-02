@@ -18,15 +18,32 @@ Usage (from server.py):
 from __future__ import annotations
 
 import json
-import math
 import os
-import struct
 import threading
 import time
 import uuid
 import importlib.util
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+try:
+    from .intelligence_helpers import (
+        cosine_similarity as _cosine,
+        pack_floats as _pack,
+        unpack_floats as _unpack,
+    )
+except ImportError:
+    _helpers_path = Path(__file__).with_name("intelligence_helpers.py")
+    _helpers_spec = importlib.util.spec_from_file_location(
+        "intelligence_helpers", _helpers_path
+    )
+    if _helpers_spec is None or _helpers_spec.loader is None:
+        raise
+    _helpers_mod = importlib.util.module_from_spec(_helpers_spec)
+    _helpers_spec.loader.exec_module(_helpers_mod)
+    _cosine = _helpers_mod.cosine_similarity
+    _pack = _helpers_mod.pack_floats
+    _unpack = _helpers_mod.unpack_floats
 
 try:
     from .analysis_engine_kg import AnalysisEngineKnowledgeGraphMixin
@@ -40,21 +57,6 @@ except ImportError:
     AnalysisEngineKnowledgeGraphMixin = _kg_mod.AnalysisEngineKnowledgeGraphMixin
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-
-def _cosine(a: List[float], b: List[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(x * x for x in b))
-    return dot / (na * nb) if na and nb else 0.0
-
-
-def _unpack(blob: bytes) -> List[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f"{n}f", blob))
-
-
-def _pack(v: List[float]) -> bytes:
-    return struct.pack(f"{len(v)}f", *v)
 
 
 # ── Proposal store ────────────────────────────────────────────────────────────
@@ -610,13 +612,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
     ):
         """Scan other session embedding DBs for similar functions."""
         import sqlite3
-        def _q(vals: List[float], q: float, default: float = 0.0) -> float:
-            if not vals:
-                return default
-            s = sorted(float(v) for v in vals)
-            i = int(round((len(s) - 1) * max(0.0, min(1.0, q))))
-            i = max(0, min(len(s) - 1, i))
-            return float(s[i])
+        from .intelligence_helpers import quantile as _q
 
         best_sim = -1.0
         best_match = None

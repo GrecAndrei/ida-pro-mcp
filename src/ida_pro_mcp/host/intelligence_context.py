@@ -854,16 +854,9 @@ class ContextAssembler(
     @staticmethod
     def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
         """Deterministic quantile helper with sane fallback."""
+        from .intelligence_helpers import quantile
         try:
-            if not vals:
-                return float(default)
-            s = sorted(float(v) for v in vals)
-            if len(s) == 1:
-                return float(s[0])
-            qv = max(0.0, min(1.0, float(q)))
-            idx = int(round((len(s) - 1) * qv))
-            idx = max(0, min(len(s) - 1, idx))
-            return float(s[idx])
+            return quantile(vals, q, default)
         except Exception:
             return float(default)
 

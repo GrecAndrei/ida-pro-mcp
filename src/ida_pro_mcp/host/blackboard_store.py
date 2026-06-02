@@ -19,15 +19,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
-    if not vals:
-        return float(default)
-    s = sorted(float(v) for v in vals)
-    if len(s) == 1:
-        return s[0]
-    idx = int(round((len(s) - 1) * max(0.0, min(1.0, float(q)))))
-    idx = max(0, min(len(s) - 1, idx))
-    return float(s[idx])
+from .intelligence_helpers import quantile as _quantile
 
 
 def _resolve_db_path(db_path: Optional[str] = None) -> str:
@@ -72,16 +64,18 @@ def _get_embedder():
 
 
 def _pack_vec(vec: List[float]) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec)
+    from .intelligence_helpers import pack_floats
+    return pack_floats(vec)
 
 
 def _unpack_vec(blob: bytes) -> List[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f"{n}f", blob))
+    from .intelligence_helpers import unpack_floats
+    return unpack_floats(blob)
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
-    return sum(x * y for x, y in zip(a, b))
+    from .intelligence_helpers import dot_product
+    return dot_product(a, b)
 
 
 class BlackboardStore:

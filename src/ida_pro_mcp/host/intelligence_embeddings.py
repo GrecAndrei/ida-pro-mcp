@@ -13,9 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-
-def _cosine(a: List[float], b: List[float]) -> float:
-    return sum(x * y for x, y in zip(a, b))
+from .intelligence_helpers import dot_product as _cosine
 
 
 def _now_iso() -> str:
@@ -296,21 +294,22 @@ class FunctionEmbeddingIndex:
 
     def _load_cache(self) -> None:
         """Load all stored embeddings into RAM for fast cosine search."""
+        from .intelligence_helpers import unpack_floats
         try:
             with self._conn() as conn:
                 for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
                     ea, blob = row
-                    n = len(blob) // 4
-                    self._cache[ea] = list(struct.unpack(f"{n}f", blob))
+                    self._cache[ea] = unpack_floats(blob)
         except Exception:
             pass
 
     def _pack(self, vec: List[float]) -> bytes:
-        return struct.pack(f"{len(vec)}f", *vec)
+        from .intelligence_helpers import pack_floats
+        return pack_floats(vec)
 
     def _unpack(self, blob: bytes) -> List[float]:
-        n = len(blob) // 4
-        return list(struct.unpack(f"{n}f", blob))
+        from .intelligence_helpers import unpack_floats
+        return unpack_floats(blob)
 
     def _phash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:16]
@@ -507,11 +506,12 @@ class SemanticObjectIndex:
         return conn
 
     def _pack(self, vec: List[float]) -> bytes:
-        return struct.pack(f"{len(vec)}f", *vec)
+        from .intelligence_helpers import pack_floats
+        return pack_floats(vec)
 
     def _unpack(self, blob: bytes) -> List[float]:
-        n = len(blob) // 4
-        return list(struct.unpack(f"{n}f", blob))
+        from .intelligence_helpers import unpack_floats
+        return unpack_floats(blob)
 
     def _init_db(self) -> None:
         with self._conn() as conn:

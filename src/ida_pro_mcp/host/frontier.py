@@ -17,25 +17,10 @@ from __future__ import annotations
 
 import math
 import sqlite3
-import struct
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _unpack(blob: bytes) -> List[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f"{n}f", blob))
-
-
-def _cosine(a: List[float], b: List[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(x * x for x in b))
-    if na < 1e-9 or nb < 1e-9:
-        return 0.0
-    return dot / (na * nb)
+from .intelligence_helpers import cosine_similarity as _cosine, unpack_floats as _unpack
 
 
 def _vec_add(a: List[float], b: List[float]) -> List[float]:

@@ -581,7 +581,8 @@ class BgeCodeEmbedder:
 
     @staticmethod
     def cosine(a: List[float], b: List[float]) -> float:
-        return sum(x * y for x, y in zip(a, b))
+        from .intelligence_helpers import dot_product
+        return dot_product(a, b)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
