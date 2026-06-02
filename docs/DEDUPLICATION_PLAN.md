@@ -109,3 +109,26 @@ count stays at or below the baseline of 51.
     importable for back-compat; the alias in the runtime layer redirects
     calls. A future phase may decide to delete the file once no callers
     import from it directly.
+
+## Cross-Reference Notes (Phase 3, 2026-06-02)
+
+The Phase 3 inventory revealed no name-collision action overlaps between
+`agent`/`intelligence`/`llm_helpers` (the 50+ ghost-action concern from
+the original plan was already addressed in Phase 1.6). What it did find
+is a handful of *intentional* name reuses between tools with deliberately
+different semantics. Cross-reference notes were added to the tool
+descriptions in `TOOL_DESCRIPTIONS` so the LLM picks the right one; this
+section is the human-readable index.
+
+| Tool A action | Tool B action | What's different | When to use which |
+|---|---|---|---|
+| `classify.function` | `summarize.function` | `classify` returns category / behavior tag (BehaviorClassifier on a single function). `summarize` returns counts / structure (xrefs, insns, callee count, complexity). | Use `classify.function` to ask "what kind of function is this?". Use `summarize.function` to ask "what does this function look like (size, complexity, calls)?" |
+| `classify.binary` | `summarize.binary` | `classify` returns the binary's overall type / purpose. `summarize` returns the binary's overall stats / breakdown. | Use `classify.binary` for "what is this binary?" (architecture, role). Use `summarize.binary` for "what's in this binary?" (segment sizes, file type, imports). |
+| `agent.similar` | `intelligence.similar_functions` | Both find nearest-neighbor functions. `intelligence.similar_functions` is the canonical embedding-indexed search (bge-code-v1). `agent.similar` is the older "context pack" workflow that bundles similarity with surrounding code. | Prefer `intelligence.similar_functions` for new code. Keep `agent.similar` for back-compat with existing client scripts. |
+| `agent.cfg_encode` / `agent.cfg_similar` / `agent.cfg_stats` | `graph.cfg` / `graph.*` | `agent.*` are agent-specific structural CFG features (encode for similarity search, etc.). `graph.*` is the canonical call-graph / CFG / xref-graph tool. | Use `agent.cfg_*` for the similarity/encoding workflow. Use `graph.*` for plain graph queries. |
+| `agent.fingerprint` | `intelligence.index_function` | `agent.fingerprint` produces a structural signature (for clustering). `intelligence.index_function` adds a function to the embedding index. | Use `agent.fingerprint` for "give this function a structural hash". Use `intelligence.index_function` for "make this function retrievable by semantic similarity". |
+| `search.nl` | `query.nl` | Both expose natural-language search. `search.nl` uses the bge-code-v1 embedding ranker directly. `query.nl` routes through the unified query dispatcher (multi-domain NL over the indexed IDB). | Use `search.nl` for behaviorally-precise RE queries. Use `query.nl` when you want the unified dispatcher to pick a target domain. |
+| `search.behavior` | `classify.all_functions` | `search.behavior` finds all functions matching a behavior tag (precomputed). `classify.all_functions` runs the BehaviorClassifier on every unnamed function and produces tagged entries. | Use `search.behavior` for read-only lookup. Use `classify.all_functions` when you need to actually run classification on the current IDB. |
+| `intelligence.classify_function` | `classify.function` | Both classify a single function. `intelligence.classify_function` uses the embedding-index classifier (fast, cached). `classify.function` is the direct BehaviorClassifier call. | Use `intelligence.classify_function` (faster, consistent with the index). `classify.function` is the older entry point. |
+| `trace_analysis` | `coverage` | `trace_analysis` is coverage-oriented trace analysis. `coverage` is the import/report helper. | Use `trace_analysis` for trace-side queries. Use `coverage` to import / report coverage data. |
+| `xref_analysis` (legacy) | `graph` | `xref_analysis.py` on disk is consolidated into `graph` at the host layer. The runtime alias redirects `xref_analysis` → `graph`. | Prefer `graph` for new code. The alias exists for back-compat. |
