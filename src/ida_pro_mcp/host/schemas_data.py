@@ -1562,6 +1562,15 @@ TOOL_ARG_SCHEMAS = {
         "max_functions": {"type": "integer"},
         "sample": {"type": "boolean"},
         "sample_max_funcs": {"type": "integer"},
+        # Combinator actions (bool, hunt, neighborhood, outlier, fingerprint, path, reach, noreach)
+        "metric": {"type": "string", "description": "outlier metric: size|complexity|bb_count|orphan|leaf|hub|deep|tiny|huge"},
+        "top": {"type": "integer", "description": "outlier top N (default 50)"},
+        "top_k": {"type": "integer", "description": "fingerprint top K (default 20)"},
+        "radius": {"type": "integer", "description": "neighborhood radius (default 10)"},
+        "src": {"type": "string", "description": "path source symbol/addr"},
+        "dst": {"type": "string", "description": "path destination symbol/addr"},
+        "max_depth": {"type": "integer", "description": "path/reach max BFS depth"},
+        "depth": {"type": "integer", "description": "reach/noreach BFS depth"},
     },
     "threat_hunt": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},

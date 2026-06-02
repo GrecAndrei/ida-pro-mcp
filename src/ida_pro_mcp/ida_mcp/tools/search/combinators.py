@@ -72,9 +72,9 @@ def _set_to_text(items: list[dict]) -> str:
 # Primitive extractors (used by the bool parser)
 # ============================================================================
 
-def _prim_funcs_by_name(pattern: str, case_sensitive: bool) -> set[int]:
+def _prim_funcs_by_name(pattern: str) -> set[int]:
     """Functions whose name matches pattern (glob or substring)."""
-    matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
+    matcher = compile_smart_pattern(pattern, case_sensitive=False)
     out = set()
     for ea in idautils.Functions():
         if matcher(_func_name(ea)):
@@ -82,10 +82,10 @@ def _prim_funcs_by_name(pattern: str, case_sensitive: bool) -> set[int]:
     return out
 
 
-def _prim_funcs_by_string(pattern: str, case_sensitive: bool) -> set[int]:
+def _prim_funcs_by_string(pattern: str) -> set[int]:
     """Functions whose decompiled code contains a string literal matching pattern."""
     import ida_hexrays
-    matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
+    matcher = compile_smart_pattern(pattern, case_sensitive=False)
     out = set()
     for ea in idautils.Functions():
         try:
@@ -145,7 +145,7 @@ def _prim_funcs_by_mnem(pattern: str) -> set[int]:
 
 def _prim_callers(target: str) -> set[int]:
     """Functions that call the given target (name or addr)."""
-    ea, err = resolve_target(target)
+    ea, err, _ = resolve_target(target)
     if err or ea == idaapi.BADADDR:
         return set()
     out = set()
@@ -160,7 +160,7 @@ def _prim_callers(target: str) -> set[int]:
 
 def _prim_callees(target: str) -> set[int]:
     """Functions called by the given target."""
-    ea, err = resolve_target(target)
+    ea, err, _ = resolve_target(target)
     if err or ea == idaapi.BADADDR:
         return set()
     out = set()
@@ -342,10 +342,11 @@ def search_bool(expr: str, case_sensitive: bool, offset: int, limit: int) -> dic
         if not tokens:
             return make_error(MCPError.INVALID_ARGS, "expression parsed to zero tokens")
         parser = _BoolParser(tokens)
+        result_set = parser.parse_expr()
         if parser.pos < len(parser.tokens):
             return make_error(MCPError.INVALID_ARGS,
-                              f"unparsed tokens at end: {parser.tokens[parser.pos:]}")
-        result_set = parser.parse_expr()
+                              f"unparsed tokens at end: {parser.tokens[parser.pos:]}",
+                              hint="Operators: AND OR NOT ( ). Primitives: name: api: string: mnem: caller: callee:")
     except ValueError as e:
         return make_error(MCPError.INVALID_ARGS, f"bool parse error: {e}",
                           hint="Operators: AND OR NOT ( ). Primitives: name: api: string: mnem: caller: callee:")
@@ -524,7 +525,7 @@ def search_neighborhood(addr: str, radius: int, offset: int, limit: int) -> dict
     Returns a compact summary card so the LLM can orient quickly without
     having to issue five separate searches.
     """
-    ea, err = resolve_target(addr)
+    ea, err, _ = resolve_target(addr)
     if err or ea == idaapi.BADADDR:
         return make_error(MCPError.INVALID_ARGS,
                           f"could not resolve addr {addr!r}",
@@ -822,7 +823,7 @@ def search_fingerprint(addr: str, top_k: int, offset: int, limit: int) -> dict:
     'nl' search: two functions can have the same structure but completely
     different names or comments, and vice versa.
     """
-    ea, err = resolve_target(addr)
+    ea, err, _ = resolve_target(addr)
     if err or ea == idaapi.BADADDR:
         return make_error(MCPError.INVALID_ARGS,
                           f"could not resolve addr {addr!r}",
@@ -898,10 +899,10 @@ def search_path(src: str, dst: str, max_depth: int) -> dict:
 
     Returns the chain of function addresses (and names) such that each calls the next.
     """
-    src_ea, src_err = resolve_target(src)
+    src_ea, src_err, _ = resolve_target(src)
     if src_err or src_ea == idaapi.BADADDR:
         return make_error(MCPError.INVALID_ARGS, f"could not resolve src {src!r}")
-    dst_ea, dst_err = resolve_target(dst)
+    dst_ea, dst_err, _ = resolve_target(dst)
     if dst_err or dst_ea == idaapi.BADADDR:
         return make_error(MCPError.INVALID_ARGS, f"could not resolve dst {dst!r}")
     src_func = idaapi.get_func(src_ea)
@@ -971,7 +972,7 @@ def search_reach(root: str, depth: int, offset: int, limit: int) -> dict:
 
     BFS forward on the call graph.
     """
-    root_ea, err = resolve_target(root)
+    root_ea, err, _ = resolve_target(root)
     if err or root_ea == idaapi.BADADDR:
         return make_error(MCPError.INVALID_ARGS, f"could not resolve root {root!r}")
     func = idaapi.get_func(root_ea)
@@ -998,7 +999,12 @@ def search_reach(root: str, depth: int, offset: int, limit: int) -> dict:
 
 
 def _all_entry_points() -> list[int]:
-    """Return all known entry points (exports + entry ordinals)."""
+    """Return all known entry points.
+
+    Includes:
+      - Formal export entries (idc.get_entry_qty)
+      - The "main" or "_start" function as a fallback (common RE starting point)
+    """
     out = set()
     try:
         for idx in range(ida_nalt.get_entry_qty()):
@@ -1009,6 +1015,18 @@ def _all_entry_points() -> list[int]:
                     out.add(int(f.start_ea))
     except Exception:
         pass
+    if not out:
+        # Fallback: use main / _start / WinMain as a starting point
+        for sym in ("main", "_start", "wmain", "WinMain", "DllMain"):
+            try:
+                ea = idc.get_name_ea_simple(sym)
+                if ea != idaapi.BADADDR:
+                    f = idaapi.get_func(ea)
+                    if f:
+                        out.add(int(f.start_ea))
+                        break
+            except Exception:
+                continue
     return list(out)
 
 

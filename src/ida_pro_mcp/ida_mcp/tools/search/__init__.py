@@ -232,7 +232,7 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "summary"}
+        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
         if action == "export" and not actual_pattern:
