@@ -414,13 +414,17 @@ Powers the `_nudge` field in every response.
 ### Additional ML components
 
 Legacy `memrl`, `turboquant`, and `bridgerag` tool names were removed from the public surface.
-Use the canonical names instead:
+
+Tool surface:
 
 - `schemaboot`: Structured semantic indexing with induced attribute-value schemas per function
 - `bridge_search`: Multi-hop bridge query expansion for discovering indirect relationships
+- `predictor`: Deterministic prediction and strategy suggestion using crystallized skills
+
+Internal components:
+
 - `PreferenceMemoryBank`: Q-value learning and skill crystallization based on usage patterns
 - `MultiHopBridgeIndex`: Canonical bridge index used by `bridge_search`
-- `predictor`: Deterministic prediction and strategy suggestion using crystallized skills
 
 ## Production Hardening
 
