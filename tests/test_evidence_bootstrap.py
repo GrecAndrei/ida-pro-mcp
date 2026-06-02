@@ -78,12 +78,30 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         self.binary = os.path.join(self.tmpdir, "sample.bin")
         with open(self.binary, "wb") as f:
             f.write(b"\x90" * 256)
+        self._orig_policy_mode = os.environ.get("IDA_MCP_POLICY_MODE")
+        self._orig_rate_per_tool = os.environ.get("IDA_MCP_RATE_LIMIT_PER_TOOL")
+        self._orig_rate_global = os.environ.get("IDA_MCP_RATE_LIMIT_GLOBAL")
+        self._orig_rate_burst = os.environ.get("IDA_MCP_RATE_LIMIT_BURST")
+        os.environ["IDA_MCP_POLICY_MODE"] = "permissive"
+        os.environ["IDA_MCP_RATE_LIMIT_PER_TOOL"] = "10000"
+        os.environ["IDA_MCP_RATE_LIMIT_GLOBAL"] = "10000"
+        os.environ["IDA_MCP_RATE_LIMIT_BURST"] = "10000"
         self.server = IDAMCPServer()
         create = self.server._execute_tool("session", {"action": "create", "binary_path": self.binary})
         assert create.get("ok"), create
         self.sid = create["session"]["session_id"]
 
     def tearDown(self):
+        for var, orig in [
+            ("IDA_MCP_POLICY_MODE", self._orig_policy_mode),
+            ("IDA_MCP_RATE_LIMIT_PER_TOOL", self._orig_rate_per_tool),
+            ("IDA_MCP_RATE_LIMIT_GLOBAL", self._orig_rate_global),
+            ("IDA_MCP_RATE_LIMIT_BURST", self._orig_rate_burst),
+        ]:
+            if orig is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = orig
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_route_bootstrap_actions(self):

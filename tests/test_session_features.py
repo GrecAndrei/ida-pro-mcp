@@ -749,7 +749,8 @@ class TestExecuteToolNewActions(unittest.TestCase):
         # Create a session
         self.server._execute_tool("session", {
             "action": "create",
-            "binary_path": self.test_binary
+            "binary_path": self.test_binary,
+            "_risk_ack": True,
         })
 
     def tearDown(self):
@@ -759,14 +760,14 @@ class TestExecuteToolNewActions(unittest.TestCase):
 
     def test_update_action(self):
         result = self.server._execute_tool("session", {
-            "action": "update", "notes": "updated via action"
+            "action": "update", "notes": "updated via action", "_risk_ack": True,
         })
         self.assertTrue(result.get("ok"))
         self.assertEqual(result["session"]["notes"], "updated via action")
 
     def test_rename_action(self):
         result = self.server._execute_tool("session", {
-            "action": "rename", "name": "New Name"
+            "action": "rename", "name": "New Name", "_risk_ack": True,
         })
         self.assertTrue(result.get("ok"))
         self.assertEqual(result["session"]["auto_name"], "New Name")
@@ -805,10 +806,10 @@ class TestExecuteToolNewActions(unittest.TestCase):
         self.assertNotIn("archived", result["session"]["tags"])
 
     def test_tag_untag_actions(self):
-        result = self.server._execute_tool("session", {"action": "tag", "tag": "malware"})
+        result = self.server._execute_tool("session", {"action": "tag", "tag": "malware", "_risk_ack": True})
         self.assertTrue(result.get("ok"))
         self.assertIn("malware", result["session"]["tags"])
-        result = self.server._execute_tool("session", {"action": "untag", "tag": "malware"})
+        result = self.server._execute_tool("session", {"action": "untag", "tag": "malware", "_risk_ack": True})
         self.assertTrue(result.get("ok"))
         self.assertNotIn("malware", result["session"]["tags"])
 
@@ -817,7 +818,7 @@ class TestExecuteToolNewActions(unittest.TestCase):
         self.assertTrue(result.get("error"))
 
     def test_find_by_tag_action(self):
-        self.server._execute_tool("session", {"action": "tag", "tag": "test_tag"})
+        self.server._execute_tool("session", {"action": "tag", "tag": "test_tag", "_risk_ack": True})
         result = self.server._execute_tool("session", {"action": "find_by_tag", "tag": "test_tag"})
         self.assertTrue(result.get("ok"))
         self.assertEqual(result["count"], 1)
@@ -930,15 +931,15 @@ class TestExecuteToolNewActions(unittest.TestCase):
         with open(b2, "wb") as f:
             f.write(b"\x00" * 50)
         r2 = self.server._execute_tool("session", {
-            "action": "create", "binary_path": b2, "force_new": True
+            "action": "create", "binary_path": b2, "force_new": True, "_risk_ack": True
         })
         sid2 = r2["session"]["session_id"]
         self.server._execute_tool("session", {
-            "action": "tag", "tag": "source_tag", "session_id": sid2
+            "action": "tag", "tag": "source_tag", "session_id": sid2, "_risk_ack": True
         })
         sid1 = self.server.current_session.session_id
         result = self.server._execute_tool("session", {
-            "action": "merge", "session_id": sid1, "source_id": sid2
+            "action": "merge", "session_id": sid1, "source_id": sid2, "_risk_ack": True
         })
         self.assertTrue(result.get("ok"))
 

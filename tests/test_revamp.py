@@ -131,6 +131,8 @@ class TestSessionExecuteTool(unittest.TestCase):
         self._orig_find = IDAMCPServer._find_idat
         IDAMCPServer._detect_ida_dir = lambda self: ""
         IDAMCPServer._find_idat = lambda self: ""
+        self._orig_policy_mode = os.environ.get("IDA_MCP_POLICY_MODE")
+        os.environ["IDA_MCP_POLICY_MODE"] = "permissive"
         self.server = IDAMCPServer()
         self.server.cache_dir = self.tmpdir
         self.server.session_mgr = SessionManager(self.tmpdir)
@@ -138,6 +140,10 @@ class TestSessionExecuteTool(unittest.TestCase):
     def tearDown(self):
         IDAMCPServer._detect_ida_dir = self._orig_detect
         IDAMCPServer._find_idat = self._orig_find
+        if self._orig_policy_mode is None:
+            os.environ.pop("IDA_MCP_POLICY_MODE", None)
+        else:
+            os.environ["IDA_MCP_POLICY_MODE"] = self._orig_policy_mode
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_create_session(self):

@@ -178,6 +178,8 @@ class TestHostWikiTool(unittest.TestCase):
 
 class TestHostHardening(unittest.TestCase):
     def setUp(self):
+        self._orig_policy_mode = os.environ.get("IDA_MCP_POLICY_MODE")
+        os.environ["IDA_MCP_POLICY_MODE"] = "permissive"
         self.server = IDAMCPServer()
 
     def test_session_invalid_id_format(self):
@@ -591,6 +593,12 @@ class TestHostHardening(unittest.TestCase):
             self.assertTrue(row.get("error"))
             self.assertIn("Nested batch", row.get("message", ""))
 
+    def tearDown(self):
+        if self._orig_policy_mode is None:
+            os.environ.pop("IDA_MCP_POLICY_MODE", None)
+        else:
+            os.environ["IDA_MCP_POLICY_MODE"] = self._orig_policy_mode
+
 
 class TestResponseCompaction(unittest.TestCase):
     def setUp(self):
@@ -964,6 +972,7 @@ class TestGadgetSemanticIndex(unittest.TestCase):
                 "query": "xchg rsp",
                 "source_actions": ["rop", "stack_pivot"],
                 "source_limit": 20,
+                "_risk_ack": True,
             },
         )
         self.assertTrue(res.get("ok"))
@@ -990,7 +999,7 @@ class TestGadgetSemanticIndex(unittest.TestCase):
         self.server.call_tool = fake_call_tool
         first = self.server._execute_tool(
             "gadgets",
-            {"action": "semantic_find", "query": "move register", "source_actions": ["rop"]},
+            {"action": "semantic_find", "query": "move register", "source_actions": ["rop"], "_risk_ack": True},
         )
         self.assertTrue(first.get("ok"))
         self.assertEqual(calls["count"], 1)
@@ -1001,7 +1010,7 @@ class TestGadgetSemanticIndex(unittest.TestCase):
         self.server.call_tool = fail_call_tool
         second = self.server._execute_tool(
             "gadgets",
-            {"action": "semantic_find", "query": "move register", "source_actions": ["rop"]},
+            {"action": "semantic_find", "query": "move register", "source_actions": ["rop"], "_risk_ack": True},
         )
         self.assertTrue(second.get("ok"))
         self.assertNotIn("index_refresh", second)
