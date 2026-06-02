@@ -1,4 +1,4 @@
-# Sideband Capsules (Experimental v0)
+# Sideband Capsules (Experimental, initial implementation)
 
 ## Concept
 
@@ -10,7 +10,7 @@ IDA Pro is the first backend/reference backend, not necessarily the long-term pr
 
 ## Why Capsules Exist
 
-The existing project already has rich session, policy, and installer data, but this state is spread across runtime files and client configs. Capsules provide a portable workspace container with:
+The existing project already has rich session, policy, and installer data, and the capsule layer now persists initial semantic/session/evidence state alongside runtime files and client configs. Capsules provide a portable workspace container with:
 
 - explicit manifest and trust metadata
 - deterministic storage for install/session/audit records
@@ -47,9 +47,9 @@ This iteration intentionally does not:
 - implement FUSE/mounting or custom binary wrappers
 - claim sandboxing or malware safety guarantees
 
-## v0 Scope
+## Current Scope
 
-Capsule v0 includes:
+Capsule v0 currently includes:
 
 - SQLite schema and migrations
 - manifest/meta storage and verification
@@ -68,15 +68,18 @@ Test coverage includes unit tests and optional real-IDA integration probes:
 
 Planned follow-on work:
 
-- capsule-backed MCP sessions
 - installer materialization graph
 - analysis deltas
-- evidence cards
-- analysis-only export
 - backend-neutral adapters
 - optional executable wrapper
 - signed capsules
 - capsule diff/replay
+
+Already implemented in initial form:
+
+- capsule-backed MCP sessions
+- evidence cards
+- analysis-only export
 
 ## Analysis-Only Export
 
