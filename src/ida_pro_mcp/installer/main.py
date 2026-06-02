@@ -508,21 +508,30 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
     report.metadata.update({"install_root": str(install_root), "source_root": str(source_root)})
 
     try:
-        # Resolve IDA install FIRST so subsequent steps (stdio config, capsule
-        # metadata) can refer to the chosen install.  We deliberately do NOT
-        # mutate os.environ here — the chosen install is passed explicitly to
-        # build_stdio_config and recorded in the capsule.  Mutating the parent
-        # process env would leak into tests and any subprocesses the user
-        # launches from this shell.
-        chosen_install = _resolve_ida_install(opts, ui)
-        opts._ida_install = chosen_install  # type: ignore[attr-defined]
-        report.metadata["ida_install"] = chosen_install.to_dict()
-        report.metadata["ida_version"] = chosen_install.full_version_str
-        if not opts.dry_run:
+        # Resolve IDA only when a later phase actually needs it or the user
+        # explicitly asked for an IDA override. Client configuration benefits
+        # from a concrete install, but runtime/skills/shell-only installs
+        # should not fail just because IDA is absent on this machine.
+        chosen_install = None
+        if _phase_enabled(opts, "clients") or opts.ida_dir or opts.ida_version:
             try:
-                write_install_state(install_root, chosen_install)
-            except OSError as exc:
-                ui.warn(f"Could not write ida-install.json: {exc}")
+                chosen_install = _resolve_ida_install(opts, ui)
+            except RuntimeError as exc:
+                if opts.ida_dir or opts.ida_version:
+                    raise
+                msg = str(exc)
+                if "no IDA Pro install found" not in msg and "No IDA Pro install detected" not in msg:
+                    raise
+                ui.warn("No IDA Pro install detected; continuing without IDADIR")
+        if chosen_install is not None:
+            opts._ida_install = chosen_install  # type: ignore[attr-defined]
+            report.metadata["ida_install"] = chosen_install.to_dict()
+            report.metadata["ida_version"] = chosen_install.full_version_str
+            if not opts.dry_run:
+                try:
+                    write_install_state(install_root, chosen_install)
+                except OSError as exc:
+                    ui.warn(f"Could not write ida-install.json: {exc}")
 
         opts = _run_interactive_wizard(opts, ui)
         ui.info("Starting installer")
