@@ -443,7 +443,10 @@ class TestHostHardening(unittest.TestCase):
             shutil.rmtree(tempdir, ignore_errors=True)
 
     def test_wrapper_source_action_defaults_to_list_when_available(self):
-        action, err = self.server._wrapper_source_action("funcs", {"action": "head"}, "head")
+        # `funcs` no longer owns a `list` action (it lives on `data`).
+        # `segments` still has a `list` action and is the canonical fit for
+        # this check.
+        action, err = self.server._wrapper_source_action("segments", {"action": "head"}, "head")
         self.assertIsNone(err)
         self.assertEqual(action, "list")
 
