@@ -10,6 +10,13 @@ from pathlib import Path
 
 from .clients import configure_clients, rollback_from_backups
 from .common import InstallReport, InstallerOptions
+from .discovery import (
+    IdaInstall,
+    detect_ida_installs,
+    read_install_state,
+    select_ida_install,
+    write_install_state,
+)
 from .runtime import (
     build_stdio_config,
     download_and_install_llama_server,
@@ -189,6 +196,98 @@ def _prompt_choice(question: str, choices: list[str], default: str) -> str:
         print("Invalid choice.")
 
 
+def _format_install_table(installs: list[IdaInstall]) -> str:
+    """Format installs as a numbered table for the user prompt."""
+    lines = []
+    for i, inst in enumerate(installs, start=1):
+        lines.append(f"  {i}) {inst.display}")
+    return "\n".join(lines)
+
+
+def _prompt_ida_install(installs: list[IdaInstall], default_index: int = 0) -> IdaInstall:
+    print("Detected IDA Pro installs:")
+    print(_format_install_table(installs))
+    default_label = f"{default_index + 1}"
+    while True:
+        ans = input(
+            f"Select IDA install [1-{len(installs)}] (default: {default_label}): "
+        ).strip()
+        if not ans:
+            return installs[default_index]
+        if ans.isdigit():
+            n = int(ans)
+            if 1 <= n <= len(installs):
+                return installs[n - 1]
+        # Allow selecting by version string
+        for i, inst in enumerate(installs):
+            if ans == inst.version_str or ans == inst.full_version_str:
+                return inst
+        print("Invalid choice. Enter a number or version string (e.g. '9.3').")
+
+
+def _resolve_ida_install(opts: InstallerOptions, ui: UI) -> IdaInstall:
+    """Pick an IDA install: apply CLI overrides, prompt, or auto-pick.
+
+    Always runs (even in --yes mode) so the rest of the install knows
+    which IDA to wire into the launch config.
+    """
+    installs = detect_ida_installs()
+
+    # Case 1: explicit override via CLI
+    if opts.ida_dir or opts.ida_version:
+        chosen = select_ida_install(
+            installs,
+            explicit_dir=Path(opts.ida_dir).expanduser() if opts.ida_dir else None,
+            explicit_version=opts.ida_version or None,
+        )
+        ui.ok(f"Selected IDA install (override): {chosen.display}")
+        return chosen
+
+    # Case 2: zero installs — fatal
+    if not installs:
+        ui.err(
+            "No IDA Pro install detected. Pass --ida-dir <path>, set IDADIR, "
+            "or install IDA Pro/IDA Home."
+        )
+        raise RuntimeError("no IDA Pro install found")
+
+    # Case 3: one install — auto-pick (no need to prompt)
+    if len(installs) == 1:
+        ui.ok(f"Detected IDA install: {installs[0].display}")
+        return installs[0]
+
+    # Case 4: multiple installs — decide based on interactivity
+    # Read last-saved state to default the prompt
+    last = read_install_state(opts.install_root or get_install_root())
+    default_index = 0
+    if last is not None:
+        for i, inst in enumerate(installs):
+            if inst.path == last.path:
+                default_index = i
+                break
+
+    if opts.yes or opts.interactive is False or opts.no_ida_prompt:
+        chosen = installs[default_index]
+        ui.ok(
+            f"Auto-selected IDA install: {chosen.display} "
+            f"(use --ida-dir to override; saved selection honored)"
+        )
+        return chosen
+
+    # TTY prompt (only if we have one)
+    if not _is_interactive_terminal():
+        chosen = installs[default_index]
+        ui.ok(
+            f"Non-TTY: auto-selected {chosen.display} "
+            f"(saved selection honored; use --ida-dir to override)"
+        )
+        return chosen
+
+    chosen = _prompt_ida_install(installs, default_index=default_index)
+    ui.ok(f"Selected IDA install: {chosen.display}")
+    return chosen
+
+
 def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     if opts.yes:
         return opts
@@ -351,6 +450,21 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--capsule", default="", help="optional path to write installer metadata capsule (.sideband)")
     parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
+    parser.add_argument(
+        "--ida-dir",
+        default="",
+        help="explicit path to an IDA install directory (e.g. /opt/ida-pro-9.3)",
+    )
+    parser.add_argument(
+        "--ida-version",
+        default="",
+        help="explicit IDA version constraint (e.g. '9.3', '9.2', '9.3.260421')",
+    )
+    parser.add_argument(
+        "--no-ida-prompt",
+        action="store_true",
+        help="do not prompt for IDA install selection; pick highest-version automatically",
+    )
     args = parser.parse_args(argv)
     opts = InstallerOptions(
         dry_run=args.dry_run,
@@ -377,6 +491,9 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
             opts.only = {"clients"}
     opts.install_root = Path(args.install_root).expanduser() if args.install_root else get_install_root()
     opts.source_root = Path(__file__).resolve().parents[3]
+    opts.ida_dir = args.ida_dir
+    opts.ida_version = args.ida_version
+    opts.no_ida_prompt = args.no_ida_prompt
     return opts
 
 
@@ -391,6 +508,22 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
     report.metadata.update({"install_root": str(install_root), "source_root": str(source_root)})
 
     try:
+        # Resolve IDA install FIRST so subsequent steps (stdio config, capsule
+        # metadata) can refer to the chosen install.  We deliberately do NOT
+        # mutate os.environ here — the chosen install is passed explicitly to
+        # build_stdio_config and recorded in the capsule.  Mutating the parent
+        # process env would leak into tests and any subprocesses the user
+        # launches from this shell.
+        chosen_install = _resolve_ida_install(opts, ui)
+        opts._ida_install = chosen_install  # type: ignore[attr-defined]
+        report.metadata["ida_install"] = chosen_install.to_dict()
+        report.metadata["ida_version"] = chosen_install.full_version_str
+        if not opts.dry_run:
+            try:
+                write_install_state(install_root, chosen_install)
+            except OSError as exc:
+                ui.warn(f"Could not write ida-install.json: {exc}")
+
         opts = _run_interactive_wizard(opts, ui)
         ui.info("Starting installer")
         ui.info(f"Install root: {install_root}")
@@ -454,6 +587,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 install_root,
                 embed_model=embed_model,
                 embed_server_bin=embed_server,
+                ida_install=getattr(opts, "_ida_install", None),
             )
             configured = configure_clients(
                 source_root=source_root,
@@ -509,7 +643,11 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     name="ida-primary",
                     kind="ida",
                     config={
-                        "idadir": "",
+                        "idadir": str(chosen_install.path) if chosen_install else "",
+                        "idat_binary": str(chosen_install.idat_binary) if (chosen_install and chosen_install.idat_binary) else "",
+                        "ida_version": chosen_install.full_version_str if chosen_install else "",
+                        "ida_flavor": chosen_install.flavor if chosen_install else "unknown",
+                        "ida_arch": chosen_install.arch if chosen_install else "unknown",
                         "status": "primary",
                     },
                 )

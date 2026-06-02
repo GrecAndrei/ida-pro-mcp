@@ -3,7 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 
 from ida_pro_mcp.capsule import CapsuleStore
+from ida_pro_mcp.installer.discovery import IdaInstall
 from ida_pro_mcp.installer.main import UI, parse_args, run_install
+
+
+def _fake_ida_install(tmp_path: Path) -> IdaInstall:
+    """Build a synthetic IdaInstall pointing at a temp dir."""
+    install_dir = tmp_path / "fake-ida-9.3"
+    install_dir.mkdir(parents=True, exist_ok=True)
+    idat = install_dir / "idat"
+    idat.write_text("#!/bin/sh\nexec ./ida \"$@\"\n")
+    idat.chmod(0o755)
+    return IdaInstall(
+        path=install_dir,
+        version=(9, 3),
+        build="000000.test",
+        idat_binary=idat,
+        arch="x64",
+        flavor="pro",
+        source="test",
+    )
 
 
 def test_installer_capsule_success_writes_records(tmp_path, monkeypatch):
@@ -13,6 +32,11 @@ def test_installer_capsule_success_writes_records(tmp_path, monkeypatch):
     model_path.parent.mkdir(parents=True, exist_ok=True)
     model_path.write_text("fake-model", encoding="utf-8")
 
+    fake_install = _fake_ida_install(tmp_path)
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.main._resolve_ida_install",
+        lambda *a, **k: fake_install,
+    )
     monkeypatch.setattr(
         "ida_pro_mcp.installer.main.setup_runtime_environment",
         lambda **kwargs: install_root / ".venv" / "bin" / "python",
@@ -69,6 +93,11 @@ def test_installer_capsule_dry_run_does_not_write_capsule(tmp_path, monkeypatch)
     install_root = tmp_path / "install-root"
     capsule_path = tmp_path / "dryrun.sideband"
 
+    fake_install = _fake_ida_install(tmp_path)
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.main._resolve_ida_install",
+        lambda *a, **k: fake_install,
+    )
     monkeypatch.setattr(
         "ida_pro_mcp.installer.main.setup_runtime_environment",
         lambda **kwargs: install_root / ".venv" / "bin" / "python",
@@ -98,6 +127,12 @@ def test_installer_capsule_dry_run_does_not_write_capsule(tmp_path, monkeypatch)
 def test_installer_capsule_failure_writes_failed_audit_event(tmp_path, monkeypatch):
     install_root = tmp_path / "install-root"
     capsule_path = tmp_path / "failed.sideband"
+
+    fake_install = _fake_ida_install(tmp_path)
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.main._resolve_ida_install",
+        lambda *a, **k: fake_install,
+    )
 
     def _boom(**kwargs):
         raise RuntimeError("runtime setup failed")

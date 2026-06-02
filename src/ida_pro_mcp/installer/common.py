@@ -27,6 +27,10 @@ class InstallerOptions:
     only: set[str] = field(default_factory=set)
     install_root: Path | None = None
     source_root: Path | None = None
+    # IDA install selection (9.2 ↔ 9.3 multi-install support)
+    ida_dir: str = ""  # explicit path override
+    ida_version: str = ""  # explicit version override (e.g. "9.3" or "9.3.260421")
+    no_ida_prompt: bool = False  # don't prompt; pick highest-version automatically
 
 
 @dataclass

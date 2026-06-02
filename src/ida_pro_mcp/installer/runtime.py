@@ -31,6 +31,20 @@ def _ida_binary_names() -> list[str]:
 
 
 def detect_ida_install_dir() -> Path | None:
+    """Return the IDA install dir from env vars or PATH.
+
+    This is the legacy single-install detector used by the host MCP server
+    and the installer's environment-reading code paths.  The multi-install
+    discovery logic lives in `installer/discovery.py` and is invoked
+    separately by the install wizard.
+
+    Note: this function deliberately does NOT read the installer state
+    file (install_root/ida-install.json) — the host server's detection
+    must be deterministic and not depend on what the installer last
+    decided.  The installer's `_resolve_ida_install()` writes IDADIR into
+    the MCP server env at config-write time, which is the right way to
+    hand off the selection to the host.
+    """
     for env_name in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT"):
         value = os.environ.get(env_name)
         if not value:
@@ -293,8 +307,20 @@ def build_stdio_config(
     install_root: Path,
     embed_model: str = "",
     embed_server_bin: str = "",
+    ida_install: object | None = None,
 ) -> dict:
-    idadir = os.environ.get("IDADIR") or os.environ.get("IDA_DIR")
+    """Build the stdio MCP server config for a specific IDA install.
+
+    Resolution order for IDADIR:
+      1. `ida_install` (IdaInstall from installer/discovery.py)
+      2. IDADIR / IDA_DIR env
+      3. `detect_ida_install_dir()` (legacy single-install path)
+    """
+    idadir = ""
+    if ida_install is not None:
+        idadir = str(getattr(ida_install, "path"))
+    if not idadir:
+        idadir = os.environ.get("IDADIR") or os.environ.get("IDA_DIR") or ""
     if not idadir:
         detected = detect_ida_install_dir()
         if detected:
