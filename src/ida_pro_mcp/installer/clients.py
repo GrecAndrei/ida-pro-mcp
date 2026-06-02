@@ -65,17 +65,86 @@ def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> No
     backup_file(path, report, dry_run)
 
 
-def _load_json_config(path: Path, *, allow_comments: bool = False) -> dict:
+def _strip_jsonc_comments(text: str) -> str:
+    """Strip // and /* */ comments from JSONC/JSON5 text while preserving strings.
+
+    Trailing commas left by removed comments are normalized so json.loads succeeds.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    string_quote = ""
+    escape = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == string_quote:
+                in_string = False
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            string_quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    cleaned = "".join(out)
+    cleaned = re.sub(r",(\s*[\]\}])", r"\1", cleaned)
+    return cleaned
+
+
+class ConfigParseError(Exception):
+    """Raised when an existing config file cannot be parsed.
+
+    The installer refuses to write back to a file it cannot read; doing otherwise
+    would silently wipe the user's settings.
+    """
+
+
+def _load_json_config(path: Path, *, allow_comments: bool = True) -> dict:
     if not path.exists():
         return {}
     try:
         content = path.read_text(encoding="utf-8")
-        if allow_comments:
-            content = re.sub(r"//.*?$", "", content, flags=re.MULTILINE)
-            content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-        return json.loads(content)
-    except Exception:
+    except OSError as exc:
+        raise ConfigParseError(f"Could not read {path}: {exc}") from exc
+
+    if not content.strip():
         return {}
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    if not allow_comments:
+        raise ConfigParseError(
+            f"{path} is not strict JSON. Strict mode is enforced for this client; "
+            "fix the syntax or remove the file before retrying."
+        )
+    try:
+        return json.loads(_strip_jsonc_comments(content))
+    except json.JSONDecodeError as exc:
+        raise ConfigParseError(
+            f"Could not parse {path} as JSON or JSONC: {exc}. "
+            "Fix the syntax or remove the file before retrying."
+        ) from exc
 
 
 def _upsert_server_entry(container: dict, server_name: str, server_cfg: dict) -> None:
@@ -170,7 +239,11 @@ def get_config_paths(source_root: Path) -> dict[str, Path]:
 
 def update_json_config(path: Path, server_name: str, server_cfg: dict, report: InstallReport, dry_run: bool) -> bool:
     _prepare_config_path(path, report, dry_run)
-    config = _load_json_config(path, allow_comments=False)
+    try:
+        config = _load_json_config(path, allow_comments=True)
+    except ConfigParseError as exc:
+        report.add_error(str(exc))
+        return False
     config.setdefault("mcpServers", {})
     _upsert_server_entry(config["mcpServers"], server_name, server_cfg)
     if not dry_run:
@@ -181,7 +254,11 @@ def update_json_config(path: Path, server_name: str, server_cfg: dict, report: I
 
 def update_opencode_config(path: Path, server_name: str, server_cfg: dict, report: InstallReport, dry_run: bool) -> bool:
     _prepare_config_path(path, report, dry_run)
-    config = _load_json_config(path, allow_comments=True)
+    try:
+        config = _load_json_config(path, allow_comments=True)
+    except ConfigParseError as exc:
+        report.add_error(str(exc))
+        return False
     config.setdefault("$schema", "https://opencode.ai/config.json")
     config.setdefault("mcp", {})
     opencode_entry = {
@@ -213,8 +290,12 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
     if path.exists():
         try:
             config = tomllib.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            config = {}
+        except Exception as exc:
+            report.add_error(
+                f"Could not parse {path} as TOML: {exc}. "
+                "Fix the syntax or remove the file before retrying."
+            )
+            return False
     config.setdefault("mcp_servers", {})
     _upsert_server_entry(config["mcp_servers"], server_name, server_cfg)
     if not dry_run:
