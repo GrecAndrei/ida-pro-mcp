@@ -112,6 +112,12 @@ def test_router_dispatches_each_new_action():
             f"router missing dispatcher for action={action}"
 
 
+def test_router_hunt_accepts_recipe_kwarg():
+    src = _read(INIT)
+    assert 'pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "hunt"}' in src
+    assert 'kwargs.get("recipe") or actual_pattern or ""' in src
+
+
 def test_router_literal_includes_new_actions():
     src = _read(INIT)
     # The Literal[...] type in the search() signature should list every new action

@@ -232,7 +232,7 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach"}
+        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "hunt"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
         if action == "export" and not actual_pattern:
@@ -552,7 +552,8 @@ def search(
         elif action == "bool":
             response = search_bool(actual_pattern, case_sensitive, offset, limit)
         elif action == "hunt":
-            response = search_hunt(actual_pattern, case_sensitive, offset, limit)
+            recipe = str(kwargs.get("recipe") or actual_pattern or "")
+            response = search_hunt(recipe, case_sensitive, offset, limit)
         elif action == "neighborhood":
             radius = int(kwargs.get("radius", 10))
             response = search_neighborhood(actual_pattern, radius, offset, limit)
