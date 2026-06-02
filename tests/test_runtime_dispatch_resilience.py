@@ -20,7 +20,7 @@ def _make_session() -> Session:
     )
 
 
-def test_misc_health_runtime_liveness_uses_process_poll():
+def test_session_health_runtime_liveness_uses_process_poll():
     server = IDAMCPServer()
     alive_proc = Mock()
     alive_proc.poll.return_value = None
@@ -31,7 +31,7 @@ def test_misc_health_runtime_liveness_uses_process_poll():
         "E5F6A7B8": {"process": dead_proc, "port": 1338},
     }
 
-    res = server._execute_tool("misc", {"action": "health", "verbose": True})
+    res = server._execute_tool("session", {"action": "health", "verbose": True})
     assert res.get("ok") is True
     rp = (((res.get("sessions") or {}).get("runtime_processes")) or {})
     assert rp.get("tracked") == 2

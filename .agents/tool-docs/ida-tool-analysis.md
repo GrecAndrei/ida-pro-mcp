@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Controls IDA analysis engine settings and triggers reanalysis. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait.
+Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait, plugin_run.
 
 ## Actions
 - `get_options` (tool-specific)
@@ -15,6 +15,7 @@ Controls IDA analysis engine settings and triggers reanalysis. Actions: get_opti
 - `set_loader_options` (tool-specific)
 - `set_architecture` (tool-specific)
 - `reanalyze` (tool-specific)
+- `plugin_run` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -30,12 +31,14 @@ Controls IDA analysis engine settings and triggers reanalysis. Actions: get_opti
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze`
+- `action`: `string` - allowed: `get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, plugin_run`
+- `arg`: `integer` - Plugin argument for plugin_run
 - `bitness`: `integer`
 - `end`: `string`
 - `endian`: `string`
 - `flags`: `integer`
 - `loader`: `string`
+- `name`: `string` - Plugin name for plugin_run
 - `options`: `object`
 - `processor`: `string`
 - `start`: `string`

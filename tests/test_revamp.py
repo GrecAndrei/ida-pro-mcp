@@ -372,30 +372,29 @@ class TestSessionExecuteTool(unittest.TestCase):
 
 
 class TestMiscReadWriteFile(unittest.TestCase):
-    """Test misc tool read_file and write_file actions.
-    
-    These test the action routing in ida_mcp_stdio, not the IDA-side misc tool.
-    Since read_file/write_file are added to the IDA-side misc.py, we verify
-    the schema and action list are correctly updated.
+    """Test memory tool read_file and write_file actions.
+
+    read_file/write_file moved from misc to memory. Verify the schema and
+    action list are correctly updated on the new tool.
     """
 
-    def test_misc_actions_include_read_write(self):
-        """Verify TOOL_ACTIONS for misc includes read_file and write_file."""
+    def test_memory_actions_include_read_write(self):
+        """Verify TOOL_ACTIONS for memory includes read_file and write_file."""
         from ida_mcp_stdio import TOOL_ACTIONS
-        self.assertIn("read_file", TOOL_ACTIONS["misc"])
-        self.assertIn("write_file", TOOL_ACTIONS["misc"])
+        self.assertIn("read_file", TOOL_ACTIONS["memory"])
+        self.assertIn("write_file", TOOL_ACTIONS["memory"])
 
-    def test_misc_description_includes_read_write(self):
-        """Verify TOOL_DESCRIPTIONS for misc mentions read_file/write_file."""
+    def test_memory_description_includes_read_write(self):
+        """Verify TOOL_DESCRIPTIONS for memory mentions read_file/write_file."""
         from ida_mcp_stdio import TOOL_DESCRIPTIONS
-        desc = TOOL_DESCRIPTIONS["misc"]
+        desc = TOOL_DESCRIPTIONS["memory"]
         self.assertIn("read_file", desc)
         self.assertIn("write_file", desc)
 
-    def test_misc_schema_has_path_and_content(self):
-        """Verify TOOL_ARG_SCHEMAS for misc has path and content params."""
+    def test_memory_schema_has_path_and_content(self):
+        """Verify TOOL_ARG_SCHEMAS for memory has path and content params."""
         from ida_mcp_stdio import TOOL_ARG_SCHEMAS
-        schema = TOOL_ARG_SCHEMAS["misc"]
+        schema = TOOL_ARG_SCHEMAS["memory"]
         self.assertIn("path", schema)
         self.assertIn("content", schema)
         self.assertIn("encoding", schema)

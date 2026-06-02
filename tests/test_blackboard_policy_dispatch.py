@@ -124,6 +124,11 @@ class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin):
         self._tool_calls.append((tool_name, dict(kwargs or {})))
         return {"ok": True, "tool": tool_name, "action": kwargs.get("action"), "idb": idb_path}
 
+    def _handle_session(self, args):
+        if args.get("action") == "health" and hasattr(self, "_handle_session_health"):
+            return self._handle_session_health(args)
+        return {"ok": True, "tool": "session", "action": args.get("action")}
+
 
 def test_dispatch_policy_allows_read_only_actions_by_default(monkeypatch):
     monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
@@ -184,15 +189,15 @@ def test_dispatch_policy_guardrail_ack_is_honored_even_with_false_risk_ack(monke
     assert res.get("ok") is True
 
 
-def test_dispatch_policy_allows_misc_health_without_ack(monkeypatch):
+def test_dispatch_policy_allows_session_health_without_ack(monkeypatch):
     monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
     srv = _DummyDispatchServer()
-    srv._handle_misc_health = lambda _args: {"ok": True, "tool": "misc", "action": "health"}  # type: ignore[attr-defined]
+    srv._handle_session_health = lambda _args: {"ok": True, "tool": "session", "action": "health"}  # type: ignore[attr-defined]
 
-    res = srv._execute_tool_inner("misc", "misc", {"action": "health"})
+    res = srv._execute_tool_inner("session", "session", {"action": "health"})
 
     assert res.get("ok") is True
-    assert res.get("tool") == "misc"
+    assert res.get("tool") == "session"
     assert res.get("action") == "health"
 
 

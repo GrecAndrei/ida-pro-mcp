@@ -16,9 +16,9 @@ from ida_pro_mcp.host.schemas import (  # noqa: E402
 from ida_pro_mcp.host.server import IDAMCPServer  # noqa: E402
 
 
-def test_misc_health_reports_catalog_surface():
+def test_session_health_reports_catalog_surface():
     server = IDAMCPServer()
-    res = server._execute_tool("misc", {"action": "health"})
+    res = server._execute_tool("session", {"action": "health"})
     assert isinstance(res, dict)
     assert res.get("ok") is True
     assert res.get("action") == "health"
@@ -38,9 +38,9 @@ def test_misc_health_reports_catalog_surface():
     assert isinstance(action_surface.get("max_actions_count"), int)
 
 
-def test_misc_health_verbose_includes_per_tool_action_counts():
+def test_session_health_verbose_includes_per_tool_action_counts():
     server = IDAMCPServer()
-    res = server._execute_tool("misc", {"action": "health", "verbose": True})
+    res = server._execute_tool("session", {"action": "health", "verbose": True})
     tools = res.get("tools", {})
     counts = tools.get("action_counts_by_tool")
     assert isinstance(counts, dict)

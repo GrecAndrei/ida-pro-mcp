@@ -6,18 +6,14 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Utility grab-bag: run scripts, manage plugins, read/write files, check health. Actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health.
+Utility grab-bag: run scripts and list loaded plugins. Actions: python, idc, load_sig, cache_stats, plugin_list. (read_file/write_file → memory, plugin_run → analysis, health → session.)
 
 ## Actions
 - `python` (tool-specific)
 - `idc` (tool-specific)
 - `load_sig` (tool-specific)
 - `cache_stats` (tool-specific)
-- `read_file` (tool-specific)
-- `write_file` (tool-specific)
 - `plugin_list` (tool-specific)
-- `plugin_run` (tool-specific)
-- `health` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -33,15 +29,10 @@ Utility grab-bag: run scripts, manage plugins, read/write files, check health. A
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health`
-- `arg`: `integer` - Plugin argument for plugin_run
+- `action`: `string` - allowed: `python, idc, load_sig, cache_stats, plugin_list`
 - `code`: `string` - Multi-line Python code to execute
-- `content`: `string` - Content to write for write_file
-- `encoding`: `string` - File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.
 - `expr`: `string` - Python expression or IDC script to evaluate
 - `name`: `string` - Signature name for load_sig
-- `path`: `string` - File path for read_file/write_file
-- `verbose`: `boolean` - Include per-runtime details for health action.
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes

@@ -330,7 +330,10 @@ class TestToolRegistration(unittest.TestCase):
         self.assertIn("plugins", TOOL_ALIASES)
         self.assertNotIn("plugins", TOOLS)
         self.assertIn("plugin_list", TOOL_ACTIONS["misc"])
-        self.assertIn("plugin_run", TOOL_ACTIONS["misc"])
+        self.assertIn("plugin_run", TOOL_ACTIONS["analysis"])
+        self.assertIn("health", TOOL_ACTIONS["session"])
+        self.assertIn("read_file", TOOL_ACTIONS["memory"])
+        self.assertIn("write_file", TOOL_ACTIONS["memory"])
 
     def test_batch_registered(self):
         self.assertIn("batch", TOOLS)

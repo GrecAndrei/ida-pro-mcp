@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Read, write, and inspect raw memory/bytes in the binary or debuggee. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram.
+Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram, read_file, write_file.
 
 ## Actions
 - `read` (read/discovery)
@@ -20,6 +20,8 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee. Actions: re
 - `strings` (tool-specific)
 - `struct_walk` (tool-specific)
 - `histogram` (tool-specific)
+- `read_file` (tool-specific)
+- `write_file` (tool-specific)
 - `bytes` (tool-specific)
 - `u8` (tool-specific)
 - `u16` (tool-specific)
@@ -48,9 +50,12 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee. Actions: re
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `24`
+- `action`: `string` - allowed_count: `26`
 - `addr`: `string`
+- `content`: `string` - Content to write for write_file
 - `data`: `string`
+- `encoding`: `string` - File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.
+- `path`: `string` - File path for read_file/write_file
 - `size`: `integer`
 - `type`: `string` - allowed_count: `13`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

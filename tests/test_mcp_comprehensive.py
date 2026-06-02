@@ -241,8 +241,8 @@ class TestTruncationTool:
 
 
 class TestMiscTool:
-    def test_misc_health(self, mcp_client):
-        result = mcp_client.call_tool("misc", action="health")
+    def test_session_health(self, mcp_client):
+        result = mcp_client.call_tool("session", action="health")
         assert isinstance(result, dict)
         assert "server" in result or "ok" in result or "status" in result
 
@@ -313,7 +313,7 @@ class TestWorkflowTool:
             "workflow",
             action="audit_plan",
             planned_calls=[
-                {"name": "misc", "arguments": {"action": "health"}},
+                {"name": "session", "arguments": {"action": "health"}},
                 {"name": "search", "arguments": {"action": "vulnerable"}},
             ],
         )
@@ -328,7 +328,7 @@ class TestWorkflowTool:
             "workflow",
             action="execute_plan",
             planned_calls=[
-                {"name": "misc", "arguments": {"action": "health"}},
+                {"name": "session", "arguments": {"action": "health"}},
             ],
             continue_on_error=True,
             max_steps=5,
@@ -625,7 +625,7 @@ class TestUnknownTool:
 class TestResponseModes:
     def test_compact_vs_full_mode(self, mcp_client):
         # Default is compact
-        result = mcp_client.call_tool("misc", action="health")
+        result = mcp_client.call_tool("session", action="health")
         assert isinstance(result, dict)
 
 

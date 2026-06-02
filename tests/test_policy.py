@@ -42,7 +42,7 @@ def test_local_code_execution_allowed_with_ack():
 
 
 def test_filesystem_write_requires_ack():
-    result = evaluate_policy("misc", "write_file", purpose="release_verification")
+    result = evaluate_policy("memory", "write_file", purpose="release_verification")
 
     assert result.decision == PolicyDecision.REQUIRE_ACK
     assert result.risk == RiskTier.FILESYSTEM_WRITE
@@ -81,7 +81,7 @@ def test_unknown_tool_is_conservative():
 
 
 def test_permissive_mode_warns_instead_of_requiring_ack():
-    result = evaluate_policy("misc", "plugin_run", mode="permissive")
+    result = evaluate_policy("analysis", "plugin_run", mode="permissive")
 
     assert result.risk == RiskTier.LOCAL_CODE_EXEC
     assert result.decision == PolicyDecision.WARN
@@ -105,8 +105,8 @@ def test_classify_tool_action_handles_destructive_actions():
     assert classify_tool_action("bookmarks", "delete") == RiskTier.DESTRUCTIVE
 
 
-def test_action_level_read_override_for_misc_health():
-    result = evaluate_policy("misc", "health", purpose="oss_audit")
+def test_action_level_read_override_for_session_health():
+    result = evaluate_policy("session", "health", purpose="oss_audit")
 
     assert result.risk == RiskTier.READ
     assert result.decision == PolicyDecision.ALLOW

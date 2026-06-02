@@ -150,22 +150,22 @@ WRITE_ACTIONS = {
 LOCAL_CODE_EXEC_ACTIONS = {
     ("misc", "python"),
     ("misc", "idc"),
-    ("misc", "plugin_run"),
+    ("analysis", "plugin_run"),
 }
 
 FILESYSTEM_WRITE_ACTIONS = {
-    ("misc", "write_file"),
+    ("memory", "write_file"),
     ("project", "write"),
 }
 
 FILESYSTEM_READ_ACTIONS = {
-    ("misc", "read_file"),
+    ("memory", "read_file"),
     ("project", "read"),
 }
 
 READ_ONLY_ACTIONS = {
     ("funcs", "info"),
-    ("misc", "health"),
+    ("session", "health"),
 }
 
 DEBUGGER_TOOLS = {"debug"}

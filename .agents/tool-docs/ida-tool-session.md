@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate.
+Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).
 
 ## Actions
 - `discover` (tool-specific)
@@ -30,6 +30,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `add_note` (tool-specific)
 - `clear_notes` (tool-specific)
 - `cleanup_stale` (tool-specific)
+- `health` (tool-specific)
 - `stats` (tool-specific)
 - `validate` (tool-specific)
 - `bulk_delete` (tool-specific)
@@ -80,7 +81,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `56`
+- `action`: `string` - allowed_count: `57`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` - Advanced analysis payload. Preferred for architecture/loader config at session creation.
@@ -121,6 +122,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `start_ea`: `string|integer`
 - `tags`: `array|string` - Tags for the session (create action). Comma-separated string or array.
 - `value`: `string|object` - Loader option payload alias (same as loader_options).
+- `verbose`: `boolean` - Include per-runtime details for health action.
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes

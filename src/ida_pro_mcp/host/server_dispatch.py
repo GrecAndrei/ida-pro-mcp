@@ -111,7 +111,7 @@ class ServerDispatchMixin:
                     )
                 return make_error(MCPError.IDA_CRASHED, str(e))
 
-    def _handle_misc_health(self, args: dict) -> dict:
+    def _handle_session_health(self, args: dict) -> dict:
             verbose = bool(args.get("verbose", False))
             wiki_root = self._resolve_wiki_root()
             wiki_available = bool(wiki_root and os.path.isdir(wiki_root))
@@ -188,6 +188,98 @@ class ServerDispatchMixin:
                 payload["sessions"]["runtimes"] = runtime_states
                 payload["tools"]["action_counts_by_tool"] = action_counts
             return payload
+
+    def _handle_memory_filesystem(self, args: dict) -> dict:
+            import os as _os
+            import traceback as _tb
+            action = str(args.get("action") or "").strip().lower()
+            path = args.get("path")
+            if not isinstance(path, str) or not path.strip():
+                return make_error(MCPError.INVALID_ARGS, "path required")
+            encoding = args.get("encoding") or "utf-8"
+            try:
+                if action == "read_file":
+                    if not _os.path.exists(path):
+                        return {"error": True, "message": f"File not found: {path}"}
+                    if not _os.path.isfile(path):
+                        return {"error": True, "message": f"Not a file: {path}"}
+                    enc = str(encoding).strip().lower()
+                    if enc == "binary":
+                        with open(path, "rb") as f:
+                            data = f.read()
+                        return {
+                            "ok": True,
+                            "path": _os.path.abspath(path),
+                            "size": len(data),
+                            "content": data.hex(),
+                            "encoding": "binary",
+                        }
+                    with open(path, "r", encoding=enc, errors="replace") as f:
+                        text = f.read()
+                    return {
+                        "ok": True,
+                        "path": _os.path.abspath(path),
+                        "size": len(text),
+                        "content": text,
+                        "encoding": enc,
+                    }
+                if action == "write_file":
+                    parent = _os.path.dirname(_os.path.abspath(path))
+                    if parent and not _os.path.exists(parent):
+                        _os.makedirs(parent, exist_ok=True)
+                    content = args.get("content")
+                    if content is None:
+                        return make_error(MCPError.INVALID_ARGS, "content required for write_file")
+                    enc = str(encoding).strip().lower()
+                    if enc == "binary":
+                        try:
+                            raw = bytes.fromhex(str(content))
+                        except ValueError as exc:
+                            return {"error": True, "message": f"Invalid hex content: {exc}"}
+                        with open(path, "wb") as f:
+                            f.write(raw)
+                        return {
+                            "ok": True,
+                            "path": _os.path.abspath(path),
+                            "size": len(raw),
+                            "encoding": "binary",
+                        }
+                    with open(path, "w", encoding=enc, errors="replace") as f:
+                        f.write(str(content))
+                    return {
+                        "ok": True,
+                        "path": _os.path.abspath(path),
+                        "size": len(str(content)),
+                        "encoding": enc,
+                    }
+            except Exception:
+                return {"error": True, "message": _tb.format_exc()}
+            return make_error(
+                MCPError.ACTION_NOT_FOUND,
+                f"Unsupported memory filesystem action: '{action}'",
+                hint="Use memory(action='read_file'|'write_file').",
+            )
+
+    def _handle_analysis_plugin_run(self, args: dict) -> dict:
+            name = args.get("name")
+            if not isinstance(name, str) or not name.strip():
+                return make_error(MCPError.INVALID_ARGS, "name required for plugin_run")
+            arg = args.get("arg", 0)
+            try:
+                arg = int(arg) if arg is not None else 0
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, f"arg must be int, got {type(arg).__name__}")
+            runtime = self.session_runtimes.get(self.current_session.session_id) if self.current_session else None
+            if not self._runtime_alive(runtime):
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "plugin_run requires a live IDA session; none is active.",
+                    hint="Open a session first with session(action='create', binary_path='...').",
+                )
+            return self._send_rpc_raw(
+                {"tool": "analysis", "args": {"action": "plugin_run", "name": name, "arg": arg}},
+                runtime.get("port"),
+            )
 
     def _handle_bookmarks(self, args: dict) -> dict:
             if not self.current_session:
@@ -944,23 +1036,31 @@ class ServerDispatchMixin:
                 return self._handle_wiki(args)
             if tool_name == "misc":
                 action = args.get("action")
-                if action == "health":
-                    return self._handle_misc_health(args)
                 # Backward compatibility for callers still using plugins(...).
                 # Route everything through misc to avoid maintaining a duplicate plugins tool.
                 if original_tool_name == "plugins":
                     if action == "list":
                         args["action"] = "plugin_list"
                     elif action == "run":
-                        args["action"] = "plugin_run"
+                        return make_error(
+                            MCPError.ACTION_NOT_FOUND,
+                            "plugins(action='run') moved to analysis(action='plugin_run').",
+                            hint="Use analysis(action='plugin_run', name='...', arg=0).",
+                        )
                     else:
                         return make_error(
                             MCPError.ACTION_NOT_FOUND,
                             f"Unsupported plugins action: '{action}'",
-                            hint="Use misc(action='plugin_list') or misc(action='plugin_run', name='...', arg=0).",
+                            hint="Use misc(action='plugin_list') or analysis(action='plugin_run', name='...', arg=0).",
                         )
             if tool_name == "session":
                 return self._handle_session(args)
+
+            if tool_name == "memory" and str(args.get("action") or "").strip() in ("read_file", "write_file"):
+                return self._handle_memory_filesystem(args)
+
+            if tool_name == "analysis" and str(args.get("action") or "").strip() == "plugin_run":
+                return self._handle_analysis_plugin_run(args)
 
             if tool_name == "threat_hunt":
                 return self._handle_threat_hunt(args)

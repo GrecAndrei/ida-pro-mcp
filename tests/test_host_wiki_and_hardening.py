@@ -215,8 +215,16 @@ class TestHostHardening(unittest.TestCase):
         misc_tool = next(t for t in tools_payload if t["name"] == "misc")
         misc_actions = misc_tool["inputSchema"]["properties"]["action"]["enum"]
         self.assertIn("plugin_list", misc_actions)
-        self.assertIn("plugin_run", misc_actions)
-        self.assertIn("health", misc_actions)
+        self.assertNotIn("plugin_run", misc_actions)
+        self.assertNotIn("health", misc_actions)
+
+        session_tool = next(t for t in tools_payload if t["name"] == "session")
+        session_actions = session_tool["inputSchema"]["properties"]["action"]["enum"]
+        self.assertIn("health", session_actions)
+
+        analysis_tool = next(t for t in tools_payload if t["name"] == "analysis")
+        analysis_actions = analysis_tool["inputSchema"]["properties"]["action"]["enum"]
+        self.assertIn("plugin_run", analysis_actions)
 
         project_tool = next(t for t in tools_payload if t["name"] == "project")
         project_actions = project_tool["inputSchema"]["properties"]["action"]["enum"]
@@ -308,8 +316,8 @@ class TestHostHardening(unittest.TestCase):
         lean = self.server._build_tools_list_catalog("lean")
         self.assertIsNot(full, lean)
 
-    def test_misc_health_requires_no_session(self):
-        res = self.server._execute_tool("misc", {"action": "health"})
+    def test_session_health_requires_no_session(self):
+        res = self.server._execute_tool("session", {"action": "health"})
         self.assertTrue(res.get("ok"))
         self.assertEqual(res.get("action"), "health")
         self.assertIn("runtime", res)

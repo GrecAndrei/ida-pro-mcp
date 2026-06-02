@@ -120,6 +120,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
     def _handle_session(self, args: dict) -> dict:
         action = args.get("action")
 
+        if action == "health":
+            return self._handle_session_health(args)
+
         def _sid_arg(
             key: str = "session_id", allow_current: bool = True
         ) -> tuple[Optional[str], Optional[dict]]:
