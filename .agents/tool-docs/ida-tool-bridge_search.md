@@ -1,8 +1,8 @@
-# IDA MCP Tool Doc: `bridgerag`
+# IDA MCP Tool Doc: `bridge_search`
 <!-- GENERATED: scripts/generate_tool_skills.py -->
 
 ## Purpose
-- Reference contract for the `bridgerag` MCP tool.
+- Reference contract for the `bridge_search` MCP tool.
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
@@ -21,7 +21,7 @@ Multi-hop bridge-conditioned search for discovering indirect relationships betwe
 - `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
-- Canonical wiki page: `wiki(action='read', topic='tools/bridgerag')`.
+- Canonical wiki page: `wiki(action='read', topic='tools/bridge_search')`.
 - Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
 - Keep calls narrow: include only the minimum fields needed for one action.
 
@@ -38,7 +38,7 @@ Multi-hop bridge-conditioned search for discovering indirect relationships betwe
 ## Minimal Call Shapes
 ```json
 {
-  "name": "bridgerag",
+  "name": "bridge_search",
   "arguments": {
     "action": "search"
   }
@@ -46,7 +46,7 @@ Multi-hop bridge-conditioned search for discovering indirect relationships betwe
 ```
 ```json
 {
-  "name": "bridgerag",
+  "name": "bridge_search",
   "arguments": {
     "action": "grep",
     "source_action": "search",

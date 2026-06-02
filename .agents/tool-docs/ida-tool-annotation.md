@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate.
+Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.
 
 ## Actions
 - `auto_comment` (tool-specific)
@@ -21,6 +21,12 @@ Automatically generates and manages comments, labels, and documentation across f
 - `propagate_names` (tool-specific)
 - `cleanup` (tool-specific)
 - `validate` (tool-specific)
+- `get_context` (tool-specific)
+- `set_structured` (tool-specific)
+- `bulk_set` (tool-specific)
+- `export_md` (tool-specific)
+- `import_md` (tool-specific)
+- `summary` (read/discovery)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

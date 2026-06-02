@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and first-class intelligence operations. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card.
+High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and CFG similarity. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, cfg_encode, cfg_similar, cfg_stats.
 
 ## Actions
 - `analyze_function` (tool-specific)
@@ -23,19 +23,9 @@ High-level AI-assisted analysis combining search, context packing, multi-hop dis
 - `reflect` (tool-specific)
 - `cluster` (tool-specific)
 - `fingerprint` (tool-specific)
-- `intelligence_status` (tool-specific)
-- `embedder_status` (tool-specific)
-- `anchor_status` (tool-specific)
-- `refresh_anchors` (tool-specific)
-- `classify_text` (tool-specific)
-- `classify_function` (tool-specific)
-- `index_function` (tool-specific)
-- `index_batch` (tool-specific)
-- `similar_functions` (tool-specific)
-- `semantic_search` (read/discovery)
-- `blackboard_search` (tool-specific)
-- `export_index_summary` (tool-specific)
-- `evidence_card` (tool-specific)
+- `cfg_encode` (tool-specific)
+- `cfg_similar` (tool-specific)
+- `cfg_stats` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -51,18 +41,12 @@ High-level AI-assisted analysis combining search, context packing, multi-hop dis
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `27`
+- `action`: `string` - allowed_count: `17`
 - `addr`: `string`
-- `block`: `boolean`
-- `deep_hash`: `boolean`
 - `depth`: `integer`
 - `include_pseudocode`: `boolean`
-- `limit`: `integer`
 - `max_items`: `integer`
-- `probe`: `boolean`
 - `query`: `string`
-- `threshold`: `number`
-- `top_k`: `integer`
 - `use_cache`: `boolean`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 

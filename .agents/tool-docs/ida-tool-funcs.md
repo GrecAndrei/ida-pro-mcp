@@ -6,16 +6,12 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, set_name, rename, add_comment, list, info, metrics, find_similar, suggest_names.
+Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names. (Renames/comments/listings live on modify and data.)
 
 ## Actions
 - `create` (write/mutate)
 - `delete` (destructive)
 - `set_flags` (write/mutate)
-- `set_name` (write/mutate)
-- `rename` (write/mutate)
-- `add_comment` (write/mutate)
-- `list` (read/discovery)
 - `info` (read/discovery)
 - `metrics` (tool-specific)
 - `find_similar` (tool-specific)
@@ -35,7 +31,7 @@ Function boundary management with regex/glob/substring filtering. Actions: creat
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `create, delete, set_flags, set_name, rename, add_comment, list, info, metrics, find_similar, suggest_names`
+- `action`: `string` - allowed: `create, delete, set_flags, info, metrics, find_similar, suggest_names`
 - `addr`: `string`
 - `comment`: `string`
 - `count`: `integer`

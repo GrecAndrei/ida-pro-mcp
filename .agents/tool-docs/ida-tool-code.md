@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Decompilation, disassembly, and code analysis. smart_decompile: best single call — pseudocode + behavior_tags + api_calls + crypto_hints + dangerous_patterns + var_rename_hints + callers + callees + strings + blackboard_context + suggested_next_actions. decompile: pseudocode with inline api_calls/crypto_hints/complexity. disasm: assembly listing. analyze: comprehensive (decompile+callers+callees+strings+stack). decompile_chain: function with compact caller/callee context (first 8 lines each). semantic_decompile: pseudocode + CFG semantics + variable dependency graph. diff_functions: unified diff of two functions. annotate: add comment to function/address. xrefs_to/from, callees, callers, blocks, callgraph, find_paths, strings_in_func, decomp_dataflow, export.
+Decompilation, disassembly, and code analysis. smart_decompile: best single call — pseudocode + behavior_tags + api_calls + crypto_hints + dangerous_patterns + var_rename_hints + callers + callees + strings + blackboard_context + suggested_next_actions. decompile: pseudocode with inline api_calls/crypto_hints/complexity. disasm: assembly listing. analyze: comprehensive (decompile+callers+callees+strings+stack) [deprecated — use agent(analyze_function)]. decompile_chain: function with compact caller/callee context (first 8 lines each). semantic_decompile: pseudocode + CFG semantics + variable dependency graph. diff_functions: unified diff of two functions. annotate: add comment to function/address [deprecated — use modify(comment)]. xrefs_to/from, callees, callers, blocks, callgraph, find_paths, strings_in_func, decomp_dataflow, export.
 
 ## Actions
 - `decompile` (tool-specific)

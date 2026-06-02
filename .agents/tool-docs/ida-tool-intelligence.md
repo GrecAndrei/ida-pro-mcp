@@ -1,17 +1,27 @@
-# IDA MCP Tool Doc: `mbagcn`
+# IDA MCP Tool Doc: `intelligence`
 <!-- GENERATED: scripts/generate_tool_skills.py -->
 
 ## Purpose
-- Reference contract for the `mbagcn` MCP tool.
+- Reference contract for the `intelligence` MCP tool.
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Mamba-based GCN encoder for CFG similarity search across functions. Actions: encode, similar, stats.
+Intelligence subsystem: embedding-based function classification, indexing, similarity search, and evidence-card production. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card.
 
 ## Actions
-- `encode` (tool-specific)
-- `similar` (tool-specific)
-- `stats` (tool-specific)
+- `intelligence_status` (tool-specific)
+- `embedder_status` (tool-specific)
+- `anchor_status` (tool-specific)
+- `refresh_anchors` (tool-specific)
+- `classify_text` (tool-specific)
+- `classify_function` (tool-specific)
+- `index_function` (tool-specific)
+- `index_batch` (tool-specific)
+- `similar_functions` (tool-specific)
+- `semantic_search` (read/discovery)
+- `blackboard_search` (tool-specific)
+- `export_index_summary` (tool-specific)
+- `evidence_card` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -22,32 +32,38 @@ Mamba-based GCN encoder for CFG similarity search across functions. Actions: enc
 - `stats`: run another action, then return payload statistics.
 
 ## LLM Fast Path
-- Canonical wiki page: `wiki(action='read', topic='tools/mbagcn')`.
+- Canonical wiki page: `wiki(action='read', topic='tools/intelligence')`.
 - Start with read/discovery actions (`list`, `index`, `search`, `info`) before mutating actions.
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `encode, similar, stats`
+- `action`: `string` - allowed_count: `13`
 - `addr`: `string`
-- `db_path`: `string`
+- `block`: `boolean`
+- `deep_hash`: `boolean`
+- `limit`: `integer`
+- `max_items`: `integer`
+- `probe`: `boolean`
+- `query`: `string`
+- `threshold`: `number`
 - `top_k`: `integer`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
 ```json
 {
-  "name": "mbagcn",
+  "name": "intelligence",
   "arguments": {
-    "action": "encode"
+    "action": "intelligence_status"
   }
 }
 ```
 ```json
 {
-  "name": "mbagcn",
+  "name": "intelligence",
   "arguments": {
     "action": "grep",
-    "source_action": "encode",
+    "source_action": "intelligence_status",
     "pattern": "<needle>"
   }
 }
