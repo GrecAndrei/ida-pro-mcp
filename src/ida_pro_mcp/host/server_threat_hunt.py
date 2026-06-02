@@ -10,6 +10,7 @@ from .config import (
     _coerce_bool,
 )
 from .errors import MCPError, make_error
+from .intelligence_helpers import coerce_int
 from .schemas_data import (
     THREAT_LEGACY_CONDITIONAL_PASSTHROUGH,
     THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS,
@@ -187,7 +188,7 @@ class ServerThreatHuntMixin:
                 a = str(f.get("addr") or f.get("address") or f.get("ea") or "").strip()
                 if not a:
                     continue
-                ai = int(a, 16) if a.lower().startswith("0x") else int(a)
+                ai = coerce_int(a)
                 pg = ai & ~0xFFF
                 page_groups.setdefault(pg, []).append(f)
             except Exception:
@@ -216,7 +217,7 @@ class ServerThreatHuntMixin:
                 a = str(f.get("addr") or f.get("address") or f.get("ea") or "").strip()
                 if not a:
                     continue
-                ai = int(a, 16) if a.lower().startswith("0x") else int(a)
+                ai = coerce_int(a)
                 by_addr.setdefault(ai, []).append(f)
             except Exception:
                 continue
@@ -235,7 +236,7 @@ class ServerThreatHuntMixin:
                 if not c_addr_txt:
                     continue
                 try:
-                    ci = int(c_addr_txt, 16) if c_addr_txt.lower().startswith("0x") else int(c_addr_txt)
+                    ci = coerce_int(c_addr_txt)
                 except Exception:
                     continue
                 linked = by_addr.get(ci, [])

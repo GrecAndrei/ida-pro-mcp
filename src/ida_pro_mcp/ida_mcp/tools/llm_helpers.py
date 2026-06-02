@@ -671,7 +671,11 @@ def _categorize_imports(imports):
 
 def _estimate_tokens(text):
     """Estimate token count (~4 chars per token)."""
-    return len(text) // 4 if text else 0
+    try:
+        from ida_pro_mcp.host.intelligence_helpers import estimate_tokens
+    except ImportError:
+        return len(text) // 4 if text else 0
+    return estimate_tokens(text)
 
 
 # ============================================================================

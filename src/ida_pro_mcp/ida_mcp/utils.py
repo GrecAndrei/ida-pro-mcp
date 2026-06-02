@@ -34,6 +34,8 @@ import ida_typeinf
 import idaapi
 import idautils
 import idc
+from ida_pro_mcp.host.intelligence_helpers import parse_str_list
+
 
 # Support both package mode and standalone mode
 try:
@@ -450,14 +452,13 @@ def get_image_size() -> int:
 def is_64bit() -> bool:
     """Check if the current IDB is 64-bit in a way compatible with IDA 7.x-9.x"""
     try:
-        import ida_ida
-        if hasattr(ida_ida, "inf_is_64bit"):
-            return ida_ida.inf_is_64bit()
-        if hasattr(ida_ida, "inf_get_is_64bit"):
-            return ida_ida.inf_get_is_64bit()
-    except ImportError:
-        pass
-    return idaapi.get_inf_structure().is_64bit()
+        from .tools._common import _inf_is_64bit
+        return _inf_is_64bit()
+    except (ImportError, AttributeError):
+        try:
+            return idaapi.get_inf_structure().is_64bit()
+        except AttributeError:
+            return False
 
 
 def parse_address(addr: str | int) -> int:
@@ -491,7 +492,7 @@ def normalize_list_input(value: list | str) -> list:
     if isinstance(value, list):
         return value
     if isinstance(value, str):
-        return [item.strip() for item in value.split(",") if item.strip()]
+        return parse_str_list(value)
     return [value]
 
 def resolve_symbol(query: str) -> dict:
@@ -561,7 +562,7 @@ def normalize_dict_list(
             pass
 
         # Not JSON - split by comma and parse
-        parts = [s.strip() for s in value.split(",") if s.strip()]
+        parts = parse_str_list(value)
         if not parts:
             return [{}]
 

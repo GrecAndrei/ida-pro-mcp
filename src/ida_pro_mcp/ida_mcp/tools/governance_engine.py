@@ -895,7 +895,8 @@ def governance(
             addr_int = None
             if addr:
                 try:
-                    addr_int = int(addr, 16) if isinstance(addr, str) and addr.startswith("0x") else int(addr)
+                    from ida_pro_mcp.host.intelligence_helpers import coerce_int
+                    addr_int = coerce_int(addr)
                 except (ValueError, TypeError):
                     addr_int = None
 

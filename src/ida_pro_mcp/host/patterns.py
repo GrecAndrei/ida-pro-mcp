@@ -151,11 +151,10 @@ def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_F
             return True
         if not fuzzy_tokens:
             return False
+        from .intelligence_helpers import best_match
         fuzzy_hits = 0
         for qtok in fuzzy_tokens:
-            if difflib.get_close_matches(
-                qtok, text_tokens, n=1, cutoff=fuzzy_cutoff
-            ):
+            if best_match(qtok, list(text_tokens), n=1, cutoff=fuzzy_cutoff):
                 fuzzy_hits += 1
                 if overlap + fuzzy_hits >= overlap_needed:
                     return True

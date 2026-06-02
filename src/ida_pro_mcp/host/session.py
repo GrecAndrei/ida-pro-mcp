@@ -193,6 +193,8 @@ class Session:
 
 
 from .session_skills import SessionSkillsMixin
+from .intelligence_helpers import parse_str_list
+
 
 
 class SessionManager(SessionSkillsMixin):
@@ -1076,7 +1078,7 @@ class BookmarkManager:
             max_id = max([b.get("id", 0) for b in bookmarks]) if bookmarks else 0
             tags = data.get("tags", [])
             if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(",") if t.strip()]
+                tags = parse_str_list(tags)
             new_bm = {
                 "id": max_id + 1, "addr": data.get("addr"),
                 "name": data.get("name", f"Mark at {data.get('addr')}"),
@@ -1156,7 +1158,7 @@ class BookmarkManager:
                         if key in data:
                             val = data[key]
                             if key == "tags" and isinstance(val, str):
-                                val = [t.strip() for t in val.split(",") if t.strip()]
+                                val = parse_str_list(val)
                             bookmarks[i][key] = val
                     res = self.save(sid, bookmarks)
                     return res if res.get("error") else {"ok": True, "bookmark": bookmarks[i]}

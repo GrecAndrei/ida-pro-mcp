@@ -173,7 +173,8 @@ def intelligence(
         if action == "refresh_anchors":
             behaviors = []
             if query:
-                behaviors = [x.strip() for x in str(query).split(",") if x.strip()]
+                from ida_pro_mcp.host.intelligence_helpers import parse_str_list
+                behaviors = parse_str_list(str(query))
             classifier.refresh_anchors(behaviors or None)
             loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
             return {"ok": True, "refreshed": behaviors or "all", "loaded": loaded}

@@ -309,17 +309,30 @@ ERROR_HINTS: Dict[str, str] = {
 }
 
 
-def make_error(code: str, message: str, hint: str = None, details: Dict = None) -> Dict[str, Any]:
+def make_error(
+    code: str,
+    message: str,
+    hint: str = None,
+    details: Dict = None,
+    recoverable: bool = False,
+) -> Dict[str, Any]:
     """Create a standardized error response with LLM-actionable guidance.
 
     If *hint* is not provided, the default from ``ERROR_HINTS`` is used so every
     error automatically carries a recovery suggestion.
+
+    The *recoverable* flag is accepted for parity with
+    :func:`ida_pro_mcp.host.errors.make_error`; the ida_mcp tool layer does
+    not consume it today, so it is currently only stored when the caller
+    passes it explicitly.
     """
     result: Dict[str, Any] = {
         "error": True,
         "code": code,
         "message": message,
     }
+    if recoverable:
+        result["recoverable"] = True
     resolved_hint = hint or ERROR_HINTS.get(code)
     if resolved_hint:
         result["hint"] = resolved_hint
@@ -591,8 +604,12 @@ def validate_action(action: str, valid_actions: list, tool_name: str = "") -> Op
         return None
 
     # Find close matches using difflib for better typo correction
-    import difflib
-    suggestions = difflib.get_close_matches(action or "", valid_actions, n=3, cutoff=0.4)
+    try:
+        from ida_pro_mcp.host.intelligence_helpers import best_match
+        suggestions = best_match(action or "", list(valid_actions), n=3, cutoff=0.4)
+    except ImportError:
+        import difflib
+        suggestions = difflib.get_close_matches(action or "", valid_actions, n=3, cutoff=0.4)
 
     msg = f"Unknown action '{action}'"
     if tool_name:

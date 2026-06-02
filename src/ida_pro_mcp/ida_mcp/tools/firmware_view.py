@@ -287,9 +287,10 @@ def _fwb_safe_bounds() -> tuple[int, int]:
 
 def _fwb_int_addr(v: Any) -> Optional[int]:
     try:
-        if isinstance(v, str):
-            return int(v, 16) if v.lower().startswith("0x") else int(v)
-        return int(v)
+        from ida_pro_mcp.host.intelligence_helpers import coerce_int
+        return coerce_int(v)
+    except (TypeError, ValueError):
+        return None
     except Exception:
         return None
 

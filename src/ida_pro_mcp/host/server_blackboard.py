@@ -14,6 +14,8 @@ from .config import _bounded_int
 from .errors import MCPError, make_error
 from .schemas import TOOL_ACTIONS
 from .symbol_db import SymbolDB
+from .intelligence_helpers import parse_str_list
+
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1539,7 +1541,7 @@ class ServerBlackboardMixin:
             require_dw = bool(args.get("require_decision_or_write", policy_state.get("require_decision_or_write", True)))
             enforce_phases = args.get("enforce_phases", policy_state.get("enforce_phases", ["commit", "finalize"]))
             if isinstance(enforce_phases, str):
-                enforce_phases = [p.strip() for p in enforce_phases.split(",") if p.strip()]
+                enforce_phases = parse_str_list(enforce_phases)
             if not isinstance(enforce_phases, list) or not enforce_phases:
                 enforce_phases = ["commit", "finalize"]
             policy_state["strict_mode"] = strict_mode
@@ -1622,7 +1624,7 @@ class ServerBlackboardMixin:
                 return make_error(MCPError.INVALID_ARGS, "name/title required for write")
             # Parse Cartographer-μ metadata if provided
             bridges_raw = str(args.get("bridges") or "")
-            bridges = [b.strip() for b in bridges_raw.split(",") if b.strip()]
+            bridges = parse_str_list(bridges_raw)
             schema_str = str(args.get("schema") or "")
             schema = {}
             if schema_str:
@@ -1640,7 +1642,7 @@ class ServerBlackboardMixin:
             if isinstance(raw_tags, list):
                 tags = [str(t).strip() for t in raw_tags if str(t).strip()]
             elif isinstance(raw_tags, str):
-                tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+                tags = parse_str_list(raw_tags)
             else:
                 tags = []
 

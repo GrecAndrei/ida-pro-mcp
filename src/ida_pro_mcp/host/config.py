@@ -266,7 +266,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     s = str(value).strip().lower()
-    return s in {"1", "true", "yes", "on", "enabled"}
+    return s in {"1", "true", "yes", "on", "y", "enabled"}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -274,14 +274,8 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _parse_str_list(value: Any) -> List[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(x).strip() for x in value if x is not None]
-    if isinstance(value, str):
-        if not value.strip():
-            return []
-        return [x.strip() for x in value.split(",") if x.strip()]
+    from .intelligence_helpers import parse_str_list
+    return parse_str_list(value)
     return [str(value)]
 
 

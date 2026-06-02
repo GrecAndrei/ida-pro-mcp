@@ -241,11 +241,8 @@ def normalize_name(value: Any) -> str:
 
 
 def truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+    from .config import _coerce_bool
+    return _coerce_bool(value, default=False)
 
 
 def classify_tool_action(tool: Any, action: Any) -> RiskTier:

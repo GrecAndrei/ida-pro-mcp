@@ -200,7 +200,13 @@ def _tool_signature_info(tool_func):
 def _suggest_choice(value, choices):
     if not value or not choices:
         return None
-    matches = difflib.get_close_matches(str(value), choices, n=1, cutoff=0.6)
+    try:
+        from ida_pro_mcp.host.intelligence_helpers import best_match
+    except ImportError:
+        import difflib
+        matches = difflib.get_close_matches(str(value), choices, n=1, cutoff=0.6)
+    else:
+        matches = best_match(str(value), list(choices), n=1, cutoff=0.6)
     return matches[0] if matches else None
 
 def _build_error(tool_name, message, code="INVALID_ARGS", details=None, hint=None):

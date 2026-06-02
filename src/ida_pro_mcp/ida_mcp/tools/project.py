@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+from ida_pro_mcp.host.intelligence_helpers import parse_str_list
+
 
 try:
     from ...host.casefile_helpers import build_chain_of_custody, build_risk_summary, to_markdown_casefile
@@ -595,9 +597,9 @@ def project(
             left_tags = set(kwargs.get("left_tags") or [])
             right_tags = set(kwargs.get("right_tags") or [])
             if isinstance(left_tags, str):
-                left_tags = {x.strip() for x in left_tags.split(",") if x.strip()}
+                left_tags = set(parse_str_list(left_tags))
             if isinstance(right_tags, str):
-                right_tags = {x.strip() for x in right_tags.split(",") if x.strip()}
+                right_tags = set(parse_str_list(right_tags))
             shared = sorted(left_tags & right_tags)
             only_left = sorted(left_tags - right_tags)
             only_right = sorted(right_tags - left_tags)

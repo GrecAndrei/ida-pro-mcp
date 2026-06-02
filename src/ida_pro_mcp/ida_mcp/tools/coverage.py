@@ -403,9 +403,10 @@ def coverage(
                 return make_error(MCPError.FILE_NOT_FOUND, load_err)
 
             executed = []
+            from ida_pro_mcp.host.intelligence_helpers import coerce_int
             for addr_str in addresses:
                 try:
-                    ea = int(addr_str, 16) if str(addr_str).startswith("0x") else int(addr_str)
+                    ea = coerce_int(addr_str)
                 except Exception:
                     continue
                 if _addr_covered(ea, cov):

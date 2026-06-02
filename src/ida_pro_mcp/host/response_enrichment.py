@@ -80,7 +80,8 @@ def patch_addresses(text: str, base_registers: Optional[Dict[str, int]] = None) 
                 base_name = match.group(1)
                 offset_str = match.group(3)
                 try:
-                    offset = int(offset_str, 16) if offset_str.startswith("0x") else int(offset_str)
+                    from .intelligence_helpers import coerce_int
+                    offset = coerce_int(offset_str)
                 except ValueError:
                     continue
                 if base_name in base_registers:

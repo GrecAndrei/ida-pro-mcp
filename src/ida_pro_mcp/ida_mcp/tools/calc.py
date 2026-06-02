@@ -5,6 +5,8 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 import re
+from ida_pro_mcp.host.intelligence_helpers import parse_str_list
+
 try:
     from ..support.semantic_matching import normalize_action, semantic_score, semantic_tokens
 except ImportError:
@@ -666,7 +668,7 @@ def calc(
                 offs = normalize_list_input(offsets)
                 if len(offs) == 1 and isinstance(offs[0], str):
                     compact = offs[0].replace("->", ",").replace(";", ",")
-                    parts = [p.strip() for p in compact.split(",") if p.strip()]
+                    parts = parse_str_list(compact)
                     if len(parts) > 1:
                         offs = parts
                 if not offs:

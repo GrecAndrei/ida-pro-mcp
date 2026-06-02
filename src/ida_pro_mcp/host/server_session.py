@@ -27,6 +27,8 @@ from .errors import MCPError, make_error
 from .schemas import TOOL_ACTIONS
 from .server_session_bootstrap import ServerSessionBootstrapMixin
 from .symbol_db import SymbolDB
+from .intelligence_helpers import parse_str_list
+
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -382,7 +384,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
 
             tags = args.get("tags", [])
             if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(",") if t.strip()]
+                tags = parse_str_list(tags)
             tags = tags[:MAX_TAGS_PER_SESSION]
             notes = str(args.get("notes", ""))[:MAX_NOTE_LEN]
 
@@ -1051,7 +1053,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 return make_error(MCPError.INVALID_ARGS, "steps must be a non-empty list")
             tags = args.get("tags")
             if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(",") if t.strip()]
+                tags = parse_str_list(tags)
             if tags is not None and not isinstance(tags, list):
                 return make_error(MCPError.INVALID_ARGS, "tags must be a list or comma-separated string")
             memrl_reward = args.get("memrl_reward")
@@ -1178,10 +1180,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 return make_error(MCPError.INVALID_ARGS, "statement required")
             evidence_for = args.get("evidence_for")
             if isinstance(evidence_for, str):
-                evidence_for = [s.strip() for s in evidence_for.split(",") if s.strip()]
+                evidence_for = parse_str_list(evidence_for)
             evidence_against = args.get("evidence_against")
             if isinstance(evidence_against, str):
-                evidence_against = [s.strip() for s in evidence_against.split(",") if s.strip()]
+                evidence_against = parse_str_list(evidence_against)
             confidence = args.get("confidence", 0.5)
             try:
                 confidence = float(confidence)
@@ -1205,7 +1207,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 return make_error(MCPError.INVALID_ARGS, "hypothesis_id required")
             evidence = args.get("evidence")
             if isinstance(evidence, str):
-                evidence = [s.strip() for s in evidence.split(",") if s.strip()]
+                evidence = parse_str_list(evidence)
             return self.session_mgr.confirm_hypothesis(sid, hid=hid, evidence=evidence)
         if action == "refute_hypothesis":
             sid, sid_err = _sid_arg()
@@ -1221,7 +1223,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 return make_error(MCPError.INVALID_ARGS, "reason required")
             evidence = args.get("evidence")
             if isinstance(evidence, str):
-                evidence = [s.strip() for s in evidence.split(",") if s.strip()]
+                evidence = parse_str_list(evidence)
             return self.session_mgr.refute_hypothesis(
                 sid,
                 hid=hid,

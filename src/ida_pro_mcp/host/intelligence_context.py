@@ -1300,7 +1300,8 @@ class ContextAssembler(
         if not os.path.exists(db):
             return None
         try:
-            ea = int(addr, 16) if addr.startswith("0x") else int(addr)
+            from .intelligence_helpers import coerce_int
+            ea = coerce_int(addr)
             conn = sqlite3.connect(db)
             cur = conn.cursor()
             cur.execute("""
@@ -1661,7 +1662,8 @@ class ContextAssembler(
             eas: List[int] = []
             for a in addresses[:limit]:
                 try:
-                    eas.append(int(a, 16) if str(a).startswith("0x") else int(a))
+                    from .intelligence_helpers import coerce_int
+                    eas.append(coerce_int(a))
                 except (ValueError, TypeError):
                     pass
             if not eas:
@@ -1688,7 +1690,8 @@ class ContextAssembler(
             enriched = []
             for a_str in addresses[:limit]:
                 try:
-                    ea_int = int(a_str, 16) if str(a_str).startswith("0x") else int(a_str)
+                    from .intelligence_helpers import coerce_int
+                    ea_int = coerce_int(a_str)
                 except (ValueError, TypeError):
                     continue
                 row = rows.get(ea_int)

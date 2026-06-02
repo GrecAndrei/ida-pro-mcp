@@ -476,10 +476,11 @@ class ServerWikiMixin:
                     topic_lower = str(page.get("topic_lower") or "")
                     title_lower = str(page.get("title_lower") or "")
                     base_lower = str(page.get("topic_basename") or "")
+                    from .intelligence_helpers import similarity_ratio
                     ratio = max(
-                        difflib.SequenceMatcher(None, query_lower, topic_lower).ratio(),
-                        difflib.SequenceMatcher(None, query_lower, title_lower).ratio(),
-                        difflib.SequenceMatcher(None, query_lower, base_lower).ratio(),
+                        similarity_ratio(query_lower, topic_lower),
+                        similarity_ratio(query_lower, title_lower),
+                        similarity_ratio(query_lower, base_lower),
                     )
                     if ratio >= 0.7:
                         sim = max(sim, ratio * 0.5)
@@ -504,10 +505,11 @@ class ServerWikiMixin:
             topic_lower = str(page.get("topic_lower") or "")
             title_lower = str(page.get("title_lower") or "")
             base_lower = str(page.get("topic_basename") or "")
+            from .intelligence_helpers import similarity_ratio
             ratio = max(
-                difflib.SequenceMatcher(None, query_lower, topic_lower).ratio(),
-                difflib.SequenceMatcher(None, query_lower, title_lower).ratio(),
-                difflib.SequenceMatcher(None, query_lower, base_lower).ratio(),
+                similarity_ratio(query_lower, topic_lower),
+                similarity_ratio(query_lower, title_lower),
+                similarity_ratio(query_lower, base_lower),
             )
             if ratio >= 0.7:
                 sim = ratio * 0.5
@@ -848,9 +850,8 @@ class ServerWikiMixin:
                     best_ratio = 0.0
                     best_header = None
                     for header in headers:
-                        ratio = difflib.SequenceMatcher(
-                            None, section_lower, header["text"].strip().lower()
-                        ).ratio()
+                        from .intelligence_helpers import similarity_ratio
+                        ratio = similarity_ratio(section_lower, header["text"].strip().lower())
                         if ratio > best_ratio:
                             best_ratio = ratio
                             best_header = header
