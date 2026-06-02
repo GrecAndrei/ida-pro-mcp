@@ -267,6 +267,7 @@ class TestSessionCreateViaTool(unittest.TestCase):
         self.server = IDAMCPServer()
         self.server.cache_dir = self.tmpdir
         self.server.session_mgr = SessionManager(self.tmpdir)
+        self.server.bookmark_mgr = BookmarkManager(self.server.session_mgr.session_dir)
 
     def tearDown(self):
         IDAMCPServer._detect_ida_dir = self._orig_detect
@@ -276,7 +277,7 @@ class TestSessionCreateViaTool(unittest.TestCase):
     def test_create_with_tags_list(self):
         r = self.server._execute_tool("session", {
             "action": "create", "binary_path": self.test_binary,
-            "tags": ["malware", "pe"],
+            "tags": ["malware", "pe"], "_risk_ack": True,
         })
         self.assertTrue(r.get("ok"))
         self.assertEqual(r["session"]["tags"], ["malware", "pe"])
@@ -284,21 +285,21 @@ class TestSessionCreateViaTool(unittest.TestCase):
     def test_create_with_tags_string(self):
         r = self.server._execute_tool("session", {
             "action": "create", "binary_path": self.test_binary,
-            "tags": "malware, pe", "force_new": True,
+            "tags": "malware, pe", "force_new": True, "_risk_ack": True,
         })
         self.assertEqual(r["session"]["tags"], ["malware", "pe"])
 
     def test_create_with_notes(self):
         r = self.server._execute_tool("session", {
             "action": "create", "binary_path": self.test_binary,
-            "notes": "From VT", "force_new": True,
+            "notes": "From VT", "force_new": True, "_risk_ack": True,
         })
         self.assertEqual(r["session"]["notes"], "From VT")
 
     def test_auto_name(self):
         r = self.server._execute_tool("session", {
             "action": "create", "binary_path": self.test_binary,
-            "force_new": True,
+            "force_new": True, "_risk_ack": True,
         })
         self.assertEqual(r["session"]["auto_name"], "test.exe")
 
@@ -367,6 +368,7 @@ class TestImprovedErrors(unittest.TestCase):
         self.server = IDAMCPServer()
         self.server.cache_dir = self.tmpdir
         self.server.session_mgr = SessionManager(self.tmpdir)
+        self.server.bookmark_mgr = BookmarkManager(self.server.session_mgr.session_dir)
 
     def tearDown(self):
         IDAMCPServer._detect_ida_dir = self._orig_detect
@@ -389,8 +391,8 @@ class TestImprovedErrors(unittest.TestCase):
         self.assertIn("hint", r)
 
     def test_bookmark_not_found_code(self):
-        self.server._execute_tool("session", {"action": "create", "binary_path": self.test_binary})
-        r = self.server._execute_tool("bookmarks", {"action": "delete", "id": 9999})
+        self.server._execute_tool("session", {"action": "create", "binary_path": self.test_binary, "_risk_ack": True})
+        r = self.server._execute_tool("bookmarks", {"action": "delete", "id": 9999, "_risk_ack": True})
         self.assertEqual(r["code"], "BOOKMARK_NOT_FOUND")
 
     def test_truncation_invalid_token(self):
@@ -481,6 +483,7 @@ class TestSessionSwitchCloseRebuild(unittest.TestCase):
         self.server = IDAMCPServer()
         self.server.cache_dir = self.tmpdir
         self.server.session_mgr = SessionManager(self.tmpdir)
+        self.server.bookmark_mgr = BookmarkManager(self.server.session_mgr.session_dir)
 
     def tearDown(self):
         IDAMCPServer._detect_ida_dir = self._orig_detect
