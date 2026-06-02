@@ -83,7 +83,7 @@ code(action="decompile", addr="0x401000")
 - **bulk**: Batch operations for efficiency. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations.
 - **structs**: Structure recovery. Actions: recover, analyze_usage, list, create, add_member, apply, reconstruct_vtable.
 - **data_ops**: Data type conversion. Actions: make_data, make_array, make_string, undefine, make_code.
-- **funcs**: Function boundary management. Actions: create, delete, set_flags, set_name, add_comment, list, info.
+- **funcs**: Function boundary management. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names.
 - **segments**: Segment management. Actions: list, add, delete, set_attr, set_perms, move.
 
 ### Navigation & Utilities

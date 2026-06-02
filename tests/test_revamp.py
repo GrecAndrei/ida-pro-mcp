@@ -405,8 +405,13 @@ class TestFuncsToolActions(unittest.TestCase):
     """Test that funcs tool registrations are correct."""
 
     def test_funcs_actions_include_rename(self):
+        # `funcs` no longer has set_name/rename — those live on `modify`.
         from ida_mcp_stdio import TOOL_ACTIONS
-        self.assertIn("rename", TOOL_ACTIONS["funcs"])
+        self.assertIn("rename", TOOL_ACTIONS["modify"])
+        self.assertNotIn("set_name", TOOL_ACTIONS["funcs"])
+        self.assertNotIn("rename", TOOL_ACTIONS["funcs"])
+        self.assertNotIn("add_comment", TOOL_ACTIONS["funcs"])
+        self.assertNotIn("list", TOOL_ACTIONS["funcs"])
 
     def test_funcs_description_mentions_regex(self):
         from ida_mcp_stdio import TOOL_DESCRIPTIONS

@@ -557,7 +557,7 @@ def _score_tool_call(tool: str, args: dict, score: Score,
         if score.blackboard_writes >= 3:
             score.award("used_blackboard_3")
 
-    if tool in ("funcs",) and args.get("action") in ("create", "rename"):
+    if tool in ("funcs", "modify") and args.get("action") in ("create", "rename", "set_name"):
         name = str(args.get("name") or args.get("new_name") or "")
         if name and not name.startswith("sub_") and not name.startswith("loc_"):
             score.named_func_count += 1

@@ -241,28 +241,18 @@ def _embedding_rename_suggestions(
         "suggestions": suggestions,
         "count": len(suggestions),
         "backend": embedder.backend,
-        "note": "Apply with funcs(action='set_name', addr=..., name=...). High confidence (>0.8) suggestions are reliable.",
+        "note": "Apply with modify(action='rename', addr=..., name=...). High confidence (>0.8) suggestions are reliable.",
     }
 
 
 def _funcs_impl(
-    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar", "suggest_names"],
-                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar|suggest_names"],
+    action: Annotated[Literal["create", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names"],
+                      "Action: create|delete|set_flags|info|metrics|find_similar|suggest_names"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
-    name: Annotated[Optional[str], "Function name"] = None,
+    name: Annotated[Optional[str], "Function name (for create)"] = None,
     flags: Annotated[int, "Function flags (e.g. FUNC_NORET)"] = 0,
     force: Annotated[bool, "Force creation by deleting overlapping functions/data"] = False,
-    comment: Annotated[Optional[str], "Function comment"] = None,
-    repeatable: Annotated[bool, "Is comment repeatable?"] = False,
-    query: Annotated[Optional[str], "Filter for function names - supports regex, glob, or substring (list action)"] = None,
-    offset: Annotated[int, "Pagination offset (list action)"] = 0,
-    count: Annotated[int, "Max results (0=all) (list action)"] = 100,
-    named_only: Annotated[bool, "Only return named functions (list action)"] = False,
-    include_prototype: Annotated[bool, "Include function prototype (info/list)"] = False,
-    include_stack: Annotated[bool, "Include stack frame variables (info)"] = False,
-    include_items: Annotated[bool, "Include structured `items` list in list output (default: false for context efficiency)"] = False,
-    include_xrefs: Annotated[bool, "Include caller/callee samples in info output"] = False,
     **kwargs
 ) -> dict:
     """
@@ -276,11 +266,6 @@ def _funcs_impl(
     - delete: Remove function definition at `addr`. If addr is inside a function
       (but not at its start), the containing function is deleted.
     - set_flags: Update function attribute flags.
-    - set_name/rename: Rename function at `addr`.
-    - add_comment: Set function-level comment.
-    - list: Paginated listing with optional name filtering.
-      Query supports regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.
-      Returns compact text: "addr  size  name [prototype]" per line.
     - info: Detailed info about a single function.
     """
     try:
@@ -288,10 +273,6 @@ def _funcs_impl(
             addr = kwargs.get("ea") or kwargs.get("start") or kwargs.get("function") or kwargs.get("target")
         if end is None:
             end = kwargs.get("end_ea") or kwargs.get("stop")
-
-        # "rename" is an alias for "set_name"
-        if action == "rename":
-            action = "set_name"
 
         if action == "create":
             ea, err = validate_addr(addr)
@@ -526,104 +507,6 @@ def _funcs_impl(
                 }
             return make_error(MCPError.IDA_ERROR, "Failed to update flags")
 
-        elif action == "set_name":
-            ea, err = _resolve_func_addr(addr)
-            if err: return err
-            if not name: return make_error(MCPError.INVALID_ARGS, "name required")
-            # Find the function containing this address
-            func = ida_funcs.get_func(ea)
-            if not func:
-                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
-            target_ea = func.start_ea
-            if idc.set_name(target_ea, name, ida_name.SN_FORCE):
-                result = {"ok": True, "addr": hex(target_ea), "name": name}
-                _persist_symbol_knowledge(target_ea, name)
-                if func and target_ea != ea:
-                    result["note"] = f"Renamed function at start address {hex(target_ea)}"
-                return result
-            return make_error(MCPError.IDA_ERROR, "Failed to set name", "Check if name is a valid C identifier")
-
-        elif action == "add_comment":
-            ea, err = _resolve_func_addr(addr)
-            if err: return err
-            if comment is None: return make_error(MCPError.INVALID_ARGS, "comment required")
-            # Find function start for the comment
-            func = ida_funcs.get_func(ea)
-            if not func:
-                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
-            target_ea = func.start_ea
-            idc.set_func_cmt(target_ea, comment, 1 if repeatable else 0)
-            return {"ok": True, "addr": hex(target_ea), "comment": comment, "repeatable": repeatable}
-
-        elif action == "list":
-            if offset < 0:
-                return make_error(MCPError.INVALID_ARGS, "offset must be >= 0")
-            if count < 0:
-                return make_error(MCPError.INVALID_ARGS, "count must be >= 0 (or 0 for all)")
-
-            func_lines = []
-            items = [] if include_items else None
-            total = 0
-            # Use smart pattern matching for queries
-            if query:
-                try:
-                    matcher = compile_smart_pattern(query, case_sensitive=False)
-                except Exception as e:
-                    return make_error(MCPError.INVALID_ARGS, f"Invalid query pattern: {e}")
-            else:
-                matcher = None
-
-            for ea in idautils.Functions():
-                fname = ida_funcs.get_func_name(ea)
-                if named_only and fname.startswith("sub_"):
-                    continue
-                if matcher and not matcher(fname):
-                    continue
-
-                total += 1
-                if total <= offset:
-                    continue
-                if count != 0 and len(func_lines) >= count:
-                    break
-
-                fn = ida_funcs.get_func(ea)
-                if not fn:
-                    continue
-                size = hex_size(fn.end_ea - fn.start_ea)
-                item = None
-                if include_items:
-                    item = {
-                        "addr": hex_ea(ea),
-                        "end": hex_ea(fn.end_ea),
-                        "size": size,
-                        "name": fname,
-                    }
-                if include_prototype:
-                    proto = get_prototype(fn)
-                    proto_text = _clip_text(proto, 280)
-                    if item is not None:
-                        item["prototype"] = proto_text
-                    func_lines.append(f"{hex_ea(ea)}  {size}  {fname}  {proto_text}")
-                else:
-                    func_lines.append(f"{hex_ea(ea)}  {size}  {fname}")
-                if item is not None:
-                    items.append(item)
-
-            returned = len(func_lines)
-            has_more = (count != 0) and ((offset + returned) < total)
-            result = {
-                "ok": True,
-                "functions": "\n".join(func_lines),
-                "total": total,
-                "offset": offset,
-                "count": returned,
-                "requested_count": count,
-                "has_more": has_more,
-            }
-            if include_items:
-                result["items"] = items
-            return result
-
         elif action == "info":
             ea, err = _resolve_func_addr(addr)
             if err: return err
@@ -815,27 +698,17 @@ def _funcs_impl(
 
 @tool
 def funcs(
-    action: Annotated[Literal["create", "delete", "set_flags", "set_name", "rename", "add_comment", "list", "info", "metrics", "find_similar", "suggest_names"],
-                      "Action: create|delete|set_flags|set_name|rename|add_comment|list|info|metrics|find_similar|suggest_names"],
+    action: Annotated[Literal["create", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names"],
+                      "Action: create|delete|set_flags|info|metrics|find_similar|suggest_names"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
-    name: Annotated[Optional[str], "Function name"] = None,
+    name: Annotated[Optional[str], "Function name (for create)"] = None,
     flags: Annotated[int, "Function flags (e.g. FUNC_NORET)"] = 0,
     force: Annotated[bool, "Force creation by deleting overlapping functions/data"] = False,
-    comment: Annotated[Optional[str], "Function comment"] = None,
-    repeatable: Annotated[bool, "Is comment repeatable?"] = False,
-    query: Annotated[Optional[str], "Filter for function names - supports regex, glob, or substring (list action)"] = None,
-    offset: Annotated[int, "Pagination offset (list action)"] = 0,
-    count: Annotated[int, "Max results (0=all) (list action)"] = 100,
-    named_only: Annotated[bool, "Only return named functions (list action)"] = False,
-    include_prototype: Annotated[bool, "Include function prototype (info/list)"] = False,
-    include_stack: Annotated[bool, "Include stack frame variables (info)"] = False,
-    include_items: Annotated[bool, "Include structured `items` list in list output (default: false for context efficiency)"] = False,
-    include_xrefs: Annotated[bool, "Include caller/callee samples in info output"] = False,
     **kwargs
 ) -> dict:
     """
-    Create and modify function definitions.
+    Create, modify, and analyze function definitions.
 
     Actions:
     - create: Define a new function at `addr`. Automatically converts bytes to code
@@ -845,11 +718,6 @@ def funcs(
     - delete: Remove function definition at `addr`. If addr is inside a function
       (but not at its start), the containing function is deleted.
     - set_flags: Update function attribute flags.
-    - set_name/rename: Rename function at `addr`.
-    - add_comment: Set function-level comment.
-    - list: Paginated listing with optional name filtering.
-      Query supports regex (e.g. ^init, \\w+alloc), glob (*alloc*), or plain substring.
-      Returns compact text: "addr  size  name [prototype]" per line.
     - info: Detailed info about a single function.
     - metrics: Compute complexity metrics (cyclomatic complexity, instruction count,
       basic blocks, call/return/jump counts, density).
@@ -863,16 +731,6 @@ def funcs(
         "name": name,
         "flags": flags,
         "force": force,
-        "comment": comment,
-        "repeatable": repeatable,
-        "query": query,
-        "offset": offset,
-        "count": count,
-        "named_only": named_only,
-        "include_prototype": include_prototype,
-        "include_stack": include_stack,
-        "include_items": include_items,
-        "include_xrefs": include_xrefs,
         **kwargs,
     }
     # The previous implementation routed read-only actions through

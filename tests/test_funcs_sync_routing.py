@@ -69,6 +69,78 @@ class TestFuncsSyncRouting(unittest.TestCase):
                 "funcs() still has a normalized_action routing block",
             )
 
+    def test_funcs_no_longer_owns_rename_comment_or_list_actions(self):
+        """The four write/lookup actions previously living on `funcs`
+        were migrated to their canonical homes:
+          - set_name, rename  -> modify(action="rename")
+          - add_comment       -> modify(action="comment")
+          - list              -> data(action="functions")
+        Both the public `funcs` tool and the internal `_funcs_impl`
+        Literal must reflect the smaller surface, and the action
+        branches must be gone from the implementation."""
+        funcs_fn = next(
+            (n for n in self.module.body if isinstance(n, ast.FunctionDef) and n.name == "funcs"),
+            None,
+        )
+        impl_fn = next(
+            (n for n in self.module.body if isinstance(n, ast.FunctionDef) and n.name == "_funcs_impl"),
+            None,
+        )
+        self.assertIsNotNone(funcs_fn)
+        self.assertIsNotNone(impl_fn)
+
+        def _literal_values(fn: ast.FunctionDef) -> set[str]:
+            """Find the Literal[...] annotation on the first parameter and
+            return the set of allowed string values."""
+            for arg in fn.args.args:
+                if arg.annotation is None:
+                    continue
+                ann = arg.annotation
+                # PEP 604 union: Literal | None, etc. — collect all Subscript
+                # nodes whose value is a Name('Literal').
+                values: set[str] = set()
+                for node in ast.walk(ann):
+                    if (
+                        isinstance(node, ast.Subscript)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "Literal"
+                        and isinstance(node.slice, ast.Tuple)
+                    ):
+                        for elt in node.slice.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                values.add(elt.value)
+                if values:
+                    return values
+            return set()
+
+        outer = _literal_values(funcs_fn)
+        inner = _literal_values(impl_fn)
+        for removed in ("set_name", "rename", "add_comment", "list"):
+            self.assertNotIn(removed, outer, f"funcs Literal still allows {removed!r}")
+            self.assertNotIn(removed, inner, f"_funcs_impl Literal still allows {removed!r}")
+
+        # The action branches for the removed actions must not appear in
+        # the implementation as `elif action == "<removed>":`.
+        removed_branches: set[str] = set()
+        for node in ast.walk(impl_fn):
+            if (
+                isinstance(node, ast.Compare)
+                and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.Eq)
+                and isinstance(node.left, ast.Name)
+                and node.left.id == "action"
+                and len(node.comparators) == 1
+                and isinstance(node.comparators[0], ast.Constant)
+                and isinstance(node.comparators[0].value, str)
+            ):
+                removed_branches.add(node.comparators[0].value)
+        for removed in ("set_name", "add_comment", "list"):
+            self.assertNotIn(
+                removed,
+                removed_branches,
+                f"_funcs_impl still has an `action == {removed!r}` branch",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

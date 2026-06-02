@@ -120,7 +120,8 @@ def main():
 
         probes = [
             ("idb/meta", {"name": "idb", "arguments": {"action": "meta"}}),
-            ("funcs/list", {"name": "funcs", "arguments": {"action": "list", "count": 5}}),
+            ("funcs/create", {"name": "funcs", "arguments": {"action": "create", "addr": "0x140001000"}}),
+            ("data/functions", {"name": "data", "arguments": {"action": "functions", "count": 5}}),
             ("calc/eval", {"name": "calc", "arguments": {"action": "eval", "expr": "0x1000 + 0x20"}}),
             ("calc/convert", {"name": "calc", "arguments": {"action": "convert", "value": "0x41"}}),
             ("search/name", {"name": "search", "arguments": {"action": "name", "pattern": "*main*", "limit": 5}}),

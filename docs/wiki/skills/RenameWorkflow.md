@@ -7,7 +7,7 @@
 ```
 funcs(action="suggest_names")
   → review suggestions
-  → funcs(action="set_name", address="0x...", name="new_name")
+  → modify(action="rename", addr="0x...", name="new_name")
   → blackboard(action="list", category="rename_suggestion")
 ```
 
@@ -41,7 +41,7 @@ funcs(action="suggest_names")
 Review, then apply:
 
 ```json
-{"name": "funcs", "arguments": {"action": "set_name", "address": "0x401230", "name": "decrypt_config"}}
+{"name": "modify", "arguments": {"action": "rename", "addr": "0x401230", "name": "decrypt_config"}}
 ```
 
 Check propagated suggestions:
