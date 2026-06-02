@@ -36,6 +36,10 @@ from .refs import search_data_ref, search_code_ref, search_regex, search_func_by
 from .unified import search_find, search_semantic, search_callers, search_callees, search_api
 from .advanced import search_vulnerable, search_constants, search_decompiled, search_structured
 from .meta import search_type, search_export, search_summary
+from .combinators import (
+    search_bool, search_hunt, search_neighborhood, search_outlier,
+    search_fingerprint, search_path, search_reach, search_noreach,
+)
 from ...support.query_lang import run_query_lang
 
 # ============================================================================
@@ -130,7 +134,8 @@ def search(
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
         "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang", "nl", "behavior",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|smart_bundle|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior"],
+        "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|smart_bundle|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|neighborhood|outlier|fingerprint|path|reach|noreach"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -171,6 +176,18 @@ def search(
     - data_ref, code_ref, regex, func_by_sig
     - type: Search type library names and type usages
     - export: Search exported symbols
+    
+    COMPOSITION ACTIONS (combinators):
+    - bool: Composite boolean query language across name/api/string/mnem/caller/callee
+            Example: "(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)"
+    - hunt: Named workflow recipes (backdoor, anti_debug, c2, crypto, parser, ...)
+            Pass recipe='list' to see all 14 available recipes.
+    - neighborhood: 360-degree context card around a function (callers, callees, similar, tags)
+    - outlier: Find structurally anomalous functions (size/complexity/orphan/leaf/hub/deep)
+    - fingerprint: Structural (callgraph) similarity, NOT embedding-based
+    - path: Shortest call-graph path between two symbols
+    - reach: Functions reachable from a root within N hops
+    - noreach: Functions NOT reachable from any known entrypoint
     """
     try:
         # Resolve pattern
@@ -531,6 +548,35 @@ def search(
                 "note": f"Functions classified as '{tag}'. "
                         "Use code(action='smart_decompile') on top results for full analysis.",
             }
+
+        elif action == "bool":
+            response = search_bool(actual_pattern, case_sensitive, offset, limit)
+        elif action == "hunt":
+            response = search_hunt(actual_pattern, case_sensitive, offset, limit)
+        elif action == "neighborhood":
+            radius = int(kwargs.get("radius", 10))
+            response = search_neighborhood(actual_pattern, radius, offset, limit)
+        elif action == "outlier":
+            metric = str(kwargs.get("metric", "size"))
+            response = search_outlier(metric, int(kwargs.get("top", 50)), offset, limit)
+        elif action == "fingerprint":
+            top_k = int(kwargs.get("top_k", 20))
+            response = search_fingerprint(actual_pattern, top_k, offset, limit)
+        elif action == "path":
+            src = str(kwargs.get("src", actual_pattern or ""))
+            dst = str(kwargs.get("dst", ""))
+            max_depth = int(kwargs.get("max_depth", 12))
+            if not dst:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "path action requires both src and dst",
+                                  hint="Example: search(action='path', pattern='main', dst='WSAStartup')")
+            response = search_path(src, dst, max_depth)
+        elif action == "reach":
+            depth = int(kwargs.get("depth", 5))
+            response = search_reach(actual_pattern, depth, offset, limit)
+        elif action == "noreach":
+            depth = int(kwargs.get("depth", 20))
+            response = search_noreach(depth, offset, limit)
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

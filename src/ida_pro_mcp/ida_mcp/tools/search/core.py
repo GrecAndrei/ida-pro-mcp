@@ -198,6 +198,7 @@ SEARCH_ACTIONS = {
     "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
     "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
     "type", "export", "summary", "nl", "behavior",
+    "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
 }
 
 SEARCH_ALIASES = {
@@ -231,6 +232,15 @@ SEARCH_ALIASES = {
     "exports": "export", "exported": "export",
     "overview": "summary", "count": "summary", "stats": "summary",
     "tag": "behavior", "tags": "behavior", "classify": "behavior",
+    # Combinator aliases
+    "boolean": "bool", "query": "bool", "and_or": "bool",
+    "recipe": "hunt", "recipes": "hunt", "workflow": "hunt",
+    "context": "neighborhood", "neighbors": "neighborhood", "around": "neighborhood",
+    "anomaly": "outlier", "anomalies": "outlier", "unusual": "outlier",
+    "struct_sim": "fingerprint", "structural": "fingerprint", "similar_struct": "fingerprint",
+    "shortest_path": "path", "callgraph_path": "path", "chain": "path",
+    "reachable": "reach", "forward": "reach", "fanout": "reach",
+    "unreachable": "noreach", "dead_code": "noreach", "orphan_reach": "noreach",
 }
 
 SEARCH_INTENT_PATTERNS = [
