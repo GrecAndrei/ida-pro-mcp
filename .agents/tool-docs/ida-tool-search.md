@@ -68,19 +68,27 @@ Pattern, reference, and semantic search across the binary. nl: natural language 
 - `action`: `string` - allowed_count: `41`
 - `addr`: `string`
 - `case_sensitive`: `boolean`
+- `depth`: `integer` - reach/noreach BFS depth
+- `dst`: `string` - path destination symbol/addr
 - `end`: `string`
 - `include_breakdown`: `boolean`
 - `include_context`: `boolean`
 - `include_items`: `boolean`
 - `limit`: `integer`
+- `max_depth`: `integer` - path/reach max BFS depth
 - `max_functions`: `integer`
+- `metric`: `string` - outlier metric: size|complexity|bb_count|orphan|leaf|hub|deep|tiny|huge
 - `offset`: `integer`
 - `pattern`: `string`
 - `query`: `string`
+- `radius`: `integer` - neighborhood radius (default 10)
 - `sample`: `boolean`
 - `sample_max_funcs`: `integer`
+- `src`: `string` - path source symbol/addr
 - `start`: `string`
 - `timeout_ms`: `integer`
+- `top`: `integer` - outlier top N (default 50)
+- `top_k`: `integer` - fingerprint top K (default 20)
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
