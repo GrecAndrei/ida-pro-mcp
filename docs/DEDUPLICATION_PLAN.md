@@ -132,3 +132,47 @@ section is the human-readable index.
 | `intelligence.classify_function` | `classify.function` | Both classify a single function. `intelligence.classify_function` uses the embedding-index classifier (fast, cached). `classify.function` is the direct BehaviorClassifier call. | Use `intelligence.classify_function` (faster, consistent with the index). `classify.function` is the older entry point. |
 | `trace_analysis` | `coverage` | `trace_analysis` is coverage-oriented trace analysis. `coverage` is the import/report helper. | Use `trace_analysis` for trace-side queries. Use `coverage` to import / report coverage data. |
 | `xref_analysis` (legacy) | `graph` | `xref_analysis.py` on disk is consolidated into `graph` at the host layer. The runtime alias redirects `xref_analysis` → `graph`. | Prefer `graph` for new code. The alias exists for back-compat. |
+
+## Phase 4 Audit (2026-06-02)
+
+The Phase 4 plan called for mixin / response-pipeline dedupe. An audit
+of the 12 `host/server_*.py` files and the response-compaction pair
+turned up no actionable dedupe targets:
+
+- **Mixin composition is already clean.** `IDAMCPServer` is built from
+  11 mixins (`ServerArgs`, `ServerResponse`, `ServerSemantic`, …) and
+  each mixin lives in its own file with a unique class name. The
+  parent/child pairs (`ServerResponse` extends
+  `ServerResponseCompactMixin`; `ServerWorkflow` extends
+  `ServerWorkflowBatchMixin`; etc.) compose via inheritance, not
+  duplication. No method name is defined in more than one mixin.
+
+- **`server_response.py` vs `server_response_compact.py` are
+  intentionally layered.** The compact module (391 lines) holds
+  low-level response-shaping helpers (`_compact_value`,
+  `_maybe_tableify`, `_extract_response_options`); the response module
+  (943 lines) extends it with the higher-level policy injection
+  (`_inject_blackboard_policy_followup`, `_pointer_note_signal_*`).
+  Zero method-name overlap. Splitting or merging would hurt locality.
+
+- **No module-level helper duplication** across `server_*.py`. Every
+  `def _foo` in those files is unique. The dispatch entry point
+  (`ServerDispatchMixin.call_tool`) is the single funnel for tool
+  invocations.
+
+- **`validate_addr` (ida_mcp/error_handling) vs
+  `_validate_address_lockstep` (host/server_response) are
+  unrelated.** The first coerces a string/int to an IDA address; the
+  second checks whether addresses in a call_args match the previous
+  payload (a lockstep-consistency warning, not an address parser).
+
+- **`_semantic_tokenize` (host/patterns) vs `_tokenize`
+  (host/intelligence_embeddings) are unrelated.** The first
+  normalizes + camelCase-expands text for semantic search; the second
+  is a simple lowercased regex split for keyword indexing.
+
+The mixin/response layer was likely tightened in a prior dedupe pass
+(commit `ecc7db8 misc: split grab-bag into proper homes` and
+`aa6bb72 Target D: merge xref_analysis into graph` both predate this
+session). Phase 4 is recorded as audited-with-no-targets and no
+code change is committed.
