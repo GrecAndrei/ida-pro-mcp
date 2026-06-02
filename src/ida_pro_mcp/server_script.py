@@ -39,6 +39,9 @@ TOOLS = {}
 TOOL_ALIASES = {
     # Compatibility typo used by some wrappers.
     "xfer_analysis": "graph",
+    # Legacy tool consolidated into graph (xref_analysis.py kept for back-compat
+    # imports but routed to graph at the runtime layer as well as host).
+    "xref_analysis": "graph",
     "c2_detect": "string_ops",
 }
 _ERROR_DETAIL_LEVEL = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()

@@ -112,6 +112,8 @@ TOOLS = [
     "governance",
     # --- Cross-session firmware KB ---
     "knowledge",
+    # --- Relocation/fixup management (specialized; not advertised) ---
+    "fixups",
 ]
 
 ADVERTISED_TOOLS = [
@@ -227,7 +229,9 @@ _EXTRA_TOOL_ALIASES = {
     "security": "threat_hunt",
     "trace": "threat_hunt",
     "tracing": "threat_hunt",
-    "coverage": "threat_hunt",
+    # NOTE: do NOT alias "coverage" here — it collides with the canonical
+    # `coverage` tool. The collision is silently dropped by _build_tool_aliases
+    # but the entry confuses readers. See Phase 1.5 of dedupe plan.
     "c2": "threat_hunt",
     "c2_detect": "string_ops",
     "deobfuscation": "threat_hunt",
@@ -326,6 +330,7 @@ TOOL_DESCRIPTIONS = {
     "export": "Export IDB content in various formats for external tooling. Actions: listing, html, idc, json, sarif, binexport, headers, redact.",
     "filter": "JQ-like deterministic filtering for tool outputs — prevents context overflow. Supports field extraction (.key), slicing ([0:10]), predicate filter ([?size > 100]), sort, unique, pluck, group_by, count, and first(N). Run any large list result through filter before returning to the LLM. Actions: filter.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, campaign_checkpoint, campaign_resume, campaign_feedback, fingerprint_index_sync, fingerprint_index_query, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
+    "fixups": "Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, get, add, delete.",
     "funcs": "Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names. (Renames/comments/listings live on modify and data.)",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
@@ -350,7 +355,7 @@ TOOL_DESCRIPTIONS = {
     "query": "Unified query interface combining data, search, code, types, symbols, and natural-language queries. Actions: data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch.",
     "schemaboot": "Structured semantic indexing with induced attribute-value schemas for function-level retrieval. Actions: ingest, query, refresh, stats, delete, get.",
     "search": "Pattern, reference, and semantic search across the binary. nl: natural language search using bge-code-v1 embeddings (most accurate for RE queries). behavior: find all functions matching a behavior tag (crypto_symmetric, network_http, etc.) via BehaviorClassifier. find: smart unified search (names/strings/imports/instructions, auto-ranked). semantic: NL search with embedding-aware ranking. smart_bundle: fused find+semantic with deduplicated structured items. api: find all usages of an imported API. decompiled: search pseudocode across all functions (auto-writes blackboard entries for matches). structured: schema-based pre-filtered search with behavior_tags constraints. vulnerable: scan for dangerous API patterns. constants: find crypto/magic constants. callers/callees, bytes/string/immediate/name/insns/mnemonic/instruction/text/operand/comment/data_ref/code_ref/regex/func_by_sig/type/export/summary/query_lang.",
-    "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge, fixup_list, fixup_get, fixup_add, fixup_delete.",
+    "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge. For relocations/fixups use the dedicated `fixups` tool.",
     "session": "Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).",
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
     "string_ops": "Advanced string analysis and IOC extraction. score_c2/indicators: C2 risk report — BehaviorClassifier on strings + API triads + family guess. ioc_extract: extract all IOCs (URLs, IPs, registry keys, C2 endpoints). persistence/evasion: persistence mechanisms and evasion techniques. find_urls/find_ips/find_paths/find_registry/find_emails/find_commands: pattern extraction. find_c2/find_configs/find_api_keys/find_databases/find_crypto_addrs: semantic extraction. find_stack_strings/find_base64: obfuscated string recovery. entropy_rank: rank strings by Shannon entropy. suspicious/encoding_stats/multilingual/decode_all: analysis utilities.",
@@ -442,9 +447,7 @@ TOOL_ACTIONS = {
         "import_md",
         "summary",
     ],
-    "batch": [
-        "(pass calls array)",
-    ],
+    "batch": [],
     "binary_info": [
         "headers",
         "sections",
@@ -781,6 +784,12 @@ TOOL_ACTIONS = {
         "triage_snapshot",
         "bootstrap",
     ],
+    "fixups": [
+        "list",
+        "get",
+        "add",
+        "delete",
+    ],
     "funcs": [
         "create",
         "delete",
@@ -899,7 +908,6 @@ TOOL_ACTIONS = {
         "persistent_search_collections",
         "auto_expansion_search_chains",
         "function_role_classifier",
-        "protocol_format_reconstruction_assistant",
         "global_state_influence_mapper",
         "api_contract_extractor",
         "interprocedural_data_lineage_graph",
@@ -1112,10 +1120,6 @@ TOOL_ACTIONS = {
         "find_data",
         "compare",
         "merge",
-        "fixup_list",
-        "fixup_get",
-        "fixup_add",
-        "fixup_delete",
     ],
     "session": [
         "discover",
@@ -1886,6 +1890,16 @@ TOOL_ARG_SCHEMAS = {
     "filter": {
         "data": {"type": "object", "description": "Tool output dict to filter"},
         "query": {"type": "string", "description": "JQ-like filter expression (e.g. '.functions[?size > 100] | first(10)')"},
+    },
+    "fixups": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["fixups"]},
+        "addr": {"type": "string", "description": "Address of the fixup"},
+        "target": {"type": "string", "description": "Target address (for add)"},
+        "fixup_type": {"type": "integer", "description": "Fixup type id (processor specific)"},
+        "start": {"type": "string", "description": "Start address for list range"},
+        "end": {"type": "string", "description": "End address for list range"},
+        "offset": {"type": "integer", "description": "Pagination offset"},
+        "count": {"type": "integer", "description": "Max entries (0=all)"},
     },
     "governance": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["governance"]},

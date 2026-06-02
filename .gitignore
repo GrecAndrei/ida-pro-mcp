@@ -62,6 +62,7 @@ scripts/tools_list_occupancy.json
 # Planning artifacts
 GAP_ANALYSIS.md
 *.plan.md
+DEDUPE_PLAN.md
 
 # Test result artifacts (generated, not source)
 tests/tool_sweep_*.json

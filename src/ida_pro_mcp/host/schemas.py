@@ -77,7 +77,6 @@ TOOL_ACTIONS = {
         "persistent_search_collections",
         "auto_expansion_search_chains",
         "function_role_classifier",
-        "protocol_format_reconstruction_assistant",
         "global_state_influence_mapper",
         "api_contract_extractor",
         "interprocedural_data_lineage_graph",

@@ -84,7 +84,7 @@ HOST_TOOL_ACTIONS = {
         "argument_semantics_search","decompile_disasm_consistency_search",
         "near_miss_search_ranking","persistent_search_collections",
         "auto_expansion_search_chains","function_role_classifier",
-        "protocol_format_reconstruction_assistant","global_state_influence_mapper",
+        "global_state_influence_mapper",
         "api_contract_extractor","interprocedural_data_lineage_graph",
         "semantic_diff_explainer","dangerous_pattern_explainer",
         "binary_capability_matrix_builder","execution_hypothesis_generator",
