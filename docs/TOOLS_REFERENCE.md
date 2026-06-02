@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Current canonical tool surface: **67 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
+Current canonical tool surface: **66 tools** (registered in `src/ida_pro_mcp/host/schemas.py` `TOOLS`).
 
 Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `build_input_schema`).
 
