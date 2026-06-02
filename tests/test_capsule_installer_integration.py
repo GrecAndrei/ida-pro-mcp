@@ -21,9 +21,7 @@ def test_installer_capsule_success_writes_records(tmp_path, monkeypatch):
         "ida_pro_mcp.installer.main.configure_clients",
         lambda **kwargs: ["OpenCode", "Gemini CLI"],
     )
-    monkeypatch.setattr("ida_pro_mcp.installer.main.install_ida_plugin", lambda **kwargs: None)
     monkeypatch.setattr("ida_pro_mcp.installer.main.install_codex_skills", lambda *a, **k: None)
-    monkeypatch.setattr("ida_pro_mcp.installer.main.detect_ida_install_dir", lambda: Path("/opt/ida"))
 
     opts = parse_args(
         [
@@ -79,7 +77,6 @@ def test_installer_capsule_dry_run_does_not_write_capsule(tmp_path, monkeypatch)
         "ida_pro_mcp.installer.main.configure_clients",
         lambda **kwargs: ["OpenCode"],
     )
-    monkeypatch.setattr("ida_pro_mcp.installer.main.install_ida_plugin", lambda **kwargs: None)
     monkeypatch.setattr("ida_pro_mcp.installer.main.install_codex_skills", lambda *a, **k: None)
 
     opts = parse_args(

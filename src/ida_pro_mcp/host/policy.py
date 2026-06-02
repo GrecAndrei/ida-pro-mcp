@@ -99,7 +99,6 @@ WRITE_IDB_TOOLS = {
     "bulk",
     "colorize",
     "data_ops",
-    "fixups",
     "funcs",
     "governance",
     "hooks",

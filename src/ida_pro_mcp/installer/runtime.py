@@ -47,17 +47,6 @@ def detect_ida_install_dir() -> Path | None:
     return None
 
 
-def get_ida_plugin_dir() -> Path:
-    env_dir = os.environ.get("IDAUSR") or os.environ.get("IDA_USER_DIR")
-    if env_dir:
-        base = Path(env_dir).expanduser()
-    elif sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "Hex-Rays" / "IDA Pro"
-    else:
-        base = Path.home() / ".idapro"
-    return base / "plugins"
-
-
 def run_checked(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
     if result.returncode == 0:
@@ -292,32 +281,13 @@ def setup_runtime_environment(
         [
             str(python_exe),
             "-c",
-            "import ida_pro_mcp.server, ida_pro_mcp.cli, requests, numpy, tomli_w; print('ok')",
+            "import ida_pro_mcp.host.server, ida_pro_mcp.cli, requests, numpy, tomli_w; print('ok')",
         ]
     )
     report.metadata["runtime_source"] = resolved_source
     report.metadata["runtime_package"] = package_spec
     report.metadata["venv_python"] = str(python_exe)
     return python_exe
-
-
-def discover_installed_package_paths(python_exe: Path) -> tuple[Path, Path]:
-    cmd = [
-        str(python_exe),
-        "-c",
-        (
-            "import json, pathlib, ida_pro_mcp; "
-            "pkg=pathlib.Path(ida_pro_mcp.__file__).resolve().parent; "
-            "print(json.dumps({'pkg': str(pkg), 'loader': str(pkg / 'ida_mcp.py'), 'plugin_pkg': str(pkg / 'ida_mcp')}))"
-        ),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    payload = json.loads(result.stdout.strip())
-    loader = Path(payload["loader"])
-    plugin_pkg = Path(payload["plugin_pkg"])
-    return loader, plugin_pkg
-
-
 def build_stdio_config(
     python_exe: Path,
     install_root: Path,
@@ -353,6 +323,6 @@ def build_stdio_config(
 
     return {
         "command": str(python_exe),
-        "args": ["-u", "-m", "ida_pro_mcp.server"],
+        "args": ["-u", "-m", "ida_pro_mcp.host.server"],
         "env": env,
     }

@@ -117,7 +117,7 @@ class MCPStdioClient:
 
 
 def _server_cmd() -> list[str]:
-    return [sys.executable, "-m", "ida_pro_mcp.server"]
+    return [sys.executable, "-m", "ida_pro_mcp.host.server"]
 
 
 def _print_json(value: Any, *, pretty: bool) -> None:

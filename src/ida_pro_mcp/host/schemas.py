@@ -742,7 +742,6 @@ _TOOL_CATEGORY_ADVANCED = {
     "history",
     "colorize",
     "data_ops",
-    "fixups",
     "hooks",
 }
 _TOOL_CATEGORY_SECURITY = {

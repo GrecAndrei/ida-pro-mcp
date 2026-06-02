@@ -296,11 +296,6 @@ Data type conversion (make data/array/string/code, undefine).
 
 **Actions:** make_data, make_array, make_string, undefine, make_code
 
-### fixups
-Relocation/fixup management.
-
-**Actions:** list, get, add, delete
-
 ---
 
 ## 13. Instrumentation

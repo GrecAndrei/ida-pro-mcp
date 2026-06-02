@@ -10,7 +10,7 @@ authors = [
     { name = "can1357" },
     { name = "IDA Pro MCP Contributors" },
 ]
-keywords = ["ida", "mcp", "llm", "plugin"]
+keywords = ["ida", "mcp", "llm"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -21,7 +21,6 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "idapro>=0.0.7",
     "tomli-w>=1.0.0",
     "yara-python>=4.5.0",
     "requests>=2.31.0",
@@ -37,9 +36,8 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-ida-pro-mcp = "ida_pro_mcp.server:main"
+ida-pro-mcp = "ida_pro_mcp.host.server:main"
 ida-pro-mcp-cli = "ida_pro_mcp.cli:main"
-idalib-mcp = "ida_pro_mcp.idalib_server:main"
 ida-pro-mcp-install = "ida_pro_mcp.installer.main:main"
 sideband-capsule = "ida_pro_mcp.capsule.cli:main"
 

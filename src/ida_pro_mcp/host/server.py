@@ -141,32 +141,7 @@ from .server_workflow import ServerWorkflowMixin
 # if addr and tool_name in ("code", "data", "search"):
 
 # Import truncation middleware
-try:
-    from ida_pro_mcp.ida_mcp.truncation import truncate_response, continue_truncated
-except ImportError:
-    try:
-        import importlib.util
-        import os as _os
-        _trunc_path = _os.path.join(
-            _os.path.dirname(_os.path.abspath(__file__)), "..", "ida_mcp", "truncation.py"
-        )
-        _spec = importlib.util.spec_from_file_location("ida_mcp_truncation", _trunc_path)
-        if _spec and _spec.loader:
-            _module = importlib.util.module_from_spec(_spec)
-            _spec.loader.exec_module(_module)
-            truncate_response = _module.truncate_response
-            continue_truncated = _module.continue_truncated
-        else:
-            raise ImportError("Unable to load truncation module")
-    except Exception:
-        def truncate_response(resp, **kwargs):
-            return resp
-        def continue_truncated(*_args, **_kwargs):
-            return {
-                "error": True,
-                "code": "NOT_IMPLEMENTED",
-                "message": "Truncation middleware unavailable",
-            }
+from .truncation import truncate_response, continue_truncated
 
 # =============================================================================
 # MCP SERVER
@@ -741,7 +716,7 @@ def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
                     new_only.append(ea)
             if new_only:
                 try:
-                    from ida_pro_mcp.ida_mcp.tools.blackboard import BlackboardStore
+                    from .blackboard_store import BlackboardStore
                     store = BlackboardStore()
                     store.write(
                         title=f"Session diff: {len(new_only)} new/changed functions vs previous session",
@@ -758,13 +733,24 @@ def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
     threading.Thread(target=_diff, daemon=True, name="session-diff").start()
 
 
-if __name__ == "__main__":
+_real_stdout = sys.stdout  # overwritten by ida_mcp_stdio shim; binary mode on Windows
+
+
+def main():
+    """Console-script entry point: ``python -m ida_pro_mcp.host.server``."""
+    global _real_stdout
+    if _real_stdout is sys.stdout:
+        _real_stdout = sys.stdout
     try:
         server = IDAMCPServer()
         server.run()
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
 
 # Compatibility anchors for source-based regression tests.
 # legacy_threat_tools = {

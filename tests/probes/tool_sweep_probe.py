@@ -161,7 +161,7 @@ def main():
             ("project", {"action": "get_cwd"}),
             ("misc", {"action": "plugin_list"}),
             ("trace", {"action": "get"}),
-            ("fixups", {"action": "list"}),
+            ("segments", {"action": "fixup_list"}),
             ("data_ops", {"action": "make_code", "addr": entry_addr}),
             ("agent", {"action": "explore_address", "addr": entry_addr}),
             ("agent", {"action": "context_pack", "addr": entry_addr}),

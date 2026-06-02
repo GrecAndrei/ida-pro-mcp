@@ -32,25 +32,7 @@ from .config import (
     _COMPACT_DROP,
 )
 from .server_response_compact import ServerResponseCompactMixin
-try:
-    from ida_pro_mcp.ida_mcp.truncation import truncate_response
-except ImportError:
-    try:
-        import importlib.util
-        import os as _os
-        _trunc_path = _os.path.join(
-            _os.path.dirname(_os.path.abspath(__file__)), "..", "ida_mcp", "truncation.py"
-        )
-        _spec = importlib.util.spec_from_file_location("ida_mcp_truncation", _trunc_path)
-        if _spec and _spec.loader:
-            _module = importlib.util.module_from_spec(_spec)
-            _spec.loader.exec_module(_module)
-            truncate_response = _module.truncate_response
-        else:
-            raise ImportError("Unable to load truncation module")
-    except Exception:
-        def truncate_response(resp, **kwargs):
-            return resp
+from .truncation import truncate_response
 
 
 class ServerResponseMixin(ServerResponseCompactMixin):

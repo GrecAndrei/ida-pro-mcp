@@ -15,11 +15,7 @@ from .runtime import (
     download_and_install_llama_server,
     find_embed_model,
     find_llama_server_bin,
-    detect_ida_install_dir,
-    discover_installed_package_paths,
-    get_ida_plugin_dir,
     get_install_root,
-    ida_processes_running,
     kill_ida_processes,
     choose_runtime_source,
     setup_runtime_environment,
@@ -206,26 +202,12 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     ui.info("Interactive install mode")
     ui.info("Press Enter to keep recommended defaults.")
 
-    detected_ida = detect_ida_install_dir()
-    if detected_ida:
-        ui.ok(f"Detected IDA install: {detected_ida}")
-    else:
-        ui.warn("No IDA install auto-detected (can still configure clients/runtime).")
-
     resolved_runtime = choose_runtime_source(opts.runtime_source, opts.source_root or Path.cwd())
     runtime_default = opts.runtime_source if opts.runtime_source != "auto" else resolved_runtime
     opts.runtime_source = _prompt_choice(
         "Runtime package source",
         ["local", "pypi"],
         runtime_default if runtime_default in {"local", "pypi"} else "local",
-    )
-
-    running = ida_processes_running()
-    if running:
-        ui.warn("IDA/IDAT processes appear to be running.")
-    opts.kill_ida = _prompt_yes_no(
-        "Stop running IDA/IDAT processes before install?",
-        default=running,
     )
 
     if sys.platform != "win32":
@@ -322,26 +304,6 @@ def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
         return "copied"
 
 
-def install_ida_plugin(
-    python_exe: Path,
-    report: InstallReport,
-    dry_run: bool,
-) -> None:
-    plugin_dir = get_ida_plugin_dir()
-    loader_src, pkg_src = discover_installed_package_paths(python_exe)
-    loader_dst = plugin_dir / "ida_mcp.py"
-    pkg_dst = plugin_dir / "ida_mcp"
-    if dry_run:
-        report.add_step("plugin", "dry-run", f"would install to {plugin_dir}")
-        return
-    plugin_dir.mkdir(parents=True, exist_ok=True)
-    _replace_with_symlink_or_copy(loader_src, loader_dst)
-    _replace_with_symlink_or_copy(pkg_src, pkg_dst)
-    report.add_modified(loader_dst)
-    report.add_modified(pkg_dst)
-    report.add_step("plugin", "ok", str(plugin_dir))
-
-
 def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dry_run: bool) -> None:
     if mode == "none":
         report.add_step("skills", "skipped", "skills mode set to none")
@@ -387,7 +349,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument("--skills-mode", choices=["router", "full", "none"], default="router", help="Codex skill installation mode")
     parser.add_argument("--capsule", default="", help="optional path to write installer metadata capsule (.sideband)")
-    parser.add_argument("--only", action="append", choices=["runtime", "clients", "plugin", "skills", "shell"], default=[], help="run only selected install phases")
+    parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     args = parser.parse_args(argv)
     opts = InstallerOptions(
@@ -505,13 +467,6 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         else:
             report.add_step("clients", "skipped", "filtered by --only")
 
-        if _phase_enabled(opts, "plugin"):
-            ui.info("Installing IDA plugin")
-            install_ida_plugin(python_exe=python_exe, report=report, dry_run=opts.dry_run)
-            ui.ok("IDA plugin install complete")
-        else:
-            report.add_step("plugin", "skipped", "filtered by --only")
-
         if _phase_enabled(opts, "skills"):
             ui.info("Installing Codex skills")
             install_codex_skills(source_root, opts.skills_mode, report, opts.dry_run)
@@ -526,10 +481,6 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.ok("CLI shell shim installed")
         else:
             report.add_step("shell", "skipped", "not requested")
-
-        idadir = detect_ida_install_dir()
-        if idadir:
-            report.metadata["idadir"] = str(idadir)
 
         report.finalize(True)
         report_path = install_root / "install-report.json"
@@ -558,7 +509,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     name="ida-primary",
                     kind="ida",
                     config={
-                        "idadir": str(detect_ida_install_dir() or ""),
+                        "idadir": "",
                         "status": "primary",
                     },
                 )

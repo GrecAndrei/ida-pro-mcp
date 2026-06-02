@@ -1,16 +1,13 @@
 import os
 import sys
 import json
-import shutil
 import argparse
 import http.client
-import tempfile
 import traceback
 import tomllib
 import tomli_w
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
-import glob
 from ida_pro_mcp.legacy_names import LEGACY_SERVER_NAMES
 
 if TYPE_CHECKING:
@@ -78,21 +75,6 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
 
 
 mcp.registry.dispatch = dispatch_proxy
-
-
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-IDA_PLUGIN_PKG = os.path.join(SCRIPT_DIR, "ida_mcp")
-IDA_PLUGIN_LOADER = os.path.join(SCRIPT_DIR, "ida_mcp.py")
-
-# NOTE: This is in the global scope on purpose
-if not os.path.exists(IDA_PLUGIN_PKG):
-    raise RuntimeError(
-        f"IDA plugin package not found at {IDA_PLUGIN_PKG} (did you move it?)"
-    )
-if not os.path.exists(IDA_PLUGIN_LOADER):
-    raise RuntimeError(
-        f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)"
-    )
 
 
 def get_python_executable():
@@ -759,132 +741,16 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             "No MCP servers installed. For unsupported MCP clients, use the following config:\n"
         )
         print_mcp_config()
-
-
-def install_ida_plugin(
-    *, uninstall: bool = False, quiet: bool = False, allow_ida_free: bool = False
-):
-    if sys.platform == "win32":
-        ida_folder = os.path.join(os.environ["APPDATA"], "Hex-Rays", "IDA Pro")
-    else:
-        ida_user_dir = os.environ.get("IDAUSR") or os.environ.get("IDA_USER_DIR")
-        ida_folder = os.path.expanduser(ida_user_dir) if ida_user_dir else os.path.join(os.path.expanduser("~"), ".idapro")
-    if not allow_ida_free:
-        free_licenses = glob.glob(os.path.join(ida_folder, "idafree_*.hexlic"))
-        if len(free_licenses) > 0:
-            print(
-                "IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead."
-            )
-            sys.exit(1)
-    ida_plugin_folder = os.path.join(ida_folder, "plugins")
-
-    # Install both the loader file and package directory
-    loader_source = IDA_PLUGIN_LOADER
-    loader_destination = os.path.join(ida_plugin_folder, "ida_mcp.py")
-
-    pkg_source = IDA_PLUGIN_PKG
-    pkg_destination = os.path.join(ida_plugin_folder, "ida_mcp")
-
-    # Clean up old plugin if it exists
-    old_plugin = os.path.join(ida_plugin_folder, "mcp-plugin.py")
-
-    if uninstall:
-        # Remove loader
-        if os.path.lexists(loader_destination):
-            os.remove(loader_destination)
-            if not quiet:
-                print(f"Uninstalled IDA plugin loader\n  Path: {loader_destination}")
-
-        # Remove package
-        if os.path.exists(pkg_destination):
-            if os.path.isdir(pkg_destination) and not os.path.islink(pkg_destination):
-                shutil.rmtree(pkg_destination)
-            else:
-                os.remove(pkg_destination)
-            if not quiet:
-                print(f"Uninstalled IDA plugin package\n  Path: {pkg_destination}")
-
-        # Remove old plugin if it exists
-        if os.path.lexists(old_plugin):
-            os.remove(old_plugin)
-            if not quiet:
-                print(f"Removed old plugin\n  Path: {old_plugin}")
-    else:
-        # Create IDA plugins folder
-        if not os.path.exists(ida_plugin_folder):
-            os.makedirs(ida_plugin_folder)
-
-        # Remove old plugin if it exists
-        if os.path.lexists(old_plugin):
-            os.remove(old_plugin)
-            if not quiet:
-                print(f"Removed old plugin file\n  Path: {old_plugin}")
-
-        installed_items = []
-
-        # Install loader file
-        loader_realpath = (
-            os.path.realpath(loader_destination)
-            if os.path.lexists(loader_destination)
-            else None
-        )
-        if loader_realpath != loader_source:
-            if os.path.lexists(loader_destination):
-                os.remove(loader_destination)
-
-            try:
-                os.symlink(loader_source, loader_destination)
-                installed_items.append(f"loader: {loader_destination}")
-            except OSError:
-                shutil.copy(loader_source, loader_destination)
-                installed_items.append(f"loader: {loader_destination}")
-
-        # Install package directory
-        pkg_realpath = (
-            os.path.realpath(pkg_destination)
-            if os.path.lexists(pkg_destination)
-            else None
-        )
-        if pkg_realpath != pkg_source:
-            if os.path.lexists(pkg_destination):
-                if os.path.isdir(pkg_destination) and not os.path.islink(
-                    pkg_destination
-                ):
-                    shutil.rmtree(pkg_destination)
-                else:
-                    os.remove(pkg_destination)
-
-            try:
-                os.symlink(pkg_source, pkg_destination)
-                installed_items.append(f"package: {pkg_destination}")
-            except OSError:
-                shutil.copytree(pkg_source, pkg_destination)
-                installed_items.append(f"package: {pkg_destination}")
-
-        if not quiet:
-            if installed_items:
-                print("Installed IDA Pro plugin (IDA restart required)")
-                for item in installed_items:
-                    print(f"  {item}")
-            else:
-                print("Skipping IDA plugin installation (already up to date)")
-
-
 def main():
     global IDA_HOST, IDA_PORT
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument(
-        "--install", action="store_true", help="Install the MCP Server and IDA plugin"
+        "--install", action="store_true", help="Install MCP client configuration"
     )
     parser.add_argument(
         "--uninstall",
         action="store_true",
-        help="Uninstall the MCP Server and IDA plugin",
-    )
-    parser.add_argument(
-        "--allow-ida-free",
-        action="store_true",
-        help="Allow installation despite IDA Free being installed",
+        help="Uninstall MCP client configuration",
     )
     parser.add_argument(
         "--transport",
@@ -915,12 +781,10 @@ def main():
         return
 
     if args.install:
-        install_ida_plugin(allow_ida_free=args.allow_ida_free)
         install_mcp_servers(stdio=(args.transport == "stdio"))
         return
 
     if args.uninstall:
-        install_ida_plugin(uninstall=True, allow_ida_free=args.allow_ida_free)
         install_mcp_servers(uninstall=True)
         return
 

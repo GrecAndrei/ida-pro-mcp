@@ -76,7 +76,6 @@ Auto-generated from wiki file structure.
 
 - [firmware_view](tools/firmware_view.md)
 
-- [fixups](tools/fixups.md)
 
 - [funcs](tools/funcs.md)
 

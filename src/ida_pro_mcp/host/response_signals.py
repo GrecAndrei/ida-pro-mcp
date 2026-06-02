@@ -239,7 +239,7 @@ def auto_blackboard_write(
             hypotheses = generate_hypotheses(tool, action, result, addr, behavior_tags)
             if hypotheses:
                 try:
-                    from ida_pro_mcp.ida_mcp.tools.blackboard import BlackboardStore
+                    from .blackboard_store import BlackboardStore
                     store = BlackboardStore()
                     for hyp in hypotheses:
                         store.write(
