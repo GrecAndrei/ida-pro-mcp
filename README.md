@@ -335,7 +335,7 @@ For a complete phase matrix, see `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`.
 
 The server keeps a **canonical** tool surface and preserves compatibility aliases for older clients.
 
-- Canonical tool names are listed in `src/ida_pro_mcp/host/schemas.py` under `TOOLS` (67 tools total).
+- Canonical tool names are listed in `src/ida_pro_mcp/host/schemas_data.py` under `TOOLS` (67 tools total), and re-exported by `schemas.py`.
 - Compatibility aliases are listed under `TOOL_ALIASES` and resolve before dispatch.
 - Alias names are not advertised in `tools/list` unless intentionally promoted.
 
@@ -413,7 +413,7 @@ Powers the `_nudge` field in every response.
 
 ### Additional ML components
 
-Legacy `memrl`, `turboquant`, and `bridgerag` tool names were removed from the public surface.
+Legacy `memrl`, `turboquant`, and `bridgerag` tool names were removed from the canonical `TOOLS` registry/tools-list surface, even though some internal legacy references remain.
 
 Tool surface:
 
