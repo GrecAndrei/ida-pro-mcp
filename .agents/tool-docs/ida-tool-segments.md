@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge.
+List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge, fixup_list, fixup_get, fixup_add, fixup_delete.
 
 ## Actions
 - `list` (read/discovery)
@@ -21,6 +21,10 @@ List, create, modify, and analyze binary segments and their permissions/attribut
 - `find_data` (tool-specific)
 - `compare` (tool-specific)
 - `merge` (tool-specific)
+- `fixup_list` (tool-specific)
+- `fixup_get` (tool-specific)
+- `fixup_add` (tool-specific)
+- `fixup_delete` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -36,7 +40,7 @@ List, create, modify, and analyze binary segments and their permissions/attribut
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge`
+- `action`: `string` - allowed_count: `16`
 - `attr`: `string`
 - `count`: `integer`
 - `end`: `string`
