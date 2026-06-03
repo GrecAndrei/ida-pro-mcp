@@ -1148,6 +1148,24 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 return make_error(MCPError.INVALID_ARGS, "session_id required")
             context = str(args.get("context") or "")
             return self.session_mgr.suggest_strategy(sid, context=context)
+        if action == "suggest_triage":
+            sid, sid_err = _sid_arg()
+            if sid_err:
+                return sid_err
+            if not sid:
+                return make_error(MCPError.INVALID_ARGS, "session_id required")
+            context = args.get("context")
+            if context is not None:
+                context = str(context)
+            limit = args.get("limit")
+            if limit is not None:
+                try:
+                    limit = int(limit)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "limit must be an integer")
+            else:
+                limit = 5
+            return self.session_mgr.suggest_triage(sid, context=context, limit=limit)
         if action == "log_activity":
             sid, sid_err = _sid_arg()
             if sid_err:

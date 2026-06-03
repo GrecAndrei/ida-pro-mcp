@@ -669,6 +669,37 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 "bootstrap_initialized": bool(bootstrap),
             }
 
+    def suggest_triage(
+        self,
+        sid: str,
+        context: Optional[str] = None,
+        limit: int = 5,
+    ) -> dict:
+        """Rank and suggest target functions for active triage based on entropy and novelty."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            idb_path = session.idb_path
+            if not idb_path:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "No active IDB path associated with this session. Ingest a binary first.",
+                )
+
+            from .intelligence.entropy import FunctionEntropyCalculator
+            calc = FunctionEntropyCalculator()
+            suggestions = calc.compute_triage_suggestions(
+                idb_path, context=context, limit=limit
+            )
+            return {
+                "ok": True,
+                "session_id": sid,
+                "context": context,
+                "limit": limit,
+                "suggestions": suggestions,
+            }
+
     # ====================================================================
     # ACTIVITY LOG + DEAD-END DETECTION
     # ====================================================================
