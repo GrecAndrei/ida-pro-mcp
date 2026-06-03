@@ -124,7 +124,7 @@ class AutoNudge:
                     self._search_cache[key] = self._search_cache[key][-self._max_cache:]
 
     def compute_nudge(self, idb: str, tool: str, action: str, response: dict,
-                      request_args: Optional[dict] = None) -> Optional[dict]:
+                      request_args: Optional[dict] = None, execute_tool_fn: Any = None) -> Optional[dict]:
         """
         Compute the _nudge field for a tool response.
         
@@ -148,8 +148,8 @@ class AutoNudge:
                 nudge.setdefault("resolved_addresses", {})[end_val] = hex(resolved)
 
         # 2. Detect rip-relative expressions in decompiled pseudocode
+        pseudocode = response.get("pseudocode", "") or response.get("output", "")
         if action in ("decompile", "semantic_decompile"):
-            pseudocode = response.get("pseudocode", "") or response.get("output", "")
             if isinstance(pseudocode, str):
                 rip_exprs = detect_rip_relative(pseudocode)
                 if rip_exprs:
@@ -198,6 +198,34 @@ class AutoNudge:
             if total_analyzed > 0 and total_analyzed % 10 == 0:
                 nudge["progress_note"] = f"You have decompiled {total_analyzed} functions. Check progress with session.dashboard()."
 
+        # 6. Integrated Predictive Prefetching Suite (8 Core Strategies)
+        prefetch_data = {}
+        if execute_tool_fn:
+            if addr_val:
+                try:
+                    # Resolve deep contextual insights from IDA using our new prefetch_context tool
+                    prefetch_res = execute_tool_fn("trace_analysis", {
+                        "action": "prefetch_context",
+                        "addr": addr_val
+                    })
+                    if isinstance(prefetch_res, dict) and prefetch_res.get("ok"):
+                        prefetch_data["resolved_globals"] = prefetch_res.get("resolved_globals", {})
+                        prefetch_data["resolved_pointers"] = prefetch_res.get("resolved_pointers", {})
+                        prefetch_data["virtual_calls"] = prefetch_res.get("virtual_calls", [])
+                        prefetch_data["callee_prototypes"] = prefetch_res.get("callee_prototypes", {})
+                        prefetch_data["small_callees"] = prefetch_res.get("small_callees", {})
+                        prefetch_data["vtables_and_structs"] = prefetch_res.get("vtables_and_structs", [])
+                        prefetch_data["vtable_layouts"] = prefetch_res.get("vtable_layouts", [])
+                        prefetch_data["struct_definitions"] = prefetch_res.get("struct_definitions", {})
+                        prefetch_data["argument_dereferences"] = prefetch_res.get("argument_dereferences", {})
+                        prefetch_data["emulation_insights"] = prefetch_res.get("emulation_insights", {})
+                        prefetch_data["cfg_neighborhood"] = prefetch_res.get("cfg_neighborhood", {})
+                except Exception:
+                    pass
+        
+        if prefetch_data:
+            nudge["prefetch"] = prefetch_data
+
         return nudge if nudge else None
 
 
@@ -205,9 +233,9 @@ class AutoNudge:
 _auto_nudge = AutoNudge()
 
 
-def get_nudge(idb: str, tool: str, action: str, response: dict, request_args: Optional[dict] = None) -> Optional[dict]:
+def get_nudge(idb: str, tool: str, action: str, response: dict, request_args: Optional[dict] = None, execute_tool_fn: Any = None) -> Optional[dict]:
     """Public API for auto-nudge injection."""
-    return _auto_nudge.compute_nudge(idb, tool, action, response, request_args)
+    return _auto_nudge.compute_nudge(idb, tool, action, response, request_args, execute_tool_fn)
 
 
 def record_tool_call(idb: str, tool: str, action: str, addr: Optional[str] = None, query: Optional[str] = None):

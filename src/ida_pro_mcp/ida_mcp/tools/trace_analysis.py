@@ -39,6 +39,7 @@ def trace_analysis(
             "decrypt_strings",
             "eval_expr",
             "deobfuscate_emulate",
+            "prefetch_context",
         ],
         "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis|get|clear|set_options|static_trace|decrypt_strings|eval_expr|deobfuscate_emulate",
     ],
@@ -993,10 +994,31 @@ def trace_analysis(
                 "unique_addresses": len(set(trace_list)),
             }
 
-        elif action in ("get", "clear", "set_options", "static_trace", "decrypt_strings", "eval_expr"):
-            return _trace_analysis_merged_dispatch(action, kwargs)
-        elif action == "deobfuscate_emulate":
-            return _trace_analysis_merged_dispatch(action, kwargs)
+        elif action in ("get", "clear", "set_options", "static_trace", "decrypt_strings", "eval_expr", "deobfuscate_emulate", "prefetch_context"):
+            full_args = dict(kwargs)
+            if addr is not None:
+                full_args["addr"] = addr
+            if path is not None:
+                full_args["path"] = path
+            if count is not None:
+                full_args["count"] = count
+            if enable_insn is not None:
+                full_args["enable_insn"] = enable_insn
+            if enable_func is not None:
+                full_args["enable_func"] = enable_func
+            if enable_bblk is not None:
+                full_args["enable_bblk"] = enable_bblk
+            if max_steps is not None:
+                full_args["max_steps"] = max_steps
+            if follow_calls is not None:
+                full_args["follow_calls"] = follow_calls
+            if max_depth is not None:
+                full_args["max_depth"] = max_depth
+            if include_blocks is not None:
+                full_args["include_blocks"] = include_blocks
+            if expr is not None:
+                full_args["expr"] = expr
+            return _trace_analysis_merged_dispatch(action, full_args)
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
@@ -1280,6 +1302,507 @@ def _static_trace_eval_expr(addr: Optional[str], expr: Optional[str]) -> dict:
     }
 
 
+def _prefetch_function_context(ea):
+    import idc
+    import idautils
+    import ida_funcs
+    import ida_bytes
+    import ida_typeinf
+    import ida_segment
+    import idaapi
+    import re
+    
+    func = ida_funcs.get_func(ea)
+    if not func:
+        return {"error": "Invalid function address"}
+        
+    func_start = func.start_ea
+    func_end = func.end_ea
+    
+    # Demangling helper for better readability
+    def _get_demangled_name(address):
+        name = idc.get_func_name(address) or idc.get_name(address)
+        if not name:
+            return ""
+        demangled = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN))
+        return demangled or name
+
+    # VTable Layout Dumper helper
+    def _dump_vtable_layout(class_name):
+        names_to_try = [
+            f"vtable for {class_name}",
+            f"{class_name}::vftable",
+            f"??_7{class_name}@@6B@",
+        ]
+        names_to_try.append(f"_ZTV{len(class_name)}{class_name}")
+        
+        vtable_ea = None
+        vtable_name = None
+        for name in names_to_try:
+            val_ea = idc.get_name_ea(idc.BADADDR, name)
+            if val_ea != idc.BADADDR:
+                vtable_ea = val_ea
+                vtable_name = name
+                break
+                
+        if vtable_ea is None:
+            for val_ea, name in idautils.Names():
+                if class_name in name and ("vftable" in name.lower() or "vtable" in name.lower() or name.startswith("_ZTV") or name.startswith("??_7")):
+                    vtable_ea = val_ea
+                    vtable_name = name
+                    break
+                    
+        if vtable_ea is None or vtable_ea == idc.BADADDR:
+            return None
+            
+        methods = []
+        curr_ptr = vtable_ea
+        for i in range(64):
+            ptr = ida_bytes.get_qword(curr_ptr)
+            if ptr == idc.BADADDR or ptr == 0:
+                ptr = ida_bytes.get_dword(curr_ptr)
+                if ptr == idc.BADADDR or ptr == 0:
+                    break
+            
+            func_name = idc.get_func_name(ptr)
+            if not func_name:
+                func_name = idc.get_name(ptr) or ""
+                
+            if not func_name and i > 0:
+                break
+                
+            demangled_fn = idc.demangle_name(func_name, idc.get_inf_attr(idc.INF_SHORT_DN)) if func_name else ""
+            methods.append({
+                "offset": i * 8,
+                "offset_hex": hex(i * 8),
+                "address": hex(ptr),
+                "name": func_name or "unknown_method",
+                "demangled_name": demangled_fn or func_name or "unknown_method"
+            })
+            curr_ptr += 8
+            
+        return {
+            "class_name": class_name,
+            "vtable_symbol": vtable_name,
+            "vtable_address": hex(vtable_ea),
+            "methods": methods
+        }
+
+    # Structure Definition Dumper helper
+    def _get_struct_definition(struct_name):
+        from unittest.mock import MagicMock
+        try:
+            import ida_struct
+            import ida_typeinf
+        except ImportError:
+            return None
+            
+        clean_name = struct_name
+        if not isinstance(clean_name, str):
+            return None
+        if clean_name.startswith("struct "):
+            clean_name = clean_name[7:]
+        elif clean_name.startswith("class "):
+            clean_name = clean_name[6:]
+        if not clean_name:
+            return None
+            
+        try:
+            # Try local struct definitions first
+            struct_id = ida_struct.get_struc_id(clean_name)
+            if struct_id != idc.BADADDR and isinstance(struct_id, int):
+                s = ida_struct.get_struc(struct_id)
+                if s and not isinstance(s, MagicMock):
+                    members = []
+                    offset = 0
+                    total_size = ida_struct.get_struc_size(s)
+                    if isinstance(total_size, int):
+                        while offset < total_size:
+                            member = ida_struct.get_member(s, offset)
+                            if member and not isinstance(member, MagicMock):
+                                m_name = ida_struct.get_member_name(member.id) or ""
+                                m_size = ida_struct.get_member_size(member)
+                                m_offset = member.soff
+                                if isinstance(m_offset, int) and isinstance(m_size, int):
+                                    tinfo = ida_typeinf.tinfo_t()
+                                    m_type = ""
+                                    if ida_struct.get_member_tinfo(tinfo, member):
+                                        m_type = str(tinfo)
+                                    members.append({
+                                        "name": str(m_name),
+                                        "offset": m_offset,
+                                        "offset_hex": hex(m_offset),
+                                        "size": m_size,
+                                        "type": str(m_type) or "unknown"
+                                    })
+                                    offset += m_size
+                                else:
+                                    offset += 1
+                            else:
+                                offset += 1
+                        return {
+                            "name": clean_name,
+                            "size": total_size,
+                            "members": members
+                        }
+        except Exception:
+            pass
+            
+        try:
+            # Try type info library (TIL)
+            tif = ida_typeinf.tinfo_t()
+            if tif.get_named_type(idaapi.get_idati(), clean_name):
+                if tif.is_udt():
+                    udt = ida_typeinf.udt_type_data_t()
+                    if tif.get_udt_details(udt):
+                        members = []
+                        for m in udt:
+                            if not isinstance(m, MagicMock):
+                                members.append({
+                                    "name": str(m.name),
+                                    "offset": m.offset // 8,
+                                    "offset_hex": hex(m.offset // 8),
+                                    "size": m.size // 8,
+                                    "type": str(m.type)
+                                })
+                        return {
+                            "name": clean_name,
+                            "size": tif.get_size(),
+                            "members": members
+                        }
+        except Exception:
+            pass
+        return None
+
+    # 1. Callee Prototypes & Signatures
+    callee_prototypes = {}
+    curr = func_start
+    while curr < func_end:
+        for xref in idautils.XrefsFrom(curr):
+            if xref.iscode and xref.type in (idaapi.fl_CN, idaapi.fl_CF):
+                callee_ea = xref.to
+                name = idc.get_func_name(callee_ea)
+                if name:
+                    demangled_name = _get_demangled_name(callee_ea)
+                    tinfo = ida_typeinf.tinfo_t()
+                    proto = ""
+                    if ida_typeinf.get_tinfo(tinfo, callee_ea):
+                        proto = str(tinfo)
+                    else:
+                        proto = idc.get_type(callee_ea) or ""
+                    callee_prototypes[hex(callee_ea)] = {
+                        "name": name,
+                        "demangled_name": demangled_name,
+                        "prototype": proto or "void unknown()"
+                    }
+        curr = idc.next_head(curr, func_end)
+
+    # 2. Scanned Globals & Strings
+    resolved_globals = {}
+    curr = func_start
+    import ida_ua
+    while curr < func_end:
+        insn = ida_ua.insn_t()
+        if ida_ua.decode_insn(insn, curr) > 0:
+            for op in insn.ops:
+                if op.type == ida_ua.o_mem:
+                    mem_ea = op.addr
+                    name = idc.get_name(mem_ea)
+                    if name and mem_ea != idaapi.BADADDR:
+                        demangled_name = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) or name
+                        val = 0
+                        val_str = ""
+                        s = idc.get_strlit_contents(mem_ea)
+                        if s:
+                            if isinstance(s, bytes):
+                                val_str = s.decode("utf-8", errors="replace")
+                            else:
+                                val_str = str(s)
+                        else:
+                            val = ida_bytes.get_qword(mem_ea)
+                            if val == idaapi.BADADDR or val == 0:
+                                val = ida_bytes.get_dword(mem_ea)
+                        
+                        resolved_globals[hex(mem_ea)] = {
+                            "name": name,
+                            "demangled_name": demangled_name,
+                            "type": idc.get_type(mem_ea) or "",
+                            "value_hex": hex(val) if not val_str else None,
+                            "string_value": val_str or None,
+                        }
+        curr = idc.next_head(curr, func_end)
+
+    # 3. Virtual calls & structure offsets (Ast-based if decompiler is available)
+    vtables_and_structs = []
+    try:
+        import ida_hexrays
+        import ida_lines
+        from unittest.mock import MagicMock
+        
+        cfunc = ida_hexrays.decompile(func_start)
+        if cfunc and not isinstance(cfunc, MagicMock):
+            class StructVisitor(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                    self.accesses = []
+                
+                def visit_expr(self, e):
+                    if e.op in (ida_hexrays.cot_memptr, ida_hexrays.cot_memref):
+                        ea = int(getattr(e, 'ea', 0) or 0)
+                        offset = getattr(e, 'm', None)
+                        if offset is not None and isinstance(offset, int):
+                            struct_type = ""
+                            member_name = ""
+                            try:
+                                tif = e.x.type
+                                if e.op == ida_hexrays.cot_memptr and tif.is_ptr():
+                                    tif = tif.get_pointed_object()
+                                struct_type = tif.get_type_name() or ""
+                                
+                                # Resolve member name using type info details if possible
+                                if tif.is_udt():
+                                    udt = ida_typeinf.udt_type_data_t()
+                                    if tif.get_udt_details(udt):
+                                        for m in udt:
+                                            if m.offset // 8 == offset:
+                                                member_name = m.name
+                                                break
+                                                
+                                # Fallback to local struct database
+                                if not member_name and struct_type:
+                                    struct_id = ida_struct.get_struc_id(struct_type)
+                                    if struct_id != idc.BADADDR:
+                                        s = ida_struct.get_struc(struct_id)
+                                        if s:
+                                            m = ida_struct.get_member(s, offset)
+                                            if m:
+                                                member_name = ida_struct.get_member_name(m.id) or ""
+                            except Exception:
+                                pass
+                            
+                            expr_str = ""
+                            try:
+                                expr_str = ida_lines.tag_remove(e.print1(None)) or ""
+                            except Exception:
+                                pass
+                                
+                            # Fallback to string heuristic if APIs didn't resolve it
+                            if not member_name and expr_str:
+                                if "->" in expr_str:
+                                    member_name = expr_str.split("->")[-1].strip()
+                                elif "." in expr_str:
+                                    member_name = expr_str.split(".")[-1].strip()
+                            
+                            self.accesses.append({
+                                "ea": hex(ea) if ea else None,
+                                "struct_type": struct_type,
+                                "member_name": member_name,
+                                "offset": offset,
+                                "offset_hex": hex(offset),
+                                "expression": expr_str
+                            })
+                    return 0
+            
+            visitor = StructVisitor()
+            visitor.apply_to(cfunc.body, None)
+            vtables_and_structs = visitor.accesses
+    except Exception:
+        pass
+
+    if not vtables_and_structs:
+        # Refined disassembly fallback
+        curr = func_start
+        while curr < func_end:
+            dis = idc.generate_disasm_line(curr, 0)
+            if dis and ("[" in dis and "]" in dis):
+                match_struct = re.search(r'\[([a-z0-9]+)\s*\+\s*([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\]', dis, re.IGNORECASE)
+                if match_struct:
+                    reg, struct_name, member_name = match_struct.groups()
+                    if reg.lower() not in ("rsp", "esp", "rbp", "ebp"):
+                        vtables_and_structs.append({
+                            "ea": hex(curr),
+                            "instruction": dis,
+                            "struct_type": struct_name,
+                            "member_name": member_name,
+                            "offset": None,
+                            "offset_hex": None,
+                        })
+                else:
+                    match_offset = re.search(r'\[([a-z0-9]+)\s*\+\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+h|[0-9]+)\]', dis, re.IGNORECASE)
+                    if match_offset:
+                        reg, offset_str = match_offset.groups()
+                        if reg.lower() not in ("rsp", "esp", "rbp", "ebp"):
+                            try:
+                                offset = int(offset_str.replace('h', ''), 16) if 'h' in offset_str else int(offset_str, 0)
+                                vtables_and_structs.append({
+                                    "ea": hex(curr),
+                                    "instruction": dis,
+                                    "struct_type": "",
+                                    "member_name": "",
+                                    "offset": offset,
+                                    "offset_hex": hex(offset)
+                                })
+                            except Exception:
+                                pass
+            curr = idc.next_head(curr, func_end)
+
+    # Dump VTable Layouts and Struct Definitions for accessed structures/classes
+    vtable_layouts = []
+    struct_definitions = {}
+    seen_structs = set()
+    for item in vtables_and_structs:
+        s_type = item.get("struct_type")
+        if s_type:
+            if s_type.startswith("struct "):
+                s_type = s_type[7:]
+            elif s_type.startswith("class "):
+                s_type = s_type[6:]
+            if s_type and s_type not in seen_structs:
+                seen_structs.add(s_type)
+                layout = _dump_vtable_layout(s_type)
+                if layout:
+                    vtable_layouts.append(layout)
+                s_def = _get_struct_definition(s_type)
+                if s_def:
+                    struct_definitions[s_type] = s_def
+
+    # 4. Speculative Emulation
+    emulation_insights = {}
+    resolved_pointers = {}
+    virtual_calls = []
+    argument_dereferences = {}
+    try:
+        emu = TinyEmulator(func_start)
+        emu.setup_argument_pointers()
+        res = emu.speculative_explore(max_depth=50, max_paths=8)
+        emulation_insights = {
+            "opaque_predicates": res.get("opaque_predicates", {}),
+            "stack_strings": res.get("stack_strings", []),
+            "extracted_strings": res.get("extracted_strings", []),
+            "reachable_instructions": len(res.get("reachable_eas", [])),
+            "taint_log": res.get("taint_log", []),
+        }
+        virtual_calls = res.get("virtual_calls", [])
+        argument_dereferences = res.get("argument_dereferences", {})
+        
+        # Resolve dynamic pointer dereferences from emulation
+        for ip_val, ptr_ea, access_type in res.get("dereferenced_pointers", []):
+            if ptr_ea != idaapi.BADADDR:
+                name = idc.get_name(ptr_ea)
+                demangled_name = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) if name else ""
+                val = 0
+                val_str = ""
+                s = idc.get_strlit_contents(ptr_ea)
+                if s:
+                    if isinstance(s, bytes):
+                        val_str = s.decode("utf-8", errors="replace")
+                    else:
+                        val_str = str(s)
+                else:
+                    val = ida_bytes.get_qword(ptr_ea)
+                    if val == idaapi.BADADDR or val == 0:
+                        val = ida_bytes.get_dword(ptr_ea)
+                
+                resolved_pointers[hex(ptr_ea)] = {
+                    "dereferenced_at": hex(ip_val),
+                    "access": access_type,
+                    "name": name or "",
+                    "demangled_name": demangled_name or name or "",
+                    "type": idc.get_type(ptr_ea) or "",
+                    "value_hex": hex(val) if not val_str else None,
+                    "string_value": val_str or None,
+                }
+    except Exception as e:
+        emulation_insights = {"error": str(e)}
+
+    # 5. Call Graph Neighborhood
+    callers = []
+    callees = []
+    for xref in idautils.XrefsTo(func_start):
+        if xref.iscode:
+            caller_name = _get_demangled_name(xref.frm)
+            callers.append({"ea": hex(xref.frm), "name": caller_name or "unknown"})
+    for xref in idautils.XrefsFrom(func_start):
+        if xref.iscode:
+            callee_name = _get_demangled_name(xref.to)
+            callees.append({"ea": hex(xref.to), "name": callee_name or "unknown"})
+
+    # Inline decompiled or disassembled pseudocode of small callees to prevent roundtrips
+    small_callees = {}
+    try:
+        import ida_hexrays
+        from unittest.mock import MagicMock
+        for callee_hex, callee_info in callee_prototypes.items():
+            callee_ea = int(callee_hex, 16)
+            c_func = ida_funcs.get_func(callee_ea)
+            if c_func and not isinstance(c_func, MagicMock):
+                c_size = c_func.end_ea - c_func.start_ea
+                if isinstance(c_size, int) and c_size <= 256:
+                    decompiled = False
+                    try:
+                        cfunc = ida_hexrays.decompile(callee_ea)
+                        if cfunc and not isinstance(cfunc, MagicMock):
+                            lines = []
+                            for line in cfunc.get_pseudocode():
+                                lines.append(ida_lines.tag_remove(line.line))
+                            if len(lines) < 25:
+                                small_callees[callee_hex] = {
+                                    "name": callee_info.get("name") or "",
+                                    "demangled_name": callee_info.get("demangled_name") or "",
+                                    "type": "decompiled",
+                                    "code": "\n".join(lines)
+                                }
+                                decompiled = True
+                    except Exception:
+                        pass
+                    
+                    if not decompiled:
+                        try:
+                            inst_count = 0
+                            curr_inst = c_func.start_ea
+                            while curr_inst < c_func.end_ea:
+                                inst_count += 1
+                                curr_inst = idc.next_head(curr_inst, c_func.end_ea)
+                            if isinstance(inst_count, int) and inst_count < 15:
+                                disasm_lines = []
+                                curr_inst = c_func.start_ea
+                                while curr_inst < c_func.end_ea:
+                                    disasm_lines.append(f"{hex(curr_inst)}: {idc.generate_disasm_line(curr_inst, 0)}")
+                                    curr_inst = idc.next_head(curr_inst, c_func.end_ea)
+                                small_callees[callee_hex] = {
+                                    "name": callee_info.get("name") or "",
+                                    "demangled_name": callee_info.get("demangled_name") or "",
+                                    "type": "disassembly",
+                                    "code": "\n".join(disasm_lines)
+                                }
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "function_address": hex(func_start),
+        "name": _get_demangled_name(func_start),
+        "callee_prototypes": callee_prototypes,
+        "small_callees": small_callees,
+        "resolved_globals": resolved_globals,
+        "resolved_pointers": resolved_pointers,
+        "virtual_calls": virtual_calls,
+        "vtables_and_structs": vtables_and_structs[:10],
+        "vtable_layouts": vtable_layouts,
+        "struct_definitions": struct_definitions,
+        "argument_dereferences": argument_dereferences,
+        "emulation_insights": emulation_insights,
+        "cfg_neighborhood": {
+            "callers": callers[:5],
+            "callees": callees[:5]
+        }
+    }
+
+
+
+
 class TinyEmulator:
     def __init__(self, start_ea):
         import ida_funcs
@@ -1295,12 +1818,97 @@ class TinyEmulator:
         self.func = ida_funcs.get_func(start_ea)
         self.func_start = self.func.start_ea if self.func else start_ea
         self.func_end = self.func.end_ea if self.func else start_ea + 0x1000
+        
+        # Extended capabilities
+        self.tainted_regs = set()
+        self.tainted_mem = set()
+        self.taint_log = []
+        self.flags_tainted = False
+        self.stack_writes = {}
+        self.opaque_predicates = {}
+        self.dereferenced_pointers = set()
+        self.virtual_calls = []
+        self.arg_derefs = {}
+
+    def setup_argument_pointers(self):
+        # We assign dummy pointers in the range 0x10000000 - 0x60000000
+        # for standard x64 argument registers
+        self.regs['rdi'] = 0x10000000
+        self.regs['rsi'] = 0x20000000
+        self.regs['rdx'] = 0x30000000
+        self.regs['rcx'] = 0x40000000
+        self.regs['r8']  = 0x50000000
+        self.regs['r9']  = 0x60000000
+
+    def clone(self):
+        other = TinyEmulator(self.ip)
+        other.regs = dict(self.regs)
+        other.mem = dict(self.mem)
+        other.written_addrs = set(self.written_addrs)
+        other.func = self.func
+        other.func_start = self.func_start
+        other.func_end = self.func_end
+        other.tainted_regs = set(self.tainted_regs)
+        other.tainted_mem = set(self.tainted_mem)
+        other.taint_log = list(self.taint_log)
+        other.flags_tainted = self.flags_tainted
+        other.stack_writes = {k: list(v) if isinstance(v, list) else v for k, v in self.stack_writes.items()}
+        other.opaque_predicates = dict(self.opaque_predicates)
+        other.dereferenced_pointers = set(self.dereferenced_pointers)
+        other.virtual_calls = list(self.virtual_calls)
+        other.arg_derefs = {k: list(v) for k, v in self.arg_derefs.items()}
+        return other
+
+    def _normalize_reg_name(self, name):
+        name = name.lower().strip()
+        mapping32 = {
+            'eax': 'rax', 'ebx': 'rbx', 'ecx': 'rcx', 'edx': 'rdx',
+            'esi': 'rsi', 'edi': 'rdi', 'ebp': 'rbp', 'esp': 'rsp',
+            'r8d': 'r8', 'r9d': 'r9', 'r10d': 'r10', 'r11d': 'r11', 'r12d': 'r12', 'r13d': 'r13', 'r14d': 'r14', 'r15d': 'r15'
+        }
+        mapping16 = {
+            'ax': 'rax', 'bx': 'rbx', 'cx': 'rcx', 'dx': 'rdx',
+            'si': 'rsi', 'di': 'rdi', 'bp': 'rbp', 'sp': 'rsp'
+        }
+        mapping8 = {
+            'al': 'rax', 'bl': 'rbx', 'cl': 'rcx', 'dl': 'rdx',
+            'r8b': 'r8', 'r9b': 'r9', 'r10b': 'r10', 'r11b': 'r11', 'r12b': 'r12', 'r13b': 'r13', 'r14b': 'r14', 'r15b': 'r15'
+        }
+        if name in mapping32:
+            return mapping32[name]
+        if name in mapping16:
+            return mapping16[name]
+        if name in mapping8:
+            return mapping8[name]
+        return name
+
+    def is_reg_tainted(self, name):
+        return self._normalize_reg_name(name) in self.tainted_regs
+
+    def set_reg_taint(self, name, state=True):
+        norm = self._normalize_reg_name(name)
+        if state:
+            self.tainted_regs.add(norm)
+        else:
+            self.tainted_regs.discard(norm)
+
+    def is_mem_tainted(self, addr, size=1):
+        for i in range(size):
+            if (addr + i) in self.tainted_mem:
+                return True
+        return False
+
+    def set_mem_taint(self, addr, size=1, state=True):
+        for i in range(size):
+            if state:
+                self.tainted_mem.add(addr + i)
+            else:
+                self.tainted_mem.discard(addr + i)
 
     def get_reg(self, name):
         name = name.lower()
         if name in self.regs:
             return self.regs[name]
-        # Map 32-bit, 16-bit, 8-bit registers to their 64-bit parents
         mapping32 = {
             'eax': 'rax', 'ebx': 'rbx', 'ecx': 'rcx', 'edx': 'rdx',
             'esi': 'rsi', 'edi': 'rdi', 'ebp': 'rbp', 'esp': 'rsp',
@@ -1358,7 +1966,23 @@ class TinyEmulator:
 
     def read_mem(self, addr, size=1):
         import ida_bytes
+        import idc
         out = 0
+        
+        # Check if this is a read from one of our dummy argument pointers
+        if 0x10000000 <= addr < 0x70000000:
+            reg_idx = addr // 0x10000000
+            reg_names = {1: "rdi", 2: "rsi", 3: "rdx", 4: "rcx", 5: "r8", 6: "r9"}
+            reg_name = reg_names.get(reg_idx, "unknown")
+            offset = addr % 0x10000000
+            self.arg_derefs.setdefault(reg_name, []).append({
+                "offset": offset,
+                "offset_hex": hex(offset),
+                "size": size,
+                "access": "read"
+            })
+            return 0
+            
         for i in range(size):
             b = 0
             if (addr + i) in self.mem:
@@ -1366,20 +1990,71 @@ class TinyEmulator:
             else:
                 b = ida_bytes.get_byte(addr + i)
             out |= (b << (i * 8))
+
+        # Track dereferenced pointers (non-stack, non-zero)
+        if not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+            self.dereferenced_pointers.add((self.ip, addr, "read"))
+
+        # Track C++ virtual calls (if reading a pointer from a vtable)
+        if size == 8 and not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+            vtable_base = None
+            vtable_name = None
+            for offset_check in range(0, 512, 8):
+                check_ea = addr - offset_check
+                name = idc.get_name(check_ea)
+                if name and ("vftable" in name.lower() or "vtable" in name.lower() or name.startswith("_ZTV") or name.startswith("??_7")):
+                    vtable_base = check_ea
+                    vtable_name = name
+                    break
+            if vtable_base is not None:
+                vtable_offset = addr - vtable_base
+                target_name = idc.get_name(out) or ""
+                demangled = idc.demangle_name(target_name, idc.get_inf_attr(idc.INF_SHORT_DN)) if target_name else ""
+                self.virtual_calls.append({
+                    "vtable_name": vtable_name,
+                    "vtable_offset": vtable_offset,
+                    "vtable_offset_hex": hex(vtable_offset),
+                    "target_address": hex(out),
+                    "target_name": target_name,
+                    "demangled_target_name": demangled or target_name,
+                    "target_type": idc.get_type(out) or ""
+                })
         return out
 
     def write_mem(self, addr, val, size=1):
+        # Check if this is a write to one of our dummy argument pointers
+        if 0x10000000 <= addr < 0x70000000:
+            reg_idx = addr // 0x10000000
+            reg_names = {1: "rdi", 2: "rsi", 3: "rdx", 4: "rcx", 5: "r8", 6: "r9"}
+            reg_name = reg_names.get(reg_idx, "unknown")
+            offset = addr % 0x10000000
+            self.arg_derefs.setdefault(reg_name, []).append({
+                "offset": offset,
+                "offset_hex": hex(offset),
+                "size": size,
+                "access": "write"
+            })
+            return
+
         for i in range(size):
             b = (val >> (i * 8)) & 0xff
             self.mem[addr + i] = b
             self.written_addrs.add(addr + i)
+            # Track stack writes
+            if 0x7f000000 <= addr <= 0x80000000:
+                offset = addr - 0x7ffffff0
+                self.stack_writes[offset + i] = (self.ip, b)
+
+        # Track dereferenced pointers (non-stack, non-zero)
+        if not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+            self.dereferenced_pointers.add((self.ip, addr, "write"))
 
     def parse_op(self, insn, op_idx):
         import ida_ua
         import idc
         op = insn.ops[op_idx]
         if op.type == ida_ua.o_reg:
-            return self.get_reg(insn.op_t_to_reg(op) or idc.print_operand(insn.ea, op_idx))
+            return self.get_reg(idc.print_operand(insn.ea, op_idx))
         elif op.type == ida_ua.o_imm:
             return op.value
         elif op.type in (ida_ua.o_phrase, ida_ua.o_displ):
@@ -1391,6 +2066,30 @@ class TinyEmulator:
         elif op.type == ida_ua.o_mem:
             return op.addr
         return 0
+
+    def parse_op_taint(self, insn, op_idx):
+        import ida_ua
+        import idc
+        op = insn.ops[op_idx]
+        if op.type == ida_ua.o_reg:
+            reg_name = idc.print_operand(insn.ea, op_idx)
+            return self.is_reg_tainted(reg_name)
+        elif op.type == ida_ua.o_imm:
+            return False
+        elif op.type in (ida_ua.o_phrase, ida_ua.o_displ):
+            op_str = idc.print_operand(insn.ea, op_idx)
+            addr = self.parse_address_expr(op_str)
+            addr_tainted = False
+            for r in self.regs:
+                if r in op_str.lower() and self.is_reg_tainted(r):
+                    addr_tainted = True
+                    break
+            size = self.dtype_size(op.dtype)
+            return addr_tainted or self.is_mem_tainted(addr, size)
+        elif op.type == ida_ua.o_mem:
+            size = self.dtype_size(op.dtype)
+            return self.is_mem_tainted(op.addr, size)
+        return False
 
     def parse_address_expr(self, expr_str):
         expr_str = expr_str.lower()
@@ -1458,53 +2157,95 @@ class TinyEmulator:
         if mnem in ("mov", "movzx", "movsx"):
             op0_str = idc.print_operand(self.ip, 0)
             val1 = self.parse_op(insn, 1)
+            t1 = self.parse_op_taint(insn, 1)
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
-                size = insn.ops[0].dtype
-                bytes_size = self.dtype_size(size)
-                self.write_mem(addr, val1, bytes_size)
+                size = self.dtype_size(insn.ops[0].dtype)
+                self.write_mem(addr, val1, size)
+                self.set_mem_taint(addr, size, t1)
+                if t1:
+                    self.taint_log.append((self.ip, f"Taint stored to mem address {hex(addr)}"))
             else:
                 self.set_reg(op0_str, val1)
+                self.set_reg_taint(op0_str, t1)
+                if t1:
+                    self.taint_log.append((self.ip, f"Taint moved to register {op0_str}"))
                 
         elif mnem == "lea":
             op0_str = idc.print_operand(self.ip, 0)
             addr = self.parse_op(insn, 1)
+            # Check taint of any reg used in address computation
+            t1 = False
+            op1_str = idc.print_operand(self.ip, 1)
+            for r in self.regs:
+                if r in op1_str.lower() and self.is_reg_tainted(r):
+                    t1 = True
+                    break
             self.set_reg(op0_str, addr)
+            self.set_reg_taint(op0_str, t1)
+            if t1:
+                self.taint_log.append((self.ip, f"Taint loaded to register {op0_str} via LEA"))
             
         elif mnem == "xor":
             op0_str = idc.print_operand(self.ip, 0)
+            op1_str = idc.print_operand(self.ip, 1)
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1)
             res = val0 ^ val1
+            
+            t0 = self.parse_op_taint(insn, 0)
+            t1 = self.parse_op_taint(insn, 1)
+            t_res = (t0 or t1) if op0_str != op1_str else False # xor reg, reg clears taint
+            
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
-                self.write_mem(addr, res, self.dtype_size(insn.ops[0].dtype))
+                size = self.dtype_size(insn.ops[0].dtype)
+                self.write_mem(addr, res, size)
+                self.set_mem_taint(addr, size, t_res)
             else:
                 self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.flags_tainted = t_res
             
         elif mnem in ("add", "sub"):
             op0_str = idc.print_operand(self.ip, 0)
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1)
             res = (val0 + val1) if mnem == "add" else (val0 - val1)
+            
+            t0 = self.parse_op_taint(insn, 0)
+            t1 = self.parse_op_taint(insn, 1)
+            t_res = t0 or t1
+            
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
-                self.write_mem(addr, res, self.dtype_size(insn.ops[0].dtype))
+                size = self.dtype_size(insn.ops[0].dtype)
+                self.write_mem(addr, res, size)
+                self.set_mem_taint(addr, size, t_res)
             else:
                 self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.flags_tainted = t_res
             
         elif mnem in ("inc", "dec"):
             op0_str = idc.print_operand(self.ip, 0)
             val0 = self.parse_op(insn, 0)
             res = (val0 + 1) if mnem == "inc" else (val0 - 1)
+            
+            t_res = self.parse_op_taint(insn, 0)
+            
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
-                self.write_mem(addr, res, self.dtype_size(insn.ops[0].dtype))
+                size = self.dtype_size(insn.ops[0].dtype)
+                self.write_mem(addr, res, size)
+                self.set_mem_taint(addr, size, t_res)
             else:
                 self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.flags_tainted = t_res
             
         elif mnem == "cmp":
             val0 = self.parse_op(insn, 0)
@@ -1512,12 +2253,126 @@ class TinyEmulator:
             diff = val0 - val1
             self.regs['zf'] = 1 if diff == 0 else 0
             self.regs['sf'] = 1 if diff < 0 else 0
+            self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
             
         elif mnem == "test":
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1)
             res = val0 & val1
             self.regs['zf'] = 1 if res == 0 else 0
+            self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
+
+        elif mnem == "push":
+            val = self.parse_op(insn, 0)
+            t = self.parse_op_taint(insn, 0)
+            rsp = self.get_reg("rsp") - 8
+            self.set_reg("rsp", rsp)
+            self.write_mem(rsp, val, 8)
+            self.set_mem_taint(rsp, 8, t)
+            if t:
+                self.taint_log.append((self.ip, f"Taint pushed to stack [rsp]: {hex(rsp)}"))
+
+        elif mnem == "pop":
+            op0_str = idc.print_operand(self.ip, 0)
+            rsp = self.get_reg("rsp")
+            val = self.read_mem(rsp, 8)
+            t = self.is_mem_tainted(rsp, 8)
+            self.set_reg("rsp", rsp + 8)
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                size = self.dtype_size(insn.ops[0].dtype)
+                self.write_mem(addr, val, size)
+                self.set_mem_taint(addr, size, t)
+            else:
+                self.set_reg(op0_str, val)
+                self.set_reg_taint(op0_str, t)
+            if t:
+                self.taint_log.append((self.ip, f"Taint popped from stack [rsp] ({hex(rsp)}) to {op0_str}"))
+
+        elif mnem == "call":
+            # Propagate taint to RAX if any of the common argument registers is tainted
+            arg_regs = ["rcx", "rdx", "r8", "r9", "rdi", "rsi"]
+            any_tainted = any(self.is_reg_tainted(r) for r in arg_regs)
+            self.set_reg("rax", 0)  # Reset RAX or keep dummy
+            self.set_reg_taint("rax", any_tainted)
+            if any_tainted:
+                self.taint_log.append((self.ip, "Taint propagated to RAX via CALL return value"))
+
+        elif mnem in ("and", "or"):
+            op0_str = idc.print_operand(self.ip, 0)
+            val0 = self.parse_op(insn, 0)
+            val1 = self.parse_op(insn, 1)
+            res = (val0 & val1) if mnem == "and" else (val0 | val1)
+            t0 = self.parse_op_taint(insn, 0)
+            t1 = self.parse_op_taint(insn, 1)
+            t_res = t0 or t1
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                size = self.dtype_size(insn.ops[0].dtype)
+                self.write_mem(addr, res, size)
+                self.set_mem_taint(addr, size, t_res)
+            else:
+                self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
+            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.flags_tainted = t_res
+
+        elif mnem in ("shl", "shr", "sar"):
+            op0_str = idc.print_operand(self.ip, 0)
+            val0 = self.parse_op(insn, 0)
+            val1 = self.parse_op(insn, 1) & 63
+            if mnem == "shl":
+                res = val0 << val1
+            elif mnem == "shr":
+                res = val0 >> val1
+            else:
+                if val0 & (1 << 63):
+                    res = (val0 >> val1) | (~(0xffffffffffffffff >> val1))
+                else:
+                    res = val0 >> val1
+            t_res = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                size = self.dtype_size(insn.ops[0].dtype)
+                self.write_mem(addr, res, size)
+                self.set_mem_taint(addr, size, t_res)
+            else:
+                self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
+            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.flags_tainted = t_res
+
+        elif mnem in ("imul", "mul"):
+            op0_str = idc.print_operand(self.ip, 0)
+            num_ops = 0
+            for op in insn.ops:
+                if op.type != 0:
+                    num_ops += 1
+            t_res = False
+            res = 0
+            if num_ops == 1:
+                val0 = self.get_reg("rax")
+                val1 = self.parse_op(insn, 0)
+                res = val0 * val1
+                t_res = self.is_reg_tainted("rax") or self.parse_op_taint(insn, 0)
+                self.set_reg("rax", res)
+                self.set_reg_taint("rax", t_res)
+            elif num_ops == 2:
+                val0 = self.parse_op(insn, 0)
+                val1 = self.parse_op(insn, 1)
+                res = val0 * val1
+                t_res = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
+                self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
+            elif num_ops == 3:
+                val1 = self.parse_op(insn, 1)
+                val2 = self.parse_op(insn, 2)
+                res = val1 * val2
+                t_res = self.parse_op_taint(insn, 1) or self.parse_op_taint(insn, 2)
+                self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
+            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.flags_tainted = t_res
             
         elif mnem in ("jmp", "je", "jne", "jz", "jnz", "jb", "jae"):
             target = self.parse_op(insn, 0)
@@ -1555,7 +2410,9 @@ class TinyEmulator:
             if not self.step():
                 break
             step_count += 1
-            
+        return self.get_memory_strings()
+
+    def get_memory_strings(self):
         extracted_strings = []
         current_str = []
         mem_keys = sorted(self.mem.keys())
@@ -1569,8 +2426,137 @@ class TinyEmulator:
                 current_str = []
         if len(current_str) >= 4:
             extracted_strings.append("".join(current_str))
-            
         return sorted(list(set(extracted_strings)))
+
+    def get_stack_strings(self):
+        extracted_strings = []
+        current_str = []
+        offsets = sorted(self.stack_writes.keys())
+        for off in offsets:
+            _, val = self.stack_writes[off]
+            if 32 <= val <= 126 or val in (9, 10, 13):
+                current_str.append(chr(val))
+            else:
+                if len(current_str) >= 4:
+                    extracted_strings.append("".join(current_str))
+                current_str = []
+        if len(current_str) >= 4:
+            extracted_strings.append("".join(current_str))
+        return sorted(list(set(extracted_strings)))
+
+    def speculative_explore(self, max_depth=100, max_paths=32):
+        import idc
+        import ida_ua
+        
+        paths = [self]
+        completed_paths = []
+        reachable_eas = set()
+        
+        step_count = 0
+        while paths and len(completed_paths) + len(paths) <= max_paths:
+            current_emu = paths.pop(0)
+            
+            for _ in range(max_depth):
+                ea = current_emu.ip
+                reachable_eas.add(ea)
+                
+                insn = ida_ua.insn_t()
+                if ida_ua.decode_insn(insn, ea) <= 0:
+                    completed_paths.append(current_emu)
+                    break
+                
+                mnem = idc.print_insn_mnem(ea).lower()
+                
+                if mnem in ("je", "jne", "jz", "jnz", "jb", "jae", "js", "jns", "jg", "jge", "jl", "jle"):
+                    target = current_emu.parse_op(insn, 0)
+                    next_ip = ea + insn.size
+                    
+                    if current_emu.flags_tainted:
+                        if current_emu.func_start <= target < current_emu.func_end:
+                            emu_taken = current_emu.clone()
+                            emu_taken.ip = target
+                            emu_taken.flags_tainted = False
+                            paths.append(emu_taken)
+                        
+                        emu_fallthrough = current_emu.clone()
+                        emu_fallthrough.ip = next_ip
+                        emu_fallthrough.flags_tainted = False
+                        paths.append(emu_fallthrough)
+                        
+                        current_emu.opaque_predicates[ea] = "symbolic_branch"
+                        break
+                    else:
+                        jump = False
+                        if mnem in ("je", "jz"):
+                            jump = (current_emu.regs['zf'] == 1)
+                        elif mnem in ("jne", "jnz"):
+                            jump = (current_emu.regs['zf'] == 0)
+                        elif mnem == "jb":
+                            jump = (current_emu.regs['sf'] != 0)
+                        elif mnem == "jae":
+                            jump = (current_emu.regs['sf'] == 0)
+                        else:
+                            jump = (current_emu.regs['zf'] == 1)
+                            
+                        current_emu.opaque_predicates[ea] = "always_taken" if jump else "always_fallthrough"
+                        
+                        if jump and current_emu.func_start <= target < current_emu.func_end:
+                            current_emu.ip = target
+                        else:
+                            current_emu.ip = next_ip
+                elif mnem in ("ret", "retn"):
+                    completed_paths.append(current_emu)
+                    break
+                else:
+                    if not current_emu.step():
+                        completed_paths.append(current_emu)
+                        break
+                
+                step_count += 1
+                if step_count > 5000:
+                    break
+            else:
+                completed_paths.append(current_emu)
+                
+        all_strings = set()
+        all_stack_strings = set()
+        all_taint_logs = []
+        merged_opaque_predicates = {}
+        merged_dereferenced_pointers = set()
+        merged_virtual_calls = []
+        seen_calls = set()
+        merged_arg_derefs = {}
+        
+        for emu in completed_paths + paths:
+            all_strings.update(emu.get_memory_strings())
+            all_stack_strings.update(emu.get_stack_strings())
+            for ea, desc in emu.taint_log:
+                all_taint_logs.append({"addr": hex(ea), "description": desc})
+            merged_opaque_predicates.update(emu.opaque_predicates)
+            merged_dereferenced_pointers.update(emu.dereferenced_pointers)
+            for vc in emu.virtual_calls:
+                call_key = (vc["vtable_name"], vc["vtable_offset"])
+                if call_key not in seen_calls:
+                    seen_calls.add(call_key)
+                    merged_virtual_calls.append(vc)
+            for reg, derefs in emu.arg_derefs.items():
+                seen_d = { (d["offset"], d["size"], d["access"]) for d in merged_arg_derefs.get(reg, []) }
+                for d in derefs:
+                    key = (d["offset"], d["size"], d["access"])
+                    if key not in seen_d:
+                        seen_d.add(key)
+                        merged_arg_derefs.setdefault(reg, []).append(d)
+            
+        return {
+            "reachable_eas": sorted([hex(x) for x in reachable_eas]),
+            "opaque_predicates": {hex(k): v for k, v in merged_opaque_predicates.items()},
+            "extracted_strings": sorted(list(all_strings)),
+            "stack_strings": sorted(list(all_stack_strings)),
+            "taint_log": all_taint_logs,
+            "dereferenced_pointers": sorted(list(merged_dereferenced_pointers)),
+            "virtual_calls": merged_virtual_calls,
+            "argument_dereferences": merged_arg_derefs,
+        }
 
 
 # ---- Dispatcher hook for the merged actions ----
@@ -1618,6 +2604,14 @@ def _trace_analysis_merged_dispatch(action, kwargs) -> dict:
         return _static_trace_decrypt_strings(ea)
     if action == "eval_expr":
         return _static_trace_eval_expr(kwargs.get("addr"), kwargs.get("expr"))
+    if action == "prefetch_context":
+        addr = kwargs.get("addr")
+        if not addr:
+            return make_error(MCPError.INVALID_ARGS, "addr required")
+        ea, err = validate_addr(addr)
+        if err:
+            return err
+        return _prefetch_function_context(ea)
     if action == "deobfuscate_emulate":
         addr = kwargs.get("addr")
         if not addr:
@@ -1627,14 +2621,53 @@ def _trace_analysis_merged_dispatch(action, kwargs) -> dict:
             return err
         steps = int(kwargs.get("max_steps", 2000))
         emu = TinyEmulator(ea)
-        strings = emu.run_emulation(steps)
-        return {
-            "ok": True,
-            "emulated_address": hex(ea),
-            "steps_executed": steps,
-            "extracted_strings": strings,
-            "written_memory_bytes": len(emu.mem)
-        }
+        
+        # Parse taint inputs
+        taint_regs = kwargs.get("taint_regs") or []
+        if isinstance(taint_regs, str):
+            taint_regs = [x.strip() for x in taint_regs.split(",") if x.strip()]
+        for r in taint_regs:
+            emu.set_reg_taint(r, True)
+            
+        taint_mem = kwargs.get("taint_mem") or []
+        if isinstance(taint_mem, str):
+            taint_mem = [x.strip() for x in taint_mem.split(",") if x.strip()]
+        for m in taint_mem:
+            try:
+                m_ea = int(m, 0)
+                emu.set_mem_taint(m_ea, 8, True)
+            except (ValueError, TypeError):
+                pass
+
+        if kwargs.get("speculative") or kwargs.get("speculate"):
+            # Multi-path speculative explore
+            max_depth = int(kwargs.get("max_depth", 100))
+            max_paths = int(kwargs.get("max_paths", 32))
+            res = emu.speculative_explore(max_depth=max_depth, max_paths=max_paths)
+            return {
+                "ok": True,
+                "emulated_address": hex(ea),
+                "steps_executed": steps,
+                "mode": "speculative",
+                "extracted_strings": res["extracted_strings"],
+                "stack_strings": res["stack_strings"],
+                "reachable_eas": res["reachable_eas"],
+                "opaque_predicates": res["opaque_predicates"],
+                "taint_log": res["taint_log"],
+            }
+        else:
+            # Single-path run
+            strings = emu.run_emulation(steps)
+            return {
+                "ok": True,
+                "emulated_address": hex(ea),
+                "steps_executed": steps,
+                "mode": "single_path",
+                "extracted_strings": strings,
+                "stack_strings": emu.get_stack_strings(),
+                "written_memory_bytes": len(emu.mem),
+                "taint_log": [{"addr": hex(ea_log), "description": desc} for ea_log, desc in emu.taint_log],
+            }
     return make_error(MCPError.INVALID_ARGS, f"Unknown merged action: {action}")
 
 

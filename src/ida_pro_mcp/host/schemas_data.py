@@ -1565,6 +1565,8 @@ TOOL_ARG_SCHEMAS = {
         "end": {"type": "string"},
         "name": {"type": "string", "description": "Plugin name for plugin_run"},
         "arg": {"type": "integer", "description": "Plugin argument for plugin_run"},
+        "timeout": {"type": "number"},
+        "max_wait": {"type": "number"},
     },
     "data": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["data"]},

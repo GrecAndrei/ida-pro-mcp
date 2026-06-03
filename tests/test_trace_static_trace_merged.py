@@ -43,7 +43,7 @@ def test_trace_analysis_dispatcher_routes_merged_actions():
     for the merged actions."""
     text = _read("src/ida_pro_mcp/ida_mcp/tools/trace_analysis.py")
     assert (
-        'elif action in ("get", "clear", "set_options", "static_trace", "decrypt_strings", "eval_expr")'
+        'elif action in ("get", "clear", "set_options", "static_trace", "decrypt_strings", "eval_expr", "deobfuscate_emulate", "prefetch_context")'
         in text
     ), "Merged-action dispatch branch missing in trace_analysis"
 

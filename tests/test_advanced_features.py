@@ -132,3 +132,72 @@ def test_federation_blackboards(tmp_path):
     
     assert rows[1][0] == "node_2"
     assert rows[1][1] == "Remote Node 2"
+
+
+def test_tiny_emulator_advanced():
+    with mock_ida_context():
+        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import TinyEmulator
+        
+        sys.modules["ida_funcs"].get_func.return_value = None
+        
+        emu = TinyEmulator(0x140001000)
+        
+        # Test taint propagation
+        emu.set_reg_taint("rax", True)
+        assert emu.is_reg_tainted("rax")
+        assert emu.is_reg_tainted("eax")  # normalizes sub-registers
+        
+        emu.set_reg_taint("rax", False)
+        assert not emu.is_reg_tainted("rax")
+        
+        # Test stack writes and stack strings
+        emu.write_mem(0x7ffffff0, ord('T'), 1)
+        emu.write_mem(0x7ffffff1, ord('E'), 1)
+        emu.write_mem(0x7ffffff2, ord('S'), 1)
+        emu.write_mem(0x7ffffff3, ord('T'), 1)
+        emu.write_mem(0x7ffffff4, 0, 1)  # Null terminator
+        
+        stack_strs = emu.get_stack_strings()
+        assert "TEST" in stack_strs
+
+        # Test push and pop taint/value propagation
+        emu.set_reg("rax", 0x1122334455667788)
+        emu.set_reg_taint("rax", True)
+        # Verify read_mem/write_mem with taint
+        emu.write_mem(0x7ffffff8, 0x1122334455667788, 8)
+        emu.set_mem_taint(0x7ffffff8, 8, True)
+        assert emu.is_mem_tainted(0x7ffffff8, 8)
+        assert emu.read_mem(0x7ffffff8, 8) == 0x1122334455667788
+
+        # Test dereferenced pointers tracking
+        emu.read_mem(0x140003000, 8)
+        assert any(ptr == 0x140003000 for _, ptr, _ in emu.dereferenced_pointers)
+
+
+def test_prefetch_context():
+    with mock_ida_context():
+        import sys
+        import idautils
+        import ida_funcs
+        
+        # Configure the active mock inside sys.modules
+        sys.modules["ida_funcs"].get_func.return_value.start_ea = 0x1000
+        sys.modules["ida_funcs"].get_func.return_value.end_ea = 0x1020
+        
+        f1 = ida_funcs.get_func(0x1000)
+        print("DEBUG_F1_START:", f1.start_ea)
+        print("DEBUG_F1_END:", f1.end_ea)
+        
+        idautils.XrefsTo.return_value = []
+        idautils.XrefsFrom.return_value = []
+        sys.modules["idc"].next_head.return_value = 0xffffffff
+        
+        sys.modules["ida_ua"].decode_insn.return_value = 0
+        
+        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import _prefetch_function_context
+        res = _prefetch_function_context(0x1000)
+        assert res["ok"] is True
+        assert res["function_address"] == "0x1000"
+        assert "struct_definitions" in res
+        assert "small_callees" in res
+

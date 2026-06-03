@@ -724,7 +724,18 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if self.enable_response_enrichment:
                 # ---- Auto-Nudge Injection ----
                 try:
-                    nudge = None
+                    # Always run the base nudge generator to invoke the prefetching suite and extract expressions
+                    from .auto_nudge import get_nudge
+                    idb_key = (self.current_session.idb_path if self.current_session else "")
+                    nudge = get_nudge(
+                        idb_key,
+                        tool_name,
+                        action_name,
+                        compacted,
+                        call_args if isinstance(call_args, dict) else {},
+                        execute_tool_fn=getattr(self, "_execute_tool", None)
+                    ) or {}
+
                     ui = getattr(self, "_usage_intel", None)
                     if ui:
                         # Primary: UsageIntelligence predictions (trained on real audit data)
@@ -747,17 +758,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                 ta = s.split("=")[0] if "=" in s else s
                                 if ta not in ui_set:
                                     merged.append(s)
-                            nudge = {"suggested_next": merged[:5], "source": "usage_intelligence"}
-                    else:
-                        from .auto_nudge import get_nudge
-                        idb_key = (self.current_session.idb_path if self.current_session else "")
-                        nudge = get_nudge(
-                            idb_key,
-                            tool_name,
-                            action_name,
-                            compacted,
-                            call_args if isinstance(call_args, dict) else {},
-                        )
+                            nudge["suggested_next"] = merged[:5]
+                            nudge["source"] = "usage_intelligence"
+                    if not nudge:
+                        nudge = None
                     if nudge:
                         compacted["_nudge"] = nudge
                 except Exception:
