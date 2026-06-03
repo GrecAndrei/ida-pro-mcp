@@ -2069,23 +2069,37 @@ class ServerBlackboardMixin:
             ok = store.mark_resolved(eid)
             return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
         if action == "next_target":
-            targets = store.next_target(limit=int(args.get("limit") or 5))
+            targets = store.next_target(
+                limit=int(args.get("limit") or 5),
+                query=args.get("query"),
+            )
             return {"ok": True, "targets": targets, "count": len(targets),
                     "summary": _target_collection_summary(targets),
                     "note": "Highest-priority unexplored addresses. Use code(action='decompile') on the top target."}
         if action == "frontier":
             try:
                 from .frontier import FrontierEngine
-                emb_db = os.path.join(self.cache_dir, "embeddings.sqlite3")
+                emb_db = None
+                if self.current_session and getattr(self.current_session, "idb_path", None):
+                    emb_db = self.current_session.idb_path + ".embeddings.db"
+                if not emb_db:
+                    emb_db = os.path.join(self.cache_dir, "embeddings.sqlite3")
                 fe = FrontierEngine(emb_db, getattr(store, "db_path", None))
-                results = fe.frontier(limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200))
+                results = fe.frontier(
+                    limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200),
+                    query=args.get("query"),
+                )
                 return {"ok": True, "frontier": results, "count": len(results), "summary": _frontier_collection_summary(results)}
             except Exception as e:
                 return make_error(MCPError.IO_ERROR, f"frontier unavailable: {e}")
         if action == "propagate_labels":
             try:
                 from .frontier import FrontierEngine
-                emb_db = os.path.join(self.cache_dir, "embeddings.sqlite3")
+                emb_db = None
+                if self.current_session and getattr(self.current_session, "idb_path", None):
+                    emb_db = self.current_session.idb_path + ".embeddings.db"
+                if not emb_db:
+                    emb_db = os.path.join(self.cache_dir, "embeddings.sqlite3")
                 fe = FrontierEngine(emb_db, getattr(store, "db_path", None))
                 n = fe.refresh()
                 if n < 3:

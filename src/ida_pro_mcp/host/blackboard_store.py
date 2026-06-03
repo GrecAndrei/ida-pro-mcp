@@ -185,8 +185,11 @@ class BlackboardStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_xref ON blackboard(xref_count)")
             conn.commit()
 
+    def _get_embedder(self):
+        return _get_embedder()
+
     def _embed_text(self, text: str) -> Optional[bytes]:
-        embedder = _get_embedder()
+        embedder = self._get_embedder()
         if embedder is None:
             return None
         try:
@@ -207,7 +210,7 @@ class BlackboardStore:
                 if not cap.is_initialized():
                     cap.init(project_name="ida-session", created_by="ida-pro-mcp-blackboard")
                 idx_id = "blackboard-" + uuid.uuid5(uuid.NAMESPACE_URL, self.db_path).hex[:16]
-                embedder = _get_embedder()
+                embedder = self._get_embedder()
                 backend = str(getattr(embedder, "backend", "unknown")) if embedder is not None else "unknown"
                 dim = int(getattr(embedder, "dim", 1536) or 1536) if embedder is not None else 1536
                 cap.add_semantic_index(
@@ -363,7 +366,7 @@ class BlackboardStore:
         include_resolved: bool = True,
         include_contradicted: bool = False,
     ) -> List[Dict]:
-        embedder = _get_embedder()
+        embedder = self._get_embedder()
         if embedder is None:
             q = query.lower()
             with self._conn() as conn:
@@ -611,7 +614,7 @@ class BlackboardStore:
             conn.commit()
         return updated
 
-    def next_target(self, limit: int = 5, rpc_fn=None) -> List[Dict]:
+    def next_target(self, limit: int = 5, rpc_fn=None, query: Optional[str] = None) -> List[Dict]:
         """
         Return highest-priority unexplored addresses.
 
@@ -627,10 +630,20 @@ class BlackboardStore:
         """
         import math
 
+        embedder = None
+        query_vec = None
+        if query and query.strip():
+            try:
+                embedder = self._get_embedder()
+                if embedder is not None:
+                    query_vec = embedder.embed(query)
+            except Exception:
+                pass
+
         with self._conn() as conn:
             rows = conn.execute("""
                 SELECT id, addr, category, title, confidence, depends_on,
-                       created_at, xref_count, entropy, source_type
+                       created_at, xref_count, entropy, source_type, vector, content
                 FROM blackboard
                 WHERE resolved=0 AND contradicted=0 AND addr != '' AND addr IS NOT NULL
                 ORDER BY confidence DESC
@@ -659,10 +672,25 @@ class BlackboardStore:
         q_ent75 = _quantile(ent_vals, 0.75, default=1.0)
 
         for row in rows:
-            eid, addr, cat, title, conf, depends_on, created_at, xref_count, entropy, source_type = row
+            eid, addr, cat, title, conf, depends_on, created_at, xref_count, entropy, source_type, vector_blob, content = row
             if addr in seen_addrs:
                 continue
             seen_addrs.add(addr)
+
+            # Calculate query similarity if query is provided
+            query_similarity = 0.0
+            if query and query.strip():
+                if query_vec is not None and vector_blob is not None:
+                    try:
+                        vec = _unpack_vec(vector_blob)
+                        query_similarity = _cosine(query_vec, vec)
+                    except Exception:
+                        pass
+                else:
+                    # Fallback to lexical/keyword check
+                    text = f"{title or ''} {content or ''}".lower()
+                    if query.lower() in text:
+                        query_similarity = 0.5
 
             # Adaptive confidence baseline around current frontier distribution.
             score = max(1e-6, float(conf or 0.5))
@@ -700,6 +728,10 @@ class BlackboardStore:
             ent_sig = 1.0 / (1.0 + math.exp(-((ent - q_ent50) / ent_iqr)))
             score *= (0.9 + 0.25 * ent_sig)
 
+            # Blend with query similarity if query is active
+            if query and query.strip():
+                score = 0.6 * max(0.0, query_similarity) + 0.4 * score
+
             scored.append({
                 "addr": addr,
                 "title": title,
@@ -712,6 +744,7 @@ class BlackboardStore:
                 "entropy": entropy or 0.0,
                 "source_type": source_type or "manual",
                 "age_days": round(age_days, 1),
+                "semantic_similarity": round(query_similarity, 4) if (query and query.strip()) else None,
             })
 
         scored.sort(key=lambda x: x["priority_score"], reverse=True)
@@ -854,7 +887,7 @@ class BlackboardStore:
         }
 
     def semantic_rebuild(self, category: Optional[str] = None, force: bool = False, limit: int = 5000) -> Dict[str, Any]:
-        embedder = _get_embedder()
+        embedder = self._get_embedder()
         if embedder is None:
             return {"ok": False, "error": "embedder unavailable"}
         conditions = []

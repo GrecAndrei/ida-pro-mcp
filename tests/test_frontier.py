@@ -291,5 +291,160 @@ class TestFrontierKMeans(unittest.TestCase):
         self.assertAlmostEqual(_cosine([0.0, 0.0], [1.0, 0.0]), 0.0)
 
 
+class TestFrontierAndBlackboardSmarter(unittest.TestCase):
+    def setUp(self):
+        from ida_pro_mcp.host.frontier import FrontierEngine
+        self.FrontierEngine = FrontierEngine
+        self.tmp = tempfile.mkdtemp()
+        self.emb_db = os.path.join(self.tmp, "test.embeddings.db")
+        self.bb_db = os.path.join(self.tmp, "test.blackboard.db")
+
+        # 2 functions with distinct vectors
+        self.dim = 8
+        self.entries = [
+            ("0x1000", "func_crypto", [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            ("0x1004", "func_network", [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        ]
+        _make_emb_db(self.emb_db, self.entries)
+
+    def tearDown(self):
+        try:
+            import shutil
+            shutil.rmtree(self.tmp)
+        except Exception:
+            pass
+
+    def test_frontier_with_query_semantic_scoring(self):
+        import sys
+        import types
+        from unittest import mock
+
+        class FakeEmbedder:
+            def embed(self, text):
+                # Returns vector that aligns with func_crypto
+                return [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+        class FakeClassifier:
+            @classmethod
+            def instance(cls, emb):
+                return cls()
+            def classify_vec(self, vec, **kw):
+                return []
+
+        fake_intel = types.ModuleType("ida_pro_mcp.host.intelligence.core")
+        fake_intel.BgeCodeEmbedder = FakeEmbedder
+        fake_intel.BehaviorClassifier = FakeClassifier
+
+        with mock.patch.dict("sys.modules", {"ida_pro_mcp.host.intelligence.core": fake_intel}):
+            fe = self.FrontierEngine(self.emb_db, self.bb_db)
+            fe.refresh()
+            # Query matches func_crypto
+            results = fe.frontier(query="crypto")
+            self.assertEqual(len(results), 2)
+            # Crypto should be top ranked
+            self.assertEqual(results[0]["addr"], "0x1000")
+            self.assertEqual(results[0]["query_similarity"], 1.0)
+            self.assertEqual(results[1]["query_similarity"], 0.0)
+
+    def test_frontier_with_zero_shot_behavior_boost(self):
+        import sys
+        import types
+        from unittest import mock
+
+        class FakeEmbedder:
+            def embed(self, text):
+                return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+        class FakeClassifier:
+            @classmethod
+            def instance(cls, emb):
+                return cls()
+            def classify_vec(self, vec, **kw):
+                # If it's func_crypto vector
+                if vec[0] > 0.9:
+                    return [{"behavior": "crypto", "confidence": 0.8}]
+                return []
+
+        fake_intel = types.ModuleType("ida_pro_mcp.host.intelligence.core")
+        fake_intel.BgeCodeEmbedder = FakeEmbedder
+        fake_intel.BehaviorClassifier = FakeClassifier
+
+        with mock.patch.dict("sys.modules", {"ida_pro_mcp.host.intelligence.core": fake_intel}):
+            fe = self.FrontierEngine(self.emb_db, self.bb_db)
+            fe.refresh()
+            results = fe.frontier()
+            # func_crypto has zero-shot behavior boost
+            crypto_res = [r for r in results if r["addr"] == "0x1000"][0]
+            network_res = [r for r in results if r["addr"] == "0x1004"][0]
+            self.assertIn("crypto", crypto_res["detected_behaviors"])
+            self.assertGreater(crypto_res["score"], network_res["score"])
+
+    def test_next_target_with_query_semantic_scoring(self):
+        from ida_pro_mcp.host.blackboard_store import BlackboardStore
+        import sys
+        import types
+        from unittest import mock
+
+        class FakeEmbedder:
+            def embed(self, text):
+                return [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+        fake_intel = types.ModuleType("ida_pro_mcp.host.intelligence_core")
+        fake_intel.BgeCodeEmbedder = FakeEmbedder
+
+        store = BlackboardStore(self.bb_db)
+
+        # Write entries with vectors
+        from ida_pro_mcp.host.blackboard_store import _pack_vec
+        vec_crypto = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        vec_network = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+        with store._conn() as conn:
+            conn.execute(
+                "INSERT INTO blackboard (id, category, title, addr, confidence, created_at, updated_at, vector) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("id1", "general", "crypto stuff", "0x1000", 0.5, time.time(), time.time(), _pack_vec(vec_crypto))
+            )
+            conn.execute(
+                "INSERT INTO blackboard (id, category, title, addr, confidence, created_at, updated_at, vector) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("id2", "general", "network stuff", "0x1004", 0.5, time.time(), time.time(), _pack_vec(vec_network))
+            )
+            conn.commit()
+
+        # Query matches crypto
+        with mock.patch.dict("sys.modules", {"ida_pro_mcp.host.intelligence_core": fake_intel, "host.intelligence_core": fake_intel}):
+            targets = store.next_target(query="crypto")
+            self.assertEqual(len(targets), 2)
+            self.assertEqual(targets[0]["addr"], "0x1000")
+            self.assertEqual(targets[0]["semantic_similarity"], 1.0)
+            self.assertEqual(targets[1]["semantic_similarity"], 0.0)
+
+    def test_next_target_with_query_keyword_fallback(self):
+        from ida_pro_mcp.host.blackboard_store import BlackboardStore
+
+        store = BlackboardStore(self.bb_db)
+
+        with store._conn() as conn:
+            conn.execute(
+                "INSERT INTO blackboard (id, category, title, content, addr, confidence, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("id1", "general", "crypto functions", "aes implementation", "0x1000", 0.5, time.time(), time.time())
+            )
+            conn.execute(
+                "INSERT INTO blackboard (id, category, title, content, addr, confidence, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("id2", "general", "network functions", "http connection", "0x1004", 0.5, time.time(), time.time())
+            )
+            conn.commit()
+
+        # Query matches keyword in title
+        targets = store.next_target(query="aes")
+        self.assertEqual(len(targets), 2)
+        self.assertEqual(targets[0]["addr"], "0x1000")
+        self.assertEqual(targets[0]["semantic_similarity"], 0.5)
+        self.assertEqual(targets[1]["semantic_similarity"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

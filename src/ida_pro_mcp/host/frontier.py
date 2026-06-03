@@ -313,17 +313,32 @@ class FrontierEngine:
         limit: int = 20,
         xref_counts: Optional[Dict[str, int]] = None,
         entropy_map: Optional[Dict[str, float]] = None,
+        query: Optional[str] = None,
     ) -> List[Dict]:
         """
         Return ranked list of unvisited functions most worth analyzing next.
 
         xref_counts: {ea_hex: count} — from IDA (optional, improves scoring)
         entropy_map: {ea_hex: entropy} — from entropy scan (optional)
+        query: semantic query (optional, e.g. "AES encrypt" or "http post")
         """
         if not self._ea_list:
             self.refresh()
         if not self._ea_list:
             return []
+
+        # Setup intelligence helpers
+        embedder = None
+        classifier = None
+        query_vec = None
+        try:
+            from .intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+            embedder = BgeCodeEmbedder()
+            classifier = BehaviorClassifier.instance(embedder)
+            if query and query.strip():
+                query_vec = embedder.embed(query)
+        except Exception:
+            pass
 
         labels = self._load_bb_labels()
         labeled_eas = set(labels.keys())
@@ -381,6 +396,26 @@ class FrontierEngine:
                 + self.W_CLUSTER  * cluster_score
             )
 
+            # Zero-shot behavior classification boost
+            detected_behaviors = []
+            behavior_boost = 0.0
+            if classifier is not None:
+                try:
+                    matches = classifier.classify_vec(vec, threshold=0.35, top_k=3, block=False)
+                    detected_behaviors = [m["behavior"] for m in matches]
+                    if detected_behaviors:
+                        behavior_boost = 0.15
+                except Exception:
+                    pass
+
+            total = min(1.0, total + behavior_boost)
+
+            query_similarity = 0.0
+            if query_vec is not None:
+                query_similarity = _cosine(vec, query_vec)
+                # Blend: 60% query match, 40% structural/proximity match
+                total = 0.6 * max(0.0, query_similarity) + 0.4 * total
+
             scored.append({
                 "addr": ea,
                 "name": self._names.get(ea, ea),
@@ -392,6 +427,8 @@ class FrontierEngine:
                 "xref_count": xref_raw,
                 "entropy": round(ent_raw, 2),
                 "cluster_coverage": round(cluster_score, 3),
+                "detected_behaviors": detected_behaviors,
+                "query_similarity": round(query_similarity, 4) if query_vec is not None else None,
             })
 
         scored.sort(key=lambda x: -x["score"])
