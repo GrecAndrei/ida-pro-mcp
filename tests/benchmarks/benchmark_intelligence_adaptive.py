@@ -6,7 +6,7 @@ import sys
 import time
 import statistics
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from ida_pro_mcp.host.intelligence_context import ContextAssembler
 

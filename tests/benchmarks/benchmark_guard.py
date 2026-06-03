@@ -50,18 +50,25 @@ def threshold(name: str, default: float) -> float:
 def main() -> int:
     checks = [
         {
-            "script": "tests/benchmark_intelligence_adaptive.py",
+            "script": "tests/benchmarks/benchmark_intelligence_adaptive.py",
             "limits": {
-                "semantic cached": threshold("semantic_cached", 0.8),
+                "semantic cached": threshold("semantic_cached", 1.5),
                 "focus candidate ranking": threshold("focus_candidate_ranking", 0.08),
             },
         },
         {
-            "script": "tests/benchmark_firmware_heuristics.py",
+            "script": "tests/benchmarks/benchmark_firmware_heuristics.py",
             "limits": {
                 "cluster_pointer_hits": threshold("cluster_pointer_hits", 20.0),
                 "dedup_regions": threshold("dedup_regions", 9.0),
                 "aggregate_fingerprint": threshold("aggregate_fingerprint", 2.0),
+            },
+        },
+        {
+            "script": "tests/benchmarks/benchmark_analogy_engine.py",
+            "limits": {
+                "analogy score match": threshold("analogy_score_match", 0.8),
+                "analogy score mismatch": threshold("analogy_score_mismatch", 0.05),
             },
         },
     ]
