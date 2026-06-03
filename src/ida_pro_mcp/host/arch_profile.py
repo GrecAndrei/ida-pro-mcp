@@ -314,6 +314,26 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
         inf.endian = "little"
         inf.confidence = 0.85
         inf.reason = "MZ/PE header"
+        if len(sample) >= 0x40:
+            pe_offset = struct.unpack_from("<I", sample, 0x3c)[0]
+            if pe_offset + 24 <= len(sample):
+                pe_sig = sample[pe_offset:pe_offset+4]
+                if pe_sig == b"PE\0\0":
+                    machine = struct.unpack_from("<H", sample, pe_offset + 4)[0]
+                    if machine == 0x8664:  # AMD64
+                        inf.bitness = 64
+                        inf.reason = "MZ/PE header (64-bit x64)"
+                    elif machine == 0xaa64:  # ARM64
+                        inf.processor = "arm"
+                        inf.bitness = 64
+                        inf.reason = "MZ/PE header (64-bit ARM64)"
+                    elif machine in (0x1c0, 0x1c4):  # ARM 32-bit
+                        inf.processor = "arm"
+                        inf.bitness = 32
+                        inf.reason = "MZ/PE header (32-bit ARM)"
+                    elif machine == 0x014c:  # Intel 386
+                        inf.bitness = 32
+                        inf.reason = "MZ/PE header (32-bit x86)"
         return inf.to_dict()
 
     if head[:4] in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe"):
