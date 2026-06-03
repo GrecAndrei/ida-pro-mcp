@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy/suggest_triage, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).
+Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy/suggest_triage/suggest_analogy/apply_analogy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).
 
 ## Actions
 - `discover` (tool-specific)
@@ -52,6 +52,8 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `list_skills` (tool-specific)
 - `suggest_strategy` (tool-specific)
 - `suggest_triage` (tool-specific)
+- `suggest_analogy` (tool-specific)
+- `apply_analogy` (tool-specific)
 - `log_activity` (tool-specific)
 - `get_activity_log` (tool-specific)
 - `notebook_append` (tool-specific)
@@ -82,7 +84,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `58`
+- `action`: `string` - allowed_count: `60`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` - Advanced analysis payload. Preferred for architecture/loader config at session creation.
@@ -101,11 +103,13 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `ida_args`: `string|array`
 - `include_bookmarks`: `boolean` - Include bookmark entries in recent_workset.
 - `include_items`: `boolean` - Include structured items in recent_workset response.
+- `library_idbs`: `array` - Optional list of absolute historical library IDB paths to match against.
 - `limit`: `integer` - Max sessions to return (list action)
 - `loader`: `string` - Loader name used before initial analysis.
 - `loader_options`: `string|object` - Loader option payload applied before analysis.
 - `macro`: `string` - Alias for macro name in macro_* actions.
 - `macro_data`: `object` - Alias for macro payload in macro_set.
+- `mappings`: `array` - List of mapping objects to apply, where each object contains addr, name (optional), and comment (optional).
 - `max_ea`: `string|integer`
 - `min_ea`: `string|integer`
 - `n`: `integer` - Count for recent/oldest/recent_workset actions.
@@ -123,6 +127,8 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `start`: `string|integer`
 - `start_ea`: `string|integer`
 - `tags`: `array|string` - Tags for the session (create action). Comma-separated string or array.
+- `threshold_cosine`: `number` - Minimum cosine similarity threshold (default: 0.85).
+- `threshold_structural`: `number` - Minimum structural ratio similarity threshold (default: 0.70).
 - `value`: `string|object` - Loader option payload alias (same as loader_options).
 - `verbose`: `boolean` - Include per-runtime details for health action.
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

@@ -1166,6 +1166,101 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             else:
                 limit = 5
             return self.session_mgr.suggest_triage(sid, context=context, limit=limit)
+        if action == "suggest_analogy":
+            sid, sid_err = _sid_arg()
+            if sid_err:
+                return sid_err
+            if not sid:
+                return make_error(MCPError.INVALID_ARGS, "session_id required")
+            library_idbs = args.get("library_idbs")
+            if library_idbs is not None:
+                if not isinstance(library_idbs, list):
+                    return make_error(MCPError.INVALID_ARGS, "library_idbs must be a list of strings")
+                library_idbs = [str(x) for x in library_idbs]
+
+            threshold_cosine = args.get("threshold_cosine", 0.85)
+            try:
+                threshold_cosine = float(threshold_cosine)
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, "threshold_cosine must be a float")
+
+            threshold_structural = args.get("threshold_structural", 0.70)
+            try:
+                threshold_structural = float(threshold_structural)
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, "threshold_structural must be a float")
+
+            limit = args.get("limit")
+            if limit is not None:
+                try:
+                    limit = int(limit)
+                except (TypeError, ValueError):
+                    return make_error(MCPError.INVALID_ARGS, "limit must be an integer")
+            else:
+                limit = 10
+
+            return self.session_mgr.suggest_analogy(
+                sid,
+                library_idbs=library_idbs,
+                threshold_cosine=threshold_cosine,
+                threshold_structural=threshold_structural,
+                limit=limit,
+            )
+        if action == "apply_analogy":
+            sid, sid_err = _sid_arg()
+            if sid_err:
+                return sid_err
+            if not sid:
+                return make_error(MCPError.INVALID_ARGS, "session_id required")
+            mappings = args.get("mappings")
+            if not mappings:
+                return make_error(MCPError.INVALID_ARGS, "mappings list required")
+            if not isinstance(mappings, list):
+                return make_error(MCPError.INVALID_ARGS, "mappings must be a list of mapping objects")
+
+            session = self.session_mgr.get_session(sid)
+            if not session or not session.idb_path:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Session {sid} has no active IDB path associated with it.",
+                )
+            ip = session.idb_path
+
+            results = []
+            for item in mappings:
+                if not isinstance(item, dict):
+                    results.append({"ok": False, "error": "Mapping entry must be a dictionary"})
+                    continue
+                addr = item.get("addr")
+                name = item.get("name")
+                comment = item.get("comment")
+
+                if not addr:
+                    results.append({"ok": False, "error": "Mapping entry requires 'addr'"})
+                    continue
+
+                mapping_res = {"addr": addr, "rename": None, "comment": None}
+                if name:
+                    rename_res = self.call_tool("modify", ip, action="rename", addr=addr, value=name)
+                    mapping_res["rename"] = rename_res
+                if comment:
+                    comment_res = self.call_tool(
+                        "modify",
+                        ip,
+                        action="comment",
+                        addr=addr,
+                        value=comment,
+                        comment_type="repeatable",
+                    )
+                    mapping_res["comment"] = comment_res
+                results.append(mapping_res)
+
+            return {
+                "ok": True,
+                "session_id": sid,
+                "applied": len(results),
+                "results": results,
+            }
         if action == "log_activity":
             sid, sid_err = _sid_arg()
             if sid_err:

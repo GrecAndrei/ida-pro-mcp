@@ -700,6 +700,70 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 "suggestions": suggestions,
             }
 
+    def suggest_analogy(
+        self,
+        sid: str,
+        library_idbs: Optional[List[str]] = None,
+        threshold_cosine: float = 0.85,
+        threshold_structural: float = 0.70,
+        limit: int = 10,
+    ) -> dict:
+        """Rank and suggest analogy-based symbol transfer matches from library sessions."""
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            idb_path = session.idb_path
+            if not idb_path:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "No active IDB path associated with this session. Ingest a binary first.",
+                )
+
+            # Discover library idbs
+            resolved_library_idbs = []
+            if library_idbs:
+                resolved_library_idbs = [str(x) for x in library_idbs]
+            else:
+                for other_sid, other_sess in list(self.sessions.items()):
+                    if other_sid != sid and other_sess.idb_path:
+                        resolved_library_idbs.append(other_sess.idb_path)
+                if os.path.exists(self.session_dir):
+                    for fn in os.listdir(self.session_dir):
+                        if fn.endswith(".json"):
+                            try:
+                                with open(
+                                    os.path.join(self.session_dir, fn),
+                                    "r",
+                                    encoding="utf-8",
+                                ) as f:
+                                    sdata = json.load(f)
+                                    other_idb = sdata.get("idb_path")
+                                    if (
+                                        other_idb
+                                        and other_idb != idb_path
+                                        and other_idb not in resolved_library_idbs
+                                    ):
+                                        resolved_library_idbs.append(other_idb)
+                            except Exception:
+                                pass
+
+            from .intelligence.analogy import CrossBinaryAnalogyEngine
+            engine = CrossBinaryAnalogyEngine()
+            suggestions = engine.suggest_analogies(
+                idb_path,
+                resolved_library_idbs,
+                threshold_cosine=threshold_cosine,
+                threshold_structural=threshold_structural,
+                limit=limit,
+            )
+            return {
+                "ok": True,
+                "session_id": sid,
+                "suggestions": suggestions,
+                "scanned_libraries": len(resolved_library_idbs),
+            }
+
     # ====================================================================
     # ACTIVITY LOG + DEAD-END DETECTION
     # ====================================================================
