@@ -1056,6 +1056,12 @@ class ServerDispatchMixin:
             if tool_name == "session":
                 return self._handle_session(args)
 
+            if tool_name == "schemaboot":
+                return self._handle_schemaboot(args)
+
+            if tool_name == "intelligence" and str(args.get("action") or "").startswith("structural_"):
+                return self._handle_intelligence_structural(args)
+
             if tool_name == "memory" and str(args.get("action") or "").strip() in ("read_file", "write_file"):
                 return self._handle_memory_filesystem(args)
 
@@ -1092,3 +1098,354 @@ class ServerDispatchMixin:
                     "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
                 )
             return self.call_tool(tool_name, ip, **args)
+
+    def _handle_schemaboot(self, args: dict) -> dict:
+        import os
+        import sqlite3
+        action = args.get("action")
+        constraints = args.get("constraints") or {}
+        addr = args.get("addr")
+        limit = args.get("limit", 50)
+        offset = args.get("offset", 0)
+        order_by = args.get("order_by")
+        include_apis = bool(args.get("include_apis", False))
+        include_strings = bool(args.get("include_strings", False))
+
+        session = self.current_session
+        ip = args.get("idb") or (session.idb_path if session else None)
+        if not ip:
+            return make_error(
+                MCPError.SESSION_REQUIRED,
+                "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+            )
+
+        from .intelligence.structural_index import (
+            get_db_path, ensure_tables, upsert_functions_batch,
+            execute_host_query, write_insight_index, add_global_facts,
+            _detect_global_facts
+        )
+
+        db_path = get_db_path(ip)
+
+        if action == "delete":
+            if os.path.exists(db_path):
+                try:
+                    os.remove(db_path)
+                    return {"ok": True, "deleted": db_path}
+                except Exception as e:
+                    return make_error(MCPError.DB_ERROR, f"Failed to delete database: {e}")
+            return make_error(MCPError.FILE_NOT_FOUND, f"No index found at {db_path}")
+
+        if action == "stats":
+            if not os.path.exists(db_path):
+                return make_error(MCPError.FILE_NOT_FOUND, "No index found. Run schemaboot(action='ingest') first.")
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM function_attrs")
+                total_indexed = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(DISTINCT func_ea) FROM function_apis")
+                funcs_with_apis = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(DISTINCT func_ea) FROM function_strings")
+                funcs_with_strings = cursor.fetchone()[0]
+                cursor.execute("SELECT AVG(size), AVG(entropy), AVG(bb_count), AVG(cyclomatic_complexity) FROM function_attrs")
+                avg_size, avg_entropy, avg_bb, avg_cc = cursor.fetchone()
+                cursor.execute("SELECT segment, COUNT(*) FROM function_attrs GROUP BY segment")
+                segments = {row[0]: row[1] for row in cursor.fetchall()}
+                conn.close()
+                return {
+                    "ok": True,
+                    "db_path": db_path,
+                    "total_indexed": total_indexed,
+                    "funcs_with_apis": funcs_with_apis,
+                    "funcs_with_strings": funcs_with_strings,
+                    "avg_size": round(avg_size or 0, 1),
+                    "avg_entropy": round(avg_entropy or 0, 2),
+                    "avg_bb_count": round(avg_bb or 0, 1),
+                    "avg_cyclomatic": round(avg_cc or 0, 1),
+                    "segments": segments,
+                }
+            except Exception as e:
+                return make_error(MCPError.DB_ERROR, f"Failed to retrieve stats: {e}")
+
+        if action == "get":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for get")
+            try:
+                ea = int(addr, 0) if isinstance(addr, str) else addr
+            except ValueError:
+                return make_error(MCPError.INVALID_ARGS, f"Invalid address format: {addr}")
+
+            if not os.path.exists(db_path):
+                return make_error(MCPError.FILE_NOT_FOUND, "No index found")
+
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM function_attrs WHERE ea=?", (ea,))
+                row = cursor.fetchone()
+                if not row:
+                    conn.close()
+                    return make_error(MCPError.NOT_FOUND, f"Function {addr} not in index")
+                cols = [d[0] for d in cursor.description]
+                result = dict(zip(cols, row))
+                if include_apis:
+                    cursor.execute("SELECT api_name FROM function_apis WHERE func_ea=?", (ea,))
+                    result["apis"] = [r[0] for r in cursor.fetchall()]
+                if include_strings:
+                    cursor.execute("SELECT string_text, string_ea FROM function_strings WHERE func_ea=?", (ea,))
+                    result["strings"] = [{"text": r[0], "ea": hex(r[1])} for r in cursor.fetchall()]
+                conn.close()
+                result["ea"] = hex(result["ea"])
+                return {"ok": True, "function": result}
+            except Exception as e:
+                return make_error(MCPError.DB_ERROR, f"Failed to get function: {e}")
+
+        if action == "query":
+            return execute_host_query(
+                db_path, constraints, limit=limit, offset=offset, order_by=order_by,
+                include_apis=include_apis, include_strings=include_strings
+            )
+
+        if action == "ingest":
+            # 1. Call the IDA process to run extraction
+            extract_res = self.call_tool("schemaboot", ip, action="extract")
+            if extract_res.get("error") or not extract_res.get("ok"):
+                return extract_res
+
+            funcs_data = extract_res.get("functions") or []
+
+            # 2. Open DB and Upsert batch
+            try:
+                conn = sqlite3.connect(db_path)
+                ensure_tables(conn)
+                ingested = upsert_functions_batch(conn, funcs_data)
+                conn.close()
+            except Exception as e:
+                return make_error(MCPError.DB_ERROR, f"Ingestion database error: {e}")
+
+            # 3. Update L1 and L2 indexes on the host
+            try:
+                write_insight_index(funcs_data)
+                all_facts = []
+                for f in funcs_data:
+                    all_facts.extend(_detect_global_facts(f))
+                add_global_facts(all_facts)
+                facts_count = len(all_facts)
+            except Exception as e:
+                log_rpc(f"Failed to update L1/L2 index during ingest: {e}")
+                facts_count = 0
+
+            return {
+                "ok": True,
+                "action": "ingest",
+                "total_functions": len(funcs_data),
+                "ingested": ingested,
+                "db_path": db_path,
+                "l1_indexed": len(funcs_data),
+                "l2_facts_added": facts_count,
+            }
+
+        if action == "refresh":
+            if addr:
+                # Refresh single
+                extract_res = self.call_tool("schemaboot", ip, action="extract_single", addr=addr)
+                if extract_res.get("error") or not extract_res.get("ok"):
+                    return extract_res
+                func_data = extract_res.get("function")
+                if not func_data:
+                    return make_error(MCPError.NOT_FOUND, f"Failed to extract function at {addr}")
+
+                try:
+                    conn = sqlite3.connect(db_path)
+                    ensure_tables(conn)
+                    upsert_functions_batch(conn, [func_data])
+                    conn.close()
+                except Exception as e:
+                    return make_error(MCPError.DB_ERROR, f"Refresh database error: {e}")
+
+                try:
+                    write_insight_index([func_data])
+                    add_global_facts(_detect_global_facts(func_data))
+                except Exception as e:
+                    log_rpc(f"Failed to update L1/L2 index during refresh: {e}")
+
+                return {"ok": True, "refreshed": 1, "ea": addr}
+            else:
+                # Refresh all = Ingest
+                return self._handle_schemaboot({"action": "ingest"})
+
+        return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+
+    def _handle_intelligence_structural(self, args: dict) -> dict:
+        import os
+        import sqlite3
+        action = args.get("action")
+        constraints = args.get("constraints") or {}
+        addr = args.get("addr")
+        limit = args.get("limit", 50)
+        offset = args.get("offset", 0)
+        order_by = args.get("order_by")
+        include_apis = bool(args.get("include_apis", False))
+        include_strings = bool(args.get("include_strings", False))
+
+        session = self.current_session
+        ip = args.get("idb") or (session.idb_path if session else None)
+        if not ip:
+            return make_error(
+                MCPError.SESSION_REQUIRED,
+                "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+            )
+
+        from .intelligence.structural_index import (
+            get_db_path, ensure_tables, upsert_functions_batch,
+            execute_host_query, write_insight_index, add_global_facts,
+            _detect_global_facts
+        )
+
+        db_path = get_db_path(ip)
+
+        if action == "structural_delete":
+            if os.path.exists(db_path):
+                try:
+                    os.remove(db_path)
+                    return {"ok": True, "deleted": db_path}
+                except Exception as e:
+                    return make_error(MCPError.DB_ERROR, f"Failed to delete database: {e}")
+            return make_error(MCPError.FILE_NOT_FOUND, f"No index found at {db_path}")
+
+        if action == "structural_stats":
+            if not os.path.exists(db_path):
+                return make_error(MCPError.FILE_NOT_FOUND, "No index found. Run structural_ingest first.")
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM function_attrs")
+                total_indexed = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(DISTINCT func_ea) FROM function_apis")
+                funcs_with_apis = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(DISTINCT func_ea) FROM function_strings")
+                funcs_with_strings = cursor.fetchone()[0]
+                cursor.execute("SELECT AVG(size), AVG(entropy), AVG(bb_count), AVG(cyclomatic_complexity) FROM function_attrs")
+                avg_size, avg_entropy, avg_bb, avg_cc = cursor.fetchone()
+                cursor.execute("SELECT segment, COUNT(*) FROM function_attrs GROUP BY segment")
+                segments = {row[0]: row[1] for row in cursor.fetchall()}
+                conn.close()
+                return {
+                    "ok": True,
+                    "db_path": db_path,
+                    "total_indexed": total_indexed,
+                    "funcs_with_apis": funcs_with_apis,
+                    "funcs_with_strings": funcs_with_strings,
+                    "avg_size": round(avg_size or 0, 1),
+                    "avg_entropy": round(avg_entropy or 0, 2),
+                    "avg_bb_count": round(avg_bb or 0, 1),
+                    "avg_cyclomatic": round(avg_cc or 0, 1),
+                    "segments": segments,
+                }
+            except Exception as e:
+                return make_error(MCPError.DB_ERROR, f"Failed to retrieve stats: {e}")
+
+        if action == "structural_get":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for structural_get")
+            try:
+                ea = int(addr, 0) if isinstance(addr, str) else addr
+            except ValueError:
+                return make_error(MCPError.INVALID_ARGS, f"Invalid address format: {addr}")
+
+            if not os.path.exists(db_path):
+                return make_error(MCPError.FILE_NOT_FOUND, "No index found")
+
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM function_attrs WHERE ea=?", (ea,))
+                row = cursor.fetchone()
+                if not row:
+                    conn.close()
+                    return make_error(MCPError.NOT_FOUND, f"Function {addr} not in index")
+                cols = [d[0] for d in cursor.description]
+                result = dict(zip(cols, row))
+                if include_apis:
+                    cursor.execute("SELECT api_name FROM function_apis WHERE func_ea=?", (ea,))
+                    result["apis"] = [r[0] for r in cursor.fetchall()]
+                if include_strings:
+                    cursor.execute("SELECT string_text, string_ea FROM function_strings WHERE func_ea=?", (ea,))
+                    result["strings"] = [{"text": r[0], "ea": hex(r[1])} for r in cursor.fetchall()]
+                conn.close()
+                result["ea"] = hex(result["ea"])
+                return {"ok": True, "function": result}
+            except Exception as e:
+                return make_error(MCPError.DB_ERROR, f"Failed to get function: {e}")
+
+        if action == "structural_query":
+            return execute_host_query(
+                db_path, constraints, limit=limit, offset=offset, order_by=order_by,
+                include_apis=include_apis, include_strings=include_strings
+            )
+
+        if action == "structural_ingest":
+            extract_res = self.call_tool("intelligence", ip, action="structural_extract")
+            if extract_res.get("error") or not extract_res.get("ok"):
+                return extract_res
+
+            funcs_data = extract_res.get("functions") or []
+
+            try:
+                conn = sqlite3.connect(db_path)
+                ensure_tables(conn)
+                ingested = upsert_functions_batch(conn, funcs_data)
+                conn.close()
+            except Exception as e:
+                return make_error(MCPError.DB_ERROR, f"Ingestion database error: {e}")
+
+            try:
+                write_insight_index(funcs_data)
+                all_facts = []
+                for f in funcs_data:
+                    all_facts.extend(_detect_global_facts(f))
+                add_global_facts(all_facts)
+                facts_count = len(all_facts)
+            except Exception as e:
+                log_rpc(f"Failed to update L1/L2 index during structural_ingest: {e}")
+                facts_count = 0
+
+            return {
+                "ok": True,
+                "action": "structural_ingest",
+                "total_functions": len(funcs_data),
+                "ingested": ingested,
+                "db_path": db_path,
+                "l1_indexed": len(funcs_data),
+                "l2_facts_added": facts_count,
+            }
+
+        if action == "structural_refresh":
+            if addr:
+                extract_res = self.call_tool("intelligence", ip, action="structural_extract_single", addr=addr)
+                if extract_res.get("error") or not extract_res.get("ok"):
+                    return extract_res
+                func_data = extract_res.get("function")
+                if not func_data:
+                    return make_error(MCPError.NOT_FOUND, f"Failed to extract function at {addr}")
+
+                try:
+                    conn = sqlite3.connect(db_path)
+                    ensure_tables(conn)
+                    upsert_functions_batch(conn, [func_data])
+                    conn.close()
+                except Exception as e:
+                    return make_error(MCPError.DB_ERROR, f"Refresh database error: {e}")
+
+                try:
+                    write_insight_index([func_data])
+                    add_global_facts(_detect_global_facts(func_data))
+                except Exception as e:
+                    log_rpc(f"Failed to update L1/L2 index during structural_refresh: {e}")
+
+                return {"ok": True, "refreshed": 1, "ea": addr}
+            else:
+                return self._handle_intelligence_structural({"action": "structural_ingest", "idb": ip})
+
+        return make_error(MCPError.INVALID_ARGS, f"Unknown structural action: {action}")

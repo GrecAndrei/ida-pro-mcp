@@ -114,7 +114,6 @@ def test_tools_importers_use_double_dot():
         "classify.py": ("_api_categories",),
         "firmware_view.py": ("firmware_heuristics",),
         "llm_helpers.py": ("_api_categories",),
-        "schemaboot.py": ("hybrid_search",),
     }
     for fname, mods in expected_double_dot.items():
         src = _read(os.path.join(TOOLS, fname))

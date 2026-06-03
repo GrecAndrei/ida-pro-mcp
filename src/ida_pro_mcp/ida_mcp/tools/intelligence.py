@@ -25,6 +25,169 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from .string_ops import shannon_entropy as _shannon_entropy
+except ImportError:
+    try:
+        from string_ops import shannon_entropy as _shannon_entropy
+    except ImportError:
+        from ida_pro_mcp.ida_mcp.tools.string_ops import shannon_entropy as _shannon_entropy
+
+import re
+from collections import Counter
+from typing import Any
+
+# Known crypto constant values (subset)
+_CRYPTO_CONSTS: dict[int, str] = {
+    0x67452301: "MD5_A", 0xEFCDAB89: "MD5_B", 0x98BADCFE: "MD5_C", 0x10325476: "MD5_D",
+    0x6A09E667: "SHA256_H0", 0xBB67AE85: "SHA256_H1", 0x3C6EF372: "SHA256_H2",
+    0xA54FF53A: "SHA256_H3", 0x510E527F: "SHA256_H4", 0x9B05688C: "SHA256_H5",
+    0x1F83D9AB: "SHA256_H6", 0x5BE0CD19: "SHA256_H7",
+    0x36E8E8E9: "CRC32", 0x04C11DB7: "CRC32_POLY",
+    0xCBF29CE484222325: "FNV_OFFSET", 0x100000001B3: "FNV_PRIME",
+}
+
+
+def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
+    """Extract deterministic attributes for a single function using only IDA APIs.
+
+    Avoids Hex-Rays decompilation to maximize performance.
+    """
+    func = ida_funcs.get_func(func_ea)
+    if not func:
+        return {}
+
+    start = func.start_ea
+    end = func.end_ea
+    size = end - start
+    name = idc.get_func_name(start) or f"sub_{start:X}"
+    seg = idaapi.getseg(start)
+    seg_name = ida_segment.get_segm_name(seg) if seg else ""
+
+    # Flags
+    flags = func.flags
+    is_thunk = 1 if (flags & idaapi.FUNC_THUNK) else 0
+    is_library = 1 if (flags & idaapi.FUNC_LIB) else 0
+
+    # Instruction counts
+    mnem_counts: Counter = Counter()
+    bb_count = 0
+    has_loops = 0
+    max_loop_depth = 0
+    apis: set[str] = set()
+    strings: list[tuple[str, int]] = []
+    data_refs = 0
+    crypto_constants: list[tuple[int, int]] = []  # (value, ea)
+
+    # Walk basic blocks
+    import ida_ua
+    flow = idaapi.FlowChart(func)
+    for block in flow:
+        bb_count += 1
+        for ea in idautils.Heads(block.start_ea, block.end_ea):
+            mnem = idc.print_insn_mnem(ea)
+            if not mnem:
+                continue
+            mnem_l = mnem.lower()
+            mnem_counts[mnem_l] += 1
+
+            # API calls via xrefs
+            if mnem_l in ("call", "jmp"):
+                for xref in idautils.XrefsFrom(ea, 0):
+                    if xref.type == idaapi.fl_CN or xref.type == idaapi.fl_CF:
+                        tgt_name = idc.get_name(xref.to)
+                        if tgt_name:
+                            apis.add(tgt_name)
+
+            # String refs via operand xrefs
+            for i in range(idaapi.UA_MAXOP):
+                op_type = idc.get_operand_type(ea, i)
+                if op_type == idc.o_imm:
+                    val = idc.get_operand_value(ea, i)
+                    s = idc.get_strlit_contents(val)
+                    if s:
+                        txt = s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s)
+                        if len(txt) >= 4:
+                            strings.append((txt[:256], val))
+                    # Check for crypto constants in immediates
+                    if val in _CRYPTO_CONSTS:
+                        crypto_constants.append((val, ea))
+
+            # Decode instruction to check operands for crypto constants
+            insn = ida_ua.insn_t()
+            if ida_ua.decode_insn(insn, ea) > 0:
+                for op in insn.ops:
+                    if op.type == ida_ua.o_imm:
+                        val = op.value
+                        if val in _CRYPTO_CONSTS and (val, ea) not in crypto_constants:
+                            crypto_constants.append((val, ea))
+
+            # Data refs
+            for xref in idautils.XrefsFrom(ea, 0):
+                if xref.iscode == 0:
+                    data_refs += 1
+
+    # Check for loops via back-edges in flow chart
+    for block in flow:
+        loop_depth = 0
+        for succ in block.succs():
+            if succ.start_ea <= block.start_ea:
+                has_loops = 1
+                loop_depth += 1
+        max_loop_depth = max(max_loop_depth, loop_depth)
+
+    # Cyclomatic complexity: E - N + 2P
+    edges = sum(len(list(b.succs())) for b in flow)
+    cyclomatic = edges - bb_count + 2
+
+    # Xref counts
+    incoming = sum(1 for _ in idautils.XrefsTo(start, 0))
+    outgoing = sum(1 for _ in idautils.XrefsFrom(start, 0))
+
+    # Entropy
+    func_bytes = ida_bytes.get_bytes(start, min(size, 4096))
+    entropy = _shannon_entropy(func_bytes) if func_bytes else 0.0
+
+    # Derived metrics
+    total_insns = sum(mnem_counts.values())
+    xor_ratio = round(mnem_counts.get("xor", 0) / max(1, total_insns), 4)
+    has_crypto_constants = 1 if crypto_constants else 0
+
+    return {
+        "ea": start,
+        "name": name,
+        "size": size,
+        "segment": seg_name,
+        "is_thunk": is_thunk,
+        "is_library": is_library,
+        "bb_count": bb_count,
+        "cyclomatic_complexity": max(1, cyclomatic),
+        "incoming_xrefs": incoming,
+        "outgoing_xrefs": outgoing,
+        "entropy": entropy,
+        "call_count": mnem_counts.get("call", 0),
+        "xor_count": mnem_counts.get("xor", 0),
+        "mov_count": mnem_counts.get("mov", 0) + mnem_counts.get("movzx", 0) + mnem_counts.get("movsx", 0),
+        "cmp_count": mnem_counts.get("cmp", 0),
+        "jmp_count": mnem_counts.get("jmp", 0) + mnem_counts.get("je", 0) + mnem_counts.get("jne", 0) + mnem_counts.get("jz", 0) + mnem_counts.get("jnz", 0),
+        "ret_count": mnem_counts.get("ret", 0) + mnem_counts.get("retn", 0),
+        "push_count": mnem_counts.get("push", 0),
+        "pop_count": mnem_counts.get("pop", 0),
+        "lea_count": mnem_counts.get("lea", 0),
+        "test_count": mnem_counts.get("test", 0),
+        "api_count": len(apis),
+        "string_count": len(strings),
+        "data_ref_count": data_refs,
+        "has_loops": has_loops,
+        "max_loop_depth": max_loop_depth,
+        "has_crypto_constants": has_crypto_constants,
+        "xor_ratio": xor_ratio,
+        "apis": sorted(apis),
+        "strings": strings,
+        "crypto_constants": crypto_constants,
+    }
+
+
 
 @tool
 @idaread
@@ -44,8 +207,16 @@ def intelligence(
             "blackboard_search",
             "export_index_summary",
             "evidence_card",
+            "structural_ingest",
+            "structural_query",
+            "structural_get",
+            "structural_stats",
+            "structural_delete",
+            "structural_refresh",
+            "structural_extract",
+            "structural_extract_single",
         ],
-        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card",
+        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single",
     ],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Free-form text or comma-separated list"] = None,
@@ -472,6 +643,216 @@ def intelligence(
                 "persisted": persisted,
                 "persisted_id": persisted_id,
             }
+
+        # ─────────────────────────────────────────────────────────────────────
+        # Structural Ingestion and Query Actions
+        # ─────────────────────────────────────────────────────────────────────
+        if action in (
+            "structural_extract",
+            "structural_extract_single",
+            "structural_ingest",
+            "structural_query",
+            "structural_get",
+            "structural_stats",
+            "structural_delete",
+            "structural_refresh",
+        ):
+            import sqlite3
+            import sys
+            import time
+
+            idb_path = idc.get_idb_path()
+            if not idb_path:
+                return {"error": True, "message": "No active IDB path found"}
+
+            try:
+                from ida_pro_mcp.host.intelligence.structural_index import (
+                    get_db_path, ensure_tables, upsert_functions_batch,
+                    execute_host_query, write_insight_index, add_global_facts,
+                    _detect_global_facts
+                )
+            except ImportError:
+                _src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+                if _src_dir not in sys.path:
+                    sys.path.insert(0, _src_dir)
+                from ida_pro_mcp.host.intelligence.structural_index import (
+                    get_db_path, ensure_tables, upsert_functions_batch,
+                    execute_host_query, write_insight_index, add_global_facts,
+                    _detect_global_facts
+                )
+
+            db_path = get_db_path(idb_path)
+
+            if action == "structural_extract":
+                funcs = list(idautils.Functions())
+                results = []
+                for func_ea in funcs:
+                    attrs = _extract_function_attributes(func_ea)
+                    if attrs:
+                        results.append(attrs)
+                return {"ok": True, "functions": results}
+
+            if action == "structural_extract_single":
+                if not addr:
+                    return {"error": True, "message": "addr required"}
+                ea, err = validate_addr(addr, require_func=True)
+                if err:
+                    return err
+                attrs = _extract_function_attributes(ea)
+                if not attrs:
+                    return {"error": True, "message": "Extraction failed"}
+                return {"ok": True, "function": attrs}
+
+            if action == "structural_delete":
+                if os.path.exists(db_path):
+                    try:
+                        os.remove(db_path)
+                        return {"ok": True, "deleted": db_path}
+                    except Exception as e:
+                        return {"error": True, "message": f"Failed to delete database: {e}"}
+                return {"error": True, "message": f"No index found at {db_path}"}
+
+            if action == "structural_stats":
+                if not os.path.exists(db_path):
+                    return {"error": True, "message": "No index found. Run structural_ingest first."}
+                try:
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM function_attrs")
+                    total_indexed = cursor.fetchone()[0]
+                    cursor.execute("SELECT COUNT(DISTINCT func_ea) FROM function_apis")
+                    funcs_with_apis = cursor.fetchone()[0]
+                    cursor.execute("SELECT COUNT(DISTINCT func_ea) FROM function_strings")
+                    funcs_with_strings = cursor.fetchone()[0]
+                    cursor.execute("SELECT AVG(size), AVG(entropy), AVG(bb_count), AVG(cyclomatic_complexity) FROM function_attrs")
+                    avg_size, avg_entropy, avg_bb, avg_cc = cursor.fetchone()
+                    cursor.execute("SELECT segment, COUNT(*) FROM function_attrs GROUP BY segment")
+                    segments = {row[0]: row[1] for row in cursor.fetchall()}
+                    conn.close()
+                    return {
+                        "ok": True,
+                        "db_path": db_path,
+                        "total_indexed": total_indexed,
+                        "funcs_with_apis": funcs_with_apis,
+                        "funcs_with_strings": funcs_with_strings,
+                        "avg_size": round(avg_size or 0, 1),
+                        "avg_entropy": round(avg_entropy or 0, 2),
+                        "avg_bb_count": round(avg_bb or 0, 1),
+                        "avg_cyclomatic": round(avg_cc or 0, 1),
+                        "segments": segments,
+                    }
+                except Exception as e:
+                    return {"error": True, "message": f"Failed to retrieve stats: {e}"}
+
+            if action == "structural_get":
+                if not addr:
+                    return {"error": True, "message": "addr required for structural_get"}
+                try:
+                    ea = int(addr, 0) if isinstance(addr, str) else addr
+                except ValueError:
+                    return {"error": True, "message": f"Invalid address format: {addr}"}
+
+                if not os.path.exists(db_path):
+                    return {"error": True, "message": "No index found"}
+                try:
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM function_attrs WHERE ea=?", (ea,))
+                    row = cursor.fetchone()
+                    if not row:
+                        conn.close()
+                        return {"error": True, "message": f"Function {addr} not in index"}
+                    cols = [d[0] for d in cursor.description]
+                    result = dict(zip(cols, row))
+                    include_apis = bool(kwargs.get("include_apis", False))
+                    include_strings = bool(kwargs.get("include_strings", False))
+                    if include_apis:
+                        cursor.execute("SELECT api_name FROM function_apis WHERE func_ea=?", (ea,))
+                        result["apis"] = [r[0] for r in cursor.fetchall()]
+                    if include_strings:
+                        cursor.execute("SELECT string_text, string_ea FROM function_strings WHERE func_ea=?", (ea,))
+                        result["strings"] = [{"text": r[0], "ea": hex(r[1])} for r in cursor.fetchall()]
+                    conn.close()
+                    result["ea"] = hex(result["ea"])
+                    return {"ok": True, "function": result}
+                except Exception as e:
+                    return {"error": True, "message": f"Failed to get function: {e}"}
+
+            if action == "structural_query":
+                constraints = kwargs.get("constraints") or {}
+                limit = kwargs.get("limit", max_items)
+                offset = kwargs.get("offset", 0)
+                order_by = kwargs.get("order_by")
+                include_apis = bool(kwargs.get("include_apis", False))
+                include_strings = bool(kwargs.get("include_strings", False))
+                return execute_host_query(
+                    db_path, constraints, limit=limit, offset=offset, order_by=order_by,
+                    include_apis=include_apis, include_strings=include_strings
+                )
+
+            if action == "structural_ingest":
+                t0 = time.time()
+                extract_res = intelligence(action="structural_extract")
+                if extract_res.get("error") or not extract_res.get("ok"):
+                    return extract_res
+                funcs_data = extract_res.get("functions") or []
+
+                try:
+                    conn = sqlite3.connect(db_path)
+                    ensure_tables(conn)
+                    ingested = upsert_functions_batch(conn, funcs_data)
+                    conn.close()
+                except Exception as e:
+                    return {"error": True, "message": f"Database error during ingest: {e}"}
+
+                try:
+                    write_insight_index(funcs_data)
+                    all_facts = []
+                    for f in funcs_data:
+                        all_facts.extend(_detect_global_facts(f))
+                    add_global_facts(all_facts)
+                    facts_count = len(all_facts)
+                except Exception:
+                    facts_count = 0
+
+                elapsed = time.time() - t0
+                return {
+                    "ok": True,
+                    "action": "structural_ingest",
+                    "total_functions": len(funcs_data),
+                    "ingested": ingested,
+                    "db_path": db_path,
+                    "l1_indexed": len(funcs_data),
+                    "l2_facts_added": facts_count,
+                    "elapsed_seconds": elapsed,
+                }
+
+            if action == "structural_refresh":
+                if addr:
+                    extract_res = intelligence(action="structural_extract_single", addr=addr)
+                    if extract_res.get("error") or not extract_res.get("ok"):
+                        return extract_res
+                    func_data = extract_res.get("function")
+                    if not func_data:
+                        return {"error": True, "message": f"Failed to extract function at {addr}"}
+
+                    try:
+                        conn = sqlite3.connect(db_path)
+                        ensure_tables(conn)
+                        upsert_functions_batch(conn, [func_data])
+                        conn.close()
+                    except Exception as e:
+                        return {"error": True, "message": f"Database error during refresh: {e}"}
+
+                    try:
+                        write_insight_index([func_data])
+                        add_global_facts(_detect_global_facts(func_data))
+                    except Exception:
+                        pass
+
+                    return {"ok": True, "refreshed": 1, "ea": addr}
+                else:
+                    return intelligence(action="structural_ingest")
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

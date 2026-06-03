@@ -77,6 +77,9 @@ def test_intelligence_tool_action_enum_has_13_entries():
         "index_function", "index_batch", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary",
         "evidence_card",
+        "structural_ingest", "structural_query", "structural_get",
+        "structural_stats", "structural_delete", "structural_refresh",
+        "structural_extract", "structural_extract_single",
     }
     assert set(actions) == expected, f"mismatch: got {set(actions)}"
 
@@ -138,8 +141,8 @@ def test_schemas_py_knows_about_intelligence_tool():
     assert "intelligence" in TOOL_ACTIONS
     assert "intelligence" in ADVERTISED_TOOLS
     # The wrapper actions (grep/pick/head/tail/next/stats) extend the
-    # enum at schema-build time; the raw TOOL_ACTIONS has 13.
-    assert len(TOOL_ACTIONS["intelligence"]) == 13
+    # enum at schema-build time; the raw TOOL_ACTIONS has 21.
+    assert len(TOOL_ACTIONS["intelligence"]) == 21
 
 
 def test_intelligence_arg_schema_includes_intelligence_specific_args():

@@ -68,7 +68,7 @@ def test_types_contract_has_inferred_types_and_propagation_shape():
 
 
 def test_intelligence_contract_has_anchor_coverage_and_thresholds():
-    src = _read("src/ida_pro_mcp/host/intelligence_core.py")
+    src = _read("src/ida_pro_mcp/host/intelligence/core.py")
     assert "def anchor_coverage_report" in src
     assert "ANCHOR_MIN_CONFIDENCE" in src
     assert "min_thr = max" in src
@@ -301,7 +301,7 @@ def test_nav_semantic_goto_reports_backend_and_fallback_warning():
 
 
 def test_intelligence_find_model_uses_path_cache():
-    src = _read("src/ida_pro_mcp/host/intelligence_core.py")
+    src = _read("src/ida_pro_mcp/host/intelligence/core.py")
     assert "_MODEL_PATH_CACHE = None" in src
     assert "if isinstance(_MODEL_PATH_CACHE, str):" in src
 

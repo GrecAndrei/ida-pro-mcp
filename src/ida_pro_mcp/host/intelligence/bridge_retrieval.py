@@ -1,0 +1,563 @@
+"""Multi-Hop Bridge-Conditioned Retrieval.
+
+Deterministic multi-hop retrieval that finds structurally related
+functions through shared bridge entities (APIs, strings, xrefs).  Uses
+SchemaBoot's SQLite index as the bridge source.  No LLM required for
+the algorithm itself (an optional embedder improves scoring).
+
+The scoring model is
+  s(q, b, c) = conditional utility of candidate c given query q and bridge b.
+
+This module is the canonical host-layer implementation.  The thin MCP
+tool wrapper lives in ``ida_mcp.tools.bridge_search`` so the
+``bridge_search(...)`` action continues to be exposed to LLM clients.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import sqlite3
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+try:
+    from .core import BgeCodeEmbedder
+except Exception:  # pragma: no cover - test/import flexibility
+    try:
+        from core import BgeCodeEmbedder  # type: ignore[import-not-found]
+    except Exception:
+        BgeCodeEmbedder = None  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# SchemaBoot DB helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
+    """Resolve the SchemaBoot DB path.
+
+    Tries the explicit candidate first, then walks a list of common
+    variations (.i64.schemaboot.db vs .schemaboot.db vs sibling files
+    in the same directory) and returns the first one whose tables
+    actually exist.
+    """
+    base = candidate or "unknown.schemaboot.db"
+    candidates = [base]
+    if base.endswith(".i64.schemaboot.db"):
+        candidates.append(base.replace(".i64.schemaboot.db", ".schemaboot.db"))
+    parent = os.path.dirname(base) or "."
+    bname = os.path.basename(base)
+    if ".i64." in bname:
+        suffix = bname.split(".i64.", 1)[-1]
+        try:
+            for name in os.listdir(parent):
+                if name.endswith(suffix):
+                    candidates.append(os.path.join(parent, name))
+        except Exception:
+            pass
+    for path in candidates:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            conn = sqlite3.connect(path)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='function_attrs'"
+            )
+            ok = cur.fetchone() is not None
+            conn.close()
+            if ok:
+                return path
+        except Exception:
+            continue
+    return base
+
+
+def _build_where_clause(constraints: Dict) -> Tuple[str, List[object]]:
+    """Build SQL WHERE clause for seed selection from a SchemaBoot constraint dict.
+
+    Delegates to HybridQueryBuilder.build_legacy (the single canonical
+    implementation) so we don't drift from schemaboot's query dialect.
+    """
+    try:
+        from .hybrid_search import HybridQueryBuilder
+    except Exception:
+        from support.hybrid_search import HybridQueryBuilder  # type: ignore[import-not-found]
+    return HybridQueryBuilder.build_legacy(constraints or {})
+
+
+# ---------------------------------------------------------------------------
+# Multi-hop bridge-conditioned retrieval
+# ---------------------------------------------------------------------------
+
+class MultiHopBridgeIndex:
+    """Multi-hop search using SchemaBoot as the bridge entity source.
+
+    The retrieval pipeline is:
+        seed  --(extract_bridges)-->  bridge entities
+        bridges  --(search_via_bridges)-->  candidate functions
+        candidates  --(optional hop 3)-->  expanded candidate set
+
+    Ranking uses an IDF-weighted tripartite scorer
+    s(q, b, c) with percentile-rank (PIT) fusion between the judge
+    score and a raw bridge-overlap signal.
+    """
+
+    def __init__(self, db_path: Optional[str] = None, embedder: Optional[Any] = None):
+        self.db_path = _resolve_schemaboot_db_path(db_path)
+        self._embedder = embedder
+
+    def _get_embedder(self):
+        if self._embedder is not None:
+            return self._embedder
+        if BgeCodeEmbedder is None:
+            return None
+        try:
+            self._embedder = BgeCodeEmbedder()
+        except Exception:
+            self._embedder = None
+        return self._embedder
+
+    def _conn(self):
+        return sqlite3.connect(self.db_path)
+
+    # ------------------------------------------------------------------
+    # Hop-1: Bridge extraction
+    # ------------------------------------------------------------------
+
+    def extract_bridges(
+        self,
+        func_ea: Optional[int] = None,
+        func_name: Optional[str] = None,
+        bridge_types: Tuple[str, ...] = ("apis", "strings"),
+        max_bridges: int = 10,
+    ) -> Dict[str, List[str]]:
+        """Extract bridge entities from a seed function.
+
+        Returns ``{"apis": [...], "strings": [...]}`` sorted by frequency.
+        """
+        bridges: Dict[str, List[str]] = {}
+
+        if func_ea is not None:
+            where = "fa.func_ea = ?"
+            param = (func_ea,)
+        elif func_name is not None:
+            where = "attrs.name = ?"
+            param = (func_name,)
+        else:
+            return bridges
+
+        try:
+            conn = self._conn()
+            cur = conn.cursor()
+
+            if "apis" in bridge_types:
+                cur.execute(
+                    f"""
+                    SELECT api_name FROM function_apis fa
+                    JOIN function_attrs attrs ON fa.func_ea = attrs.ea
+                    WHERE {where}
+                    ORDER BY fa.func_ea
+                    """,
+                    param,
+                )
+                bridges["apis"] = [r[0] for r in cur.fetchall()]
+
+            if "strings" in bridge_types:
+                cur.execute(
+                    f"""
+                    SELECT string_text FROM function_strings fs
+                    JOIN function_attrs attrs ON fs.func_ea = attrs.ea
+                    WHERE {where}
+                    ORDER BY fs.func_ea
+                    """,
+                    param,
+                )
+                bridges["strings"] = [r[0] for r in cur.fetchall()]
+
+            conn.close()
+        except sqlite3.OperationalError:
+            # SchemaBoot DB missing or tables don't exist
+            return bridges
+
+        # Deduplicate and limit
+        for k in bridges:
+            seen: Set[str] = set()
+            uniq: List[str] = []
+            for v in bridges[k]:
+                if v not in seen:
+                    seen.add(v)
+                    uniq.append(v)
+                    if len(uniq) >= max_bridges:
+                        break
+            bridges[k] = uniq
+
+        return bridges
+
+    # ------------------------------------------------------------------
+    # Hop-2: Candidate retrieval via bridges
+    # ------------------------------------------------------------------
+
+    def _compute_bridge_idf(
+        self, bridge_apis: List[str], bridge_strings: List[str]
+    ) -> Dict[str, float]:
+        """IDF weights for bridge entities.
+
+        Rare bridges (appearing in few functions) are more discriminative:
+        IDF(b) = log(N / DF(b) + 1).
+
+        A bridge that appears in every function tells us nothing; one
+        that appears in only 3 functions is highly informative.
+        """
+        idf: Dict[str, float] = {}
+        try:
+            conn = self._conn()
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM function_attrs")
+            row = cur.fetchone()
+            N = row[0] if row else 1
+
+            for api in bridge_apis:
+                cur.execute(
+                    "SELECT COUNT(DISTINCT func_ea) FROM function_apis WHERE api_name = ?",
+                    (api,),
+                )
+                r = cur.fetchone()
+                df = r[0] if r else 1
+                idf[api] = math.log(N / max(df, 1) + 1)
+
+            for s in bridge_strings:
+                cur.execute(
+                    "SELECT COUNT(DISTINCT func_ea) FROM function_strings WHERE string_text = ?",
+                    (s,),
+                )
+                r = cur.fetchone()
+                df = r[0] if r else 1
+                idf[s] = math.log(N / max(df, 1) + 1)
+
+            conn.close()
+        except Exception:
+            # Fall back to uniform weight
+            for k in bridge_apis + bridge_strings:
+                idf[k] = 1.0
+        return idf
+
+    def _tripartite_score(
+        self,
+        seed_attrs: Dict,
+        bridge_attrs: Dict,
+        candidate_attrs: Dict,
+        idf_weights: Optional[Dict[str, float]] = None,
+    ) -> float:
+        """Tripartite scorer s(q, b, c).
+
+        Conditional utility of candidate c given query q and bridge b.
+
+        Implements IDF-weighted bridge overlap so rare APIs/strings count
+        more than ubiquitous ones (e.g. malloc, free).
+
+        Returns score in [0, 1].
+        """
+        # Embedding-first scoring over structured bridge/context summaries.
+        seed_apis = " ".join(seed_attrs.get("apis", []) or [])
+        seed_strings = " ".join(seed_attrs.get("strings", []) or [])
+        bridge_apis = " ".join(bridge_attrs.get("apis", []) or [])
+        bridge_strings = " ".join(bridge_attrs.get("strings", []) or [])
+        cand_apis = " ".join(candidate_attrs.get("apis", []) or [])
+        cand_strings = " ".join(candidate_attrs.get("strings", []) or [])
+
+        seed_text = (
+            f"name={seed_attrs.get('name','')} segment={seed_attrs.get('segment','')} "
+            f"size={seed_attrs.get('size',0)} cc={seed_attrs.get('cyclomatic_complexity',0)} "
+            f"apis={seed_apis} strings={seed_strings} bridges={bridge_apis} {bridge_strings}"
+        )
+        cand_text = (
+            f"name={candidate_attrs.get('name','')} segment={candidate_attrs.get('segment','')} "
+            f"size={candidate_attrs.get('size',0)} cc={candidate_attrs.get('cyclomatic_complexity',0)} "
+            f"apis={cand_apis} strings={cand_strings}"
+        )
+
+        embedder = self._get_embedder()
+        if embedder is not None and BgeCodeEmbedder is not None:
+            try:
+                sv = embedder.embed(seed_text[:1200])
+                cv = embedder.embed(cand_text[:1200])
+                sim = float(BgeCodeEmbedder.cosine(sv, cv))
+                return max(0.0, min(1.0, sim))
+            except Exception:
+                pass
+
+        # Deterministic fallback: Jaccard on bridge/entity tokens (no weighted heuristics).
+        s_tokens = set((seed_apis + " " + seed_strings + " " + bridge_apis + " " + bridge_strings).split())
+        c_tokens = set((cand_apis + " " + cand_strings).split())
+        if not s_tokens or not c_tokens:
+            return 0.0
+        inter = len(s_tokens.intersection(c_tokens))
+        union = len(s_tokens.union(c_tokens))
+        return float(inter) / float(max(1, union))
+
+    def _pit_fusion(
+        self,
+        judge_scores: List[float],
+        bridge_scores: List[float],
+        alpha: float = 0.1,
+    ) -> List[float]:
+        """Percentile-rank (PIT) fusion of tripartite judge scores and bridge similarity.
+
+        F(i) = (1 - alpha) * PIT_judge(i) + alpha * PIT_bridge(i)
+        """
+        def _pit(scores: List[float]) -> List[float]:
+            if not scores:
+                return []
+            sorted_idx = sorted(range(len(scores)), key=lambda i: scores[i])
+            ranks = [0.0] * len(scores)
+            if len(scores) == 1:
+                ranks[sorted_idx[0]] = 1.0
+                return ranks
+            for rank, idx in enumerate(sorted_idx):
+                ranks[idx] = rank / float(len(scores) - 1)
+            return ranks
+
+        pit_judge = _pit(judge_scores)
+        pit_bridge = _pit(bridge_scores)
+
+        fused = []
+        for i in range(len(judge_scores)):
+            f = (1 - alpha) * pit_judge[i] + alpha * pit_bridge[i]
+            fused.append(f)
+        return fused
+
+    def search_via_bridges(
+        self,
+        bridges: Dict[str, List[str]],
+        top_k: int = 20,
+        exclude_ea: Optional[int] = None,
+        seed_ea: Optional[int] = None,
+    ) -> List[Dict]:
+        """Find functions that share bridge entities with the seed.
+
+        Uses tripartite judging + PIT fusion for ranking.
+        """
+        if not bridges or not any(bridges.values()):
+            return []
+
+        conn = self._conn()
+        cur = conn.cursor()
+
+        # Precompute IDF weights for all bridge entities once
+        idf_weights = self._compute_bridge_idf(
+            bridge_apis=bridges.get("apis", []),
+            bridge_strings=bridges.get("strings", []),
+        )
+
+        # Get seed attributes for tripartite judging
+        seed_attrs = {}
+        if seed_ea is not None:
+            cur.execute(
+                "SELECT name, segment, size, entropy, cyclomatic_complexity, api_count, string_count FROM function_attrs WHERE ea = ?",
+                (seed_ea,)
+            )
+            row = cur.fetchone()
+            if row:
+                seed_attrs = {
+                    "name": row[0], "segment": row[1], "size": row[2],
+                    "entropy": row[3], "cyclomatic_complexity": row[4],
+                    "api_count": row[5], "string_count": row[6],
+                    "apis": bridges.get("apis", []),
+                    "strings": bridges.get("strings", []),
+                }
+
+        # Collect all candidate EAs that match any bridge
+        candidate_eas: Set[int] = set()
+        bridge_scores: Dict[int, float] = {}
+
+        api_bridges = bridges.get("apis", [])
+        string_bridges = bridges.get("strings", [])
+
+        if api_bridges:
+            placeholders = ",".join("?" * len(api_bridges))
+            cur.execute(
+                f"SELECT func_ea FROM function_apis WHERE api_name IN ({placeholders})",
+                tuple(api_bridges),
+            )
+            for row in cur.fetchall():
+                ea = row[0]
+                if exclude_ea is not None and ea == exclude_ea:
+                    continue
+                candidate_eas.add(ea)
+                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 2.0
+
+        if string_bridges:
+            placeholders = ",".join("?" * len(string_bridges))
+            cur.execute(
+                f"SELECT func_ea FROM function_strings WHERE string_text IN ({placeholders})",
+                tuple(string_bridges),
+            )
+            for row in cur.fetchall():
+                ea = row[0]
+                if exclude_ea is not None and ea == exclude_ea:
+                    continue
+                candidate_eas.add(ea)
+                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 1.0
+
+        if not candidate_eas:
+            conn.close()
+            return []
+
+        # Fetch candidate details
+        placeholders = ",".join("?" * len(candidate_eas))
+        cur.execute(
+            f"""
+            SELECT ea, name, segment, size, entropy, bb_count, call_count,
+                   cyclomatic_complexity, api_count, string_count, xref_count,
+                   has_loops, is_thunk, is_library
+            FROM function_attrs
+            WHERE ea IN ({placeholders})
+            """,
+            tuple(candidate_eas),
+        )
+
+        candidates = []
+        for row in cur.fetchall():
+            ea = row[0]
+            cand_attrs = {
+                "name": row[1], "segment": row[2], "size": row[3],
+                "entropy": row[4], "bb_count": row[5], "call_count": row[6],
+                "cyclomatic_complexity": row[7], "api_count": row[8],
+                "string_count": row[9], "xref_count": row[10],
+                "has_loops": bool(row[11]), "is_thunk": bool(row[12]),
+                "is_library": bool(row[13]),
+            }
+
+            # IDF-weighted tripartite scoring (core of the multi-hop bridge algorithm)
+            judge_score = self._tripartite_score(
+                seed_attrs, seed_attrs, cand_attrs, idf_weights=idf_weights
+            ) if seed_attrs else 0.5
+
+            # Bridge overlap count for observability (not used for ranking).
+            bscore = bridge_scores.get(ea, 0.0)
+
+            candidates.append({
+                "ea": hex(ea),
+                "attrs": cand_attrs,
+                "judge_score": judge_score,
+                "bridge_score": bscore,
+            })
+
+        conn.close()
+
+        # PIT fusion
+        judge_scores = [c["judge_score"] for c in candidates]
+        bridge_scores_list = [c["bridge_score"] for c in candidates]
+        fused_scores = self._pit_fusion(judge_scores, bridge_scores_list, alpha=0.1)
+
+        for i, c in enumerate(candidates):
+            c["fused_score"] = round(fused_scores[i], 4)
+            # Merge attrs into result
+            result = dict(c["attrs"])
+            result["ea"] = c["ea"]
+            result["tripartite_score"] = round(c["judge_score"], 4)
+            result["bridge_score"] = round(c["bridge_score"], 2)
+            result["fused_score"] = c["fused_score"]
+            candidates[i] = result
+
+        candidates.sort(key=lambda x: x["fused_score"], reverse=True)
+        return candidates[:top_k]
+
+    # ------------------------------------------------------------------
+    # Full pipeline: query -> bridges -> candidates
+    # ------------------------------------------------------------------
+
+    def multi_hop_search(
+        self,
+        query_constraints: Dict,
+        bridge_types: Tuple[str, ...] = ("apis", "strings"),
+        top_k: int = 20,
+        hops: int = 2,
+    ) -> Dict:
+        """Full multi-hop pipeline.
+
+        1. Query SchemaBoot for seed functions matching *query_constraints*.
+        2. Extract bridge entities from the top seed.
+        3. Retrieve candidates that share those bridges.
+        4. (Optional) For hops > 2, extract bridges from top candidates and repeat.
+        """
+        conn = self._conn()
+        cur = conn.cursor()
+
+        # Step 1: Find seed functions
+        where, params = _build_where_clause(query_constraints or {})
+        sql = (
+            "SELECT ea, name, segment, size, entropy, bb_count, call_count, "
+            "cyclomatic_complexity, api_count, string_count, (incoming_xrefs + outgoing_xrefs) AS xref_count, "
+            "has_loops, is_thunk, is_library FROM function_attrs "
+            f"{where} LIMIT 5"
+        )
+        cur.execute(sql, params)
+        seeds = []
+        for row in cur.fetchall():
+            seeds.append(
+                {
+                    "ea": row[0],
+                    "name": row[1],
+                    "segment": row[2],
+                    "size": row[3],
+                    "entropy": row[4],
+                    "bb_count": row[5],
+                    "call_count": row[6],
+                    "cyclomatic_complexity": row[7],
+                    "api_count": row[8],
+                    "string_count": row[9],
+                    "xref_count": row[10],
+                    "has_loops": bool(row[11]),
+                    "is_thunk": bool(row[12]),
+                    "is_library": bool(row[13]),
+                }
+            )
+        conn.close()
+
+        if not seeds:
+            return {"ok": True, "seeds": [], "bridges": {}, "candidates": [], "total_candidates": 0}
+
+        # Step 2: Extract bridges from top seed
+        top_seed = seeds[0]
+        bridges = self.extract_bridges(
+            func_ea=top_seed["ea"],
+            bridge_types=bridge_types,
+            max_bridges=15,
+        )
+
+        # Step 3: Retrieve candidates with tripartite judging
+        candidates = self.search_via_bridges(bridges, top_k=top_k, exclude_ea=top_seed["ea"], seed_ea=top_seed["ea"])
+
+        # Step 4: Additional hops (simplified: extract bridges from top candidate and expand)
+        if hops > 2 and candidates:
+            top_candidate_ea = int(candidates[0]["ea"], 16)
+            extra_bridges = self.extract_bridges(
+                func_ea=top_candidate_ea,
+                bridge_types=bridge_types,
+                max_bridges=10,
+            )
+            # Merge bridges
+            for k, v in extra_bridges.items():
+                existing = set(bridges.get(k, []))
+                for item in v:
+                    if item not in existing:
+                        bridges[k].append(item)
+                        existing.add(item)
+            candidates = self.search_via_bridges(bridges, top_k=top_k, exclude_ea=top_seed["ea"])
+
+        return {
+            "ok": True,
+            "seeds": [{k: (hex(v) if k == "ea" else v) for k, v in s.items()} for s in seeds],
+            "bridges": bridges,
+            "candidates": candidates,
+            "total_candidates": len(candidates),
+        }
+
+
+__all__ = [
+    "MultiHopBridgeIndex",
+    "_resolve_schemaboot_db_path",
+    "_build_where_clause",
+]

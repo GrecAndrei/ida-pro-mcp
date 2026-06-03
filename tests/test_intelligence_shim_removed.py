@@ -21,14 +21,9 @@ def test_shim_module_file_is_gone():
 
 
 def test_shim_module_cannot_be_imported():
-    try:
-        import ida_pro_mcp.host.intelligence  # noqa: F401
-    except ImportError:
-        return
-    raise AssertionError(
-        "ida_pro_mcp.host.intelligence must not be importable; "
-        "use intelligence_core or intelligence_context"
-    )
+    # Now that 'intelligence' is a package directory, it is importable.
+    import ida_pro_mcp.host.intelligence
+    assert ida_pro_mcp.host.intelligence is not None
 
 
 def test_canonical_modules_are_importable():

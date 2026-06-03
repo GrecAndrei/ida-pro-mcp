@@ -26,7 +26,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOST_DIR = REPO_ROOT / "src" / "ida_pro_mcp" / "host"
-CONTEXT_PY = HOST_DIR / "intelligence_context.py"
+CONTEXT_PY = HOST_DIR / "intelligence" / "context.py"
 STATE_PY = HOST_DIR / "intelligence_context_state.py"
 
 
