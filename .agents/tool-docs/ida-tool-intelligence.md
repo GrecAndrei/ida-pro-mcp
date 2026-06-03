@@ -22,6 +22,14 @@ Intelligence subsystem: embedding-based function classification, indexing, simil
 - `blackboard_search` (tool-specific)
 - `export_index_summary` (tool-specific)
 - `evidence_card` (tool-specific)
+- `structural_ingest` (tool-specific)
+- `structural_query` (tool-specific)
+- `structural_get` (tool-specific)
+- `structural_stats` (tool-specific)
+- `structural_delete` (tool-specific)
+- `structural_refresh` (tool-specific)
+- `structural_extract` (tool-specific)
+- `structural_extract_single` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -37,12 +45,17 @@ Intelligence subsystem: embedding-based function classification, indexing, simil
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `13`
+- `action`: `string` - allowed_count: `21`
 - `addr`: `string`
 - `block`: `boolean`
+- `constraints`: `object` - Structured query constraints
 - `deep_hash`: `boolean`
+- `include_apis`: `boolean` - Include API list in results
+- `include_strings`: `boolean` - Include string refs in results
 - `limit`: `integer`
 - `max_items`: `integer`
+- `offset`: `integer` - Skip first N results
+- `order_by`: `string` - Column to order by (e.g., 'entropy DESC')
 - `probe`: `boolean`
 - `query`: `string`
 - `threshold`: `number`
