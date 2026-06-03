@@ -597,3 +597,118 @@ class PreferenceMemoryBank:
             conn.commit()
             return int(pruned)
 
+    def merge_preferences(
+        self,
+        incoming_triplets: List[Dict[str, Any]],
+        incoming_suggestions: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, int]:
+        """
+        Merge external preference memories (triplets & suggestions).
+        Applies visitation-count weighted average to combine local and incoming Q-values:
+        Q_new = (N_local * Q_local + N_inc * Q_inc) / (N_local + N_inc)
+        """
+        incoming_suggestions = incoming_suggestions or []
+        merged_triplets = 0
+        merged_suggestions = 0
+
+        with self._conn() as conn:
+            cur = conn.cursor()
+            
+            # 1. Merge triplets
+            for t in incoming_triplets:
+                ik = str(t.get("intent_key") or "").strip()
+                ek = str(t.get("experience_key") or "").strip()
+                if not ik or not ek:
+                    continue
+                q_inc = float(t.get("q_value") if t.get("q_value") is not None else 0.5)
+                n_inc = int(t.get("visit_count") if t.get("visit_count") is not None else 1)
+                intent_z = t.get("intent_z")
+                experience_meta = t.get("experience_meta")
+                meta_str = json.dumps(experience_meta) if isinstance(experience_meta, dict) else (str(experience_meta) if experience_meta else None)
+
+                # Fetch local
+                cur.execute(
+                    "SELECT q_value, visit_count, experience_meta, intent_z FROM memrl_triplets WHERE intent_key=? AND experience_key=?",
+                    (ik, ek),
+                )
+                row = cur.fetchone()
+                if row:
+                    q_local = float(row[0])
+                    n_local = int(row[1])
+                    local_meta = json.loads(row[2]) if row[2] else {}
+                    local_z = row[3]
+                    
+                    # Math: weighted average
+                    n_new = n_local + n_inc
+                    q_new = max(-1.0, min(1.0, (n_local * q_local + n_inc * q_inc) / n_new))
+                    
+                    # Merge metadata dicts if they exist
+                    merged_meta = {}
+                    if local_meta:
+                        merged_meta.update(local_meta)
+                    if isinstance(experience_meta, dict):
+                        merged_meta.update(experience_meta)
+                    elif experience_meta:
+                        try:
+                            merged_meta.update(json.loads(experience_meta))
+                        except Exception:
+                            pass
+                    
+                    final_meta = json.dumps(merged_meta) if merged_meta else None
+                    final_z = local_z or intent_z
+                    
+                    cur.execute(
+                        """
+                        UPDATE memrl_triplets
+                        SET q_value=?, visit_count=?, experience_meta=?, intent_z=?, last_updated=?
+                        WHERE intent_key=? AND experience_key=?
+                        """,
+                        (q_new, n_new, final_meta, final_z, time.time(), ik, ek),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO memrl_triplets
+                        (intent_key, experience_key, intent_z, experience_meta, q_value, visit_count, last_updated)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (ik, ek, intent_z, meta_str, q_inc, n_inc, time.time()),
+                    )
+                merged_triplets += 1
+
+            # 2. Merge suggestions (by suggestion_id)
+            for s in incoming_suggestions:
+                sug_id = str(s.get("suggestion_id") or "").strip()
+                if not sug_id:
+                    continue
+                ik = str(s.get("intent_key") or "")
+                ek = str(s.get("experience_key") or "")
+                src_tool = str(s.get("source_tool") or "")
+                src_act = str(s.get("source_action") or "")
+                ctx_addr = str(s.get("context_addr") or "")
+                exp_meta = s.get("experience_meta")
+                meta_str = json.dumps(exp_meta) if isinstance(exp_meta, dict) else (str(exp_meta) if exp_meta else None)
+                q_val = float(s.get("q_value") if s.get("q_value") is not None else 0.5)
+                init_q = float(s.get("initial_q") if s.get("initial_q") is not None else 0.5)
+                reward = s.get("reward")
+                fb_type = s.get("feedback_type")
+                fb_ts = s.get("feedback_timestamp")
+                created_at = float(s.get("created_at") if s.get("created_at") is not None else time.time())
+                last_up = float(s.get("last_updated") if s.get("last_updated") is not None else time.time())
+                
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO memrl_suggestions
+                    (suggestion_id, intent_key, experience_key, source_tool, source_action, context_addr,
+                     experience_meta, q_value, initial_q, reward, feedback_type, feedback_timestamp, created_at, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (sug_id, ik, ek, src_tool, src_act, ctx_addr, meta_str, q_val, init_q, reward, fb_type, fb_ts, created_at, last_up),
+                )
+                merged_suggestions += 1
+
+            conn.commit()
+
+        return {"merged_triplets": merged_triplets, "merged_suggestions": merged_suggestions}
+
+

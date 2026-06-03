@@ -1599,4 +1599,18 @@ class CapsuleStore:
         reasoner = VulnerabilityReasoner()
         return reasoner.reason_on_capsule(self)
 
+    def merge_capsule_preferences(self, other_capsule: "CapsuleStore") -> dict[str, int]:
+        self._assert_initialized()
+        other_capsule._assert_initialized()
+        other_triplets = []
+        for row in other_capsule.conn.execute("SELECT * FROM memrl_triplets").fetchall():
+            other_triplets.append(dict(row))
+        other_suggestions = []
+        for row in other_capsule.conn.execute("SELECT * FROM memrl_suggestions").fetchall():
+            other_suggestions.append(dict(row))
+        from ida_pro_mcp.host.intelligence_preference_store import PreferenceMemoryBank
+        bank = PreferenceMemoryBank(conn=self.conn)
+        return bank.merge_preferences(other_triplets, other_suggestions)
+
+
 
