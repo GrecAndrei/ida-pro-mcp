@@ -182,3 +182,12 @@ def test_context_policy_fallback_resolution():
     assert resolved_path.endswith(".focus_policy.json")
 
 
+def test_blackboard_store_fallback_resolution():
+    from ida_pro_mcp.host.blackboard_store import BlackboardStore
+    
+    unwritable_path = "/usr/bin/nonexistent_path_mcp/test_bb.db"
+    
+    store = BlackboardStore(unwritable_path)
+    
+    assert "fallback_indexes" in store.db_path
+    assert store.db_path.endswith(".blackboard.db")

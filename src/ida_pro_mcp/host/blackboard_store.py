@@ -82,15 +82,30 @@ class BlackboardStore:
     """SQLite-backed blackboard with extended firmware RE schema."""
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = _resolve_db_path(db_path)
-        parent = os.path.dirname(self.db_path) or "."
+        primary_path = _resolve_db_path(db_path)
+        self.db_path = primary_path
         try:
+            parent = os.path.dirname(self.db_path) or "."
             os.makedirs(parent, exist_ok=True)
-        except Exception:
-            fallback_root = os.path.join(tempfile.gettempdir(), "ida-pro-mcp")
-            os.makedirs(fallback_root, exist_ok=True)
-            self.db_path = os.path.join(fallback_root, os.path.basename(self.db_path) or "blackboard.db")
-        self._init_db()
+            # Verify writability by connecting to the primary path
+            conn = self._conn()
+            conn.close()
+            self._init_db()
+        except (sqlite3.OperationalError, OSError, PermissionError):
+            try:
+                from .config import CACHE_DIR
+            except ImportError:
+                try:
+                    from host.config import CACHE_DIR
+                except ImportError:
+                    xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+                    CACHE_DIR = os.path.join(xdg, "ida-pro-mcp")
+
+            h = hashlib.sha256(os.path.abspath(primary_path).encode("utf-8")).hexdigest()[:16]
+            fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
+            os.makedirs(fallback_dir, exist_ok=True)
+            self.db_path = os.path.join(fallback_dir, f"{h}.blackboard.db")
+            self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
