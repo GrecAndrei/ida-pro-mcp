@@ -594,3 +594,31 @@ def test_preference_memory_bank_capsule_shared_connection(tmp_path):
         # Verify that it was written to CapsuleStore directly
         assert c.get_experience_q("intent_z", "exp_z") == pytest.approx(0.9)
 
+
+def test_capsule_session_auto_resolution(tmp_path):
+    import os
+    from unittest.mock import MagicMock
+    from ida_pro_mcp.host.server_session import ServerSessionMixin
+
+    mixin = ServerSessionMixin()
+    mixin._session_capsules = {}
+    mixin.current_session = MagicMock()
+    mixin.current_session.session_id = "ABC12345"
+    mixin.current_session.idb_path = str(tmp_path / "firmware.i64")
+    mixin.current_session.binary_path = str(tmp_path / "firmware.bin")
+
+    old_env = os.environ.pop("IDA_MCP_CAPSULE", None)
+
+    try:
+        resolved = mixin._resolve_session_capsule("ABC12345")
+        expected = os.path.abspath(str(tmp_path / "firmware.sideband"))
+        assert resolved == expected
+        assert os.environ.get("IDA_MCP_CAPSULE") == expected
+    finally:
+        if old_env is not None:
+            os.environ["IDA_MCP_CAPSULE"] = old_env
+        else:
+            os.environ.pop("IDA_MCP_CAPSULE", None)
+
+
+

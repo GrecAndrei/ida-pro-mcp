@@ -40,16 +40,54 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         if explicit:
             resolved = os.path.abspath(os.path.expanduser(explicit))
             self._session_capsules[sid_norm] = resolved
+            os.environ["IDA_MCP_CAPSULE"] = resolved
             return resolved
         mapped = str(getattr(self, "_session_capsules", {}).get(sid_norm, "") or "").strip()
         if mapped:
+            os.environ["IDA_MCP_CAPSULE"] = mapped
             return mapped
         env_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
         if env_path:
             resolved = os.path.abspath(os.path.expanduser(env_path))
             self._session_capsules[sid_norm] = resolved
             return resolved
+
+        # Try to resolve session to retrieve idb_path / binary_path
+        session = None
+        if self.current_session and (_normalize_session_id(self.current_session.session_id) == sid_norm):
+            session = self.current_session
+        else:
+            try:
+                session = self.session_mgr.get_session(sid_norm)
+            except Exception:
+                pass
+
+        idb_path = ""
+        if session:
+            idb_path = getattr(session, "idb_path", "")
+            if not idb_path and hasattr(session, "to_dict"):
+                try:
+                    idb_path = session.to_dict().get("idb_path", "")
+                except Exception:
+                    pass
+            if not idb_path:
+                binary_path = getattr(session, "binary_path", "")
+                if not binary_path and hasattr(session, "to_dict"):
+                    try:
+                        binary_path = session.to_dict().get("binary_path", "")
+                    except Exception:
+                        pass
+                if binary_path:
+                    idb_path = binary_path
+
+        if idb_path:
+            resolved = os.path.abspath(f"{os.path.splitext(idb_path)[0]}.sideband")
+            self._session_capsules[sid_norm] = resolved
+            os.environ["IDA_MCP_CAPSULE"] = resolved
+            return resolved
+
         return ""
+
 
     def _sync_session_to_capsule(
         self,
