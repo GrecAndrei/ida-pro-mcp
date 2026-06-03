@@ -2,7 +2,7 @@ from __future__ import annotations
 
 FORMAT_NAME = "sideband-capsule"
 FORMAT_VERSION = 0
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 REQUIRED_META_KEYS = {
     "format_name",

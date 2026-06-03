@@ -40,17 +40,25 @@ class PreferenceMemoryBank:
     lifecycles.
     """
 
-    def __init__(self, db_path: Optional[str] = None):
-        if db_path is None:
-            db_path = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "memrl.db")
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._init_db()
+    def __init__(self, db_path: Optional[str] = None, conn: Optional[sqlite3.Connection] = None):
+        self.conn = conn
+        if conn is None:
+            if db_path is None:
+                db_path = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "memrl.db")
+            self.db_path = db_path
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            self._init_db()
+        else:
+            self.db_path = None
+            self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
+        if self.conn is not None:
+            return self.conn
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
+
 
     def _init_db(self) -> None:
         with self._conn() as conn:

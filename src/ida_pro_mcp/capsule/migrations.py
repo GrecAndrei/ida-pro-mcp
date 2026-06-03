@@ -157,5 +157,43 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             source_refs_json TEXT NOT NULL DEFAULT '[]',
             metadata_json TEXT NOT NULL DEFAULT '{}'
         );
+
+        CREATE TABLE IF NOT EXISTS memrl_triplets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            intent_key TEXT NOT NULL,
+            experience_key TEXT NOT NULL,
+            intent_z BLOB,
+            experience_meta TEXT,
+            q_value REAL NOT NULL DEFAULT 0.5,
+            visit_count INTEGER NOT NULL DEFAULT 0,
+            last_updated REAL NOT NULL,
+            UNIQUE(intent_key, experience_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_intent ON memrl_triplets(intent_key);
+        CREATE INDEX IF NOT EXISTS idx_experience ON memrl_triplets(experience_key);
+        CREATE INDEX IF NOT EXISTS idx_q_value ON memrl_triplets(q_value);
+
+        CREATE TABLE IF NOT EXISTS memrl_suggestions (
+            suggestion_id TEXT PRIMARY KEY,
+            intent_key TEXT NOT NULL,
+            experience_key TEXT NOT NULL,
+            source_tool TEXT DEFAULT '',
+            source_action TEXT DEFAULT '',
+            context_addr TEXT DEFAULT '',
+            experience_meta TEXT,
+            q_value REAL NOT NULL DEFAULT 0.5,
+            initial_q REAL NOT NULL DEFAULT 0.5,
+            reward REAL,
+            feedback_type TEXT,
+            feedback_timestamp REAL,
+            created_at REAL NOT NULL,
+            last_updated REAL NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sug_intent ON memrl_suggestions(intent_key);
+        CREATE INDEX IF NOT EXISTS idx_sug_created ON memrl_suggestions(created_at);
+        CREATE INDEX IF NOT EXISTS idx_sug_feedback ON memrl_suggestions(feedback_type);
         """
     )
+

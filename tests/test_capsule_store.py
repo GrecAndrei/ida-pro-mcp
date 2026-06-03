@@ -54,7 +54,7 @@ def test_capsule_init_creates_valid_manifest(tmp_path):
         manifest = c.get_manifest()
     assert manifest["format"] == "sideband-capsule"
     assert manifest["format_version"] == 0
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["project_name"] == "firmware-audit"
     assert manifest["trust"]["contains_executable_payloads"] is False
 
@@ -269,7 +269,7 @@ def test_capsule_semantic_tables_roundtrip_and_verify(tmp_path):
         c.verify()
 
 
-def test_capsule_auto_upgrades_schema_v1_to_v2(tmp_path):
+def test_capsule_auto_upgrades_schema_to_v3(tmp_path):
     capsule_path = tmp_path / "migrate.sideband"
     with CapsuleStore.open(capsule_path) as c:
         c.init(project_name="migrate")
@@ -282,7 +282,8 @@ def test_capsule_auto_upgrades_schema_v1_to_v2(tmp_path):
         c.conn.commit()
         assert int(c.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"]) == 1
         c.inspect_summary()
-        assert int(c._get_meta("schema_version") or 0) == 2
+        assert int(c._get_meta("schema_version") or 0) == 3
+
 
 
 def test_capsule_import_export_function_index_metadata_only(tmp_path):
@@ -462,3 +463,134 @@ def test_capsule_list_evidence_cards_roundtrip(tmp_path):
         rows = c.list_evidence_cards(limit=2, claim_type="behavior_triage")
     assert len(rows) == 2
     assert all(r["claim_type"] == "behavior_triage" for r in rows)
+
+
+def test_capsule_store_experience_crud_and_q_learning(tmp_path):
+    capsule_path = tmp_path / "experience.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="experience")
+        c.record_experience_triplet("intent_a", "exp_1", initial_q=0.5, experience_meta={"tag": "triage"})
+        assert c.get_experience_q("intent_a", "exp_1") == pytest.approx(0.5)
+
+        # TD(0) update: 0.5 + 0.2 * (1.0 - 0.5) = 0.6
+        new_q = c.update_experience_q("intent_a", "exp_1", reward=1.0, alpha=0.2)
+        assert new_q == pytest.approx(0.6)
+        assert c.get_experience_q("intent_a", "exp_1") == pytest.approx(0.6)
+
+        # Batch update
+        results = c.batch_update_experience_q("intent_a", ["exp_1", "exp_2"], [0.0, 1.0], alpha=0.5)
+        # exp_1: 0.6 + 0.5 * (0.0 - 0.6) = 0.3
+        # exp_2: 1.0 (since it did not exist, it is initialized with the reward value)
+        assert results["exp_1"] == pytest.approx(0.3)
+        assert results["exp_2"] == pytest.approx(1.0)
+
+
+        # Two-phase retrieval ranking validation
+        candidates = [
+            {"ea": "exp_1", "score": 0.9},
+            {"ea": "exp_2", "score": 0.8},
+        ]
+        retrieved = c.two_phase_retrieve_experiences("intent_a", candidates, top_k=2, lambda_explore=0.5)
+        assert len(retrieved) == 2
+        # retrieved scores should be blended: (1 - 0.5) * norm_sim + 0.5 * norm_q
+        assert "memrl_score" in retrieved[0]
+        assert "q_value" in retrieved[0]
+
+
+def test_capsule_store_suggestion_feedback_lifecycle(tmp_path):
+    capsule_path = tmp_path / "suggestions.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="suggestions")
+        sug_id = c.add_experience_suggestion(
+            intent_key="find_vuln",
+            experience_key="check_bounds",
+            source_tool="annotator",
+            source_action="rename",
+            context_addr="0x401000",
+            experience_meta={"vuln_type": "oob_read"},
+            initial_q=0.4,
+        )
+
+        sug = c.get_experience_suggestion(sug_id)
+        assert sug is not None
+        assert sug["intent_key"] == "find_vuln"
+        assert sug["experience_key"] == "check_bounds"
+        assert sug["context_addr"] == "0x401000"
+        assert sug["experience_meta"] == {"vuln_type": "oob_read"}
+        assert sug["q_value"] == 0.4
+
+        # Auto reward suggestions
+        updated = c.auto_reward_suggestions_for_addr("0x401000", reward=0.8, alpha=0.5, max_age_seconds=100)
+        assert updated == 1
+        sug_after = c.get_experience_suggestion(sug_id)
+        # q_value after: 0.4 + 0.5 * (0.8 - 0.4) = 0.6
+        assert sug_after["q_value"] == pytest.approx(0.6)
+        assert sug_after["feedback_type"] == "auto_accept"
+
+        # Explicit feedback loop
+        res = c.process_suggestion_feedback(sug_id, reward=1.0, alpha=0.5)
+        assert res["ok"] is True
+        assert res["feedback_type"] == "accept"
+        # q_value after: 0.6 + 0.5 * (1.0 - 0.6) = 0.8
+        assert res["new_q"] == pytest.approx(0.8)
+
+        # Retrieve suggestions
+        sugs_list = c.list_experience_suggestions(intent_key="find_vuln")
+        assert sugs_list["total"] == 1
+        assert len(sugs_list["suggestions"]) == 1
+
+        # Check stats
+        stats = c.get_experience_stats()
+        assert stats["total_triplets"] == 1
+        assert stats["total_suggestions"] == 1
+        assert stats["avg_q_value"] == pytest.approx(0.8)
+
+        # Top memories
+        top = c.top_experience_memories(limit=5)
+        assert len(top) == 1
+        assert top[0]["experience_key"] == "check_bounds"
+
+        # Prune
+        pruned = c.prune_low_q_experiences(threshold=0.9)
+        assert pruned == 1
+        assert len(c.top_experience_memories()) == 0
+
+        # Clear
+        c.clear_experience_memories()
+        assert c.get_experience_stats()["total_triplets"] == 0
+
+
+def test_capsule_store_export_experience_memories(tmp_path):
+    capsule_path = tmp_path / "source.sideband"
+    export_path = tmp_path / "exported.sideband"
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="source")
+        c.record_experience_triplet("intent_x", "exp_y", initial_q=0.7)
+        c.add_experience_suggestion("intent_x", "exp_y", initial_q=0.7)
+
+        summary_src = c.inspect_summary()
+        assert summary_src["memrl_triplets"] == 1
+        assert summary_src["memrl_suggestions"] == 1
+
+        c.export_analysis_capsule(out_path=export_path, include_experience=True)
+
+    with CapsuleStore.open(export_path) as c_exp:
+        summary_exp = c_exp.inspect_summary()
+        assert summary_exp["memrl_triplets"] == 1
+        assert summary_exp["memrl_suggestions"] == 1
+        assert c_exp.get_experience_q("intent_x", "exp_y") == pytest.approx(0.7)
+
+
+def test_preference_memory_bank_capsule_shared_connection(tmp_path):
+    capsule_path = tmp_path / "shared.sideband"
+    from ida_pro_mcp.host.intelligence_preference_store import PreferenceMemoryBank
+
+    with CapsuleStore.open(capsule_path) as c:
+        c.init(project_name="shared")
+        bank = PreferenceMemoryBank(conn=c.conn)
+        bank.record("intent_z", "exp_z", initial_q=0.9)
+        assert bank.get_q("intent_z", "exp_z") == pytest.approx(0.9)
+
+        # Verify that it was written to CapsuleStore directly
+        assert c.get_experience_q("intent_z", "exp_z") == pytest.approx(0.9)
+
