@@ -31,12 +31,7 @@ class CrossBinaryAnalogyEngine:
         Returns (confidence, cosine_sim, structural_sim) if passing thresholds,
         else (0.0, 0.0, 0.0).
         """
-        # 1. Cosine similarity
-        cosine_sim = BgeCodeEmbedder.cosine(current_vector, source_vector)
-        if cosine_sim < threshold_cosine:
-            return 0.0, 0.0, 0.0
-
-        # 2. Structural ratio similarity
+        # 1. Structural ratio similarity (very cheap, prunes 99.9% of non-matching pairs)
         def ratio(x: Any, y: Any) -> float:
             x_val = float(x if x is not None else 0.0)
             y_val = float(y if y is not None else 0.0)
@@ -53,6 +48,11 @@ class CrossBinaryAnalogyEngine:
 
         structural_sim = (sim_size + sim_bb + sim_cc + sim_api + sim_xor) / 5.0
         if structural_sim < threshold_structural:
+            return 0.0, 0.0, 0.0
+
+        # 2. Cosine similarity (more expensive dot product, only runs on structural candidates)
+        cosine_sim = BgeCodeEmbedder.cosine(current_vector, source_vector)
+        if cosine_sim < threshold_cosine:
             return 0.0, 0.0, 0.0
 
         confidence = cosine_sim * structural_sim

@@ -26,7 +26,11 @@ def dot_product(a: Sequence[float], b: Sequence[float]) -> float:
     """Sum of elementwise products. Equivalent to cosine similarity when
     both inputs are pre-normalized to unit length — the convention used by
     the BgeCodeEmbedder output vectors."""
-    return sum(float(x) * float(y) for x, y in zip(a, b))
+    try:
+        import numpy as np
+        return float(np.dot(a, b))
+    except ImportError:
+        return sum(x * y for x, y in zip(a, b))
 
 
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
