@@ -18,9 +18,32 @@ from .helpers import compact_policy_blob, derive_focus_candidates, prune_policy_
 
 class ContextAssemblerPolicyMixin:
     def _policy_store_path(self, idb_path: str) -> str:
+        try:
+            from ..config import CACHE_DIR
+        except ImportError:
+            try:
+                from host.config import CACHE_DIR
+            except ImportError:
+                CACHE_DIR = os.path.join(os.path.expanduser("~"), ".local", "state", "ida-pro-mcp")
+
         if idb_path:
-            return idb_path + ".focus_policy.json"
-        return os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "focus_policy.json")
+            primary = idb_path + ".focus_policy.json"
+            db_dir = os.path.dirname(os.path.abspath(primary))
+            if os.path.isdir(db_dir) and os.access(db_dir, os.W_OK):
+                return primary
+            elif not os.path.exists(db_dir):
+                try:
+                    os.makedirs(db_dir, exist_ok=True)
+                    return primary
+                except (OSError, PermissionError):
+                    pass
+            import hashlib
+            h = hashlib.sha256(os.path.abspath(primary).encode("utf-8")).hexdigest()[:16]
+            fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
+            os.makedirs(fallback_dir, exist_ok=True)
+            return os.path.join(fallback_dir, f"{h}.focus_policy.json")
+            
+        return os.path.join(CACHE_DIR, "global_focus_policy.json")
 
     def _compact_policy_blob(self, sess_blob: Dict[str, Any]) -> Dict[str, Any]:
         return compact_policy_blob(sess_blob)
