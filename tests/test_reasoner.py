@@ -69,3 +69,30 @@ def test_reasoner_integration_on_capsule(tmp_path):
             "SELECT * FROM evidence_cards WHERE claim_type='synthesized_vulnerability'"
         ).fetchall()
         assert len(db_rows_2) == len(db_rows)
+
+
+def test_vulnerability_reasoner_edge_cases():
+    reasoner = VulnerabilityReasoner()
+
+    # 1. Empty behavior hits and evidence cards -> empty output
+    assert reasoner.reason([], []) == []
+
+    # 2. Confidence extremes
+    # Confidence = 0.0 should not trigger anything above background leak
+    hits_zero = [{"behavior": "buffer_overflow", "confidence": 0.0}]
+    assert reasoner.reason(hits_zero, []) == []
+
+    # Confidence = 1.0 should trigger maximum value
+    hits_max = [{"behavior": "buffer_overflow", "confidence": 1.0}]
+    res = reasoner.reason(hits_max)
+    mem_corr = next((h for h in res if h["claim"] == "Memory Corruption"), None)
+    assert mem_corr is not None
+    # P(V) = 1 - 0.95 * (1 - 0.85 * 1.0) = 1 - 0.95 * 0.15 = 1 - 0.1425 = 0.8575
+    assert mem_corr["confidence"] == pytest.approx(0.8575, abs=1e-4)
+
+    # 3. Invalid/negative confidence should be treated as 0 or handled gracefully
+    hits_neg = [{"behavior": "buffer_overflow", "confidence": -0.5}]
+    res_neg = reasoner.reason(hits_neg)
+    # Since confidence is <= 0, it shouldn't produce high level claim
+    assert not any(h["confidence"] > 0.1 for h in res_neg)
+

@@ -83,3 +83,19 @@ def test_capsule_store_preference_merging(tmp_path):
         # Verify suggestion got imported
         sug_rows = c_local.conn.execute("SELECT COUNT(*) AS cnt FROM memrl_suggestions").fetchone()
         assert int(sug_rows["cnt"]) == 1
+
+
+def test_federated_preference_edge_cases(tmp_path):
+    db_local = str(tmp_path / "local_edge.db")
+    bank = PreferenceMemoryBank(db_path=db_local)
+
+    # 1. Merge empty list -> 0 merged
+    res_empty = bank.merge_preferences([])
+    assert res_empty["merged_triplets"] == 0
+
+    # 2. Merge triplet with missing key should be skipped
+    res_skipped = bank.merge_preferences([
+        {"intent_key": "", "experience_key": "exp_y", "q_value": 0.5}
+    ])
+    assert res_skipped["merged_triplets"] == 0
+

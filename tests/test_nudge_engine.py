@@ -237,3 +237,22 @@ class TestNudgeEngine(unittest.TestCase):
         sugs = res.get("suggestions", [])
         self.assertEqual(len(sugs), 1)
         self.assertEqual(sugs[0]["name"], "some_func")
+
+    def test_nudge_engine_edge_cases(self):
+        calc = FunctionEntropyCalculator()
+
+        # 1. Non-existent database path should return empty suggestions list
+        self.assertEqual(calc.compute_triage_suggestions("non_existent_file.i64"), [])
+
+        # 2. Empty/new database with no functions should return empty list
+        empty_idb = os.path.join(self.tmpdir, "empty_binary.i64")
+        empty_db = get_db_path(empty_idb)
+        conn = sqlite3.connect(empty_db)
+        ensure_tables(conn)
+        conn.close()
+        self.assertEqual(calc.compute_triage_suggestions(empty_idb), [])
+
+        # 3. Instruction entropy with nulls or empty dict -> 0.0
+        self.assertEqual(FunctionEntropyCalculator.compute_instruction_entropy({}), 0.0)
+        self.assertEqual(FunctionEntropyCalculator.compute_instruction_entropy({"xor_count": None}), 0.0)
+
