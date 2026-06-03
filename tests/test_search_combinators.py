@@ -21,6 +21,56 @@ COMBINATORS = os.path.join(SEARCH_DIR, "combinators.py")
 INIT = os.path.join(SEARCH_DIR, "__init__.py")
 CORE = os.path.join(SEARCH_DIR, "core.py")
 
+import sys
+import types
+sys.path.insert(0, os.path.join(ROOT, "src"))
+
+# Mock IDA modules in-place to avoid breaking other tests
+for mod_name in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
+                  "ida_lines", "ida_xref", "ida_funcs", "ida_hexrays",
+                  "ida_typeinf", "ida_search", "ida_gdl", "ida_segment", "ida_kernwin", "ida_netnode", "ida_name", "ida_frame"):
+    if mod_name not in sys.modules:
+        sys.modules[mod_name] = types.ModuleType(mod_name)
+
+sys.modules["idaapi"].BADADDR = 0xFFFFFFFF
+sys.modules["idaapi"].get_kernel_version = lambda: "9.2"
+sys.modules["idaapi"].MFF_FAST = 1
+sys.modules["idaapi"].MFF_WRITE = 2
+sys.modules["idaapi"].MFF_READ = 4
+
+sys.modules["ida_kernwin"].MFF_FAST = 1
+sys.modules["ida_kernwin"].MFF_WRITE = 2
+sys.modules["ida_kernwin"].MFF_READ = 4
+sys.modules["ida_funcs"].func_t = type("func_t", (), {})
+sys.modules["ida_typeinf"].tinfo_t = type("tinfo_t", (), {})
+sys.modules["ida_hexrays"].user_lvar_modifier_t = type("user_lvar_modifier_t", (), {})
+sys.modules["ida_netnode"].netnode = type("netnode", (), {
+    "__init__": lambda *a, **kw: None,
+    "longval": lambda *a: 0,
+    "altval": lambda *a: 0,
+    "getblob": lambda *a, **kw: None,
+    "setblob": lambda *a, **kw: None,
+})
+sys.modules["idc"].batch = lambda x: 0
+sys.modules["idc"].get_func_name = lambda ea: ""
+sys.modules["idc"].get_name = lambda ea, *a: ""
+sys.modules["idc"].print_insn_mnem = lambda ea: ""
+sys.modules["idc"].next_head = lambda ea, end: ea + 1
+
+# Mock rpc and sync modules in-place
+for mod_name in ("rpc", "sync"):
+    if mod_name not in sys.modules:
+        sys.modules[mod_name] = types.ModuleType(mod_name)
+
+sys.modules["rpc"].tool = lambda f: f
+sys.modules["rpc"].unsafe = lambda f: f
+sys.modules["rpc"].prompt = lambda f: f
+
+sys.modules["sync"].idaread = lambda f: f
+sys.modules["sync"].idawrite = lambda f: f
+if not hasattr(sys.modules["sync"], "IDAError"):
+    sys.modules["sync"].IDAError = type("IDAError", (Exception,), {})
+
 
 def _read(path):
     with open(path) as f:
@@ -164,33 +214,7 @@ def test_search_aliases_include_combinator_aliases():
 
 def test_bool_tokenizer_handles_simple_primitive():
     """Test the tokenizer by importing the function with stub IDA modules."""
-    import sys
-    import types
-
-    # Stub the IDA modules the combinator module tries to import on load.
-    # If the import fails, we just skip — the AST-level checks above already
-    # verify the surface.
-    try:
-        # Provide minimal stubs so the import succeeds without a real IDA.
-        for mod_name in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
-                          "ida_lines", "ida_xref", "ida_funcs", "ida_hexrays",
-                          "ida_typeinf", "ida_search", "ida_gdl", "ida_segment"):
-            if mod_name not in sys.modules:
-                sys.modules[mod_name] = types.ModuleType(mod_name)
-        # Constants/functions used at import time
-        sys.modules["idaapi"].BADADDR = 0xFFFFFFFF
-        sys.modules["idc"].get_func_name = lambda ea: ""
-        sys.modules["idc"].get_name = lambda ea, *a: ""
-        sys.modules["idc"].print_insn_mnem = lambda ea: ""
-        sys.modules["idc"].next_head = lambda ea, end: ea + 1
-
-        sys.path.insert(0, os.path.join(ROOT, "src"))
-
-        from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
-    except Exception as e:
-        # Combinator module needs IDA stubs we don't fully provide; skip.
-        import pytest
-        pytest.skip(f"combinators import needs full IDA stubs: {e}")
+    from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
 
     toks = cb._tokenize_bool("api:Crypt* AND name:key")
     assert toks == ["api:Crypt*", "AND", "name:key"], f"got {toks}"
@@ -198,27 +222,22 @@ def test_bool_tokenizer_handles_simple_primitive():
     toks = cb._tokenize_bool("(string:\"my secret\" OR name:foo) AND NOT mnem:ret")
     assert toks == ["(", "string:my secret", "OR", "name:foo", ")", "AND", "NOT", "mnem:ret"], f"got {toks}"
 
+    # Test logical aliases
+    toks = cb._tokenize_bool("(string:\"my secret\" || name:foo) && ! mnem:ret")
+    assert toks == ["(", "string:my secret", "OR", "name:foo", ")", "AND", "NOT", "mnem:ret"], f"got {toks}"
+
+    # Test bare keywords
+    toks = cb._tokenize_bool("api:Crypt* && leaf")
+    assert toks == ["api:Crypt*", "AND", "leaf:true"], f"got {toks}"
+
+    # Test escaped double quotes
+    toks = cb._tokenize_bool("string:\"my \\\"escaped\\\" secret\"")
+    assert toks == ["string:my \"escaped\" secret"], f"got {toks}"
+
 
 def test_bool_parser_precedence():
     """AND binds tighter than OR; NOT applies to the next atom."""
-    import sys
-    import types
-    try:
-        for mod_name in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
-                          "ida_lines", "ida_xref", "ida_funcs", "ida_hexrays",
-                          "ida_typeinf", "ida_search", "ida_gdl", "ida_segment"):
-            if mod_name not in sys.modules:
-                sys.modules[mod_name] = types.ModuleType(mod_name)
-        sys.modules["idaapi"].BADADDR = 0xFFFFFFFF
-        sys.modules["idc"].get_func_name = lambda ea: ""
-        sys.modules["idc"].get_name = lambda ea, *a: ""
-        sys.modules["idc"].print_insn_mnem = lambda ea: ""
-        sys.modules["idc"].next_head = lambda ea, end: ea + 1
-        sys.path.insert(0, os.path.join(ROOT, "src"))
-        from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
-    except Exception as e:
-        import pytest
-        pytest.skip(f"combinators import needs full IDA stubs: {e}")
+    from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
 
     # Stub the handlers so we can test parser precedence without IDA.
     s_name, s_api = {1, 2}, {2, 3}
@@ -273,7 +292,33 @@ def test_search_docstring_lists_combinators():
         assert action in doc, f"docstring missing mention of action: {action}"
 
 
-# ---- 7. No regressions in non-combinator actions ---------------------------
+def test_bool_new_primitives():
+    from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
+
+    class MockFunc:
+        def __init__(self, start, end):
+            self.start_ea = start
+            self.end_ea = end
+
+    sys.modules["idautils"].Functions = lambda: [0x401000, 0x402000]
+    sys.modules["idaapi"].get_func = lambda ea: MockFunc(0x401000, 0x401200) if ea == 0x401000 else MockFunc(0x402000, 0x402030)
+
+    # Test size primitive
+    assert cb._prim_size(">100") == {0x401000}
+    assert cb._prim_size("<100") == {0x402000}
+
+    # Test leaf / no_callers
+    cb.CALL_XREF_TYPES = {21}
+    class MockXref:
+        def __init__(self, iscode=True, xtype=21):
+            self.iscode = iscode
+            self.type = xtype
+    sys.modules["idautils"].XrefsFrom = lambda ea, *a: [MockXref()] if ea == 0x401000 else []
+    sys.modules["idautils"].XrefsTo = lambda ea, *a: [MockXref()] if ea == 0x401000 else []
+
+    assert cb._prim_leaf("") == {0x402000}
+    assert cb._prim_no_callers("") == {0x402000}
+
 
 def test_combinators_module_line_count_reasonable():
     """Sanity check: combinators.py should be in the 300-1500 line range."""

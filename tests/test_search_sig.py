@@ -83,13 +83,14 @@ MOCK_XREFS_TO = {
     0x403000: [],  # no callers
 }
 
-sys.modules["idautils"].Functions = lambda: MOCK_FUNCTIONS
-sys.modules["idaapi"].get_func = lambda ea: MOCK_FUNC_MAP.get(ea)
-sys.modules["ida_funcs"].get_func_name = lambda ea: f"func_{hex(ea)}"
-sys.modules["idc"].get_func_name = lambda ea: f"func_{hex(ea)}"
-sys.modules["idc"].get_name = lambda ea, *a: f"func_{hex(ea)}"
-sys.modules["idautils"].XrefsFrom = lambda ea, *a: MOCK_XREFS_FROM.get(ea, [])
-sys.modules["idautils"].XrefsTo = lambda ea, *a: MOCK_XREFS_TO.get(ea, [])
+def setup_mocks():
+    sys.modules["idautils"].Functions = lambda: MOCK_FUNCTIONS
+    sys.modules["idaapi"].get_func = lambda ea: MOCK_FUNC_MAP.get(ea)
+    sys.modules["ida_funcs"].get_func_name = lambda ea: f"func_{hex(ea)}"
+    sys.modules["idc"].get_func_name = lambda ea: f"func_{hex(ea)}"
+    sys.modules["idc"].get_name = lambda ea, *a: f"func_{hex(ea)}"
+    sys.modules["idautils"].XrefsFrom = lambda ea, *a: MOCK_XREFS_FROM.get(ea, [])
+    sys.modules["idautils"].XrefsTo = lambda ea, *a: MOCK_XREFS_TO.get(ea, [])
 
 # Imports list for caching stub
 sys.modules["ida_nalt"].get_import_module_qty = lambda: 0
@@ -97,6 +98,7 @@ sys.modules["ida_nalt"].get_import_module_qty = lambda: 0
 from ida_pro_mcp.ida_mcp.tools.search.refs import search_func_by_sig
 
 def test_func_by_sig_and_logic():
+    setup_mocks()
     # 1. Test size constraint alone
     res = search_func_by_sig("size:>100", offset=0, limit=10)
     matches = res.get("matches", "")

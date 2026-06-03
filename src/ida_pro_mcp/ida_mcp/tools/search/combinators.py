@@ -27,7 +27,7 @@ except ImportError:
 
 from .core import (
     clip_text, paginate_records, build_response, MAX_LIMIT,
-    resolve_target, safe_generate_disasm_line,
+    resolve_target, safe_generate_disasm_line, CALL_XREF_TYPES,
 )
 
 
@@ -176,6 +176,95 @@ def _prim_callees(target: str) -> set[int]:
     return out
 
 
+def _prim_size(pattern: str) -> set[int]:
+    """Functions whose size matches a signature constraint (e.g. '>100', '<50', '10-20')."""
+    import re as re_mod
+    size_rules = []
+    for m in re_mod.finditer(r"([<>]?)(\d+)(?:\s*-\s*(\d+))?", pattern):
+        op, val1, val2 = m.groups()
+        size_rules.append((op or "=", int(val1), int(val2) if val2 else None))
+    if not size_rules:
+        try:
+            size_rules.append(("=", int(pattern), None))
+        except ValueError:
+            return set()
+    out = set()
+    for ea in idautils.Functions():
+        try:
+            func = idaapi.get_func(ea)
+            if not func:
+                continue
+            size = func.end_ea - func.start_ea
+            for op, val1, val2 in size_rules:
+                if op == ">" and size > val1:
+                    out.add(int(ea))
+                    break
+                elif op == "<" and size < val1:
+                    out.add(int(ea))
+                    break
+                elif val2 is not None and val1 <= size <= val2:
+                    out.add(int(ea))
+                    break
+                elif op in ("", "=") and val2 is None and size == val1:
+                    out.add(int(ea))
+                    break
+        except Exception:
+            continue
+    return out
+
+
+def _prim_args(pattern: str) -> set[int]:
+    """Functions with matching argument count constraint (e.g., '3', '3+')."""
+    import re as re_mod
+    import ida_typeinf, ida_nalt
+    m_args = re_mod.search(r"(\d+)\s*(\+)?", pattern)
+    if not m_args:
+        return set()
+    arg_count = int(m_args.group(1))
+    plus = bool(m_args.group(2))
+    out = set()
+    for ea in idautils.Functions():
+        try:
+            tif = ida_typeinf.tinfo_t()
+            if ida_nalt.get_tinfo(tif, ea):
+                func_data = ida_typeinf.func_type_data_t()
+                if tif.get_func_details(func_data):
+                    actual_args = func_data.size()
+                    if plus and actual_args >= arg_count:
+                        out.add(int(ea))
+                    elif not plus and actual_args == arg_count:
+                        out.add(int(ea))
+        except Exception:
+            continue
+    return out
+
+
+def _prim_leaf(pattern: str) -> set[int]:
+    """Functions that are leaf functions (no outgoing calls)."""
+    out = set()
+    for ea in idautils.Functions():
+        try:
+            has_calls = any(xr.type in CALL_XREF_TYPES for xr in idautils.XrefsFrom(ea))
+            if not has_calls:
+                out.add(int(ea))
+        except Exception:
+            continue
+    return out
+
+
+def _prim_no_callers(pattern: str) -> set[int]:
+    """Functions with no incoming callers."""
+    out = set()
+    for ea in idautils.Functions():
+        try:
+            has_callers = any(xr.iscode for xr in idautils.XrefsTo(ea, 0))
+            if not has_callers:
+                out.add(int(ea))
+        except Exception:
+            continue
+    return out
+
+
 # ============================================================================
 # search_bool - composite boolean query
 # ============================================================================
@@ -187,6 +276,10 @@ _BOOL_PRIMITIVES = {
     "mnem": _prim_funcs_by_mnem,
     "caller": _prim_callers,
     "callee": _prim_callees,
+    "size": _prim_size,
+    "args": _prim_args,
+    "leaf": _prim_leaf,
+    "no_callers": _prim_no_callers,
 }
 
 _BOOL_OPS = {"AND", "OR", "NOT"}
@@ -197,7 +290,9 @@ def _tokenize_bool(expr: str) -> list[str]:
 
     Supports:
       - name:foo, api:Crypt*, string:password
-      - quoted values: string:"my secret"
+      - quoted values with escapes: string:"my \"escaped\" secret"
+      - logical aliases: &&, ||, !
+      - bare keywords: leaf, no_callers
       - AND, OR, NOT (case-insensitive)
       - parentheses
     """
@@ -217,19 +312,38 @@ def _tokenize_bool(expr: str) -> list[str]:
             tokens.append(")")
             i += 1
             continue
-        if c == '"':
-            j = expr.find('"', i + 1)
-            if j == -1:
-                j = n
-            tokens.append("LITERAL:" + expr[i + 1:j])
-            i = j + 1
+        if expr[i:i+2] == "&&":
+            tokens.append("AND")
+            i += 2
             continue
-        m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*:\s*("[^"]*"|[^\s()]+)', expr[i:])
+        if expr[i:i+2] == "||":
+            tokens.append("OR")
+            i += 2
+            continue
+        if c == "!":
+            tokens.append("NOT")
+            i += 1
+            continue
+        if c == '"':
+            m = re.match(r'"((?:[^"\\]|\\.)*)"', expr[i:])
+            if m:
+                val = m.group(1).replace('\\"', '"').replace('\\\\', '\\')
+                tokens.append("LITERAL:" + val)
+                i += m.end()
+                continue
+            else:
+                j = expr.find('"', i + 1)
+                if j == -1:
+                    j = n
+                tokens.append("LITERAL:" + expr[i + 1:j])
+                i = j + 1
+                continue
+        m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*:\s*("(?:[^"\\]|\\.)*"|[^\s()]+)', expr[i:])
         if m:
             key = m.group(1).lower()
             val = m.group(2)
             if val.startswith('"') and val.endswith('"'):
-                val = val[1:-1]
+                val = val[1:-1].replace('\\"', '"').replace('\\\\', '\\')
             tokens.append(f"{key}:{val}")
             i += m.end()
             continue
@@ -238,6 +352,10 @@ def _tokenize_bool(expr: str) -> list[str]:
             word = m.group(0).upper()
             if word in _BOOL_OPS:
                 tokens.append(word)
+            elif word == "LEAF":
+                tokens.append("leaf:true")
+            elif word == "NO_CALLERS":
+                tokens.append("no_callers:true")
             else:
                 tokens.append("LITERAL:" + m.group(0))
             i += m.end()
