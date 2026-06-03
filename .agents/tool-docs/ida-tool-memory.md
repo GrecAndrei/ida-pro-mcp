@@ -9,6 +9,8 @@
 Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram, read_file, write_file.
 
 ## Actions
+- `read_file` (tool-specific)
+- `write_file` (tool-specific)
 - `read` (read/discovery)
 - `write` (write/mutate)
 - `hexdump` (tool-specific)
@@ -20,21 +22,6 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
 - `strings` (tool-specific)
 - `struct_walk` (tool-specific)
 - `histogram` (tool-specific)
-- `read_file` (tool-specific)
-- `write_file` (tool-specific)
-- `bytes` (tool-specific)
-- `u8` (tool-specific)
-- `u16` (tool-specific)
-- `u32` (tool-specific)
-- `u64` (tool-specific)
-- `s8` (tool-specific)
-- `s16` (tool-specific)
-- `s32` (tool-specific)
-- `s64` (tool-specific)
-- `f32` (tool-specific)
-- `f64` (tool-specific)
-- `ptr` (tool-specific)
-- `string` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -50,7 +37,7 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `26`
+- `action`: `string` - allowed_count: `13`
 - `addr`: `string`
 - `content`: `string` - Content to write for write_file
 - `data`: `string`
@@ -65,7 +52,7 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
 {
   "name": "memory",
   "arguments": {
-    "action": "read"
+    "action": "read_file"
   }
 }
 ```
@@ -74,7 +61,7 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
   "name": "memory",
   "arguments": {
     "action": "grep",
-    "source_action": "read",
+    "source_action": "read_file",
     "pattern": "<needle>"
   }
 }

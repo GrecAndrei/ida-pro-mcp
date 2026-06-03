@@ -9,8 +9,8 @@
 Multi-hop bridge-conditioned search for discovering indirect relationships between entities. Actions: search, bridges.
 
 ## Actions
-- `search` (read/discovery)
 - `bridges` (tool-specific)
+- `search` (read/discovery)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -26,7 +26,7 @@ Multi-hop bridge-conditioned search for discovering indirect relationships betwe
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `search, bridges`
+- `action`: `string` - allowed: `bridges, search`
 - `bridge_types`: `array` - Bridge types: ['apis'], ['strings'], or ['apis', 'strings']
 - `func_ea`: `string` - Hex address of seed function (for action='bridges')
 - `func_name`: `string` - Name of seed function (for action='bridges')
@@ -40,7 +40,7 @@ Multi-hop bridge-conditioned search for discovering indirect relationships betwe
 {
   "name": "bridge_search",
   "arguments": {
-    "action": "search"
+    "action": "bridges"
   }
 }
 ```
@@ -49,7 +49,7 @@ Multi-hop bridge-conditioned search for discovering indirect relationships betwe
   "name": "bridge_search",
   "arguments": {
     "action": "grep",
-    "source_action": "search",
+    "source_action": "bridges",
     "pattern": "<needle>"
   }
 }

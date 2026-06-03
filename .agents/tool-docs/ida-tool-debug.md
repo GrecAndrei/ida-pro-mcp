@@ -40,10 +40,6 @@ Control the debugger: run, step, breakpoints, registers, memory, threads. Action
 - `trace_stop` (tool-specific)
 - `trace_read` (tool-specific)
 - `mem_diff` (tool-specific)
-- `read` (read/discovery)
-- `write` (write/mutate)
-- `rw` (tool-specific)
-- `execute` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

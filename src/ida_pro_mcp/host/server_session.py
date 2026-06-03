@@ -1108,6 +1108,23 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 tags=tags,
                 memrl_reward=memrl_reward,
             )
+        if action == "crystallize_mined_macros":
+            sid, sid_err = _sid_arg()
+            if sid_err:
+                return sid_err
+            if not sid:
+                return make_error(MCPError.INVALID_ARGS, "session_id required")
+            min_support = args.get("min_support", 2)
+            try:
+                min_support = int(min_support)
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, "min_support must be an integer")
+
+            from .intelligence.crystallizer import AgentMacroCrystallizer
+            crystallizer = AgentMacroCrystallizer()
+            return crystallizer.crystallize_from_log(
+                self.session_mgr, sid, min_support=min_support
+            )
         if action == "rate_skill":
             sid, sid_err = _sid_arg()
             if sid_err:

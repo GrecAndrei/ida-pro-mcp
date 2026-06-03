@@ -29,12 +29,6 @@ Decompilation, disassembly, and code analysis. smart_decompile: best single call
 - `smart_decompile` (tool-specific)
 - `annotate` (tool-specific)
 - `explain` (tool-specific)
-- `json` (tool-specific)
-- `c_header` (tool-specific)
-- `prototypes` (tool-specific)
-- `csmini` (tool-specific)
-- `classic` (tool-specific)
-- `annotated` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -50,7 +44,7 @@ Decompilation, disassembly, and code analysis. smart_decompile: best single call
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `26`
+- `action`: `string` - allowed_count: `20`
 - `addr`: `string`
 - `addrs`: `array|string`
 - `disasm_style`: `string` - allowed: `csmini, classic, annotated`

@@ -35,9 +35,6 @@ Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and know
 - `read` (read/discovery)
 - `list` (read/discovery)
 - `search` (read/discovery)
-- `semantic_index` (tool-specific)
-- `semantic_rebuild` (tool-specific)
-- `related_by_behavior` (tool-specific)
 - `update` (tool-specific)
 - `delete` (destructive)
 - `clear` (destructive)
@@ -77,6 +74,11 @@ Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and know
 - `kg_peripherals` (tool-specific)
 - `export_symbols` (tool-specific)
 - `import_symbols` (tool-specific)
+- `semantic_index` (tool-specific)
+- `semantic_rebuild` (tool-specific)
+- `related_by_behavior` (tool-specific)
+- `deref` (tool-specific)
+- `chain` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -92,7 +94,7 @@ Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and know
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `68`
+- `action`: `string` - allowed_count: `70`
 - `addr`: `string` - Associated address
 - `category`: `string` - Category (default: general)
 - `confidence`: `number` - Confidence score 0-1

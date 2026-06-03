@@ -23,7 +23,7 @@ from typing import Dict, List
 TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "src",
                          "ida_pro_mcp", "ida_mcp", "tools")
 SCHEMAS_PATH = os.path.join(os.path.dirname(__file__), "..", "src",
-                            "ida_pro_mcp", "host", "schemas.py")
+                            "ida_pro_mcp", "host", "schemas_data.py")
 
 # Tools that live in host/ not tools/ — actions extracted manually
 HOST_TOOL_ACTIONS = {
@@ -35,21 +35,28 @@ HOST_TOOL_ACTIONS = {
         "bulk_tag","search_notes","recent","oldest","snapshot",
         "restore_snapshot","merge","macro_set","macro_get","macro_list",
         "macro_delete","macro_run","recent_workset","crystallize_skill",
+        "crystallize_mined_macros",
         "rate_skill","list_skills","suggest_strategy","suggest_triage",
         "suggest_analogy","apply_analogy","log_activity",
         "get_activity_log","notebook_append","notebook_read","notebook_section",
         "track_hypothesis","confirm_hypothesis","refute_hypothesis",
         "list_hypotheses","get_phase","advance_phase","dashboard",
         "link","cross_reference","list_snapshots",
+        "health",
     ],
     "batch": ["(pass calls array)"],
     "truncation": ["continue"],
     "bookmarks": ["add","list","delete","update","clear","find","export"],
-    "query": ["data","search","idb","code","types","imports_deep","symbols","patterns"],
+    "query": ["data","search","idb","code","types","imports_deep","symbols","patterns", "nl", "nl_batch"],
     "wiki": ["list_topics","read","search","semantic_search","index","sections","suggest"],
     "blackboard": [
-        "write","read","list","search","update","delete","clear","stats",
+        "policy_set", "policy_status", "policy_check", "phase_status", "phase_set", "phase_tick",
+        "quest_board", "quest_complete", "memory_compile", "phase_finalize", "trace_ingest",
+        "trace_run", "trace_status", "proposal_create", "proposal_list", "proposal_accept",
+        "proposal_reject", "decision_card", "working_set", "state_health", "notes_export",
+        "notes_import", "write","read","list","search","update","delete","clear","stats",
         "prune","merge","contradict","resolve","next_target",
+        "frontier", "coverage", "propagate_labels",
         "start_crawler","stop_crawler","crawler_status","accept","reject",
         "add_evidence","calibrate","campaign_summary","auto_tag_propagate",
         "accept_proposal","reject_proposal",
@@ -59,18 +66,31 @@ HOST_TOOL_ACTIONS = {
         # KG read
         "kg_summary","kg_systems","kg_gaps","kg_structs",
         "kg_state_machines","kg_attack_surface","kg_peripherals",
+        "export_symbols", "import_symbols", "semantic_index", "semantic_rebuild",
+        "related_by_behavior",
     ],
     "filter": ["filter"],
     "modify": ["rename","comment","set_type","patch_asm"],
     "governance": ["check","redact","list_rules","stats"],
+    "graph": [
+        "callgraph", "cfg", "dominators", "xref_graph", "down", "up", "both", "json", "dot", "mermaid",
+        "call_chain", "common_callers", "common_callees", "hub_functions", "leaf_functions",
+        "recursive", "dominator", "influence", "dependency_graph", "dead_functions"
+    ],
     "predictor": [
         "suggest_next_tool","detect_stuck","suggest_focus",
         "suggest_next_address","risk_of_stall",
+        "recommend_bundle", "explain_decision", "feedback",
     ],
-    "workflow": ["triage_fast","malware_deep","vuln_audit","patch_review"],
+    "workflow": [
+        "audit_plan", "execute_plan", "prioritize", "compose", "estimate",
+        "explain", "plan", "catalog", "recon_sweep",
+        "triage_fast","malware_deep","vuln_audit","patch_review"
+    ],
     "project": ["save","close","open","load_binary","list_recent","get_cwd","set_cwd","list_dir","exists","evidence_graph","knowledge_merge","confidence_model","replay_pipeline","hypothesis_tracker","temporal_reasoning","semantic_artifact_diff","ai_governance","knowledge_debt","casefile_export"],
     "threat_hunt": ["run","malware","vuln","tracing","findings","quick","deep","legacy"],
     "llm_helpers": [
+        "bootstrap", "guided_analysis", "cheatsheet",
         "context_window","function_digest","binary_digest","explain_address",
         "suggest_next","progress_report","focus_area","question_answer",
         "compact","enrich",
@@ -100,6 +120,8 @@ HOST_TOOL_ACTIONS = {
         "review_queue_for_ai_edits","case_narrative_composer",
         "cost_latency_optimizer","trust_verification_layer","learning_feedback_loop",
     ],
+    "memory": ["read_file", "write_file"],
+    "analysis": ["plugin_run"],
 }
 
 # Tools in subdirectories (packages) — actions listed manually
@@ -107,9 +129,15 @@ HOST_TOOL_ACTIONS["search"] = [
     "text", "bytes", "regex", "immediate", "code_pattern", "next", "all",
     "structured", "string", "name", "comment", "mnemonic", "operand",
     "insns", "instruction", "decompiled", "constants", "semantic",
-    "func_by_sig", "vulnerable", "api", "callees", "callers",
-    "code_ref", "data_ref", "export", "find", "query_lang", "summary", "type",
+    "smart_bundle", "func_by_sig", "vulnerable", "api", "callees", "callers",
+    "code_ref", "data_ref", "export", "find", "nl", "behavior", "query_lang", "summary", "type",
+    "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
 ]
+
+# Actions to exclude from specific tools (e.g. legacy or moved actions)
+EXCLUDED_TOOL_ACTIONS = {
+    "misc": {"plugin_run", "health", "read_file", "write_file"},
+}
 
 # Tools to skip (internal helpers, not exposed as MCP tools)
 SKIP_FILES = {
@@ -135,8 +163,8 @@ def scan_tool_actions(tool_file: str) -> List[str]:
             seen.add(a)
             actions.append(a)
 
-    # Literal["a","b",...] type hints
-    for lit in re.findall(r'Literal\[([^\]]+)\]', src):
+    # Literal["a","b",...] type hints for action parameter
+    for lit in re.findall(r'action\s*:\s*(?:Annotated\s*\[\s*)?Literal\s*\[([^\]]+)\]', src, re.DOTALL):
         for a in re.findall(r'["\']([^"\']+)["\']', lit):
             add(a)
 
@@ -167,8 +195,23 @@ def discover_all() -> Dict[str, List[str]]:
         if actions:
             result[name] = actions
 
-    # Add host tools
-    result.update(HOST_TOOL_ACTIONS)
+    # Merge host tools instead of overwriting
+    for name, host_actions in HOST_TOOL_ACTIONS.items():
+        if name in result:
+            seen = set(host_actions)
+            merged = list(host_actions)
+            for a in result[name]:
+                if a not in seen:
+                    merged.append(a)
+                    seen.add(a)
+            result[name] = merged
+        else:
+            result[name] = list(host_actions)
+
+    # Filter out excluded actions
+    for name, excluded in EXCLUDED_TOOL_ACTIONS.items():
+        if name in result:
+            result[name] = [a for a in result[name] if a not in excluded]
 
     return result
 
@@ -178,11 +221,17 @@ def patch_schemas(actions_map: Dict[str, List[str]],
     """Patch TOOL_DESCRIPTIONS and TOOL_ACTIONS in schemas.py."""
     src = open(SCHEMAS_PATH).read()
 
-    # Get canonical TOOLS list from schemas.py
-    tools_match = re.search(r'TOOLS\s*=\s*\[(.*?)\]', src, re.DOTALL)
-    canonical_tools: set = set()
-    if tools_match:
-        canonical_tools = set(re.findall(r'"([^"]+)"', tools_match.group(1)))
+    # Get canonical TOOLS list from schemas_data.py
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    try:
+        from ida_pro_mcp.host.schemas_data import TOOLS as canonical_tools_list
+        canonical_tools = set(canonical_tools_list)
+    except Exception as e:
+        print(f"Warning: could not import TOOLS: {e}", file=sys.stderr)
+        tools_match = re.search(r'TOOLS\s*=\s*\[(.*?)\]', src, re.DOTALL)
+        canonical_tools = set()
+        if tools_match:
+            canonical_tools = set(re.findall(r'"([^"]+)"', tools_match.group(1)))
 
     # Only include tools that are in the canonical TOOLS list
     filtered_actions = {k: v for k, v in actions_map.items()

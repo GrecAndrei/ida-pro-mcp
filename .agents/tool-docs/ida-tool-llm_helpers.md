@@ -10,6 +10,8 @@ Context-optimized helpers for LLM agents. START HERE: bootstrap gives a concrete
 
 ## Actions
 - `bootstrap` (tool-specific)
+- `guided_analysis` (tool-specific)
+- `cheatsheet` (tool-specific)
 - `context_window` (tool-specific)
 - `function_digest` (tool-specific)
 - `binary_digest` (tool-specific)
@@ -18,8 +20,6 @@ Context-optimized helpers for LLM agents. START HERE: bootstrap gives a concrete
 - `progress_report` (tool-specific)
 - `focus_area` (tool-specific)
 - `question_answer` (tool-specific)
-- `guided_analysis` (tool-specific)
-- `cheatsheet` (tool-specific)
 - `compact` (tool-specific)
 - `enrich` (tool-specific)
 - `intent_tool_compiler` (tool-specific)

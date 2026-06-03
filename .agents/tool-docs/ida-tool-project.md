@@ -28,6 +28,8 @@ Project I/O and evidence management. Actions: save, close, open, load_binary, li
 - `ai_governance` (tool-specific)
 - `knowledge_debt` (tool-specific)
 - `casefile_export` (tool-specific)
+- `CloseBase` (tool-specific)
+- `Close` (destructive)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

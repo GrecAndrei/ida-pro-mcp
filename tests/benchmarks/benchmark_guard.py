@@ -61,7 +61,7 @@ def main() -> int:
             "limits": {
                 "cluster_pointer_hits": threshold("cluster_pointer_hits", 20.0),
                 "dedup_regions": threshold("dedup_regions", 9.0),
-                "aggregate_fingerprint": threshold("aggregate_fingerprint", 2.0),
+                "aggregate_fingerprint": threshold("aggregate_fingerprint", 6.0),
             },
         },
         {

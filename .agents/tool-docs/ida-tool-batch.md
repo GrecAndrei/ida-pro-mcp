@@ -9,7 +9,7 @@
 Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.
 
 ## Actions
-- (none documented)
+- `(pass calls array)` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -37,8 +37,16 @@ Executes multiple tool calls in a single request to reduce round trips. Pass a c
 {
   "name": "batch",
   "arguments": {
+    "action": "(pass calls array)"
+  }
+}
+```
+```json
+{
+  "name": "batch",
+  "arguments": {
     "action": "grep",
-    "source_action": "list",
+    "source_action": "(pass calls array)",
     "pattern": "<needle>"
   }
 }

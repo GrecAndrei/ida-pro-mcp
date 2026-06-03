@@ -9,13 +9,16 @@
 Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait, plugin_run.
 
 ## Actions
+- `plugin_run` (tool-specific)
 - `get_options` (tool-specific)
 - `set_options` (tool-specific)
 - `set_processor` (tool-specific)
 - `set_loader_options` (tool-specific)
 - `set_architecture` (tool-specific)
 - `reanalyze` (tool-specific)
-- `plugin_run` (tool-specific)
+- `run` (tool-specific)
+- `analyze` (analysis)
+- `wait` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -31,7 +34,7 @@ Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plug
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, plugin_run`
+- `action`: `string` - allowed: `plugin_run, get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait`
 - `arg`: `integer` - Plugin argument for plugin_run
 - `bitness`: `integer`
 - `end`: `string`
@@ -50,7 +53,7 @@ Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plug
 {
   "name": "analysis",
   "arguments": {
-    "action": "get_options"
+    "action": "plugin_run"
   }
 }
 ```
@@ -59,7 +62,7 @@ Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plug
   "name": "analysis",
   "arguments": {
     "action": "grep",
-    "source_action": "get_options",
+    "source_action": "plugin_run",
     "pattern": "<needle>"
   }
 }

@@ -9,12 +9,14 @@
 Structured semantic indexing with induced attribute-value schemas for function-level retrieval. Actions: ingest, query, refresh, stats, delete, get.
 
 ## Actions
+- `extract` (tool-specific)
+- `extract_single` (tool-specific)
 - `ingest` (tool-specific)
 - `query` (tool-specific)
-- `refresh` (tool-specific)
+- `get` (read/discovery)
 - `stats` (tool-specific)
 - `delete` (destructive)
-- `get` (read/discovery)
+- `refresh` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -30,7 +32,7 @@ Structured semantic indexing with induced attribute-value schemas for function-l
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `ingest, query, refresh, stats, delete, get`
+- `action`: `string` - allowed: `extract, extract_single, ingest, query, get, stats, delete, refresh`
 - `addr`: `string` - Function address for get/refresh
 - `constraints`: `object` - Structured query constraints
 - `include_apis`: `boolean` - Include API list in results
@@ -45,7 +47,7 @@ Structured semantic indexing with induced attribute-value schemas for function-l
 {
   "name": "schemaboot",
   "arguments": {
-    "action": "ingest"
+    "action": "extract"
   }
 }
 ```
@@ -54,7 +56,7 @@ Structured semantic indexing with induced attribute-value schemas for function-l
   "name": "schemaboot",
   "arguments": {
     "action": "grep",
-    "source_action": "ingest",
+    "source_action": "extract",
     "pattern": "<needle>"
   }
 }

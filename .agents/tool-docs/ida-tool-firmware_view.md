@@ -34,6 +34,10 @@ Firmware triage: region scanning, pointer sweeps, table carving, deterministic d
 - `rtos_scan` (tool-specific)
 - `triage_snapshot` (tool-specific)
 - `bootstrap` (tool-specific)
+- `define_vector_table` (tool-specific)
+- `annotate_mmio` (tool-specific)
+- `reanalyze` (tool-specific)
+- `define_strings` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

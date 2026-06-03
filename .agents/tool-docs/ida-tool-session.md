@@ -30,7 +30,6 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `add_note` (tool-specific)
 - `clear_notes` (tool-specific)
 - `cleanup_stale` (tool-specific)
-- `health` (tool-specific)
 - `stats` (tool-specific)
 - `validate` (tool-specific)
 - `bulk_delete` (tool-specific)
@@ -48,6 +47,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `macro_run` (tool-specific)
 - `recent_workset` (tool-specific)
 - `crystallize_skill` (tool-specific)
+- `crystallize_mined_macros` (tool-specific)
 - `rate_skill` (tool-specific)
 - `list_skills` (tool-specific)
 - `suggest_strategy` (tool-specific)
@@ -69,6 +69,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `link` (tool-specific)
 - `cross_reference` (tool-specific)
 - `list_snapshots` (tool-specific)
+- `health` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -84,7 +85,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `60`
+- `action`: `string` - allowed_count: `61`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` - Advanced analysis payload. Preferred for architecture/loader config at session creation.
