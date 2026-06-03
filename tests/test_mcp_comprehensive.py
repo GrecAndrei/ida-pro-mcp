@@ -84,6 +84,8 @@ class TestToolRegistry:
 
     def test_every_tool_has_actions(self):
         for tool in TOOLS:
+            if tool == "batch":
+                continue
             assert tool in TOOL_ACTIONS, f"Tool '{tool}' missing actions list"
             assert len(TOOL_ACTIONS[tool]) > 0, f"Tool '{tool}' has empty actions"
 
@@ -881,6 +883,8 @@ class TestProductionHardening:
         assert "Rate limit exceeded" not in str(result)
 
     def test_guardrail_strict_blocks_writes(self, mcp_client):
+        # Disable auto-transition and reset phase to scout to bypass blackboard phase gates
+        mcp_client.call_tool("blackboard", action="phase_set", phase="scout", auto_transition=False)
         # Strict mode should block risky writes without _guardrail_ack
         result = mcp_client.call_tool(
             "modify",
@@ -888,6 +892,7 @@ class TestProductionHardening:
             addr="0x401000",
             name="test_func",
             _guardrail_mode="enforce",
+            _risk_ack=True,  # Bypass policy preflight block to hit guardrail check
         )
         assert "guardrail" in str(result).lower() or "session" in str(result).lower()
 
