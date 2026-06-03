@@ -31,7 +31,9 @@ class TestPPAAEngine(unittest.TestCase):
                 incoming_xrefs INTEGER,
                 outgoing_xrefs INTEGER,
                 entropy REAL,
-                call_count INTEGER
+                call_count INTEGER,
+                cfg_hash TEXT,
+                reconstructed_structs TEXT
             )
             """
         )
@@ -66,7 +68,7 @@ class TestPPAAEngine(unittest.TestCase):
         self.conn.execute(
             """
             INSERT INTO function_attrs VALUES 
-            (0x140001080, 'aes_decrypt_block', 128, '.text', 0, 0, 8, 4, 3, 2, 4.5, 5)
+            (0x140001080, 'aes_decrypt_block', 128, '.text', 0, 0, 8, 4, 3, 2, 4.5, 5, 'a1b2c3d4e5f6g7h8', '[{"base_register": "rsi", "fields": [{"offset": 16, "offset_hex": "0x10", "type": "char"}]}]')
             """
         )
         self.conn.execute("INSERT INTO function_apis VALUES (0x140001080, 'memcpy')")

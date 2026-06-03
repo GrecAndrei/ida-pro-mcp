@@ -38,8 +38,9 @@ def trace_analysis(
             "static_trace",
             "decrypt_strings",
             "eval_expr",
+            "deobfuscate_emulate",
         ],
-        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis|get|clear|set_options|static_trace|decrypt_strings|eval_expr",
+        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis|get|clear|set_options|static_trace|decrypt_strings|eval_expr|deobfuscate_emulate",
     ],
     path: Annotated[Optional[str], "Path to trace file"] = None,
     addr: Annotated[Optional[str], "Function or address to analyze"] = None,
@@ -994,6 +995,8 @@ def trace_analysis(
 
         elif action in ("get", "clear", "set_options", "static_trace", "decrypt_strings", "eval_expr"):
             return _trace_analysis_merged_dispatch(action, kwargs)
+        elif action == "deobfuscate_emulate":
+            return _trace_analysis_merged_dispatch(action, kwargs)
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
@@ -1277,6 +1280,299 @@ def _static_trace_eval_expr(addr: Optional[str], expr: Optional[str]) -> dict:
     }
 
 
+class TinyEmulator:
+    def __init__(self, start_ea):
+        import ida_funcs
+        self.regs = {
+            'rax': 0, 'rbx': 0, 'rcx': 0, 'rdx': 0,
+            'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': 0x7ffffff0,
+            'r8': 0, 'r9': 0, 'r10': 0, 'r11': 0, 'r12': 0, 'r13': 0, 'r14': 0, 'r15': 0,
+            'zf': 0, 'sf': 0
+        }
+        self.mem = {}  # address -> byte
+        self.written_addrs = set()
+        self.ip = start_ea
+        self.func = ida_funcs.get_func(start_ea)
+        self.func_start = self.func.start_ea if self.func else start_ea
+        self.func_end = self.func.end_ea if self.func else start_ea + 0x1000
+
+    def get_reg(self, name):
+        name = name.lower()
+        if name in self.regs:
+            return self.regs[name]
+        # Map 32-bit, 16-bit, 8-bit registers to their 64-bit parents
+        mapping32 = {
+            'eax': 'rax', 'ebx': 'rbx', 'ecx': 'rcx', 'edx': 'rdx',
+            'esi': 'rsi', 'edi': 'rdi', 'ebp': 'rbp', 'esp': 'rsp',
+            'r8d': 'r8', 'r9d': 'r9', 'r10d': 'r10', 'r11d': 'r11', 'r12d': 'r12', 'r13d': 'r13', 'r14d': 'r14', 'r15d': 'r15'
+        }
+        if name in mapping32:
+            return self.regs[mapping32[name]] & 0xffffffff
+            
+        mapping16 = {
+            'ax': 'rax', 'bx': 'rbx', 'cx': 'rcx', 'dx': 'rdx',
+            'si': 'rsi', 'di': 'rdi', 'bp': 'rbp', 'sp': 'rsp'
+        }
+        if name in mapping16:
+            return self.regs[mapping16[name]] & 0xffff
+            
+        mapping8 = {
+            'al': 'rax', 'bl': 'rbx', 'cl': 'rcx', 'dl': 'rdx',
+            'r8b': 'r8', 'r9b': 'r9', 'r10b': 'r10', 'r11b': 'r11', 'r12b': 'r12', 'r13b': 'r13', 'r14b': 'r14', 'r15b': 'r15'
+        }
+        if name in mapping8:
+            return self.regs[mapping8[name]] & 0xff
+        return 0
+
+    def set_reg(self, name, val):
+        name = name.lower()
+        val = val & 0xffffffffffffffff
+        if name in self.regs:
+            self.regs[name] = val
+            return
+        mapping32 = {
+            'eax': 'rax', 'ebx': 'rbx', 'ecx': 'rcx', 'edx': 'rdx',
+            'esi': 'rsi', 'edi': 'rdi', 'ebp': 'rbp', 'esp': 'rsp',
+            'r8d': 'r8', 'r9d': 'r9', 'r10d': 'r10', 'r11d': 'r11', 'r12d': 'r12', 'r13d': 'r13', 'r14d': 'r14', 'r15d': 'r15'
+        }
+        if name in mapping32:
+            parent = mapping32[name]
+            self.regs[parent] = (val & 0xffffffff)
+            return
+        mapping16 = {
+            'ax': 'rax', 'bx': 'rbx', 'cx': 'rcx', 'dx': 'rdx',
+            'si': 'rsi', 'di': 'rdi', 'bp': 'rbp', 'sp': 'rsp'
+        }
+        if name in mapping16:
+            parent = mapping16[name]
+            self.regs[parent] = (self.regs[parent] & 0xffffffffffff0000) | (val & 0xffff)
+            return
+        mapping8 = {
+            'al': 'rax', 'bl': 'rbx', 'cl': 'rcx', 'dl': 'rdx',
+            'r8b': 'r8', 'r9b': 'r9', 'r10b': 'r10', 'r11b': 'r11', 'r12b': 'r12', 'r13b': 'r13', 'r14b': 'r14', 'r15b': 'r15'
+        }
+        if name in mapping8:
+            parent = mapping8[name]
+            self.regs[parent] = (self.regs[parent] & 0xffffffffffffff00) | (val & 0xff)
+            return
+
+    def read_mem(self, addr, size=1):
+        import ida_bytes
+        out = 0
+        for i in range(size):
+            b = 0
+            if (addr + i) in self.mem:
+                b = self.mem[addr + i]
+            else:
+                b = ida_bytes.get_byte(addr + i)
+            out |= (b << (i * 8))
+        return out
+
+    def write_mem(self, addr, val, size=1):
+        for i in range(size):
+            b = (val >> (i * 8)) & 0xff
+            self.mem[addr + i] = b
+            self.written_addrs.add(addr + i)
+
+    def parse_op(self, insn, op_idx):
+        import ida_ua
+        import idc
+        op = insn.ops[op_idx]
+        if op.type == ida_ua.o_reg:
+            return self.get_reg(insn.op_t_to_reg(op) or idc.print_operand(insn.ea, op_idx))
+        elif op.type == ida_ua.o_imm:
+            return op.value
+        elif op.type in (ida_ua.o_phrase, ida_ua.o_displ):
+            op_str = idc.print_operand(insn.ea, op_idx)
+            addr = self.parse_address_expr(op_str)
+            return addr
+        elif op.type == ida_ua.o_near:
+            return op.addr
+        elif op.type == ida_ua.o_mem:
+            return op.addr
+        return 0
+
+    def parse_address_expr(self, expr_str):
+        expr_str = expr_str.lower()
+        if '[' in expr_str:
+            expr_str = expr_str.split('[')[1].split(']')[0]
+        else:
+            return 0
+        
+        import re
+        tokens = re.split(r'(\+|\-)', expr_str)
+        val = 0
+        current_op = '+'
+        for tok in tokens:
+            tok = tok.strip()
+            if not tok:
+                continue
+            if tok in ('+', '-'):
+                current_op = tok
+                continue
+            
+            tok_val = 0
+            if '*' in tok:
+                parts = tok.split('*')
+                reg_name = parts[0].strip()
+                try:
+                    scale = int(parts[1].strip(), 0)
+                except ValueError:
+                    scale = 1
+                tok_val = self.get_reg(reg_name) * scale
+            elif tok.endswith('h'):
+                try:
+                    tok_val = int(tok[:-1], 16)
+                except ValueError:
+                    tok_val = 0
+            elif re.match(r'^[0-9a-f]+$', tok):
+                try:
+                    tok_val = int(tok, 16)
+                except ValueError:
+                    tok_val = 0
+            elif tok in self.regs or tok in ('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'r8d', 'r9d', 'r10d', 'r11d', 'r12d', 'r13d', 'r14d', 'r15d', 'ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'al', 'bl', 'cl', 'dl'):
+                tok_val = self.get_reg(tok)
+            else:
+                try:
+                    tok_val = int(tok, 0)
+                except ValueError:
+                    tok_val = 0
+            
+            if current_op == '+':
+                val += tok_val
+            else:
+                val -= tok_val
+        return val & 0xffffffffffffffff
+
+    def step(self):
+        import ida_ua
+        import idc
+        import ida_bytes
+        insn = ida_ua.insn_t()
+        if ida_ua.decode_insn(insn, self.ip) <= 0:
+            return False
+        
+        mnem = idc.print_insn_mnem(self.ip).lower()
+        next_ip = self.ip + insn.size
+        
+        if mnem in ("mov", "movzx", "movsx"):
+            op0_str = idc.print_operand(self.ip, 0)
+            val1 = self.parse_op(insn, 1)
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                size = insn.ops[0].dtype
+                bytes_size = self.dtype_size(size)
+                self.write_mem(addr, val1, bytes_size)
+            else:
+                self.set_reg(op0_str, val1)
+                
+        elif mnem == "lea":
+            op0_str = idc.print_operand(self.ip, 0)
+            addr = self.parse_op(insn, 1)
+            self.set_reg(op0_str, addr)
+            
+        elif mnem == "xor":
+            op0_str = idc.print_operand(self.ip, 0)
+            val0 = self.parse_op(insn, 0)
+            val1 = self.parse_op(insn, 1)
+            res = val0 ^ val1
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                self.write_mem(addr, res, self.dtype_size(insn.ops[0].dtype))
+            else:
+                self.set_reg(op0_str, res)
+            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            
+        elif mnem in ("add", "sub"):
+            op0_str = idc.print_operand(self.ip, 0)
+            val0 = self.parse_op(insn, 0)
+            val1 = self.parse_op(insn, 1)
+            res = (val0 + val1) if mnem == "add" else (val0 - val1)
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                self.write_mem(addr, res, self.dtype_size(insn.ops[0].dtype))
+            else:
+                self.set_reg(op0_str, res)
+            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            
+        elif mnem in ("inc", "dec"):
+            op0_str = idc.print_operand(self.ip, 0)
+            val0 = self.parse_op(insn, 0)
+            res = (val0 + 1) if mnem == "inc" else (val0 - 1)
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                self.write_mem(addr, res, self.dtype_size(insn.ops[0].dtype))
+            else:
+                self.set_reg(op0_str, res)
+            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            
+        elif mnem == "cmp":
+            val0 = self.parse_op(insn, 0)
+            val1 = self.parse_op(insn, 1)
+            diff = val0 - val1
+            self.regs['zf'] = 1 if diff == 0 else 0
+            self.regs['sf'] = 1 if diff < 0 else 0
+            
+        elif mnem == "test":
+            val0 = self.parse_op(insn, 0)
+            val1 = self.parse_op(insn, 1)
+            res = val0 & val1
+            self.regs['zf'] = 1 if res == 0 else 0
+            
+        elif mnem in ("jmp", "je", "jne", "jz", "jnz", "jb", "jae"):
+            target = self.parse_op(insn, 0)
+            jump = False
+            if mnem == "jmp":
+                jump = True
+            elif mnem in ("je", "jz"):
+                jump = (self.regs['zf'] == 1)
+            elif mnem in ("jne", "jnz"):
+                jump = (self.regs['zf'] == 0)
+            elif mnem == "jb":
+                jump = (self.regs['sf'] != 0)
+            elif mnem == "jae":
+                jump = (self.regs['sf'] == 0)
+            
+            if jump and self.func_start <= target < self.func_end:
+                next_ip = target
+
+        elif mnem in ("ret", "retn"):
+            return False
+
+        self.ip = next_ip
+        return True
+
+    def dtype_size(self, dtype):
+        if dtype == 0: return 1
+        elif dtype == 1: return 2
+        elif dtype == 2: return 4
+        elif dtype == 7: return 8
+        return 1
+
+    def run_emulation(self, limit=2000):
+        step_count = 0
+        while step_count < limit:
+            if not self.step():
+                break
+            step_count += 1
+            
+        extracted_strings = []
+        current_str = []
+        mem_keys = sorted(self.mem.keys())
+        for k in mem_keys:
+            val = self.mem[k]
+            if 32 <= val <= 126 or val in (9, 10, 13):
+                current_str.append(chr(val))
+            else:
+                if len(current_str) >= 4:
+                    extracted_strings.append("".join(current_str))
+                current_str = []
+        if len(current_str) >= 4:
+            extracted_strings.append("".join(current_str))
+            
+        return sorted(list(set(extracted_strings)))
+
+
 # ---- Dispatcher hook for the merged actions ----
 # The original trace() and static_trace() tools were @tool @idaread entry
 # points; we now route their action names into the same dispatcher. The
@@ -1322,6 +1618,23 @@ def _trace_analysis_merged_dispatch(action, kwargs) -> dict:
         return _static_trace_decrypt_strings(ea)
     if action == "eval_expr":
         return _static_trace_eval_expr(kwargs.get("addr"), kwargs.get("expr"))
+    if action == "deobfuscate_emulate":
+        addr = kwargs.get("addr")
+        if not addr:
+            return make_error(MCPError.INVALID_ARGS, "addr required")
+        ea, err = validate_addr(addr)
+        if err:
+            return err
+        steps = int(kwargs.get("max_steps", 2000))
+        emu = TinyEmulator(ea)
+        strings = emu.run_emulation(steps)
+        return {
+            "ok": True,
+            "emulated_address": hex(ea),
+            "steps_executed": steps,
+            "extracted_strings": strings,
+            "written_memory_bytes": len(emu.mem)
+        }
     return make_error(MCPError.INVALID_ARGS, f"Unknown merged action: {action}")
 
 

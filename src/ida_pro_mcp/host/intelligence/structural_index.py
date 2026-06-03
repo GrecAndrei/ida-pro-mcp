@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS function_attrs (
     max_loop_depth INTEGER DEFAULT 0,
     has_crypto_constants INTEGER DEFAULT 0,
     xor_ratio REAL DEFAULT 0.0,
+    cfg_hash TEXT,
+    reconstructed_structs TEXT,
     created_at REAL DEFAULT 0.0,
     updated_at REAL DEFAULT 0.0
 );
@@ -97,6 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_attrs_xrefs_in ON function_attrs(incoming_xrefs);
 CREATE INDEX IF NOT EXISTS idx_attrs_xrefs_out ON function_attrs(outgoing_xrefs);
 CREATE INDEX IF NOT EXISTS idx_attrs_crypto ON function_attrs(has_crypto_constants);
 CREATE INDEX IF NOT EXISTS idx_attrs_xor_ratio ON function_attrs(xor_ratio);
+CREATE INDEX IF NOT EXISTS idx_attrs_cfg ON function_attrs(cfg_hash);
 """
 
 
@@ -127,6 +130,19 @@ def get_db_path(idb_path: str) -> str:
 
 def ensure_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_SQL)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(function_attrs)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "cfg_hash" not in columns:
+            cursor.execute("ALTER TABLE function_attrs ADD COLUMN cfg_hash TEXT")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_attrs_cfg ON function_attrs(cfg_hash)")
+            conn.commit()
+        if "reconstructed_structs" not in columns:
+            cursor.execute("ALTER TABLE function_attrs ADD COLUMN reconstructed_structs TEXT")
+            conn.commit()
+    except Exception:
+        pass
     conn.commit()
 
 
@@ -293,6 +309,12 @@ def upsert_functions_batch(conn: sqlite3.Connection, attrs_list: list[dict[str, 
     # Ensure transaction
     with conn:
         for attrs in attrs_list:
+            structs_json = None
+            if "reconstructed_structs" in attrs:
+                try:
+                    structs_json = json.dumps(attrs["reconstructed_structs"])
+                except Exception:
+                    pass
             cursor.execute(
                 """
                 INSERT INTO function_attrs
@@ -300,8 +322,8 @@ def upsert_functions_batch(conn: sqlite3.Connection, attrs_list: list[dict[str, 
                  incoming_xrefs, outgoing_xrefs, entropy, call_count, xor_count, mov_count,
                  cmp_count, jmp_count, ret_count, push_count, pop_count, lea_count, test_count,
                  api_count, string_count, data_ref_count, has_loops, max_loop_depth,
-                 has_crypto_constants, xor_ratio, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 has_crypto_constants, xor_ratio, cfg_hash, reconstructed_structs, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ea) DO UPDATE SET
                 name=excluded.name, size=excluded.size, segment=excluded.segment,
                 is_thunk=excluded.is_thunk, is_library=excluded.is_library,
@@ -314,7 +336,7 @@ def upsert_functions_batch(conn: sqlite3.Connection, attrs_list: list[dict[str, 
                 string_count=excluded.string_count, data_ref_count=excluded.data_ref_count,
                 has_loops=excluded.has_loops, max_loop_depth=excluded.max_loop_depth,
                 has_crypto_constants=excluded.has_crypto_constants, xor_ratio=excluded.xor_ratio,
-                updated_at=excluded.updated_at
+                cfg_hash=excluded.cfg_hash, reconstructed_structs=excluded.reconstructed_structs, updated_at=excluded.updated_at
                 """,
                 (
                     attrs["ea"], attrs["name"], attrs["size"], attrs["segment"],
@@ -327,7 +349,7 @@ def upsert_functions_batch(conn: sqlite3.Connection, attrs_list: list[dict[str, 
                     attrs["api_count"], attrs["string_count"], attrs["data_ref_count"],
                     attrs["has_loops"], attrs.get("max_loop_depth", 0),
                     attrs.get("has_crypto_constants", 0), attrs.get("xor_ratio", 0.0),
-                    now, now,
+                    attrs.get("cfg_hash"), structs_json, now, now,
                 ),
             )
 

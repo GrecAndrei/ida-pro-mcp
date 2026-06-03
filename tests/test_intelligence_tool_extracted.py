@@ -79,7 +79,7 @@ def test_intelligence_tool_action_enum_has_13_entries():
         "evidence_card",
         "structural_ingest", "structural_query", "structural_get",
         "structural_stats", "structural_delete", "structural_refresh",
-        "structural_extract", "structural_extract_single",
+        "structural_extract", "structural_extract_single", "blackboard_federate",
     }
     assert set(actions) == expected, f"mismatch: got {set(actions)}"
 

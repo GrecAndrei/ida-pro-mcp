@@ -48,6 +48,62 @@ _CRYPTO_CONSTS: dict[int, str] = {
 }
 
 
+def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
+    op_str = op_str.lower()
+    if '[' not in op_str or ']' not in op_str:
+        return None
+    inner = op_str.split('[')[1].split(']')[0].strip()
+    tokens = re.split(r'(\+|\-)', inner)
+    base_reg = None
+    offset = 0
+    current_sign = 1
+    
+    valid_regs = {'rax', 'rcx', 'rdx', 'rbx', 'rsp', 'rbp', 'rsi', 'rdi',
+                  'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15',
+                  'eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'}
+                  
+    for tok in tokens:
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok == '+':
+            current_sign = 1
+            continue
+        elif tok == '-':
+            current_sign = -1
+            continue
+            
+        if tok in valid_regs:
+            if base_reg is None:
+                base_reg = tok
+        else:
+            val = 0
+            if tok.endswith('h'):
+                try:
+                    val = int(tok[:-1], 16)
+                except ValueError:
+                    pass
+            elif tok.startswith('0x'):
+                try:
+                    val = int(tok, 16)
+                except ValueError:
+                    pass
+            else:
+                try:
+                    val = int(tok, 10)
+                except ValueError:
+                    try:
+                        val = int(tok, 16)
+                    except ValueError:
+                        pass
+            if val != 0:
+                offset += current_sign * val
+                
+    if base_reg:
+        return base_reg, offset
+    return None
+
+
 def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
     """Extract deterministic attributes for a single function using only IDA APIs.
 
@@ -78,12 +134,19 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
     strings: list[tuple[str, int]] = []
     data_refs = 0
     crypto_constants: list[tuple[int, int]] = []  # (value, ea)
+    struct_accesses: dict[str, dict[int, list[str]]] = {}
 
     # Walk basic blocks
     import ida_ua
     flow = idaapi.FlowChart(func)
+    block_descriptors = []
     for block in flow:
         bb_count += 1
+        inst_count = sum(1 for _ in idautils.Heads(block.start_ea, block.end_ea))
+        in_degree = sum(1 for _ in block.preds()) if hasattr(block, "preds") else 0
+        out_degree = sum(1 for _ in block.succs()) if hasattr(block, "succs") else 0
+        block_descriptors.append(f"{in_degree}:{out_degree}:{inst_count}")
+
         for ea in idautils.Heads(block.start_ea, block.end_ea):
             mnem = idc.print_insn_mnem(ea)
             if not mnem:
@@ -113,7 +176,7 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
                     if val in _CRYPTO_CONSTS:
                         crypto_constants.append((val, ea))
 
-            # Decode instruction to check operands for crypto constants
+            # Decode instruction to check operands for crypto constants and register offsets
             insn = ida_ua.insn_t()
             if ida_ua.decode_insn(insn, ea) > 0:
                 for op in insn.ops:
@@ -121,6 +184,24 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
                         val = op.value
                         if val in _CRYPTO_CONSTS and (val, ea) not in crypto_constants:
                             crypto_constants.append((val, ea))
+                
+                # Process register offset accesses for struct reconstruction
+                for i in range(idaapi.UA_MAXOP):
+                    op_type = idc.get_operand_type(ea, i)
+                    if op_type in (idc.o_displ, idc.o_phrase):
+                        op_str = idc.print_operand(ea, i)
+                        parsed = _parse_register_offset(op_str)
+                        if parsed:
+                            base_reg, offset = parsed
+                            if base_reg not in ('rsp', 'esp', 'rbp', 'ebp'):
+                                dtype = insn.ops[i].dtype
+                                dtype_sizes = {0: 1, 1: 2, 2: 4, 7: 8}
+                                size = dtype_sizes.get(dtype, 4)
+                                type_guesses = {1: "char", 2: "short", 4: "int", 8: "void*"}
+                                t_guess = type_guesses.get(size, "int")
+                                
+                                struct_accesses.setdefault(base_reg, {})
+                                struct_accesses[base_reg].setdefault(offset, []).append(t_guess)
 
             # Data refs
             for xref in idautils.XrefsFrom(ea, 0):
@@ -152,6 +233,29 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
     total_insns = sum(mnem_counts.values())
     xor_ratio = round(mnem_counts.get("xor", 0) / max(1, total_insns), 4)
     has_crypto_constants = 1 if crypto_constants else 0
+
+    # Hash of CFG
+    block_descriptors.sort()
+    cfg_desc_str = ",".join(block_descriptors)
+    cfg_hash = hashlib.sha256(cfg_desc_str.encode("utf-8")).hexdigest()[:16] if block_descriptors else None
+
+    # Format reconstructed structs
+    reconstructed_structs = []
+    for reg, offsets in struct_accesses.items():
+        fields = []
+        for offset in sorted(offsets.keys()):
+            guesses = offsets[offset]
+            best_type = Counter(guesses).most_common(1)[0][0]
+            fields.append({
+                "offset": offset,
+                "offset_hex": f"0x{offset:x}",
+                "type": best_type
+            })
+        if fields:
+            reconstructed_structs.append({
+                "base_register": reg,
+                "fields": fields
+            })
 
     return {
         "ea": start,
@@ -185,6 +289,8 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
         "apis": sorted(apis),
         "strings": strings,
         "crypto_constants": crypto_constants,
+        "cfg_hash": cfg_hash,
+        "reconstructed_structs": reconstructed_structs,
     }
 
 
@@ -215,8 +321,9 @@ def intelligence(
             "structural_refresh",
             "structural_extract",
             "structural_extract_single",
+            "blackboard_federate",
         ],
-        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single",
+        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single|blackboard_federate",
     ],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Free-form text or comma-separated list"] = None,
@@ -711,6 +818,39 @@ def intelligence(
                     except Exception as e:
                         return {"error": True, "message": f"Failed to delete database: {e}"}
                 return {"error": True, "message": f"No index found at {db_path}"}
+
+            if action == "blackboard_federate":
+                try:
+                    from ida_pro_mcp.host.blackboard_store import _resolve_db_path
+                    from ida_pro_mcp.host.intelligence.federation import FederationBridge
+                except ImportError:
+                    _src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+                    if _src_dir not in sys.path:
+                        sys.path.insert(0, _src_dir)
+                    from ida_pro_mcp.host.blackboard_store import _resolve_db_path
+                    from ida_pro_mcp.host.intelligence.federation import FederationBridge
+
+                idb_path = idc.get_idb_path()
+                local_bb = _resolve_db_path(idb_path + ".blackboard.db" if idb_path else None)
+
+                remote_paths = kwargs.get("remote_paths") or []
+                if isinstance(remote_paths, str):
+                    remote_paths = [r.strip() for r in remote_paths.split(",") if r.strip()]
+
+                remote_capsule_paths = kwargs.get("remote_capsule_paths") or []
+                if isinstance(remote_capsule_paths, str):
+                    remote_capsule_paths = [r.strip() for r in remote_capsule_paths.split(",") if r.strip()]
+
+                bridge = FederationBridge(local_bb)
+                bb_stats = bridge.federate_blackboards(remote_paths)
+                pref_stats = bridge.federate_preferences(remote_capsule_paths)
+
+                return {
+                    "ok": True,
+                    "local_blackboard_path": local_bb,
+                    "blackboard_merge": bb_stats,
+                    "preference_merge": pref_stats
+                }
 
             if action == "structural_stats":
                 if not os.path.exists(db_path):

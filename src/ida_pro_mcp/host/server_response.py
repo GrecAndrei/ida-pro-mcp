@@ -588,11 +588,39 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     }
                     inferred["behavior_tags"] = []
 
+                    if meta.get("reconstructed_structs"):
+                        inferred["reconstructed_structs"] = meta["reconstructed_structs"]
+                        c_structs = []
+                        for struct_desc in meta["reconstructed_structs"]:
+                            base_reg = struct_desc.get("base_register", "struct")
+                            fields_lines = []
+                            for f in struct_desc.get("fields", []):
+                                fields_lines.append(f"    {f['type']} field_{f['offset']:x}; // offset {f['offset_hex']}")
+                            struct_decl = f"struct struct_{base_reg} {{\n" + "\n".join(fields_lines) + "\n};"
+                            c_structs.append(struct_decl)
+                        inferred["synthesized_c_structures"] = c_structs
+
                     analogy = ppaa.query_symbol_analogy(meta["name"])
                     if analogy:
                         inferred["global_analogy"] = analogy
 
                     addr_info["inferred_semantics"] = inferred
+
+                    if meta.get("cfg_hash"):
+                        analogies = ppaa.query_functions_by_cfg_hash(meta["cfg_hash"], exclude_ea=target_val)
+                        if analogies:
+                            addr_info["cfg_structural_analogies"] = {
+                                "cfg_hash": meta["cfg_hash"],
+                                "matches": analogies
+                            }
+
+                    if meta.get("entropy", 0.0) > 6.5 and meta.get("string_count", 0) < 2:
+                        addr_info["suggested_deobfuscation"] = {
+                            "tool": "trace_analysis",
+                            "action": "deobfuscate_emulate",
+                            "addr": hex(target_val),
+                            "reason": f"Function has high entropy ({meta['entropy']:.2f}) and low string references ({meta['string_count']}), suggesting encryption/obfuscation. Auto-emulation can extract hidden constants/strings."
+                        }
 
                     bridges = ppaa.query_related_bridges(target_val)
                     if bridges:

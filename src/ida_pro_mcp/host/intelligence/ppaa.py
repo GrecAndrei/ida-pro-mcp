@@ -62,7 +62,7 @@ class PPAAEngine:
             cur.execute(
                 """
                 SELECT name, size, segment, is_thunk, is_library, bb_count, cyclomatic_complexity,
-                       incoming_xrefs, outgoing_xrefs, entropy, call_count
+                       incoming_xrefs, outgoing_xrefs, entropy, call_count, cfg_hash, reconstructed_structs
                 FROM function_attrs WHERE ea = ?
                 """,
                 (ea,),
@@ -84,6 +84,8 @@ class PPAAEngine:
                 "outgoing_xrefs": row[8],
                 "entropy": row[9],
                 "call_count": row[10],
+                "cfg_hash": row[11],
+                "reconstructed_structs": json.loads(row[12]) if row[12] else [],
             }
 
             # 2. Fetch referenced APIs
@@ -135,6 +137,49 @@ class PPAAEngine:
         except Exception:
             pass
         return None
+
+    def query_functions_by_cfg_hash(self, cfg_hash: str, exclude_ea: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Find functions with the matching cfg_hash."""
+        conn = self._conn()
+        if not conn or not cfg_hash:
+            return []
+        try:
+            cur = conn.cursor()
+            if exclude_ea is not None:
+                cur.execute(
+                    """
+                    SELECT ea, name, segment, size
+                    FROM function_attrs
+                    WHERE cfg_hash = ? AND ea != ? LIMIT 10
+                    """,
+                    (cfg_hash, exclude_ea),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT ea, name, segment, size
+                    FROM function_attrs
+                    WHERE cfg_hash = ? LIMIT 10
+                    """,
+                    (cfg_hash,),
+                )
+            rows = cur.fetchall()
+            conn.close()
+            results = []
+            for r in rows:
+                results.append({
+                    "address": hex(r[0]),
+                    "name": r[1],
+                    "segment": r[2],
+                    "size": r[3],
+                })
+            return results
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return []
 
     def query_related_bridges(self, ea: int, top_k: int = 3) -> List[Dict[str, Any]]:
         """Run Multi-Hop Bridge retrieval to get structurally similar functions."""
