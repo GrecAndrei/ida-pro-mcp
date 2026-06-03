@@ -311,17 +311,48 @@ def _split_constraints(constraints: dict) -> tuple[dict, dict]:
 
 
 def _schemaboot_db_path() -> str | None:
-    """Get the schemaboot DB path for the current IDB."""
+    """Get the schemaboot DB path for the current IDB, with read-only fallback support."""
+    primary = None
     try:
         import ida_loader
-        return ida_loader.get_path(ida_loader.PATH_TYPE_IDB) + ".schemaboot.db"
+        primary = ida_loader.get_path(ida_loader.PATH_TYPE_IDB) + ".schemaboot.db"
     except Exception:
-        pass
+        try:
+            import idc
+            primary = idc.get_idb_path() + ".schemaboot.db"
+        except Exception:
+            pass
+            
+    if not primary:
+        return None
+        
+    import os
+    if os.path.exists(primary):
+        return primary
+        
+    import hashlib
     try:
-        return idc.get_idb_path() + ".schemaboot.db"
-    except Exception:
-        pass
-    return None
+        from ida_pro_mcp.host.config import CACHE_DIR
+    except ImportError:
+        import sys
+        if sys.platform == "win32":
+            root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local")
+            CACHE_DIR = os.path.realpath(os.path.join(root, "ida-pro-mcp"))
+        elif sys.platform == "darwin":
+            CACHE_DIR = os.path.realpath(os.path.join(os.path.expanduser("~"), "Library", "Application Support", "ida-pro-mcp"))
+        else:
+            xdg_state = os.environ.get("XDG_STATE_HOME")
+            if xdg_state:
+                CACHE_DIR = os.path.realpath(os.path.join(xdg_state, "ida-pro-mcp"))
+            else:
+                CACHE_DIR = os.path.realpath(os.path.join(os.path.expanduser("~"), ".local", "state", "ida-pro-mcp"))
+
+    h = hashlib.sha256(os.path.abspath(primary).encode("utf-8")).hexdigest()[:16]
+    fallback = os.path.join(CACHE_DIR, "fallback_indexes", f"{h}.schemaboot.db")
+    if os.path.exists(fallback):
+        return fallback
+        
+    return primary
 
 
 def _sql_pre_filter_functions(

@@ -26,6 +26,7 @@ from .core import (
 )
 from .context_policy import ContextAssemblerPolicyMixin
 from .context_semantic import ContextAssemblerSemanticMixin
+from .structural_index import get_db_path
 from . import helpers as _helpers
 from .api_patterns import (
     ALL_INTERESTING_APIS,
@@ -1296,7 +1297,7 @@ class ContextAssembler(
         """Pull structural attributes from schemaboot for this function address."""
         if not idb_path or not addr:
             return None
-        db = idb_path + ".schemaboot.db"
+        db = get_db_path(idb_path)
         if not os.path.exists(db):
             return None
         try:
@@ -1654,7 +1655,7 @@ class ContextAssembler(
         """
         if not addresses or not idb_path:
             return []
-        db = idb_path + ".schemaboot.db"
+        db = get_db_path(idb_path)
         if not os.path.exists(db):
             return []
         try:
@@ -1734,7 +1735,7 @@ class ContextAssembler(
         """
         if not idb_path:
             return []
-        db = idb_path + ".schemaboot.db"
+        db = get_db_path(idb_path)
         if not os.path.exists(db):
             return []
 
