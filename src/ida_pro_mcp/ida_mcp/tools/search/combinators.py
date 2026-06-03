@@ -224,10 +224,12 @@ def _tokenize_bool(expr: str) -> list[str]:
             tokens.append("LITERAL:" + expr[i + 1:j])
             i = j + 1
             continue
-        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^\s()]+)", expr[i:])
+        m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*:\s*("[^"]*"|[^\s()]+)', expr[i:])
         if m:
             key = m.group(1).lower()
             val = m.group(2)
+            if val.startswith('"') and val.endswith('"'):
+                val = val[1:-1]
             tokens.append(f"{key}:{val}")
             i += m.end()
             continue

@@ -132,15 +132,22 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
     return result
 
 
-def search_string(pattern, case_sensitive, include_context, offset, limit):
+def search_string(pattern, case_sensitive, include_context, offset, limit, timeout_ms=0):
     """Search string literals."""
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     results = []
     truncated = False
     matches_seen = 0
+    timer = SearchTimeout(timeout_ms)
+    timed_out = False
 
     for sc in safe_get_strlist_items():
-        if truncated:
+        if truncated or timed_out:
+            break
+        try:
+            timer.check()
+        except TimeoutError:
+            timed_out = True
             break
         try:
             s = safe_get_strlit_contents(sc.ea)
@@ -160,10 +167,14 @@ def search_string(pattern, case_sensitive, include_context, offset, limit):
         except Exception:
             pass
 
-    return build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if timed_out:
+        result["timed_out"] = True
+        result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."
+    return result
 
 
-def search_immediate(pattern, range_start, range_end, include_context, offset, limit):
+def search_immediate(pattern, range_start, range_end, include_context, offset, limit, timeout_ms=0):
     """Search for immediate values in instructions."""
     semantic_meta = {}
     try:
@@ -179,10 +190,19 @@ def search_immediate(pattern, range_start, range_end, include_context, offset, l
     results = []
     truncated = False
     matches_seen = 0
+    timer = SearchTimeout(timeout_ms)
+    timed_out = False
 
     for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+        if timed_out:
+            break
         curr = seg_start
         while curr < seg_end:
+            try:
+                timer.check()
+            except TimeoutError:
+                timed_out = True
+                break
             insn = ida_ua.insn_t()
             if ida_ua.decode_insn(insn, curr) > 0:
                 for op in insn.ops:
@@ -209,7 +229,11 @@ def search_immediate(pattern, range_start, range_end, include_context, offset, l
             if truncated:
                 break
 
-    return build_response(results, offset, limit, matches_seen, truncated, value=hex(value), **semantic_meta)
+    result = build_response(results, offset, limit, matches_seen, truncated, value=hex(value), **semantic_meta)
+    if timed_out:
+        result["timed_out"] = True
+        result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."
+    return result
 
 
 def search_name(pattern, case_sensitive, offset, limit):

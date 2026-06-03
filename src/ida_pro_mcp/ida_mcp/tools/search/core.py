@@ -115,7 +115,6 @@ def get_cached_imports() -> list[dict]:
     """Return cached import list, rebuilding if the database changed.
 
     Capped at _MAX_DB_CACHE_ITEMS to prevent memory bombs on huge databases.
-    If the cap is exceeded, the list is returned uncached.
     """
     global _IMPORTS_CACHE
     if _IMPORTS_CACHE is not None and not _db_changed():
@@ -133,9 +132,9 @@ def get_cached_imports() -> list[dict]:
 
         ida_nalt.enum_import_names(mod_idx, make_cb(mod_name))
         if len(imports) >= _MAX_DB_CACHE_ITEMS:
+            imports = imports[:_MAX_DB_CACHE_ITEMS]
             break
-    if len(imports) < _MAX_DB_CACHE_ITEMS:
-        _IMPORTS_CACHE = imports
+    _IMPORTS_CACHE = imports
     return imports
 
 
@@ -143,7 +142,6 @@ def get_cached_strings() -> list[dict]:
     """Return cached string list, rebuilding if the database changed.
 
     Capped at _MAX_DB_CACHE_ITEMS to prevent memory bombs on huge databases.
-    If the cap is exceeded, the list is returned uncached.
     """
     global _STRINGS_CACHE
     if _STRINGS_CACHE is not None and not _db_changed():
@@ -158,8 +156,7 @@ def get_cached_strings() -> list[dict]:
                 strings.append({"ea": sc.ea, "string": s})
         except Exception:
             pass
-    if len(strings) < _MAX_DB_CACHE_ITEMS:
-        _STRINGS_CACHE = strings
+    _STRINGS_CACHE = strings
     return strings
 
 

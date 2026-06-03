@@ -149,7 +149,7 @@ def search_regex(pattern, case_sensitive, range_start, range_end, include_contex
     return result
 
 
-def search_func_by_sig(pattern, offset, limit):
+def search_func_by_sig(pattern, offset, limit, timeout_ms=0):
     """Filter functions by characteristics.
     
     Supports structural filters in pattern:
@@ -188,9 +188,29 @@ def search_func_by_sig(pattern, offset, limit):
     results = []
     truncated = False
     matches_seen = 0
+    timer = SearchTimeout(timeout_ms)
+    timed_out = False
+
+    # Determine which filters are active to enforce AND logic
+    active_filters = []
+    if size_rules:
+        active_filters.append("size")
+    if call_pattern:
+        active_filters.append("calls")
+    if args_rule:
+        active_filters.append("args")
+    if want_leaf:
+        active_filters.append("leaf")
+    if want_no_callers:
+        active_filters.append("no_callers")
 
     for ea in idautils.Functions():
-        if truncated:
+        if truncated or timed_out:
+            break
+        try:
+            timer.check()
+        except TimeoutError:
+            timed_out = True
             break
         func = idaapi.get_func(ea)
         if not func:
@@ -201,64 +221,77 @@ def search_func_by_sig(pattern, offset, limit):
         matched = False
         reason = []
 
-        if size_rules:
-            size_ok = False
-            for op, val1, val2 in size_rules:
-                if op == ">" and size > val1:
-                    size_ok = True
-                    reason.append(f"size={size}>{val1}")
-                elif op == "<" and size < val1:
-                    size_ok = True
-                    reason.append(f"size={size}<{val1}")
-                elif val2 is not None and val1 <= size <= val2:
-                    size_ok = True
-                    reason.append(f"size={size} in [{val1},{val2}]")
-                elif op in ("", "=") and val2 is None and size == val1:
-                    size_ok = True
-                    reason.append(f"size={size}")
-                if size_ok:
-                    break
-            matched = matched or size_ok
-
-        if call_pattern:
-            call_matcher = compile_smart_pattern(call_pattern, case_sensitive=False)
-            for xref in idautils.XrefsFrom(ea):
-                if xref.type in CALL_XREF_TYPES:
-                    callee_name = idc.get_name(xref.to) or ""
-                    if call_matcher(callee_name):
-                        matched = True
-                        reason.append(f"calls:{callee_name}")
-                        break
-
-        if args_rule:
-            arg_count, plus = args_rule
-            tif = ida_typeinf.tinfo_t()
-            if ida_nalt.get_tinfo(tif, ea):
-                func_data = ida_typeinf.func_type_data_t()
-                if tif.get_func_details(func_data):
-                    actual_args = func_data.size()
-                    if plus and actual_args >= arg_count:
-                        matched = True
-                        reason.append(f"args={actual_args}>={arg_count}")
-                    elif not plus and actual_args == arg_count:
-                        matched = True
-                        reason.append(f"args={actual_args}")
-
-        if want_leaf:
-            has_calls = any(xr.type in CALL_XREF_TYPES for xr in idautils.XrefsFrom(ea))
-            if not has_calls:
+        if not active_filters:
+            # Fallback to name search if no structural filters are active
+            if filter_matcher(name):
                 matched = True
-                reason.append("leaf")
-
-        if want_no_callers:
-            has_callers = any(xr.iscode for xr in idautils.XrefsTo(ea, 0))
-            if not has_callers:
-                matched = True
-                reason.append("no_callers")
-
-        if not (size_rules or call_pattern or args_rule or want_leaf or want_no_callers) and filter_matcher(name):
+                reason.append("semantic:name")
+        else:
+            # All active filters must be satisfied (AND logic)
             matched = True
-            reason.append("semantic:name")
+            if "size" in active_filters:
+                size_ok = False
+                for op, val1, val2 in size_rules:
+                    if op == ">" and size > val1:
+                        size_ok = True
+                        reason.append(f"size={size}>{val1}")
+                    elif op == "<" and size < val1:
+                        size_ok = True
+                        reason.append(f"size={size}<{val1}")
+                    elif val2 is not None and val1 <= size <= val2:
+                        size_ok = True
+                        reason.append(f"size={size} in [{val1},{val2}]")
+                    elif op in ("", "=") and val2 is None and size == val1:
+                        size_ok = True
+                        reason.append(f"size={size}")
+                    if size_ok:
+                        break
+                if not size_ok:
+                    matched = False
+
+            if matched and "calls" in active_filters:
+                calls_ok = False
+                call_matcher = compile_smart_pattern(call_pattern, case_sensitive=False)
+                for xref in idautils.XrefsFrom(ea):
+                    if xref.type in CALL_XREF_TYPES:
+                        callee_name = idc.get_name(xref.to) or ""
+                        if call_matcher(callee_name):
+                            calls_ok = True
+                            reason.append(f"calls:{callee_name}")
+                            break
+                if not calls_ok:
+                    matched = False
+
+            if matched and "args" in active_filters:
+                args_ok = False
+                arg_count, plus = args_rule
+                tif = ida_typeinf.tinfo_t()
+                if ida_nalt.get_tinfo(tif, ea):
+                    func_data = ida_typeinf.func_type_data_t()
+                    if tif.get_func_details(func_data):
+                        actual_args = func_data.size()
+                        if plus and actual_args >= arg_count:
+                            args_ok = True
+                            reason.append(f"args={actual_args}>={arg_count}")
+                        elif not plus and actual_args == arg_count:
+                            args_ok = True
+                            reason.append(f"args={actual_args}")
+                if not args_ok:
+                    matched = False
+
+            if matched and "leaf" in active_filters:
+                has_calls = any(xr.type in CALL_XREF_TYPES for xr in idautils.XrefsFrom(ea))
+                if not has_calls:
+                    reason.append("leaf")
+                else:
+                    matched = False
+
+            if matched and "no_callers" in active_filters:
+                has_callers = any(xr.iscode for xr in idautils.XrefsTo(ea, 0))
+                if not has_callers:
+                    reason.append("no_callers")
+                else:
+                    matched = False
 
         if matched:
             matches_seen += 1
@@ -269,4 +302,8 @@ def search_func_by_sig(pattern, offset, limit):
                     truncated = True
                     break
 
-    return build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if timed_out:
+        result["timed_out"] = True
+        result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."
+    return result

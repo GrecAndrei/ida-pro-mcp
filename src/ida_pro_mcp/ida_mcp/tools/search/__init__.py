@@ -287,9 +287,9 @@ def search(
         if action == "bytes":
             response = search_bytes(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms)
         elif action == "string":
-            response = search_string(actual_pattern, case_sensitive, include_context, offset, limit)
+            response = search_string(actual_pattern, case_sensitive, include_context, offset, limit, timeout_ms)
         elif action == "immediate":
-            response = search_immediate(actual_pattern, range_start, range_end, include_context, offset, limit)
+            response = search_immediate(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms)
         elif action == "name":
             response = search_name(actual_pattern, case_sensitive, offset, limit)
         elif action == "insns":
@@ -311,7 +311,7 @@ def search(
         elif action == "regex":
             response = search_regex(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms)
         elif action == "func_by_sig":
-            response = search_func_by_sig(actual_pattern, offset, limit)
+            response = search_func_by_sig(actual_pattern, offset, limit, timeout_ms)
         elif action == "find":
             response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
         elif action == "semantic":

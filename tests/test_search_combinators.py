@@ -234,7 +234,7 @@ def test_bool_parser_precedence():
     assert parser.parse_expr() == {1, 2, 3}
 
     # 1 OR 2 AND 3 = 1 | (2&3) = {1}
-    toks = cb._tokenize_bool("name:1 OR name:2,3")
+    toks = cb._tokenize_bool("name:1 OR name:2 AND api:3")
     parser = cb._BoolParser(toks)
     assert parser.parse_expr() == {1}
 
