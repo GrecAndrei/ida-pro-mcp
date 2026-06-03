@@ -71,6 +71,13 @@ def main() -> int:
                 "analogy score mismatch": threshold("analogy_score_mismatch", 0.05),
             },
         },
+        {
+            "script": "tests/benchmarks/benchmark_crystallizer.py",
+            "limits": {
+                "crystallizer step reward": threshold("crystallizer_step_reward", 0.02),
+                "crystallizer sequence mining": threshold("crystallizer_sequence_mining", 2.0),
+            },
+        },
     ]
 
     failed = []
