@@ -105,7 +105,24 @@ def get_db_path(idb_path: str) -> str:
     if not idb_path:
         idb_path = "unknown"
     base = os.path.splitext(idb_path)[0]
-    return f"{base}.schemaboot.db"
+    primary_path = f"{base}.schemaboot.db"
+    
+    # Check if primary path directory is writable
+    db_dir = os.path.dirname(os.path.abspath(primary_path))
+    if os.path.isdir(db_dir) and os.access(db_dir, os.W_OK):
+        return primary_path
+    elif not os.path.exists(db_dir):
+        try:
+            os.makedirs(db_dir, exist_ok=True)
+            return primary_path
+        except (OSError, PermissionError):
+            pass
+            
+    # Fallback path inside CACHE_DIR
+    h = hashlib.sha256(os.path.abspath(primary_path).encode("utf-8")).hexdigest()[:16]
+    fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
+    os.makedirs(fallback_dir, exist_ok=True)
+    return os.path.join(fallback_dir, f"{h}.schemaboot.db")
 
 
 def ensure_tables(conn: sqlite3.Connection) -> None:

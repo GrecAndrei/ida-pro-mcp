@@ -59,7 +59,17 @@ from .preference_store import (
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
-_EMBED_LEASE_FILE = os.path.join("/tmp", "ida-mcp-embed-server.json")
+
+try:
+    from ..config import CACHE_DIR
+except ImportError:
+    try:
+        from host.config import CACHE_DIR
+    except ImportError:
+        CACHE_DIR = os.path.join(os.path.expanduser("~"), ".local", "state", "ida-pro-mcp")
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+_EMBED_LEASE_FILE = os.path.join(CACHE_DIR, "ida-mcp-embed-server-lease.json")
 _MODEL_PATH_CACHE = None
 
 

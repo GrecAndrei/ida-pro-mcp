@@ -55,13 +55,34 @@ class FunctionEmbeddingIndex:
     INDEX_SCHEMA_VERSION = 2
 
     def __init__(self, db_path: str, embedder: Any):
-        self._db_path = db_path
         self._embedder = embedder
         self._cache: Dict[str, List[float]] = {}  # ea_hex -> embedding
-        db_dir = os.path.dirname(db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-        self._init_db()
+
+        try:
+            from ..config import CACHE_DIR
+        except ImportError:
+            try:
+                from host.config import CACHE_DIR
+            except ImportError:
+                CACHE_DIR = os.path.join(os.path.expanduser("~"), ".local", "state", "ida-pro-mcp")
+
+        self._db_path = db_path
+        try:
+            db_dir = os.path.dirname(db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+            # Try to connect and execute a command to verify write access
+            conn = sqlite3.connect(self._db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.close()
+            self._init_db()
+        except (sqlite3.OperationalError, OSError, PermissionError):
+            h = hashlib.sha256(os.path.abspath(db_path).encode("utf-8")).hexdigest()[:16]
+            fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
+            os.makedirs(fallback_dir, exist_ok=True)
+            self._db_path = os.path.join(fallback_dir, f"{h}.embeddings.db")
+            self._init_db()
+
         self._init_meta()
         self._load_cache()
 
@@ -320,10 +341,17 @@ class FunctionEmbeddingIndex:
         try:
             with self._conn() as conn:
                 row = conn.execute(
-                    "SELECT pseudo_hash FROM func_embeddings WHERE ea=?", (func_ea,)
+                    "SELECT pseudo_hash, name FROM func_embeddings WHERE ea=?", (func_ea,)
                 ).fetchone()
                 if row and row[0] == ph:
-                    return  # unchanged
+                    if row[1] == name:
+                        return  # completely unchanged
+                    else:
+                        conn.execute(
+                            "UPDATE func_embeddings SET name=? WHERE ea=?", (name, func_ea)
+                        )
+                        conn.commit()
+                        return
         except Exception:
             pass
 
@@ -380,9 +408,9 @@ class FunctionEmbeddingIndex:
             try:
                 with self._conn() as conn:
                     row = conn.execute(
-                        "SELECT pseudo_hash FROM func_embeddings WHERE ea=?", (func_ea,)
+                        "SELECT pseudo_hash, name FROM func_embeddings WHERE ea=?", (func_ea,)
                     ).fetchone()
-                    if row and row[0] == ph:
+                    if row and row[0] == ph and row[1] == name:
                         return
             except Exception:
                 pass
@@ -493,12 +521,32 @@ class SemanticObjectIndex:
     _TOKEN_RE = re.compile(r"[a-z0-9_]{2,}")
 
     def __init__(self, db_path: str, embedder: Any):
-        self._db_path = db_path
         self._embedder = embedder
-        db_dir = os.path.dirname(db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-        self._init_db()
+
+        try:
+            from ..config import CACHE_DIR
+        except ImportError:
+            try:
+                from host.config import CACHE_DIR
+            except ImportError:
+                CACHE_DIR = os.path.join(os.path.expanduser("~"), ".local", "state", "ida-pro-mcp")
+
+        self._db_path = db_path
+        try:
+            db_dir = os.path.dirname(db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+            # Try to connect and execute a command to verify write access
+            conn = sqlite3.connect(self._db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.close()
+            self._init_db()
+        except (sqlite3.OperationalError, OSError, PermissionError):
+            h = hashlib.sha256(os.path.abspath(db_path).encode("utf-8")).hexdigest()[:16]
+            fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
+            os.makedirs(fallback_dir, exist_ok=True)
+            self._db_path = os.path.join(fallback_dir, f"{h}.semantic.db")
+            self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
