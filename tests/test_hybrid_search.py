@@ -16,8 +16,13 @@ from typing import Any, Dict, List
 SRC_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools")
 )
+SUPPORT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "support")
+)
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+if SUPPORT_DIR not in sys.path:
+    sys.path.insert(0, SUPPORT_DIR)
 
 
 # ============================================================================
