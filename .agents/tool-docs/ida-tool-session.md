@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).
+Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy/suggest_triage, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).
 
 ## Actions
 - `discover` (tool-specific)
@@ -51,6 +51,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `rate_skill` (tool-specific)
 - `list_skills` (tool-specific)
 - `suggest_strategy` (tool-specific)
+- `suggest_triage` (tool-specific)
 - `log_activity` (tool-specific)
 - `get_activity_log` (tool-specific)
 - `notebook_append` (tool-specific)
@@ -81,7 +82,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `57`
+- `action`: `string` - allowed_count: `58`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` - Advanced analysis payload. Preferred for architecture/loader config at session creation.
@@ -91,6 +92,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `baseaddr`: `string|integer`
 - `binary_path`: `string` - Path to target binary
 - `bitness`: `integer` - Target bitness: 16, 32, or 64.
+- `context`: `string` - Optional context search/intent string to compute novelty against.
 - `data`: `object` - Macro payload for macro_set.
 - `end`: `string|integer`
 - `endian`: `string` - Target endianness: le/little or be/big.
