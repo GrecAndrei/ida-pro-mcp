@@ -10,7 +10,6 @@ This folder is the canonical documentation source for `ida-pro-mcp`.
 - `design/SEMANTIC_MEMORY.md`: local-first semantic memory architecture and capsule workflow.
 - `SEMANTIC_MEMORY_ROADMAP_STATUS.md`: requirement-to-evidence status map for the Sideband semantic roadmap.
 - `CARTOGRAPHER_MU.md`: Cartographer-mu semantic engine design.
-- `ACTIVE_BLACKBOARD_KERNEL.md`: blackboard auto-extraction architecture.
 - `BOOTSTRAP_IMPLEMENTATION_STATUS.md`: bootstrap control loop phase matrix.
 - `DEDUPLICATION_PLAN.md`: canonical vs compat tool consolidation rules.
 - `OPENCODE_SETUP.md`: OpenCode-specific integration/configuration notes.
@@ -20,13 +19,6 @@ This folder is the canonical documentation source for `ida-pro-mcp`.
   - `wiki/QuickStart.md`: concise operational quickstart.
   - `wiki/INDEX.md`: generated index of available wiki topics.
   - `wiki/skills/*`, `wiki/workflows/*`, `wiki/core/*`: analyst workflows and reference content.
-
-## Legacy documentation
-
-- `legacy/`: archived historical notes and superseded docs.
-- `legacy/root-notes/`: archived root-level planning/reference notes.
-- `legacy/EVIDENCE_PHYSICS_ENGINE.md`: aspirational physics-based evidence architecture.
-- `legacy/predictive_analysis_design.md`: predictive analysis design document.
 
 ## Regeneration model
 
