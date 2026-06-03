@@ -291,7 +291,9 @@ def test_session_actions(mcp_client):
     _check_invariants(status_res, "session:status")
     close_res = mcp_client.call_tool("session", action="close")
     _check_invariants(close_res, "session:close")
-    mcp_client.call_tool("session", action="create", binary_path=TEST_BINARY)
+    create2_res = mcp_client.call_tool("session", action="create", binary_path=TEST_BINARY)
+    _check_invariants(create2_res, "session:create2")
+    assert create2_res.get("ok") is True, f"Second session creation failed: {create2_res}"
     # Wait for the new IDA process to be ready before the next test uses it
     mcp_client.call_tool("analysis", action="wait")
 

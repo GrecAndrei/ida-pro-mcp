@@ -169,7 +169,10 @@ def _get_context_at(ea, count=5):
     return lines
 
 
-from .string_ops import shannon_entropy as _shannon_entropy
+try:
+    from .string_ops import shannon_entropy as _shannon_entropy
+except ImportError:
+    from string_ops import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
 
 
 def _detect_aes_ni(limit):

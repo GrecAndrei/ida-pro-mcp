@@ -64,7 +64,7 @@ def _stop_server(proc):
 
 
 def test_persistence():
-    server_path = os.path.join(os.path.dirname(__file__), "..", "ida_mcp_stdio.py")
+    server_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "ida_mcp_stdio.py")
     proc1 = None
     proc2 = None
     session_id = None

@@ -165,6 +165,7 @@ FILESYSTEM_READ_ACTIONS = {
 READ_ONLY_ACTIONS = {
     ("funcs", "info"),
     ("session", "health"),
+    ("session", "create"),
 }
 
 DEBUGGER_TOOLS = {"debug"}

@@ -145,7 +145,10 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-from .string_ops import shannon_entropy as _shannon_entropy
+try:
+    from .string_ops import shannon_entropy as _shannon_entropy
+except ImportError:
+    from string_ops import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
 
 
 def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
@@ -568,7 +571,13 @@ def _build_where_clause(constraints: dict[str, Any]) -> tuple[str, list[Any]]:
     Canonical implementation is delegated to HybridQueryBuilder to avoid
     drift between schemaboot and hybrid_search constraint semantics.
     """
-    from ..support.hybrid_search import HybridQueryBuilder
+    try:
+        from ..support.hybrid_search import HybridQueryBuilder
+    except ImportError:
+        try:
+            from support.hybrid_search import HybridQueryBuilder
+        except ImportError:
+            from ida_pro_mcp.support.hybrid_search import HybridQueryBuilder
 
     normalized = dict(constraints or {})
     addr = normalized.pop("addr", None)
@@ -786,7 +795,13 @@ def schemaboot(
             # Use HybridSearchEngine for Phase 1 + Phase 2 BM25 when we have semantic terms
             if _query_apis or _query_strings:
                 try:
-                    from ..support.hybrid_search import HybridSearchEngine
+                    try:
+                        from ..support.hybrid_search import HybridSearchEngine
+                    except ImportError:
+                        try:
+                            from support.hybrid_search import HybridSearchEngine
+                        except ImportError:
+                            from ida_pro_mcp.support.hybrid_search import HybridSearchEngine
                     engine = HybridSearchEngine(db_path)
                     ranked = engine.search_ranked(
                         constraints or {},
