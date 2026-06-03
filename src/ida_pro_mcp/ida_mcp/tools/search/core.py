@@ -186,9 +186,17 @@ INSTRUCTION_BASE_SCORE = 90.0
 INSTRUCTION_THRESHOLD = 90.0
 FIND_INSTRUCTION_MIN_SCORE = 88.0
 
-CALL_XREF_TYPES = frozenset([getattr(idaapi, "fl_CN", 17), getattr(idaapi, "fl_CF", 18),
-                            getattr(idaapi, "fl_JN", 19), getattr(idaapi, "fl_JF", 20),
-                            getattr(idaapi, "fl_F", 21)])
+def _get_xref_type(name: str, default: int) -> int:
+    val = getattr(idaapi, name, default)
+    return val if isinstance(val, int) else default
+
+CALL_XREF_TYPES = frozenset([
+    _get_xref_type("fl_CN", 17),
+    _get_xref_type("fl_CF", 18),
+    _get_xref_type("fl_JN", 19),
+    _get_xref_type("fl_JF", 20),
+    _get_xref_type("fl_F", 21)
+])
 
 SEARCH_ACTIONS = {
     "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",

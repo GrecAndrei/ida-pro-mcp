@@ -6,23 +6,12 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-# Unload mocked IDA modules and repo modules from sys.modules to prevent cross-test cache contamination
-for mod_name in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
-                  "ida_lines", "ida_xref", "ida_funcs", "ida_hexrays",
-                  "ida_typeinf", "ida_search", "ida_gdl", "ida_segment",
-                  "ida_kernwin", "ida_netnode", "ida_name", "ida_frame",
-                  "rpc", "sync"):
-    sys.modules.pop(mod_name, None)
-
-for name in list(sys.modules.keys()):
-    if name.startswith("ida_pro_mcp"):
-        sys.modules.pop(name, None)
-
-# Mock IDA modules
+# Mock IDA modules in-place to avoid breaking other tests
 for mod_name in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
                   "ida_lines", "ida_xref", "ida_funcs", "ida_hexrays",
                   "ida_typeinf", "ida_search", "ida_gdl", "ida_segment", "ida_kernwin", "ida_netnode", "ida_name", "ida_frame"):
-    sys.modules[mod_name] = types.ModuleType(mod_name)
+    if mod_name not in sys.modules:
+        sys.modules[mod_name] = types.ModuleType(mod_name)
 
 sys.modules["idaapi"].BADADDR = 0xFFFFFFFF
 sys.modules["idaapi"].get_kernel_version = lambda: "9.2"
@@ -45,16 +34,19 @@ sys.modules["ida_netnode"].netnode = type("netnode", (), {
     "setblob": lambda *a, **kw: None,
 })
 
-# Mock rpc and sync modules
-sys.modules["rpc"] = types.ModuleType("rpc")
+# Mock rpc and sync modules in-place
+for mod_name in ("rpc", "sync"):
+    if mod_name not in sys.modules:
+        sys.modules[mod_name] = types.ModuleType(mod_name)
+
 sys.modules["rpc"].tool = lambda f: f
 sys.modules["rpc"].unsafe = lambda f: f
 sys.modules["rpc"].prompt = lambda f: f
 
-sys.modules["sync"] = types.ModuleType("sync")
 sys.modules["sync"].idaread = lambda f: f
 sys.modules["sync"].idawrite = lambda f: f
-sys.modules["sync"].IDAError = type("IDAError", (Exception,), {})
+if not hasattr(sys.modules["sync"], "IDAError"):
+    sys.modules["sync"].IDAError = type("IDAError", (Exception,), {})
 
 # Define mock function info classes
 class MockFunc:
