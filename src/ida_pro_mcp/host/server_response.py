@@ -484,13 +484,15 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                             timeout=1.0,
                             auth_token=auth_token
                         )
-                        if isinstance(res, dict) and res.get("ok"):
+                        if isinstance(res, dict) and (res.get("ok") or "image_base" in res):
                             img_base_str = res.get("image_base")
                             if img_base_str:
-                                val = int(img_base_str, 16)
-                                if val:
+                                try:
+                                    val = int(img_base_str, 16)
                                     runtime["imagebase"] = val
                                     return val
+                                except ValueError:
+                                    pass
                     except Exception:
                         pass
 
@@ -506,6 +508,21 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if not matches:
             return
 
+        imagebase = self._get_session_imagebase(session_id)
+
+        idb_path = None
+        if self.current_session:
+            idb_path = self.current_session.idb_path
+
+        ppaa = None
+        if idb_path:
+            # Cache the PPAAEngine instance to avoid recreating it on every compacted response
+            if not hasattr(self, "_ppaa_cache") or getattr(self, "_ppaa_cache_idb", None) != idb_path:
+                from .intelligence.ppaa import PPAAEngine
+                self._ppaa_cache = PPAAEngine(idb_path)
+                self._ppaa_cache_idb = idb_path
+            ppaa = self._ppaa_cache
+
         hex_addrs = sorted(list(set(matches)))
         valid_addrs = []
         for ha in hex_addrs:
@@ -513,41 +530,55 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 val = int(ha, 16)
                 if val >= 0x1000:
                     valid_addrs.append((ha, val))
+                elif ppaa:
+                    rebased_val = imagebase + val
+                    # Smarter threshold: accept values < 0x1000 if they actually exist in metadata indexes
+                    if (ppaa.query_function_metadata(val) or 
+                        ppaa.query_function_metadata(rebased_val) or 
+                        ppaa.query_string_metadata(val) or 
+                        ppaa.query_string_metadata(rebased_val)):
+                        valid_addrs.append((ha, val))
             except ValueError:
                 pass
 
         if not valid_addrs:
             return
 
-        imagebase = self._get_session_imagebase(session_id)
-
-        idb_path = None
-        if self.current_session:
-            idb_path = self.current_session.idb_path
-
-        from .intelligence.ppaa import PPAAEngine
-        ppaa = PPAAEngine(idb_path) if idb_path else None
-
         calc_dict = {}
         for ha, val in valid_addrs:
-            offset = val - imagebase
+            target_val = val
+            is_rva = False
+
+            # Check if val is likely an RVA (i.e. smaller than imagebase)
+            if val < imagebase and ppaa:
+                rebased_val = imagebase + val
+                # Check if the rebased address matches any function or string in SchemaBoot
+                if ppaa.query_function_metadata(rebased_val) or ppaa.query_string_metadata(rebased_val):
+                    target_val = rebased_val
+                    is_rva = True
+
+            offset = target_val - imagebase
             sign = "+" if offset >= 0 else "-"
             abs_offset = abs(offset)
             
             addr_info = {
-                "decimal": val,
+                "decimal": target_val,
                 "relative_to_imagebase": f"imagebase {sign} 0x{abs_offset:x}",
                 "offset": offset,
                 "offset_hex": f"{sign}0x{abs_offset:x}",
                 "alignment": {
-                    "aligned_4": (val % 4 == 0),
-                    "aligned_8": (val % 8 == 0),
-                    "aligned_16": (val % 16 == 0),
+                    "aligned_4": (target_val % 4 == 0),
+                    "aligned_8": (target_val % 8 == 0),
+                    "aligned_16": (target_val % 16 == 0),
                 }
             }
 
+            if is_rva:
+                addr_info["is_rva"] = True
+                addr_info["original_rva_hex"] = ha
+
             if ppaa:
-                meta = ppaa.query_function_metadata(val)
+                meta = ppaa.query_function_metadata(target_val)
                 if meta:
                     inferred = {
                         "name": meta["name"],
@@ -563,13 +594,27 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
                     addr_info["inferred_semantics"] = inferred
 
-                    bridges = ppaa.query_related_bridges(val)
+                    bridges = ppaa.query_related_bridges(target_val)
                     if bridges:
                         addr_info["structural_bridges"] = {
                             "referenced_apis": meta["referenced_apis"][:10],
                             "referenced_strings": [s["text"] for s in meta["referenced_strings"][:10]],
                             "related_nodes": bridges
                         }
+                else:
+                    # If not a function address, check if it's a string literal address
+                    str_meta = ppaa.query_string_metadata(target_val)
+                    if str_meta:
+                        addr_info["inferred_string"] = {
+                            "text": str_meta["string_text"],
+                            "referenced_by": str_meta["referencing_function"],
+                            "referenced_by_ea": str_meta["referencing_function_ea"],
+                        }
+
+                    # Check if it matches a known cryptographic/structural constant
+                    const_usages = ppaa.query_constant_usage(target_val)
+                    if const_usages:
+                        addr_info["inferred_constant_usages"] = const_usages
 
             calc_dict[ha] = addr_info
 
@@ -655,7 +700,11 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     ui = getattr(self, "_usage_intel", None)
                     if ui:
                         # Primary: UsageIntelligence predictions (trained on real audit data)
-                        preds = ui.predict_next(tool_name, action_name, top_k=4)
+                        preds = ui.predict_next(tool_name, action_name, top_k=12)
+                        if preds:
+                            from .schemas import TOOLS
+                            # Filter out legacy/unregistered tools from predictions
+                            preds = [p for p in preds if p.get("tool") in TOOLS][:4]
                         if preds:
                             from .auto_nudge import suggest_smart_tools
                             behavior_tags = (compacted.get("behavior_tags") or

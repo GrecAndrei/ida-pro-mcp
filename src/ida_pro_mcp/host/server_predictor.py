@@ -156,10 +156,14 @@ class ServerPredictorMixin:
                     last_tool = last.get("tool", "")
                     last_action = last.get("action", "")
                     if last_tool:
-                        ui_preds = self._usage_intel.predict_next(last_tool, last_action, top_k=limit)
+                        ui_preds = self._usage_intel.predict_next(last_tool, last_action, top_k=limit * 3)
                         # Merge: UI predictions get a "usage_intelligence" source tag
+                        from .schemas import TOOLS
                         existing_keys = {(r.get("tool"), r.get("action")) for r in seq_suggestions}
                         for p in ui_preds:
+                            # Filter out legacy/unregistered tools
+                            if p["tool"] not in TOOLS:
+                                continue
                             key = (p["tool"], p["action"])
                             if key not in existing_keys:
                                 seq_suggestions.append({

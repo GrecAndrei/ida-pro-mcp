@@ -116,3 +116,26 @@ class TestPPAAEngine(unittest.TestCase):
         # Should gracefully return empty list when no bridge match is found
         bridges = engine.query_related_bridges(0x140001080)
         self.assertEqual(bridges, [])
+
+    def test_query_string_metadata_success(self):
+        engine = PPAAEngine(self.dummy_idb)
+        str_meta = engine.query_string_metadata(0x140080100)
+        self.assertIsNotNone(str_meta)
+        self.assertEqual(str_meta["string_text"], "AES Decrypt Error")
+        self.assertEqual(str_meta["referencing_function"], "aes_decrypt_block")
+
+    def test_query_constant_usage_success(self):
+        engine = PPAAEngine(self.dummy_idb)
+        usages = engine.query_constant_usage(0x1010101)
+        self.assertEqual(len(usages), 1)
+        self.assertEqual(usages[0]["constant_name"], "AES_CONSTANT")
+        self.assertEqual(usages[0]["used_in_function"], "aes_decrypt_block")
+
+    def test_lazy_symbol_db_initialization(self):
+        engine = PPAAEngine(self.dummy_idb)
+        # Verify self._symbol_db is not initialized yet
+        self.assertIsNone(engine._symbol_db)
+        # Trigger property access
+        sdb = engine.symbol_db
+        self.assertIsNotNone(sdb)
+        self.assertIsNotNone(engine._symbol_db)

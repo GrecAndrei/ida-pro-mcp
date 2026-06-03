@@ -171,9 +171,9 @@ CONTEXT_DENSITY_MAX_XREF_ITEMS = 20
 
 _POINTER_NOTE_SIGNAL_TOOLS_STRONG = {"calc", "memory"}
 _POINTER_NOTE_SIGNAL_TOOLS_HINT = {"data", "code", "nav", "search", "debug", "batch"}
-_POINTER_NOTE_HEX_RE = re.compile(r"0x[0-9a-fA-F]{3,}")
+_POINTER_NOTE_HEX_RE = re.compile(r"0x[0-9a-fA-F]{2,}")
 _POINTER_NOTE_MATH_RE = re.compile(
-    r"0x[0-9a-fA-F]{3,}\s*(?:\+|\-|\*|/|<<|>>)\s*(?:0x[0-9a-fA-F]{1,}|[0-9]+)"
+    r"0x[0-9a-fA-F]{2,}\s*(?:\+|\-|\*|/|<<|>>)\s*(?:0x[0-9a-fA-F]{1,}|[0-9]+)"
 )
 _POINTER_NOTE_SIGNAL_KEYWORDS = (
     "addr",

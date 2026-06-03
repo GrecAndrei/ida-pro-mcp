@@ -29,11 +29,17 @@ class PPAAEngine:
             except Exception:
                 pass
                 
-        # Initialize Symbol DB
-        try:
-            self.symbol_db = SymbolDB()
-        except Exception:
-            self.symbol_db = None
+        # Lazy symbol DB
+        self._symbol_db = None
+
+    @property
+    def symbol_db(self) -> Optional[SymbolDB]:
+        if self._symbol_db is None:
+            try:
+                self._symbol_db = SymbolDB()
+            except Exception:
+                pass
+        return self._symbol_db
 
     def _conn(self) -> Optional[sqlite3.Connection]:
         if not self.db_path or not os.path.exists(self.db_path):
@@ -152,3 +158,67 @@ class PPAAEngine:
             return results
         except Exception:
             return []
+
+    def query_string_metadata(self, ea: int) -> Optional[Dict[str, Any]]:
+        """Retrieve string literal content and referencing function name if the address is a string."""
+        conn = self._conn()
+        if not conn:
+            return None
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT fs.string_text, fa.name, fs.func_ea
+                FROM function_strings fs
+                LEFT JOIN function_attrs fa ON fs.func_ea = fa.ea
+                WHERE fs.string_ea = ? LIMIT 1
+                """,
+                (ea,),
+            )
+            row = cur.fetchone()
+            conn.close()
+            if row:
+                return {
+                    "string_text": row[0],
+                    "referencing_function": row[1],
+                    "referencing_function_ea": hex(row[2]) if row[2] else None,
+                }
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return None
+
+    def query_constant_usage(self, val: int) -> List[Dict[str, Any]]:
+        """Find functions using this value as a constant."""
+        conn = self._conn()
+        if not conn:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT fc.constant_name, fa.name, fc.func_ea
+                FROM function_constants fc
+                LEFT JOIN function_attrs fa ON fc.func_ea = fa.ea
+                WHERE fc.constant_value = ? LIMIT 5
+                """,
+                (val,),
+            )
+            rows = cur.fetchall()
+            conn.close()
+            results = []
+            for r in rows:
+                results.append({
+                    "constant_name": r[0] or "",
+                    "used_in_function": r[1] or "",
+                    "function_ea": hex(r[2]) if r[2] else None,
+                })
+            return results
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return []

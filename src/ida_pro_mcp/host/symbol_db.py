@@ -17,10 +17,18 @@ def _default_db_path() -> str:
 
 
 class SymbolDB:
+    _initialized_paths = set()
+
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or _default_db_path()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._init_db()
+        if (
+            self.db_path not in SymbolDB._initialized_paths
+            or not os.path.exists(self.db_path)
+            or os.path.getsize(self.db_path) == 0
+        ):
+            self._init_db()
+            SymbolDB._initialized_paths.add(self.db_path)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
