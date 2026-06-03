@@ -690,55 +690,30 @@ class TestResponseCompaction(unittest.TestCase):
         payload = json.loads(resp["result"]["content"][0]["text"])
         self.assertNotIn("llm_pointer_note", payload)
 
-    def test_llm_note_shows_for_pointer_usage_after_signal_threshold(self):
+    def test_llm_address_calculation_injected_for_hex_addresses(self):
         opts = self.server._default_response_options()
-        call_args = {"action": "status", "note": "pointer chain"}
-        first = self.server._prepare_response_payload(
-            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-        )
-        second = self.server._prepare_response_payload(
-            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-        )
-        third = self.server._prepare_response_payload(
-            {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-        )
-        self.assertNotIn("llm_pointer_note", first)
-        self.assertNotIn("llm_pointer_note", second)
-        self.assertIn("llm_pointer_note", third)
-        self.assertIn("DO NOT CALCULATE POINTERS OR ADDRESSES", third["llm_pointer_note"])
+        session_id = "test_session_id"
+        self.server.session_runtimes = {
+            session_id: {"imagebase": 0x140000000}
+        }
+        class DummySession:
+            session_id = "test_session_id"
+            analysis_options = {}
+            idb_path = "dummy.idb"
+        self.server.current_session = DummySession()
 
-    def test_llm_note_respects_periodic_interval(self):
-        opts = self.server._default_response_options()
-        call_args = {"action": "status", "note": "ptr chain"}
-        # Warm-up to first note under a fixed clock.
-        with patch("ida_pro_mcp.host.server.time.time", return_value=10_000.0):
-            self.server._prepare_response_payload(
-                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-            )
-            self.server._prepare_response_payload(
-                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-            )
-            first = self.server._prepare_response_payload(
-                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-            )
-        self.assertIn("llm_pointer_note", first)
-
-        # Still within interval => suppressed even with strong usage signal.
-        with patch("ida_pro_mcp.host.server.time.time", return_value=10_100.0):
-            suppressed = self.server._prepare_response_payload(
-                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-            )
-        self.assertNotIn("llm_pointer_note", suppressed)
-
-        # After interval => eligible again once signal re-accumulates.
-        with patch("ida_pro_mcp.host.server.time.time", return_value=10_901.0):
-            self.server._prepare_response_payload(
-                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-            )
-            shown_again = self.server._prepare_response_payload(
-                {"ok": True, "value": "ready"}, opts, tool_name="session", call_args=call_args
-            )
-        self.assertIn("llm_pointer_note", shown_again)
+        payload = {"ok": True, "address": "0x140001080"}
+        out = self.server._prepare_response_payload(
+            payload, opts, tool_name="session", call_args={"action": "status"}
+        )
+        self.assertNotIn("llm_pointer_note", out)
+        self.assertIn("llm_address_calculation", out)
+        calc = out["llm_address_calculation"]
+        self.assertIn("0x140001080", calc)
+        self.assertEqual(calc["0x140001080"]["decimal"], 0x140001080)
+        self.assertEqual(calc["0x140001080"]["offset"], 0x1080)
+        self.assertEqual(calc["0x140001080"]["relative_to_imagebase"], "imagebase + 0x1080")
+        self.assertEqual(calc["0x140001080"]["alignment"]["aligned_4"], True)
 
     def test_execution_directive_injected_for_required_mcp_call(self):
         opts = self.server._default_response_options()

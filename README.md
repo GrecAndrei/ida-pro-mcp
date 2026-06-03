@@ -533,7 +533,7 @@ A deterministic rule-based governance layer prevents common RE mistakes:
 
 - **Strict write mode** (`IDA_MCP_GUARDRAIL_STRICT_WRITES`): blocks risky write actions unless caller explicitly sets `_guardrail_ack=true`
 - **Address lockstep validation**: detects mismatches between addresses in arguments and addresses in payloads, emitting structured warnings
-- **Pointer safety notes** (`llm_pointer_note`): ALL CAPS reminders to use `calc`/`memory` tooling instead of mental address arithmetic
+- **Proactive address calculations** (`llm_address_calculation`): pre-computed decimal values, alignment states, and offsets relative to the active session's image base address (RVA) to support automated reasoning and prevent manual arithmetic errors
 - **Governance tool** (`governance(action="check")`): pre-flight validation for patches, comments, renames, and type changes. Detects contradictions, PII, dangerous patches, and misleading claims
 
 Per-call overrides:
@@ -685,8 +685,7 @@ Full verbose shape is still available via explicit `response_mode=full`.
 
 Every tool response now also carries:
 
-- `llm_pointer_note` (ALL CAPS): reminder to avoid mental pointer/address arithmetic and use
-  `calc` / `memory` tooling instead.
+- `llm_address_calculation`: pre-calculated decimal values, alignments, and RVA offsets for any hex addresses in the response.
 - Auto-blackboard entries written silently to the persistent store.
 
 ### 6) Wiki subsystem

@@ -9,7 +9,7 @@ Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `buil
 - `session(action="create")` requires `binary_path` and does not accept `idb_path`/`use_existing`.
 - `threat_hunt` is the consolidated malware/vulnerability/tracing orchestration tool and supports legacy inheritance routing for archived threat-family tools (for example `vuln_scan`). The canonical surface remains `threat_hunt`, `string_ops`, and `taint`.
 - Host normalization is intentionally permissive for noisy LLM calls on `threat_hunt`, `search`, `session`, and `code` (wrapped action names, noisy arg keys, bracketed address/list values) when mapping is unambiguous.
-- All tool responses include `llm_pointer_note` (ALL CAPS) reminding agents to use `calc`/`memory` for pointer/address arithmetic instead of mental math.
+- All tool responses containing hex addresses include `llm_address_calculation` containing pre-computed decimal values, alignment states, and offsets relative to the active session's image base address (RVA) to support automated reasoning and prevent manual arithmetic errors.
 
 ## Aliases
 

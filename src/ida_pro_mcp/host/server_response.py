@@ -450,6 +450,132 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             "and cite returned evidence."
         )
 
+    def _get_session_imagebase(self, session_id: Optional[str]) -> int:
+        if not session_id:
+            return 0x140000000
+        
+        # 1. Check runtime cache
+        if hasattr(self, "session_runtimes") and isinstance(self.session_runtimes, dict):
+            runtime = self.session_runtimes.get(session_id)
+            if isinstance(runtime, dict) and "imagebase" in runtime:
+                return runtime["imagebase"]
+
+        # 2. Check current session options
+        session = getattr(self, "current_session", None)
+        if session and session.session_id == session_id:
+            raw_base = (getattr(session, "analysis_options", {}) or {}).get("baseaddr")
+            if raw_base is not None:
+                try:
+                    return int(str(raw_base), 0)
+                except ValueError:
+                    pass
+
+        # 3. Query the target IDA Pro RPC server
+        if hasattr(self, "session_runtimes") and isinstance(self.session_runtimes, dict):
+            runtime = self.session_runtimes.get(session_id)
+            if isinstance(runtime, dict) and "port" in runtime:
+                port = runtime.get("port")
+                auth_token = runtime.get("auth_token")
+                if isinstance(port, int) and port > 0 and hasattr(self, "_send_rpc_raw"):
+                    try:
+                        res = self._send_rpc_raw(
+                            {"tool": "idb", "args": {"action": "meta"}},
+                            port,
+                            timeout=1.0,
+                            auth_token=auth_token
+                        )
+                        if isinstance(res, dict) and res.get("ok"):
+                            img_base_str = res.get("image_base")
+                            if img_base_str:
+                                val = int(img_base_str, 16)
+                                if val:
+                                    runtime["imagebase"] = val
+                                    return val
+                    except Exception:
+                        pass
+
+        return 0x140000000
+
+    def _add_address_calculations(self, compacted: dict, session_id: Optional[str]) -> None:
+        try:
+            serialized = json.dumps(compacted, ensure_ascii=False)
+        except Exception:
+            serialized = str(compacted)
+
+        matches = _POINTER_NOTE_HEX_RE.findall(serialized)
+        if not matches:
+            return
+
+        hex_addrs = sorted(list(set(matches)))
+        valid_addrs = []
+        for ha in hex_addrs:
+            try:
+                val = int(ha, 16)
+                if val >= 0x1000:
+                    valid_addrs.append((ha, val))
+            except ValueError:
+                pass
+
+        if not valid_addrs:
+            return
+
+        imagebase = self._get_session_imagebase(session_id)
+
+        idb_path = None
+        if self.current_session:
+            idb_path = self.current_session.idb_path
+
+        from .intelligence.ppaa import PPAAEngine
+        ppaa = PPAAEngine(idb_path) if idb_path else None
+
+        calc_dict = {}
+        for ha, val in valid_addrs:
+            offset = val - imagebase
+            sign = "+" if offset >= 0 else "-"
+            abs_offset = abs(offset)
+            
+            addr_info = {
+                "decimal": val,
+                "relative_to_imagebase": f"imagebase {sign} 0x{abs_offset:x}",
+                "offset": offset,
+                "offset_hex": f"{sign}0x{abs_offset:x}",
+                "alignment": {
+                    "aligned_4": (val % 4 == 0),
+                    "aligned_8": (val % 8 == 0),
+                    "aligned_16": (val % 16 == 0),
+                }
+            }
+
+            if ppaa:
+                meta = ppaa.query_function_metadata(val)
+                if meta:
+                    inferred = {
+                        "name": meta["name"],
+                        "segment": meta["segment"],
+                        "size": meta["size"],
+                        "is_library": meta["is_library"],
+                    }
+                    inferred["behavior_tags"] = []
+
+                    analogy = ppaa.query_symbol_analogy(meta["name"])
+                    if analogy:
+                        inferred["global_analogy"] = analogy
+
+                    addr_info["inferred_semantics"] = inferred
+
+                    bridges = ppaa.query_related_bridges(val)
+                    if bridges:
+                        addr_info["structural_bridges"] = {
+                            "referenced_apis": meta["referenced_apis"][:10],
+                            "referenced_strings": [s["text"] for s in meta["referenced_strings"][:10]],
+                            "related_nodes": bridges
+                        }
+
+            calc_dict[ha] = addr_info
+
+        if calc_dict:
+            compacted["llm_address_calculation"] = calc_dict
+
     def _prepare_response_payload(
         self,
         payload: Any,
@@ -476,7 +602,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 if include_pointer_note:
                     reason_tags = self._guardrail_reason_tags(tool_name, call_args, payload)
                     guardrail_mode = self._guardrail_mode_from_args(call_args)
-                    payload.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
                     payload.setdefault("llm_guardrail_mode", guardrail_mode)
                     payload.setdefault("llm_guardrail_reason_tags", reason_tags)
                     # Address lockstep: warn about unseen addresses
@@ -521,7 +646,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if include_pointer_note:
                 reason_tags = self._guardrail_reason_tags(tool_name, call_args, compacted)
                 guardrail_mode = self._guardrail_mode_from_args(call_args)
-                compacted.setdefault("llm_pointer_note", LLM_POINTER_SAFETY_NOTE)
                 compacted.setdefault("llm_guardrail_mode", guardrail_mode)
                 compacted.setdefault("llm_guardrail_reason_tags", reason_tags)
             if self.enable_response_enrichment:
@@ -938,6 +1062,14 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     self._assemble_and_inject_context(
                         tool_name, action_name, compacted, addr, opts=opts
                     )
+            except Exception:
+                pass
+
+            # ---- Address Calculation Enrichment ----
+            try:
+                if isinstance(compacted, dict):
+                    session_id = getattr(self.current_session, "session_id", None) if self.current_session else None
+                    self._add_address_calculations(compacted, session_id)
             except Exception:
                 pass
         return compacted
