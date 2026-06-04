@@ -93,7 +93,7 @@ from .config import (
     ALLOW_HEURISTIC_FALLBACKS,
 )
 from .context_density import ContextDensityOptimizer
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .patterns import compile_smart_pattern, smart_match, GlobalFactsDatabase
 from .insight_index import InsightIndex
 from .session import Session, SessionManager, BookmarkManager
@@ -533,13 +533,14 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                     )
                     res = self._cache_next_page(resolved_tn or "", call_args, res)
                     self._record_activity(resolved_tn or "", call_args, res)
+            raw_res = res
             res = self._prepare_response_payload(
                 res,
                 response_opts,
                 tool_name=resolved_tn or str(tn or ""),
                 call_args=call_args,
             )
-            is_error = bool(isinstance(res, dict) and res.get("error"))
+            is_error = is_error_result(raw_res)
             return {
                 "jsonrpc": "2.0",
                 "id": rid,

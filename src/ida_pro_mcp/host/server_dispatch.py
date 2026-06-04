@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from ida_pro_mcp import __version__
 
 from .config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .policy import PolicyDecision, build_audit_record, evaluate_policy
 from .schemas import (
     ADVERTISED_TOOLS,
@@ -449,7 +449,11 @@ class ServerDispatchMixin:
                 if count is not None
                 else None,
             )
-            if isinstance(result, dict) and result.get("error") and "code" not in result:
+            if (
+                isinstance(result, dict)
+                and result.get("error")
+                and "code" not in result
+            ):
                 return make_error(
                     MCPError.TRUNCATION_TOKEN_INVALID,
                     result.get("message") or "Invalid continuation token. Check the token value.",
@@ -562,7 +566,7 @@ class ServerDispatchMixin:
             child_args["action"] = source_action
 
             source_payload = self._execute_tool(tool_name, child_args)
-            if isinstance(source_payload, dict) and source_payload.get("error"):
+            if is_error_result(source_payload):
                 return source_payload
 
             lines, used_field = self._grep_collect_lines(source_payload, grep_field)
@@ -620,7 +624,7 @@ class ServerDispatchMixin:
             child_args = self._strip_wrapper_args(args)
             child_args["action"] = source_action
             source_payload = self._execute_tool(tool_name, child_args)
-            if isinstance(source_payload, dict) and source_payload.get("error"):
+            if is_error_result(source_payload):
                 return source_payload
             if not isinstance(source_payload, dict):
                 return make_error(
@@ -673,7 +677,7 @@ class ServerDispatchMixin:
             child_args = self._strip_wrapper_args(args)
             child_args["action"] = source_action
             source_payload = self._execute_tool(tool_name, child_args)
-            if isinstance(source_payload, dict) and source_payload.get("error"):
+            if is_error_result(source_payload):
                 return source_payload
 
             items, used_field, item_kind = self._collect_wrapper_items(
@@ -758,7 +762,7 @@ class ServerDispatchMixin:
             child_args = self._strip_wrapper_args(args)
             child_args["action"] = source_action
             source_payload = self._execute_tool(tool_name, child_args)
-            if isinstance(source_payload, dict) and source_payload.get("error"):
+            if is_error_result(source_payload):
                 return source_payload
 
             try:
@@ -781,9 +785,7 @@ class ServerDispatchMixin:
                 "item_count": len(items),
                 "item_field": used_field,
                 "item_kind": item_kind,
-                "has_error": bool(
-                    isinstance(source_payload, dict) and source_payload.get("error")
-                ),
+                "has_error": is_error_result(source_payload),
                 "truncated": bool(
                     isinstance(source_payload, dict) and source_payload.get("truncated")
                 ),
@@ -825,7 +827,7 @@ class ServerDispatchMixin:
             result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
             
             # Record visited addresses and promote surveys
-            if isinstance(result, dict) and result.get("ok", True) and "error" not in result:
+            if isinstance(result, dict) and not is_error_result(result):
                 try:
                     visited_addrs = self._extract_addresses_from_args(args)
                     if visited_addrs:
@@ -852,6 +854,18 @@ class ServerDispatchMixin:
                     error_str = str(err)[:500]
                 elif err is not None:
                     error_str = str(err)[:500]
+                elif result.get("ok") is False:
+                    if (
+                        result.get("code") == MCPError.INVALID_ARGS
+                        and "guardrail" in str(result.get("message", "")).lower()
+                    ):
+                        guardrail_blocked = True
+                    error_str = str(
+                        {
+                            "code": result.get("code"),
+                            "message": result.get("message"),
+                        }
+                    )[:500]
             self.audit.log(
                 tool=resolved_tool,
                 action=action_name,

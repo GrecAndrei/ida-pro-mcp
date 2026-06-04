@@ -156,6 +156,82 @@ def test_workflow_execute_plan_from_provided_calls_runs_batch():
     assert result["execution_meta"].get("action") == "execute_plan"
 
 
+def test_workflow_execute_plan_treats_ok_false_as_error_and_stops():
+    server = IDAMCPServer()
+
+    def _fake_execute(tool, _args):
+        if tool == "idb":
+            return {"ok": False, "code": "NOT_FOUND", "message": "missing"}
+        return {"ok": True}
+
+    server._execute_tool = _fake_execute  # type: ignore[method-assign]
+    result = server._handle_workflow(
+        {
+            "action": "execute_plan",
+            "planned_calls": [
+                {"name": "idb", "arguments": {"action": "overview"}},
+                {"name": "data", "arguments": {"action": "functions"}},
+            ],
+            "continue_on_error": False,
+        }
+    )
+
+    assert result.get("ok") is True
+    assert result["summary"]["completed_steps"] == 0
+    assert result["summary"]["error_steps"] == 1
+    assert len(result["step_results"]) == 1
+    assert result["step_results"][0]["outcome"] == "error"
+
+
+def test_batch_reports_ok_false_failures_and_stops():
+    server = IDAMCPServer()
+    seen = []
+
+    def _fake_execute(tool, args):
+        seen.append((tool, dict(args)))
+        if tool == "idb":
+            return {"ok": False, "code": "NOT_FOUND", "message": "missing"}
+        return {"ok": True}
+
+    server._execute_tool = _fake_execute  # type: ignore[method-assign]
+    result = server._handle_batch(
+        {
+            "calls": [
+                {"name": "idb", "arguments": {"action": "overview"}},
+                {"name": "data", "arguments": {"action": "functions"}},
+            ],
+            "continue_on_error": False,
+        }
+    )
+
+    assert result.get("ok") is True
+    assert result["summary"]["errors"] == 1
+    assert result["summary"]["ok"] == 0
+    assert result["summary"]["stopped_on_error"] is True
+    assert len(result["results"]) == 1
+    assert seen == [("idb", {"action": "overview"})]
+
+
+def test_tools_call_marks_ok_false_payloads_as_mcp_errors():
+    server = IDAMCPServer()
+    server._execute_tool = lambda _tool, _args: {  # type: ignore[method-assign]
+        "ok": False,
+        "code": "NOT_FOUND",
+        "message": "missing",
+    }
+
+    response = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "idb", "arguments": {"action": "overview"}},
+        }
+    )
+
+    assert response["result"]["isError"] is True
+
+
 def test_workflow_audit_plan_from_provided_calls():
     server = IDAMCPServer()
     result = server._handle_workflow(

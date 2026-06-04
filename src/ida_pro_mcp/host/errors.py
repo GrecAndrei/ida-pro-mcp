@@ -66,3 +66,11 @@ def make_error(
     if details:
         res["details"] = details
     return res
+
+
+def is_error_result(payload) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("error"):
+        return True
+    return payload.get("ok") is False

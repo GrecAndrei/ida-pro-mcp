@@ -4,6 +4,7 @@ from tests._isolated_repo_loader import load_host_module
 
 ServerBlackboardMixin = load_host_module("server_blackboard").ServerBlackboardMixin
 ServerDispatchMixin = load_host_module("server_dispatch").ServerDispatchMixin
+ServerArgsMixin = load_host_module("server_args").ServerArgsMixin
 
 
 class _FakeStore:
@@ -236,6 +237,27 @@ def test_survey_gate_still_blocks_executable_workflow_actions(monkeypatch):
 
     assert blocked.get("error") is True
     assert blocked.get("code") == "SURVEY_REQUIRED"
+
+
+def test_wrapper_actions_propagate_ok_false_child_failures(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
+    srv = _DummyDispatchServer()
+    srv._execute_tool = lambda _tool, _args: {  # type: ignore[method-assign]
+        "ok": False,
+        "code": "NOT_FOUND",
+        "message": "missing payload",
+    }
+    srv._wrapper_source_action = types.MethodType(ServerArgsMixin._wrapper_source_action, srv)  # type: ignore[method-assign]
+    srv._strip_wrapper_args = types.MethodType(ServerArgsMixin._strip_wrapper_args, srv)  # type: ignore[method-assign]
+
+    res = srv._execute_tool_inner(
+        "idb",
+        "idb",
+        {"action": "stats", "source_action": "overview"},
+    )
+
+    assert res.get("ok") is False
+    assert res.get("code") == "NOT_FOUND"
 
 
 def test_dispatch_strict_policy_blocks_non_blackboard_tool_when_stale():

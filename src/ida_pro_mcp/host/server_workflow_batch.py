@@ -7,7 +7,7 @@ import json
 from typing import Any, Optional
 
 from .config import MAX_BATCH_CALLS, MAX_BATCH_PAYLOAD_BYTES
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .schemas import TOOLS, _resolve_tool_alias
 
 
@@ -118,7 +118,7 @@ class ServerWorkflowBatchMixin:
 
             if normalize_err:
                 results.append({"index": idx, "name": name, "result": res})
-                if res.get("error") and not continue_on_error:
+                if is_error_result(res) and not continue_on_error:
                     break
                 continue
             elif not name:
@@ -158,12 +158,12 @@ class ServerWorkflowBatchMixin:
                     )
                     self._record_activity(resolved_name or name, cleaned_args, res)
             results.append({"index": idx, "name": name, "result": res})
-            if res.get("error") and not continue_on_error:
+            if is_error_result(res) and not continue_on_error:
                 break
         errors = sum(
             1
             for item in results
-            if isinstance(item.get("result"), dict) and item["result"].get("error")
+            if is_error_result(item.get("result"))
         )
         return {
             "ok": True,
@@ -178,4 +178,3 @@ class ServerWorkflowBatchMixin:
                 ),
             },
         }
-

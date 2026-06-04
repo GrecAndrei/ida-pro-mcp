@@ -15,7 +15,7 @@ from .config import (
     _parse_str_list,
     _parse_line_range,
 )
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .server_workflow_batch import ServerWorkflowBatchMixin
 from .schemas import (
     ADVERTISED_TOOLS,
@@ -350,7 +350,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 except Exception as e:
                     res = {"error": True, "message": str(e)}
                 elapsed_ms = int((time.time() - t0) * 1000)
-                is_err = isinstance(res, dict) and bool(res.get("error"))
+                is_err = is_error_result(res)
                 calls_out.append({"name": name, "arguments": call_args, "result": res})
                 step_results.append(
                     {
