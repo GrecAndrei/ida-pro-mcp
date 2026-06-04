@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from ida_pro_mcp.host.schemas import TOOLS, TOOL_ACTIONS
 from ida_pro_mcp.host.server import IDAMCPServer
 from ida_pro_mcp.host.resources import list_resources, ResourceResolver
+from tests._isolated_repo_loader import load_support_module, load_tool_module
 
 
 # =============================================================================
@@ -324,13 +325,7 @@ class TestSearchQueryLang:
         assert "query_lang" in TOOL_ACTIONS["search"]
 
     def _load_query_lang(self):
-        import importlib.util
-        path = os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "support", "query_lang.py")
-        spec = importlib.util.spec_from_file_location("query_lang", path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["query_lang"] = mod
-        spec.loader.exec_module(mod)
-        return mod
+        return load_support_module("query_lang")
 
     def test_query_parser(self):
         mod = self._load_query_lang()
@@ -373,13 +368,7 @@ class TestSearchQueryLang:
 
 class TestBlackboard:
     def _load_blackboard(self):
-        import importlib.util
-        path = os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "blackboard.py")
-        spec = importlib.util.spec_from_file_location("blackboard", path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["blackboard"] = mod
-        spec.loader.exec_module(mod)
-        return mod
+        return load_tool_module("blackboard")
 
     def test_write_and_read(self):
         mod = self._load_blackboard()
@@ -432,13 +421,7 @@ class TestBlackboard:
 
 class TestFilterTool:
     def _load_filter(self):
-        import importlib.util
-        path = os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "filter.py")
-        spec = importlib.util.spec_from_file_location("filter_mod", path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["filter_mod"] = mod
-        spec.loader.exec_module(mod)
-        return mod
+        return load_tool_module("filter")
 
     def test_identity(self):
         mod = self._load_filter()

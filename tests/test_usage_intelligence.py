@@ -4,15 +4,9 @@ import os
 import sys
 import tempfile
 import time
-import importlib.util
+from tests._isolated_repo_loader import load_host_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-_path = os.path.join(os.path.dirname(__file__), "..", "src",
-                     "ida_pro_mcp", "host", "usage_intelligence.py")
-_spec = importlib.util.spec_from_file_location("_ui_test", _path)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+_mod = load_host_module("usage_intelligence")
 
 SequenceModel = _mod.SequenceModel
 EffectivenessModel = _mod.EffectivenessModel
@@ -322,11 +316,7 @@ def test_usage_intel_drift_notification():
 # ── ida://usage resource ──────────────────────────────────────────────────────
 
 def test_usage_resource_no_intel():
-    _res_path = os.path.join(os.path.dirname(__file__), "..", "src",
-                             "ida_pro_mcp", "host", "resources.py")
-    _rspec = importlib.util.spec_from_file_location("_res_ui", _res_path)
-    _rmod = importlib.util.module_from_spec(_rspec)
-    _rspec.loader.exec_module(_rmod)
+    _rmod = load_host_module("resources")
 
     resolver = _rmod.ResourceResolver(lambda n, k: {})
     result = resolver.read("ida://usage")
@@ -335,11 +325,7 @@ def test_usage_resource_no_intel():
 
 
 def test_usage_resource_with_intel():
-    _res_path = os.path.join(os.path.dirname(__file__), "..", "src",
-                             "ida_pro_mcp", "host", "resources.py")
-    _rspec = importlib.util.spec_from_file_location("_res_ui2", _res_path)
-    _rmod = importlib.util.module_from_spec(_rspec)
-    _rspec.loader.exec_module(_rmod)
+    _rmod = load_host_module("resources")
 
     tmpdir = tempfile.mkdtemp()
     ui = UsageIntelligence(audit_dir=tmpdir)

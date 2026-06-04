@@ -1,58 +1,10 @@
 from __future__ import annotations
 
-import importlib.util
-import os
-import sys
 import tempfile
-import types
 
+from tests._isolated_repo_loader import load_tool_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-
-def _load_bb():
-    path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "src",
-        "ida_pro_mcp",
-        "ida_mcp",
-        "tools",
-        "blackboard.py",
-    )
-    spec = importlib.util.spec_from_file_location("_bb_sem", path)
-    mod = importlib.util.module_from_spec(spec)
-    stub_names = [
-        "idaapi",
-        "idc",
-        "idautils",
-        "ida_funcs",
-        "ida_bytes",
-        "ida_segment",
-        "ida_name",
-        "ida_typeinf",
-        "ida_nalt",
-        "ida_hexrays",
-        "ida_frame",
-        "ida_struct",
-        "ida_lines",
-    ]
-    saved = {m: sys.modules.get(m) for m in stub_names}
-    for m in stub_names:
-        if m not in sys.modules:
-            sys.modules[m] = types.ModuleType(m)
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        for m, orig in saved.items():
-            if orig is None:
-                sys.modules.pop(m, None)
-            else:
-                sys.modules[m] = orig
-    return mod
-
-
-_bb = _load_bb()
+_bb = load_tool_module("blackboard")
 BlackboardStore = _bb.BlackboardStore
 
 
