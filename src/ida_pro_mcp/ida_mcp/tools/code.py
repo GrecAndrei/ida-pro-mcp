@@ -316,6 +316,207 @@ def _extract_var_rename_hints(cfunc) -> list:
     return hints[:10]
 
 
+_DECOMP_KNOWN_APIS = [
+    "malloc", "free", "memcpy", "memset", "strcpy", "strncpy", "sprintf", "snprintf",
+    "recv", "send", "socket", "connect", "bind", "listen", "accept", "recvfrom", "sendto",
+    "fopen", "fread", "fwrite", "fclose", "fgets", "fputs",
+    "system", "exec", "execve", "popen", "fork",
+    "CreateFile", "ReadFile", "WriteFile", "VirtualAlloc", "WriteProcessMemory", "CreateProcess",
+    "RegSetValue", "RegOpenKey", "CryptEncrypt", "CryptDecrypt", "BCryptEncrypt",
+    "AES_encrypt", "AES_decrypt", "SHA256", "SHA256_Update", "SHA1", "MD5", "MD5_Update", "HMAC", "pbkdf2",
+    "memcmp", "strcmp", "strstr", "sscanf", "gets", "scanf", "vsprintf",
+    "mmap", "munmap", "ioctl", "open", "read", "write", "close",
+]
+
+_DECOMP_CRYPTO_SIGS = {
+    "AES": ["0x63636363", "0x7c777c77", "aes_key", "aes_encrypt", "aes_decrypt", "aes_"],
+    "SHA256": ["0x6a09e667", "0xbb67ae85", "sha256", "sha_256"],
+    "SHA1": ["0x67452301", "sha1", "sha_1"],
+    "MD5": ["0xefcdab89", "0x67452301", "md5_", "md5update"],
+    "RC4": ["rc4_", "ksa", "prga"],
+    "ChaCha20": ["chacha", "0x61707865"],
+    "PBKDF2": ["pbkdf2", "hmac", "iterations"],
+}
+
+
+def _detect_api_calls(pseudo: str, *, limit: int = 15) -> list[str]:
+    return [api for api in _DECOMP_KNOWN_APIS if api in pseudo][:limit]
+
+
+def _detect_crypto_hints(pseudo: str, *, xor_threshold: int = 4) -> tuple[list[str], int]:
+    pseudo_lower = pseudo.lower()
+    crypto_hints = []
+    for algo, sigs in _DECOMP_CRYPTO_SIGS.items():
+        if any(sig.lower() in pseudo_lower for sig in sigs):
+            crypto_hints.append(algo)
+    xor_count = pseudo.count(" ^ ") + pseudo.count("^=")
+    if xor_count >= xor_threshold:
+        crypto_hints.append(f"XOR_heavy({xor_count})")
+    return crypto_hints, xor_count
+
+
+def _detect_dangerous_patterns(found_apis: list[str], pseudo: str, *, detailed: bool = False) -> list[str]:
+    import re as _re
+
+    dangerous = []
+    if any(api in found_apis for api in ["strcpy", "sprintf", "gets", "scanf", "vsprintf"]):
+        dangerous.append(
+            "unsafe_string_ops — potential buffer overflow" if detailed else "unsafe_string_ops"
+        )
+    memcpy_bounded = _re.search(r"memcpy\s*\([^,]+,[^,]+,\s*sizeof", pseudo)
+    if "memcpy" in found_apis and not memcpy_bounded:
+        dangerous.append(
+            "memcpy — verify size is bounded" if detailed else "memcpy_no_size_check"
+        )
+    if any(api in found_apis for api in ["system", "exec", "execve", "popen"]):
+        dangerous.append(
+            "command_execution — check for injection" if detailed else "command_execution"
+        )
+    if detailed:
+        if "VirtualAlloc" in found_apis and "WriteProcessMemory" in found_apis:
+            dangerous.append("process_injection pattern")
+        if "recv" in found_apis or "recvfrom" in found_apis:
+            dangerous.append("network_input — trace data flow to sinks")
+    return dangerous
+
+
+def _register_survey_if_needed(func_start_ea: int, var_hints: list[dict]) -> None:
+    if not var_hints:
+        return
+    try:
+        try:
+            from host.survey_store import SurveyStore
+        except ImportError:
+            from ida_pro_mcp.host.survey_store import SurveyStore
+
+        store = SurveyStore(context_key=idc.get_idb_path() or "")
+        hex_addr = hex(func_start_ea)
+        if store.get_survey(hex_addr):
+            return
+
+        deps = set()
+        try:
+            import idautils
+
+            for xref in idautils.CodeRefsTo(func_start_ea, 0):
+                caller_fn = ida_funcs.get_func(xref)
+                if caller_fn and caller_fn.start_ea != func_start_ea:
+                    deps.add(hex(caller_fn.start_ea))
+            for item_ea in idautils.FuncItems(func_start_ea):
+                for xref in idautils.CodeRefsFrom(item_ea, 0):
+                    callee_fn = ida_funcs.get_func(xref)
+                    if callee_fn and callee_fn.start_ea != func_start_ea:
+                        deps.add(hex(callee_fn.start_ea))
+        except Exception:
+            pass
+
+        vars_list = [hint["var"] for hint in var_hints]
+        store.save_survey(
+            addr=hex_addr,
+            status="DORMANT",
+            variables=vars_list,
+            dependencies=sorted(deps),
+            deferred_until=[],
+            reason=f"Function contains generic variables: {', '.join(vars_list)}",
+        )
+    except Exception:
+        pass
+
+
+def _build_pseudocode_complexity(pseudo: str, *, include_switch_cases: bool = False, xor_count: int | None = None) -> dict:
+    import re as _re
+
+    effective_xor = xor_count if xor_count is not None else pseudo.count(" ^ ") + pseudo.count("^=")
+    complexity = {
+        "lines": len(pseudo.splitlines()),
+        "calls": len(_re.findall(r"\w+\s*\(", pseudo)),
+        "branches": len(_re.findall(r"\bif\s*\(", pseudo)),
+        "loops": len(_re.findall(r"\b(for|while|do)\b", pseudo)),
+        "xor_ops": effective_xor,
+    }
+    if include_switch_cases:
+        complexity["switch_cases"] = len(_re.findall(r"\bcase\b", pseudo))
+    return complexity
+
+
+def _collect_compact_callers(func_start_ea: int, *, scan_limit: int = 30, result_limit: int = 5) -> list[dict]:
+    callers_compact = []
+    seen = set()
+    for i, xref in enumerate(idautils.CodeRefsTo(func_start_ea, 0)):
+        if i >= scan_limit:
+            break
+        cf = ida_funcs.get_func(xref)
+        if not cf or cf.start_ea in seen:
+            continue
+        seen.add(cf.start_ea)
+        callers_compact.append({"addr": hex_ea(cf.start_ea), "name": ida_funcs.get_func_name(cf.start_ea)})
+        if len(callers_compact) >= result_limit:
+            break
+    return callers_compact
+
+
+def _collect_compact_callees(func_start_ea: int, *, result_limit: int = 8) -> list[dict]:
+    callees_compact = []
+    seen = set()
+    for item in idautils.FuncItems(func_start_ea):
+        for ref in idautils.CodeRefsFrom(item, 0):
+            cf = ida_funcs.get_func(ref)
+            if not cf or cf.start_ea in seen:
+                continue
+            seen.add(cf.start_ea)
+            callees_compact.append({"addr": hex_ea(cf.start_ea), "name": ida_funcs.get_func_name(cf.start_ea)})
+            if len(callees_compact) >= result_limit:
+                break
+        if len(callees_compact) >= result_limit:
+            break
+    return callees_compact
+
+
+def _collect_function_strings(func_start_ea: int, *, result_limit: int = 10) -> list[str]:
+    str_refs = []
+    for item in idautils.FuncItems(func_start_ea):
+        for xref in idautils.XrefsFrom(item, 0):
+            if xref.iscode:
+                continue
+            s = idc.get_strlit_contents(xref.to)
+            if not s:
+                continue
+            if isinstance(s, bytes):
+                s = s.decode("utf-8", errors="replace")
+            str_refs.append(s[:80])
+        if len(str_refs) >= result_limit:
+            break
+    return str_refs[:result_limit]
+
+
+def _build_decompile_enrichment(
+    func_start_ea: int,
+    cfunc,
+    pseudo: str,
+    *,
+    detailed_dangerous: bool = False,
+    include_switch_cases: bool = False,
+    api_limit: int = 15,
+) -> dict:
+    found_apis = _detect_api_calls(pseudo, limit=api_limit)
+    crypto_hints, xor_count = _detect_crypto_hints(pseudo)
+    dangerous = _detect_dangerous_patterns(found_apis, pseudo, detailed=detailed_dangerous)
+    var_hints = _extract_var_rename_hints(cfunc)
+    _register_survey_if_needed(func_start_ea, var_hints)
+    return {
+        "api_calls": found_apis,
+        "crypto_hints": crypto_hints,
+        "dangerous_patterns": dangerous,
+        "var_rename_hints": var_hints,
+        "blackboard_context": _get_blackboard_context_for_addr(hex_ea(func_start_ea)),
+        "complexity": _build_pseudocode_complexity(
+            pseudo,
+            include_switch_cases=include_switch_cases,
+            xor_count=xor_count,
+        ),
+    }
+
+
 def _get_blackboard_context_for_addr(addr_hex: str) -> list:
     """
     Get relevant blackboard entries for this address without IDA deps.
@@ -668,113 +869,20 @@ def code(
                             result_entry["ida_code"] = pseudo
                             result_entry["ghidra_code"] = pseudo_ghidra
                             result_entry["engine"] = "differential"
-                        # Inline enrichment: API calls, behavior hints, var rename hints,
-                        # blackboard context — all in one response so LLM doesn't need extra calls
+                        # Inline enrichment shared with smart_decompile so the two
+                        # decompilation entrypoints do not drift apart.
                         try:
-                            import re as _re
-                            # Quick API extraction from pseudocode
-                            _KNOWN_APIS = [
-                                "malloc","free","memcpy","memset","strcpy","strncpy","sprintf",
-                                "recv","send","socket","connect","bind","listen","accept",
-                                "fopen","fread","fwrite","fclose","system","exec","popen",
-                                "CreateFile","ReadFile","WriteFile","VirtualAlloc","CreateProcess",
-                                "RegSetValue","RegOpenKey","CryptEncrypt","CryptDecrypt",
-                                "AES_encrypt","SHA256","MD5","HMAC","pbkdf2",
-                                "memcmp","strcmp","strstr","sscanf","gets","scanf",
-                            ]
-                            found_apis = [a for a in _KNOWN_APIS if a in pseudo]
-                            if found_apis:
-                                result_entry["api_calls"] = found_apis[:12]
-
-                            # Crypto constant detection
-                            _CRYPTO_PATTERNS = {
-                                "AES": ["0x63636363", "0x7c777c77", "AES_KEY", "aes_"],
-                                "SHA256": ["0x6a09e667", "0xbb67ae85", "sha256"],
-                                "MD5": ["0x67452301", "0xefcdab89", "md5_"],
-                                "RC4": ["rc4_", "KSA", "PRGA"],
-                                "XOR_cipher": [],  # detected by xor_count below
-                            }
-                            crypto_hints = []
-                            pseudo_lower = pseudo.lower()
-                            for algo, patterns in _CRYPTO_PATTERNS.items():
-                                if any(p.lower() in pseudo_lower for p in patterns):
-                                    crypto_hints.append(algo)
-                            # Count XOR operations as crypto signal
-                            xor_count = pseudo.count(" ^ ") + pseudo.count("^=")
-                            if xor_count >= 4:
-                                crypto_hints.append(f"XOR_heavy({xor_count})")
-                            if crypto_hints:
-                                result_entry["crypto_hints"] = crypto_hints
-
-                            # Dangerous patterns
-                            dangerous = []
-                            if any(a in found_apis for a in ["strcpy","sprintf","gets","scanf"]):
-                                dangerous.append("unsafe_string_ops")
-                            if "memcpy" in found_apis and "size" not in pseudo_lower:
-                                dangerous.append("memcpy_no_size_check")
-                            if any(a in found_apis for a in ["system","exec","popen"]):
-                                dangerous.append("command_execution")
-                            if dangerous:
-                                result_entry["dangerous_patterns"] = dangerous
-
-                            # Variable rename hints
-                            var_hints = _extract_var_rename_hints(cfunc)
-                            if var_hints:
-                                result_entry["var_rename_hints"] = var_hints
-                                
-                                # Register dormant survey
-                                try:
-                                    try:
-                                        from host.survey_store import SurveyStore
-                                    except ImportError:
-                                        from ida_pro_mcp.host.survey_store import SurveyStore
-                                    
-                                    store = SurveyStore(context_key=idc.get_idb_path() or "")
-                                    hex_addr = hex(func.start_ea)
-                                    if not store.get_survey(hex_addr):
-                                        deps = []
-                                        try:
-                                            import idautils
-                                            import ida_funcs
-                                            for xref in idautils.CodeRefsTo(func.start_ea, 0):
-                                                caller_fn = ida_funcs.get_func(xref)
-                                                if caller_fn and caller_fn.start_ea != func.start_ea:
-                                                    deps.append(hex(caller_fn.start_ea))
-                                            for item_ea in idautils.FuncItems(func.start_ea):
-                                                for xref in idautils.CodeRefsFrom(item_ea, 0):
-                                                    callee_fn = ida_funcs.get_func(xref)
-                                                    if callee_fn and callee_fn.start_ea != func.start_ea:
-                                                        deps.append(hex(callee_fn.start_ea))
-                                        except Exception:
-                                            pass
-                                        deps = list(set(deps))
-                                        
-                                        vars_list = [h["var"] for h in var_hints]
-                                        store.save_survey(
-                                            addr=hex_addr,
-                                            status="DORMANT",
-                                            variables=vars_list,
-                                            dependencies=deps,
-                                            deferred_until=[],
-                                            reason=f"Function contains generic variables: {', '.join(vars_list)}"
-                                        )
-                                except Exception:
-                                    pass
-
-                            # Blackboard context for this address
-                            bb_ctx = _get_blackboard_context_for_addr(hex_ea(func.start_ea))
-                            if bb_ctx:
-                                result_entry["blackboard_context"] = bb_ctx
-
-                            # Complexity summary
-                            lines = pseudo.splitlines()
-                            result_entry["complexity"] = {
-                                "lines": len(lines),
-                                "calls": len(_re.findall(r'\w+\s*\(', pseudo)),
-                                "branches": len(_re.findall(r'\bif\s*\(', pseudo)),
-                                "loops": len(_re.findall(r'\b(for|while|do)\b', pseudo)),
-                                "xor_ops": xor_count,
-                            }
+                            enrichment = _build_decompile_enrichment(
+                                func.start_ea,
+                                cfunc,
+                                pseudo,
+                                detailed_dangerous=False,
+                                include_switch_cases=False,
+                                api_limit=12,
+                            )
+                            for key, value in enrichment.items():
+                                if value:
+                                    result_entry[key] = value
                         except Exception:
                             pass
                         results.append(result_entry)
@@ -1353,96 +1461,24 @@ def code(
 
                 pseudo = str(cfunc)
                 fname = ida_funcs.get_func_name(func.start_ea)
-                import re as _re
+                enrichment = _build_decompile_enrichment(
+                    func.start_ea,
+                    cfunc,
+                    pseudo,
+                    detailed_dangerous=True,
+                    include_switch_cases=True,
+                    api_limit=15,
+                )
+                found_apis = enrichment["api_calls"]
+                crypto_hints = enrichment["crypto_hints"]
+                dangerous = enrichment["dangerous_patterns"]
+                var_hints = enrichment["var_rename_hints"]
+                bb_ctx = enrichment["blackboard_context"]
+                complexity = enrichment["complexity"]
 
-                _KNOWN_APIS = [
-                    "malloc","free","memcpy","memset","strcpy","strncpy","sprintf","snprintf",
-                    "recv","send","socket","connect","bind","listen","accept","recvfrom","sendto",
-                    "fopen","fread","fwrite","fclose","fgets","fputs",
-                    "system","exec","execve","popen","fork",
-                    "CreateFile","ReadFile","WriteFile","VirtualAlloc","CreateProcess",
-                    "RegSetValue","RegOpenKey","CryptEncrypt","CryptDecrypt","BCryptEncrypt",
-                    "AES_encrypt","AES_decrypt","SHA256_Update","MD5_Update","HMAC","pbkdf2",
-                    "memcmp","strcmp","strstr","sscanf","gets","scanf","vsprintf",
-                    "mmap","munmap","ioctl","open","read","write","close",
-                ]
-                found_apis = [a for a in _KNOWN_APIS if a in pseudo]
-
-                crypto_hints = []
-                pseudo_lower = pseudo.lower()
-                _CRYPTO_SIGS = {
-                    "AES": ["0x63636363","0x7c777c77","aes_key","aes_encrypt","aes_decrypt"],
-                    "SHA256": ["0x6a09e667","0xbb67ae85","sha256","sha_256"],
-                    "SHA1": ["0x67452301","sha1","sha_1"],
-                    "MD5": ["0xefcdab89","md5_","md5update"],
-                    "RC4": ["rc4_"," ksa"," prga"],
-                    "ChaCha20": ["chacha","0x61707865"],
-                    "PBKDF2": ["pbkdf2","hmac","iterations"],
-                }
-                for algo, sigs in _CRYPTO_SIGS.items():
-                    if any(s.lower() in pseudo_lower for s in sigs):
-                        crypto_hints.append(algo)
-                xor_count = pseudo.count(" ^ ") + pseudo.count("^=")
-                if xor_count >= 4:
-                    crypto_hints.append(f"XOR_heavy({xor_count})")
-
-                dangerous = []
-                if any(a in found_apis for a in ["strcpy","sprintf","gets","scanf","vsprintf"]):
-                    dangerous.append("unsafe_string_ops — potential buffer overflow")
-                if "memcpy" in found_apis and not _re.search(r'memcpy\s*\([^,]+,[^,]+,\s*sizeof', pseudo):
-                    dangerous.append("memcpy — verify size is bounded")
-                if any(a in found_apis for a in ["system","exec","execve","popen"]):
-                    dangerous.append("command_execution — check for injection")
-                if "VirtualAlloc" in found_apis and "WriteProcessMemory" in found_apis:
-                    dangerous.append("process_injection pattern")
-                if "recv" in found_apis or "recvfrom" in found_apis:
-                    dangerous.append("network_input — trace data flow to sinks")
-
-                var_hints = _extract_var_rename_hints(cfunc)
-
-                callers_compact = []
-                for i, xref in enumerate(idautils.CodeRefsTo(func.start_ea, 0)):
-                    if i >= 30: break
-                    cf = ida_funcs.get_func(xref)
-                    if cf:
-                        callers_compact.append({"addr": hex_ea(cf.start_ea),
-                                                "name": ida_funcs.get_func_name(cf.start_ea)})
-                    if len(callers_compact) >= 5: break
-
-                callees_compact = []
-                callee_seen = set()
-                for item in idautils.FuncItems(func.start_ea):
-                    for ref in idautils.CodeRefsFrom(item, 0):
-                        cf = ida_funcs.get_func(ref)
-                        if cf and cf.start_ea not in callee_seen:
-                            callee_seen.add(cf.start_ea)
-                            callees_compact.append({"addr": hex_ea(cf.start_ea),
-                                                    "name": ida_funcs.get_func_name(cf.start_ea)})
-                        if len(callees_compact) >= 8: break
-                    if len(callees_compact) >= 8: break
-
-                str_refs = []
-                for item in idautils.FuncItems(func.start_ea):
-                    for xref in idautils.XrefsFrom(item, 0):
-                        if not xref.iscode:
-                            s = idc.get_strlit_contents(xref.to)
-                            if s:
-                                if isinstance(s, bytes):
-                                    s = s.decode("utf-8", errors="replace")
-                                str_refs.append(s[:80])
-                    if len(str_refs) >= 10: break
-
-                bb_ctx = _get_blackboard_context_for_addr(hex_ea(func.start_ea))
-
-                lines = pseudo.splitlines()
-                complexity = {
-                    "lines": len(lines),
-                    "calls": len(_re.findall(r'\w+\s*\(', pseudo)),
-                    "branches": len(_re.findall(r'\bif\s*\(', pseudo)),
-                    "loops": len(_re.findall(r'\b(for|while|do)\b', pseudo)),
-                    "xor_ops": xor_count,
-                    "switch_cases": len(_re.findall(r'\bcase\b', pseudo)),
-                }
+                callers_compact = _collect_compact_callers(func.start_ea)
+                callees_compact = _collect_compact_callees(func.start_ea)
+                str_refs = _collect_function_strings(func.start_ea)
 
                 behavior_tags = list(set(
                     crypto_hints
