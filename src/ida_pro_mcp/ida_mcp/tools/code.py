@@ -729,7 +729,7 @@ def code(
                                     except ImportError:
                                         from ida_pro_mcp.host.survey_store import SurveyStore
                                     
-                                    store = SurveyStore()
+                                    store = SurveyStore(context_key=idc.get_idb_path() or "")
                                     hex_addr = hex(func.start_ea)
                                     if not store.get_survey(hex_addr):
                                         deps = []

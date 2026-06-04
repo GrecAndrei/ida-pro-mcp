@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import json
 import sqlite3
-import tempfile
 from typing import Any, Dict, List, Optional
 
 def _resolve_survey_db_path(db_path: Optional[str] = None) -> str:
@@ -18,10 +17,62 @@ def _resolve_survey_db_path(db_path: Optional[str] = None) -> str:
     os.makedirs(root, exist_ok=True)
     return os.path.join(root, "re_experience.db")
 
+
+def _resolve_current_context_key() -> str:
+    try:
+        import idc  # type: ignore[import-not-found]
+
+        path = str(idc.get_idb_path() or "").strip()
+        if path:
+            return os.path.realpath(os.path.abspath(path))
+    except Exception:
+        pass
+    try:
+        import ida_loader  # type: ignore[import-not-found]
+
+        path = str(ida_loader.get_path(ida_loader.PATH_TYPE_IDB) or "").strip()
+        if path:
+            return os.path.realpath(os.path.abspath(path))
+    except Exception:
+        pass
+    return ""
+
+
+def _normalize_context_key(context_key: Optional[str] = None) -> str:
+    raw = str(context_key or "").strip()
+    if not raw:
+        raw = _resolve_current_context_key()
+    if not raw:
+        return ""
+    try:
+        return os.path.realpath(os.path.abspath(raw))
+    except Exception:
+        return raw
+
+
 class SurveyStore:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, context_key: Optional[str] = None):
         self.db_path = _resolve_survey_db_path(db_path)
+        self.context_key = _normalize_context_key(context_key)
         self._init_db()
+
+    def _scoped_key(self, addr: str) -> str:
+        if not self.context_key:
+            return addr
+        return f"{self.context_key}|{addr}"
+
+    def _scope_like(self) -> Optional[str]:
+        if not self.context_key:
+            return None
+        return f"{self.context_key}|%"
+
+    def _decode_addr(self, stored_addr: str) -> str:
+        if not self.context_key:
+            return stored_addr
+        prefix = f"{self.context_key}|"
+        if stored_addr.startswith(prefix):
+            return stored_addr[len(prefix):]
+        return stored_addr
 
     def _conn(self):
         return sqlite3.connect(self.db_path, timeout=10)
@@ -58,29 +109,42 @@ class SurveyStore:
             conn.commit()
 
     def add_visited_address(self, addr: str):
+        scoped_addr = self._scoped_key(addr)
         with self._conn() as conn:
-            conn.execute("INSERT OR IGNORE INTO visited_addresses (addr) VALUES (?)", (addr,))
+            conn.execute("INSERT OR IGNORE INTO visited_addresses (addr) VALUES (?)", (scoped_addr,))
             conn.commit()
 
     def get_visited_addresses(self) -> List[str]:
         with self._conn() as conn:
-            rows = conn.execute("SELECT addr FROM visited_addresses").fetchall()
-            return [r[0] for r in rows]
+            scope_like = self._scope_like()
+            if scope_like is None:
+                rows = conn.execute("SELECT addr FROM visited_addresses").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT addr FROM visited_addresses WHERE addr LIKE ?",
+                    (scope_like,),
+                ).fetchall()
+            return [self._decode_addr(r[0]) for r in rows]
 
     def clear_visited_addresses(self):
         with self._conn() as conn:
-            conn.execute("DELETE FROM visited_addresses")
+            scope_like = self._scope_like()
+            if scope_like is None:
+                conn.execute("DELETE FROM visited_addresses")
+            else:
+                conn.execute("DELETE FROM visited_addresses WHERE addr LIKE ?", (scope_like,))
             conn.commit()
 
     def get_survey(self, addr: str) -> Optional[Dict[str, Any]]:
+        scoped_addr = self._scoped_key(addr)
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT addr, status, variables, dependencies, deferred_until, reason FROM active_surveys WHERE addr = ?",
-                (addr,)
+                (scoped_addr,)
             ).fetchone()
             if row:
                 return {
-                    "addr": row[0],
+                    "addr": self._decode_addr(row[0]),
                     "status": row[1],
                     "variables": json.loads(row[2]) if row[2] else [],
                     "dependencies": json.loads(row[3]) if row[3] else [],
@@ -91,11 +155,24 @@ class SurveyStore:
 
     def list_surveys(self) -> List[Dict[str, Any]]:
         with self._conn() as conn:
-            rows = conn.execute("SELECT addr, status, variables, dependencies, deferred_until, reason FROM active_surveys").fetchall()
+            scope_like = self._scope_like()
+            if scope_like is None:
+                rows = conn.execute(
+                    "SELECT addr, status, variables, dependencies, deferred_until, reason FROM active_surveys"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT addr, status, variables, dependencies, deferred_until, reason
+                    FROM active_surveys
+                    WHERE addr LIKE ?
+                    """,
+                    (scope_like,),
+                ).fetchall()
             out = []
             for r in rows:
                 out.append({
-                    "addr": r[0],
+                    "addr": self._decode_addr(r[0]),
                     "status": r[1],
                     "variables": json.loads(r[2]) if r[2] else [],
                     "dependencies": json.loads(r[3]) if r[3] else [],
@@ -112,7 +189,7 @@ class SurveyStore:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    addr,
+                    self._scoped_key(addr),
                     status,
                     json.dumps(variables),
                     json.dumps(dependencies),
@@ -123,8 +200,9 @@ class SurveyStore:
             conn.commit()
 
     def delete_survey(self, addr: str):
+        scoped_addr = self._scoped_key(addr)
         with self._conn() as conn:
-            conn.execute("DELETE FROM active_surveys WHERE addr = ?", (addr,))
+            conn.execute("DELETE FROM active_surveys WHERE addr = ?", (scoped_addr,))
             conn.commit()
 
     def save_experience(self, id_val: str, address: int, ida_pseudocode: str, ghidra_pseudocode: str, llm_rationale: str, resolved_source: str, applied_changes: Dict[str, Any]):

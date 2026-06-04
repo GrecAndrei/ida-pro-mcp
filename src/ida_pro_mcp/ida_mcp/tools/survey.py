@@ -39,7 +39,7 @@ def survey(
       - submit: Resolves the active survey, applying renames and posting findings.
     """
     try:
-        store = SurveyStore()
+        store = SurveyStore(context_key=idc.get_idb_path() or "")
 
         if action == "list":
             surveys = store.list_surveys()

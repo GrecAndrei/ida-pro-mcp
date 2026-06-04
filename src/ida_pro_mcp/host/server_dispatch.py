@@ -84,6 +84,26 @@ class ServerDispatchMixin:
                         reason=s.get("reason", "")
                     )
 
+    def _survey_context_key(self) -> Optional[str]:
+        if self.current_session and getattr(self.current_session, "idb_path", None):
+            return self.current_session.idb_path
+        return None
+
+    def _get_survey_store(self):
+        from .survey_store import SurveyStore
+
+        return SurveyStore(context_key=self._survey_context_key())
+
+    def _get_active_survey(self) -> Optional[Dict[str, Any]]:
+        try:
+            store = self._get_survey_store()
+            active_surveys = [s for s in store.list_surveys() if s["status"] == "ACTIVE"]
+            if active_surveys:
+                return active_surveys[0]
+        except Exception as e:
+            log_rpc(f"Survey lock check failed: {e}")
+        return None
+
     @staticmethod
     def _runtime_alive(runtime: Any) -> bool:
         """Best-effort runtime liveness check for runtime dict records."""
@@ -788,8 +808,7 @@ class ServerDispatchMixin:
                 try:
                     visited_addrs = self._extract_addresses_from_args(args)
                     if visited_addrs:
-                        from .survey_store import SurveyStore
-                        store = SurveyStore()
+                        store = self._get_survey_store()
                         for addr in visited_addrs:
                             store.add_visited_address(addr)
                         self._promote_eligible_surveys(store)
@@ -851,29 +870,23 @@ class ServerDispatchMixin:
 
             # ---- Active Survey Lock Check ----
             if tool_name not in {"survey", "blackboard", "session"}:
-                try:
-                    from .survey_store import SurveyStore
-                    store = SurveyStore()
-                    active_surveys = [s for s in store.list_surveys() if s["status"] == "ACTIVE"]
-                    if active_surveys:
-                        s = active_surveys[0]
-                        addr = s.get("addr", "unknown")
-                        return make_error(
-                            MCPError.SURVEY_REQUIRED,
-                            f"ACTIVE SURVEY PENDING for {addr}. You must resolve or delay the survey first.",
-                            details={
-                                "addr": addr,
-                                "reason": s.get("reason", ""),
-                                "variables": s.get("variables", []),
-                                "dependencies": s.get("dependencies", []),
-                                "actions": {
-                                    "submit": f"survey(action='submit', addr='{addr}', renames={{...}})",
-                                    "delay": f"survey(action='delay', addr='{addr}', delay_until_any=[...], reason='...')"
-                                }
+                s = self._get_active_survey()
+                if s:
+                    addr = s.get("addr", "unknown")
+                    return make_error(
+                        MCPError.SURVEY_REQUIRED,
+                        f"ACTIVE SURVEY PENDING for {addr}. You must resolve or delay the survey first.",
+                        details={
+                            "addr": addr,
+                            "reason": s.get("reason", ""),
+                            "variables": s.get("variables", []),
+                            "dependencies": s.get("dependencies", []),
+                            "actions": {
+                                "submit": f"survey(action='submit', addr='{addr}', renames={{...}})",
+                                "delay": f"survey(action='delay', addr='{addr}', delay_until_any=[...], reason='...')"
                             }
-                        )
-                except Exception as e:
-                    log_rpc(f"Survey lock check failed: {e}")
+                        }
+                    )
 
             # ---- Deterministic policy preflight ----
             if tool_name != "blackboard":
