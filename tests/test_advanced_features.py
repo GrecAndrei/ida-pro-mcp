@@ -201,3 +201,286 @@ def test_prefetch_context():
         assert "struct_definitions" in res
         assert "small_callees" in res
 
+
+
+def test_tiny_emulator_new_instructions():
+    with mock_ida_context():
+        import sys
+        from unittest.mock import MagicMock
+        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import TinyEmulator
+        
+        # Configure mocked ida modules and constants
+        import ida_ua
+        ida_ua.o_reg = 1
+        ida_ua.o_mem = 2
+        ida_ua.o_phrase = 3
+        ida_ua.o_displ = 4
+        ida_ua.o_imm = 5
+        ida_ua.o_near = 7
+        
+        # Set up a dictionary to hold our mocked instruction sequence
+        mock_instructions = {}
+        
+        def mock_decode_insn(insn, ip):
+            if ip in mock_instructions:
+                inst_info = mock_instructions[ip]
+                insn.size = inst_info.get("size", 4)
+                insn.ea = ip
+                
+                # Setup operands
+                ops = []
+                for op_data in inst_info.get("ops", []):
+                    op = MagicMock()
+                    op.type = op_data.get("type", 0)
+                    op.dtype = op_data.get("dtype", 0)
+                    op.value = op_data.get("value", 0)
+                    op.addr = op_data.get("addr", 0)
+                    ops.append(op)
+                
+                while len(ops) < 6:
+                    ops.append(MagicMock(type=0, dtype=0, value=0, addr=0))
+                insn.ops = ops
+                return 1
+            return 0
+            
+        sys.modules["ida_ua"].decode_insn.side_effect = mock_decode_insn
+        
+        def mock_print_insn_mnem(ip):
+            if ip in mock_instructions:
+                return mock_instructions[ip]["mnem"]
+            return ""
+            
+        sys.modules["idc"].print_insn_mnem.side_effect = mock_print_insn_mnem
+        
+        def mock_print_operand(ip, op_idx):
+            if ip in mock_instructions:
+                op_strs = mock_instructions[ip].get("op_strs", [])
+                if op_idx < len(op_strs):
+                    return op_strs[op_idx]
+            return ""
+            
+        sys.modules["idc"].print_operand.side_effect = mock_print_operand
+        
+        # Mock get_func
+        sys.modules["ida_funcs"].get_func.return_value = None
+        
+        emu = TinyEmulator(0x1000)
+        
+        # Helper to run emulator on registered instructions
+        def run_emu_at(ip, mnem, op_strs, ops_data):
+            mock_instructions[ip] = {
+                "mnem": mnem,
+                "op_strs": op_strs,
+                "ops": ops_data,
+                "size": 4
+            }
+            emu.ip = ip
+            emu.step()
+
+        # --- 1. ROL / ROR tests ---
+        # 64-bit ROL immediate
+        emu.set_reg("rax", 1)
+        emu.set_reg_taint("rax", False)
+        run_emu_at(0x1000, "rol", ["rax", "5"], [
+            {"type": 1, "dtype": 7},
+            {"type": 5, "value": 5}
+        ])
+        assert emu.get_reg("rax") == 0x20
+        assert not emu.is_reg_tainted("rax")
+        
+        # 64-bit ROL immediate taint
+        emu.set_reg("rax", 1)
+        emu.set_reg_taint("rax", True)
+        run_emu_at(0x1004, "rol", ["rax", "5"], [
+            {"type": 1, "dtype": 7},
+            {"type": 5, "value": 5}
+        ])
+        assert emu.get_reg("rax") == 0x20
+        assert emu.is_reg_tainted("rax")
+        
+        # 64-bit ROR immediate
+        emu.set_reg("rax", 0x20)
+        emu.set_reg_taint("rax", False)
+        run_emu_at(0x1008, "ror", ["rax", "5"], [
+            {"type": 1, "dtype": 7},
+            {"type": 5, "value": 5}
+        ])
+        assert emu.get_reg("rax") == 1
+        
+        # 64-bit ROL register-based count
+        emu.set_reg("rbx", 0x8000000000000000)
+        emu.set_reg("rcx", 1)
+        emu.set_reg_taint("rbx", False)
+        emu.set_reg_taint("rcx", False)
+        run_emu_at(0x100c, "rol", ["rbx", "cl"], [
+            {"type": 1, "dtype": 7},
+            {"type": 1, "dtype": 0}
+        ])
+        assert emu.get_reg("rbx") == 1
+        assert not emu.is_reg_tainted("rbx")
+        
+        # 64-bit ROL register count taint
+        emu.set_reg("rbx", 0x8000000000000000)
+        emu.set_reg("rcx", 1)
+        emu.set_reg_taint("rcx", True)
+        run_emu_at(0x1010, "rol", ["rbx", "cl"], [
+            {"type": 1, "dtype": 7},
+            {"type": 1, "dtype": 0}
+        ])
+        assert emu.get_reg("rbx") == 1
+        assert emu.is_reg_tainted("rbx")
+        
+        # 32-bit ROL immediate
+        emu.set_reg("rax", 0xf0000000)
+        emu.set_reg_taint("rax", False)
+        run_emu_at(0x1014, "rol", ["eax", "4"], [
+            {"type": 1, "dtype": 2},
+            {"type": 5, "value": 4}
+        ])
+        assert emu.get_reg("rax") == 0xf
+        
+        # 32-bit ROR immediate
+        emu.set_reg("rax", 0xf)
+        run_emu_at(0x1018, "ror", ["eax", "4"], [
+            {"type": 1, "dtype": 2},
+            {"type": 5, "value": 4}
+        ])
+        assert emu.get_reg("rax") == 0xf0000000
+
+        # --- 2. NOT / NEG tests ---
+        # NOT 64-bit
+        emu.set_reg("rax", 0)
+        emu.set_reg_taint("rax", False)
+        emu.regs["zf"] = 0
+        emu.regs["sf"] = 0
+        run_emu_at(0x1020, "not", ["rax"], [
+            {"type": 1, "dtype": 7}
+        ])
+        assert emu.get_reg("rax") == 0xffffffffffffffff
+        assert emu.regs["zf"] == 0
+        assert emu.regs["sf"] == 0
+        
+        # NOT 32-bit with taint
+        emu.set_reg("rax", 0)
+        emu.set_reg_taint("rax", True)
+        run_emu_at(0x1024, "not", ["eax"], [
+            {"type": 1, "dtype": 2}
+        ])
+        assert emu.get_reg("rax") == 0xffffffff
+        assert emu.is_reg_tainted("rax")
+        
+        # NEG 64-bit
+        emu.set_reg("rax", 1)
+        emu.set_reg_taint("rax", False)
+        run_emu_at(0x1028, "neg", ["rax"], [
+            {"type": 1, "dtype": 7}
+        ])
+        assert emu.get_reg("rax") == 0xffffffffffffffff
+        assert emu.regs["zf"] == 0
+        assert emu.regs["sf"] == 1
+        assert not emu.is_reg_tainted("rax")
+        
+        # NEG 32-bit zero with taint
+        emu.set_reg("rax", 0)
+        emu.set_reg_taint("rax", True)
+        run_emu_at(0x102c, "neg", ["eax"], [
+            {"type": 1, "dtype": 2}
+        ])
+        assert emu.get_reg("rax") == 0
+        assert emu.regs["zf"] == 1
+        assert emu.regs["sf"] == 0
+        assert emu.is_reg_tainted("rax")
+
+        # --- 3. CMOV tests ---
+        # CMOVZ condition met (ZF = 1)
+        emu.set_reg("rax", 0x1111)
+        emu.set_reg("rbx", 0x2222)
+        emu.regs["zf"] = 1
+        emu.set_reg_taint("rbx", True)
+        emu.set_reg_taint("rax", False)
+        run_emu_at(0x1030, "cmovz", ["rax", "rbx"], [
+            {"type": 1, "dtype": 7},
+            {"type": 1, "dtype": 7}
+        ])
+        assert emu.get_reg("rax") == 0x2222
+        assert emu.is_reg_tainted("rax")
+        
+        # CMOVZ condition NOT met (ZF = 0)
+        emu.set_reg("rax", 0x1111)
+        emu.set_reg("rbx", 0x2222)
+        emu.regs["zf"] = 0
+        emu.set_reg_taint("rax", False)
+        emu.set_reg_taint("rbx", True)
+        run_emu_at(0x1034, "cmovz", ["rax", "rbx"], [
+            {"type": 1, "dtype": 7},
+            {"type": 1, "dtype": 7}
+        ])
+        assert emu.get_reg("rax") == 0x1111
+        assert not emu.is_reg_tainted("rax")
+        
+        # CMOVNZ condition met (ZF = 0)
+        emu.set_reg("rax", 0x1111)
+        emu.set_reg("rbx", 0x2222)
+        emu.regs["zf"] = 0
+        emu.set_reg_taint("rax", False)
+        emu.set_reg_taint("rbx", True)
+        run_emu_at(0x1038, "cmovnz", ["rax", "rbx"], [
+            {"type": 1, "dtype": 7},
+            {"type": 1, "dtype": 7}
+        ])
+        assert emu.get_reg("rax") == 0x2222
+        assert emu.is_reg_tainted("rax")
+
+        # CMOVNZ condition NOT met (ZF = 1)
+        emu.set_reg("rax", 0x1111)
+        emu.set_reg("rbx", 0x2222)
+        emu.regs["zf"] = 1
+        emu.set_reg_taint("rax", False)
+        emu.set_reg_taint("rbx", True)
+        run_emu_at(0x103c, "cmovnz", ["rax", "rbx"], [
+            {"type": 1, "dtype": 7},
+            {"type": 1, "dtype": 7}
+        ])
+        assert emu.get_reg("rax") == 0x1111
+        assert not emu.is_reg_tainted("rax")
+
+        # --- 4. SETcc tests ---
+        # SETZ on register, ZF = 1
+        emu.set_reg("rax", 0xff)
+        emu.regs["zf"] = 1
+        emu.flags_tainted = False
+        run_emu_at(0x1040, "setz", ["al"], [
+            {"type": 1, "dtype": 0}
+        ])
+        assert emu.get_reg("al") == 1
+        assert not emu.is_reg_tainted("al")
+        
+        # SETZ on register, ZF = 0, tainted flags
+        emu.set_reg("rax", 0xff)
+        emu.regs["zf"] = 0
+        emu.flags_tainted = True
+        run_emu_at(0x1044, "setz", ["al"], [
+            {"type": 1, "dtype": 0}
+        ])
+        assert emu.get_reg("al") == 0
+        assert emu.is_reg_tainted("al")
+        
+        # SETNZ on memory address, ZF = 0, untainted flags
+        emu.set_reg("rsi", 0x1000)
+        emu.regs["zf"] = 0
+        emu.flags_tainted = False
+        run_emu_at(0x1048, "setnz", ["[rsi]"], [
+            {"type": 3, "dtype": 0}
+        ])
+        assert emu.read_mem(0x1000, 1) == 1
+        assert not emu.is_mem_tainted(0x1000, 1)
+        
+        # SETNZ on memory address, ZF = 1, tainted flags
+        emu.set_reg("rsi", 0x1000)
+        emu.regs["zf"] = 1
+        emu.flags_tainted = True
+        run_emu_at(0x104c, "setnz", ["[rsi]"], [
+            {"type": 3, "dtype": 0}
+        ])
+        assert emu.read_mem(0x1000, 1) == 0
+        assert emu.is_mem_tainted(0x1000, 1)
