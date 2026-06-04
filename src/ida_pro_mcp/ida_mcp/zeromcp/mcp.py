@@ -69,7 +69,7 @@ class _McpSseConnection:
             return False
 
 class McpHttpRequestHandler(BaseHTTPRequestHandler):
-    server_version = "zeromcp/1.3.0"
+    server_version = "zeromcp/1.4.0"
     error_message_format = "%(code)d - %(message)s"
     error_content_type = "text/plain"
 
@@ -454,8 +454,9 @@ class McpServer:
         if isinstance(result, dict):
             result["_elapsed_ms"] = elapsed_ms
 
+        content = result if isinstance(result, str) else json.dumps(result, indent=2)
         return {
-            "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+            "content": [{"type": "text", "text": content}],
             "structuredContent": result if isinstance(result, dict) else {"result": result},
             "isError": False,
         }
