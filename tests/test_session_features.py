@@ -23,6 +23,7 @@ ida_mcp_stdio = load_repo_module("ida_mcp_stdio.py", module_name="ida_mcp_stdio"
 SessionManager = ida_mcp_stdio.SessionManager
 Session = ida_mcp_stdio.Session
 IDAMCPServer = ida_mcp_stdio.IDAMCPServer
+BookmarkManager = ida_mcp_stdio.BookmarkManager
 make_error = ida_mcp_stdio.make_error
 MCPError = ida_mcp_stdio.MCPError
 validate_path = ida_mcp_stdio.validate_path
@@ -332,6 +333,30 @@ class TestArchiveUnarchive(unittest.TestCase):
 
     def test_unarchive_nonexistent(self):
         self.assertIsNone(self.mgr.unarchive_session("NONEXIST"))
+
+
+class TestBookmarkManagerErrorPropagation(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.mgr = BookmarkManager(self.tmpdir)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_add_propagates_ok_false_save_failure(self):
+        original = self.mgr.save
+        self.mgr.save = lambda sid, bookmarks: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "IO_ERROR",
+            "message": "save failed",
+        }
+        try:
+            result = self.mgr.add("SID_TEST", {"addr": "0x401000", "name": "target"})
+        finally:
+            self.mgr.save = original  # type: ignore[method-assign]
+
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("code"), "IO_ERROR")
 
 
 class TestSessionAge(unittest.TestCase):

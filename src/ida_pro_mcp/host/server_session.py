@@ -23,7 +23,7 @@ from .config import (
     _coerce_bool,
     _normalize_session_id,
 )
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .schemas import TOOL_ACTIONS
 from .server_session_bootstrap import ServerSessionBootstrapMixin
 from .symbol_db import SymbolDB
@@ -1584,7 +1584,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 run_args[k] = v
             run_args["action"] = run_action
             run_result = self._execute_tool("session", run_args)
-            if isinstance(run_result, dict) and not run_result.get("error"):
+            if isinstance(run_result, dict) and not is_error_result(run_result):
                 run_result = dict(run_result)
                 run_result["macro"] = macro_name
                 run_result["run_action"] = run_action

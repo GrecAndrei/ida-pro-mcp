@@ -45,7 +45,7 @@ from .config import (
     MAX_NAME_LEN,
 )
 from .patterns import compile_smart_pattern
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 
 # ============================================================================
 # ANALYSIS PHASES
@@ -1091,12 +1091,12 @@ class BookmarkManager:
                     new_bm["id"] = bm["id"]
                     bookmarks[i] = new_bm
                     res = self.save(sid, bookmarks)
-                    if res.get("error"):
+                    if is_error_result(res):
                         return res
                     return {"ok": True, "updated": True, "bookmark": new_bm}
             bookmarks.append(new_bm)
             res = self.save(sid, bookmarks)
-            if res.get("error"):
+            if is_error_result(res):
                 return res
             return {"ok": True, "bookmark": new_bm}
 
@@ -1139,7 +1139,7 @@ class BookmarkManager:
                 bookmarks = [b for b in bookmarks if b.get("addr") != addr]
             if len(bookmarks) < original_len:
                 res = self.save(sid, bookmarks)
-                return res if res.get("error") else {"ok": True, "deleted": original_len - len(bookmarks)}
+                return res if is_error_result(res) else {"ok": True, "deleted": original_len - len(bookmarks)}
             return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
     def update(self, sid: str, data: dict) -> dict:
@@ -1161,13 +1161,13 @@ class BookmarkManager:
                                 val = parse_str_list(val)
                             bookmarks[i][key] = val
                     res = self.save(sid, bookmarks)
-                    return res if res.get("error") else {"ok": True, "bookmark": bookmarks[i]}
+                    return res if is_error_result(res) else {"ok": True, "bookmark": bookmarks[i]}
             return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
     def clear(self, sid: str) -> dict:
         with self._lock:
             res = self.save(sid, [])
-            return res if res.get("error") else {"ok": True}
+            return res if is_error_result(res) else {"ok": True}
 
     def find(self, sid: str, query: str) -> dict:
         with self._lock:

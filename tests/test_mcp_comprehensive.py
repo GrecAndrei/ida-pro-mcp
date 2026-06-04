@@ -214,6 +214,25 @@ class TestSessionTool:
         r4 = mcp_client.call_tool("session", action="macro_get", name="test_macro")
         assert r4.get("error") is True or "error" in r4
 
+    def test_session_macro_run_propagates_ok_false_result(self, mcp_client):
+        original_execute = mcp_client.server._execute_tool
+
+        def _wrapped(tool, args):
+            if tool == "session" and args.get("action") == "stats":
+                return {"ok": False, "code": "IO_ERROR", "message": "run failed"}
+            return original_execute(tool, args)
+
+        mcp_client.server._execute_tool = _wrapped  # type: ignore[method-assign]
+        try:
+            setup = mcp_client.call_tool("session", action="macro_set", name="test_macro_run", data={"action": "stats"})
+            assert setup.get("ok") is True or "name" in setup
+            result = mcp_client.call_tool("session", action="macro_run", name="test_macro_run")
+        finally:
+            mcp_client.server._execute_tool = original_execute  # type: ignore[method-assign]
+
+        assert result.get("ok") is False
+        assert result.get("code") == "IO_ERROR"
+
     def test_session_invalid_id_format(self, mcp_client):
         result = mcp_client.call_tool("session", action="get", session_id="../../../etc/passwd")
         assert result.get("error") is True or "error" in result
