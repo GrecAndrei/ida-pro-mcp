@@ -676,6 +676,35 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertEqual(payload["results"][0]["data"].get("total_sessions"), 0)
         self.assertNotIn("llm_pointer_note", payload)
 
+    def test_batch_compact_marks_ok_false_child_results_as_errors(self):
+        self.server._execute_tool = lambda _tool, _args: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "NOT_FOUND",
+            "message": "missing",
+        }
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "batch",
+                "arguments": {
+                    "calls": [
+                        {"name": "session", "arguments": {"action": "status"}},
+                        {"name": "session", "arguments": {"action": "status"}},
+                    ]
+                },
+            },
+        }
+        resp = self.server.handle_request(req)
+        payload = json.loads(resp["result"]["content"][0]["text"])
+        self.assertEqual(payload["summary"]["total"], 1)
+        self.assertEqual(payload["summary"]["ok"], 0)
+        self.assertEqual(payload["summary"]["errors"], 1)
+        self.assertTrue(payload["summary"].get("stopped_on_error", False))
+        self.assertFalse(payload["results"][0]["ok"])
+        self.assertEqual(payload["results"][0]["data"].get("code"), "NOT_FOUND")
+
     def test_llm_note_present_in_full_mode(self):
         req = {
             "jsonrpc": "2.0",

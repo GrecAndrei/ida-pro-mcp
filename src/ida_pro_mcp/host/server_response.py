@@ -33,6 +33,7 @@ from .config import (
 )
 from .server_response_compact import ServerResponseCompactMixin
 from .truncation import truncate_response
+from .errors import is_error_result
 
 
 class ServerResponseMixin(ServerResponseCompactMixin):
@@ -178,7 +179,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
     def _should_include_pointer_note(
         self, tool_name: str, call_args: Any, payload: Any
     ) -> bool:
-        if isinstance(payload, dict) and payload.get("error"):
+        if is_error_result(payload):
             return False
         signal = self._compute_pointer_note_signal(tool_name, call_args, payload)
         if signal > 0:
@@ -240,7 +241,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         it into the payload so the LLM receives relevant context alongside results.
         Replaces the cartographer + attention_kernel + cognitive_layer pipeline.
         """
-        if not isinstance(payload, dict) or payload.get("error"):
+        if not isinstance(payload, dict) or is_error_result(payload):
             return
         if tool_name in {"session", "blackboard", "batch", "truncation", "wiki",
                          "predictor", "workflow"}:

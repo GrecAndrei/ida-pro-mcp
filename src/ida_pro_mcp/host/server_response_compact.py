@@ -12,6 +12,7 @@ from .config import (
     _COMPACT_DROP,
     _COMPACT_META_KEYS,
 )
+from .errors import is_error_result
 
 
 class ServerResponseCompactMixin:
@@ -249,6 +250,9 @@ class ServerResponseCompactMixin:
                     continue
                 if key == "ok" and raw is True and opts.get("drop_ok"):
                     continue
+                if key == "ok" and raw is False:
+                    out[key] = False
+                    continue
                 if key == "details":
                     compact_details = self._compact_error_details(raw, opts)
                     if compact_details is None and opts.get("drop_empty"):
@@ -368,7 +372,7 @@ class ServerResponseCompactMixin:
                 compact_results.append(item)
                 continue
             raw_result = item.get("result")
-            is_error = bool(isinstance(raw_result, dict) and raw_result.get("error"))
+            is_error = is_error_result(raw_result)
             entry = {
                 # Keep compact external key as `tool` for readability (source batch rows use `name`).
                 "tool": item.get("name"),
@@ -388,4 +392,3 @@ class ServerResponseCompactMixin:
                 continue
             out.setdefault(k, v)
         return out
-

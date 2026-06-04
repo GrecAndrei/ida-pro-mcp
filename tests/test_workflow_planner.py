@@ -232,6 +232,65 @@ def test_tools_call_marks_ok_false_payloads_as_mcp_errors():
     assert response["result"]["isError"] is True
 
 
+def test_workflow_estimate_propagates_ok_false_plan_failures():
+    server = IDAMCPServer()
+    original = server._handle_workflow
+
+    def _wrapped(args):
+        if args.get("action") == "plan":
+            return {"ok": False, "code": "NOT_FOUND", "message": "plan failed"}
+        return original(args)
+
+    server._handle_workflow = _wrapped  # type: ignore[method-assign]
+    result = server._handle_workflow({"action": "estimate", "workflow_action": "recon_sweep"})
+
+    assert result.get("ok") is False
+    assert result.get("code") == "NOT_FOUND"
+
+
+def test_workflow_prioritize_propagates_ok_false_plan_failures():
+    server = IDAMCPServer()
+    original = server._handle_workflow
+
+    def _wrapped(args):
+        if args.get("action") == "plan":
+            return {"ok": False, "code": "NOT_FOUND", "message": "plan failed"}
+        return original(args)
+
+    server._handle_workflow = _wrapped  # type: ignore[method-assign]
+    result = server._handle_workflow(
+        {
+            "action": "prioritize",
+            "workflow_action": "triage_fast",
+            "priority_mode": "coverage",
+        }
+    )
+
+    assert result.get("ok") is False
+    assert result.get("code") == "NOT_FOUND"
+
+
+def test_workflow_audit_plan_propagates_ok_false_compose_failures():
+    server = IDAMCPServer()
+    original = server._handle_workflow
+
+    def _wrapped(args):
+        if args.get("action") == "compose":
+            return {"ok": False, "code": "NOT_FOUND", "message": "compose failed"}
+        return original(args)
+
+    server._handle_workflow = _wrapped  # type: ignore[method-assign]
+    result = server._handle_workflow(
+        {
+            "action": "audit_plan",
+            "workflow_actions": ["triage_fast", "vuln_audit"],
+        }
+    )
+
+    assert result.get("ok") is False
+    assert result.get("code") == "NOT_FOUND"
+
+
 def test_workflow_audit_plan_from_provided_calls():
     server = IDAMCPServer()
     result = server._handle_workflow(

@@ -117,7 +117,7 @@ class ServerDispatchMixin:
         return None
 
     def _survey_gate_exempt(self, tool_name: str, args: dict[str, Any]) -> bool:
-        if tool_name in {"survey", "blackboard", "session"}:
+        if tool_name in {"survey", "blackboard", "session", "wiki"}:
             return True
         if tool_name == "workflow":
             action = str(args.get("action") or "").strip().lower()

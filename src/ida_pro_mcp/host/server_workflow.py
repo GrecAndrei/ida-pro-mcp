@@ -134,7 +134,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                             "addr": addr,
                         }
                     )
-                    if not isinstance(compose_result, dict) or compose_result.get("error"):
+                    if not isinstance(compose_result, dict) or is_error_result(compose_result):
                         return compose_result
                     calls_raw = compose_result.get("planned_calls") if isinstance(compose_result.get("planned_calls"), list) else []
                     source_desc = "compose"
@@ -163,7 +163,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                             "addr": addr,
                         }
                     )
-                    if not isinstance(plan_result, dict) or plan_result.get("error"):
+                    if not isinstance(plan_result, dict) or is_error_result(plan_result):
                         return plan_result
                     calls_raw = plan_result.get("planned_calls") if isinstance(plan_result.get("planned_calls"), list) else []
                     source_desc = "plan"
@@ -270,7 +270,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                             "addr": addr,
                         }
                     )
-                    if not isinstance(compose_result, dict) or compose_result.get("error"):
+                    if not isinstance(compose_result, dict) or is_error_result(compose_result):
                         return compose_result
                     calls_raw = compose_result.get("planned_calls") if isinstance(compose_result.get("planned_calls"), list) else []
                     source_desc = "compose"
@@ -299,7 +299,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                             "addr": addr,
                         }
                     )
-                    if not isinstance(plan_result, dict) or plan_result.get("error"):
+                    if not isinstance(plan_result, dict) or is_error_result(plan_result):
                         return plan_result
                     calls_raw = plan_result.get("planned_calls") if isinstance(plan_result.get("planned_calls"), list) else []
                     source_desc = "plan"
@@ -423,7 +423,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                             "addr": addr,
                         }
                     )
-                    if not isinstance(compose_result, dict) or compose_result.get("error"):
+                    if not isinstance(compose_result, dict) or is_error_result(compose_result):
                         return compose_result
                     calls_raw = compose_result.get("planned_calls")
                     calls = [c for c in calls_raw if isinstance(c, dict)] if isinstance(calls_raw, list) else []
@@ -453,7 +453,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                             "addr": addr,
                         }
                     )
-                    if not isinstance(plan_result, dict) or plan_result.get("error"):
+                    if not isinstance(plan_result, dict) or is_error_result(plan_result):
                         return plan_result
                     calls_raw = plan_result.get("planned_calls")
                     calls = [c for c in calls_raw if isinstance(c, dict)] if isinstance(calls_raw, list) else []
@@ -545,7 +545,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 if not addr:
                     plan_args.pop("addr", None)
                 plan_result = self._handle_workflow(plan_args)
-                if not isinstance(plan_result, dict) or plan_result.get("error"):
+                if not isinstance(plan_result, dict) or is_error_result(plan_result):
                     return plan_result
                 calls = plan_result.get("planned_calls")
                 if not isinstance(calls, list):
@@ -630,7 +630,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             plan_args["action"] = "plan"
             plan_args["workflow_action"] = target_action
             plan_result = self._handle_workflow(plan_args)
-            if not isinstance(plan_result, dict) or plan_result.get("error"):
+            if not isinstance(plan_result, dict) or is_error_result(plan_result):
                 return plan_result
             calls = plan_result.get("planned_calls")
             if not isinstance(calls, list):
@@ -738,7 +738,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             plan_args["action"] = "plan"
             plan_args["workflow_action"] = target_action
             plan_result = self._handle_workflow(plan_args)
-            if not isinstance(plan_result, dict) or plan_result.get("error"):
+            if not isinstance(plan_result, dict) or is_error_result(plan_result):
                 return plan_result
             calls = plan_result.get("planned_calls")
             if not isinstance(calls, list):
