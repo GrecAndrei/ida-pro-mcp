@@ -1803,6 +1803,158 @@ def _prefetch_function_context(ea):
 
 
 
+def format_sym_expr(expr):
+    if not isinstance(expr, tuple):
+        if isinstance(expr, int):
+            return hex(expr) if expr > 9 else str(expr)
+        return str(expr)
+    
+    if len(expr) == 0:
+        return ""
+    
+    op = expr[0]
+    if op == "val":
+        val = expr[1]
+        return hex(val) if isinstance(val, int) and val > 9 else str(val)
+    elif op == "reg":
+        return str(expr[1])
+    elif op == "mem":
+        addr = format_sym_expr(expr[1])
+        return f"[{addr}]"
+    elif op in ("add", "sub", "mul", "xor", "and", "or", "shl", "shr", "sar", "rol", "ror"):
+        op_signs = {
+            "add": "+", "sub": "-", "mul": "*", "xor": "^", 
+            "and": "&", "or": "|", "shl": "<<", "shr": ">>", "sar": ">>a",
+            "rol": "rol", "ror": "ror"
+        }
+        sign = op_signs.get(op, op)
+        left = format_sym_expr(expr[1])
+        right = format_sym_expr(expr[2])
+        return f"({left} {sign} {right})"
+    elif op in ("neg", "not"):
+        sign = "-" if op == "neg" else "~"
+        val = format_sym_expr(expr[1])
+        return f"{sign}{val}"
+    elif op == "call":
+        func = expr[1]
+        args = ", ".join(format_sym_expr(a) for a in expr[2])
+        return f"{func}({args})"
+    elif op == "cmov":
+        cond = expr[1]
+        val1 = format_sym_expr(expr[2])
+        val0 = format_sym_expr(expr[3])
+        return f"({val1} if {cond} else {val0})"
+    elif op == "set":
+        cond = expr[1]
+        flags = format_sym_expr(expr[2])
+        return f"(1 if {cond}({flags}) else 0)"
+    
+    return str(expr)
+
+
+def format_constraint(constraint):
+    if not isinstance(constraint, tuple) or len(constraint) < 2:
+        return str(constraint)
+        
+    op = constraint[0]
+    if op in ("eq", "ne", "lt", "gt", "le", "ge"):
+        op_signs = {"eq": "==", "ne": "!=", "lt": "<", "gt": ">", "le": "<=", "ge": ">="}
+        sign = op_signs[op]
+        left = format_sym_expr(constraint[1])
+        right = format_sym_expr(constraint[2])
+        return f"{left} {sign} {right}"
+    elif op in ("zero", "nonzero"):
+        val = format_sym_expr(constraint[1])
+        return f"{val} == 0" if op == "zero" else f"{val} != 0"
+    elif op in ("taken", "fallthrough"):
+        flags = format_sym_expr(constraint[1])
+        return f"{op}({flags})"
+        
+    return str(constraint)
+
+
+def solve_constraints(constraints):
+    solutions = {}
+    
+    def solve_expr(expr, target_val):
+        if not isinstance(expr, tuple):
+            return
+        
+        op = expr[0]
+        if op == "reg":
+            solutions[expr[1]] = target_val
+        elif op == "mem":
+            addr_str = format_sym_expr(expr[1])
+            solutions[f"[{addr_str}]"] = target_val
+        elif op == "add":
+            left, right = expr[1], expr[2]
+            if isinstance(right, tuple) and right[0] == "val":
+                solve_expr(left, target_val - right[1])
+            elif isinstance(left, tuple) and left[0] == "val":
+                solve_expr(right, target_val - left[1])
+        elif op == "sub":
+            left, right = expr[1], expr[2]
+            if isinstance(right, tuple) and right[0] == "val":
+                solve_expr(left, target_val + right[1])
+            elif isinstance(left, tuple) and left[0] == "val":
+                solve_expr(right, left[1] - target_val)
+        elif op == "xor":
+            left, right = expr[1], expr[2]
+            if isinstance(right, tuple) and right[0] == "val":
+                solve_expr(left, target_val ^ right[1])
+            elif isinstance(left, tuple) and left[0] == "val":
+                solve_expr(right, target_val ^ left[1])
+                
+    for constraint in constraints:
+        if not isinstance(constraint, tuple):
+            continue
+        op = constraint[0]
+        if op == "eq":
+            left, right = constraint[1], constraint[2]
+            if isinstance(right, tuple) and right[0] == "val":
+                solve_expr(left, right[1])
+            elif isinstance(left, tuple) and left[0] == "val":
+                solve_expr(right, left[1])
+        elif op == "zero":
+            expr = constraint[1]
+            solve_expr(expr, 0)
+            
+    return solutions
+
+
+def get_branch_constraints(mnem, flags_sym):
+    if not flags_sym:
+        return None, None
+    
+    if not isinstance(flags_sym, tuple) or len(flags_sym) < 2:
+        flags_sym = ("test", flags_sym, flags_sym)
+        
+    op = flags_sym[0]
+    if op == "cmp":
+        left, right = flags_sym[1], flags_sym[2]
+        if mnem in ("je", "jz"):
+            return ("eq", left, right), ("ne", left, right)
+        elif mnem in ("jne", "jnz"):
+            return ("ne", left, right), ("eq", left, right)
+        elif mnem in ("jb", "jl", "js"):
+            return ("lt", left, right), ("ge", left, right)
+        elif mnem in ("jae", "jge", "jns"):
+            return ("ge", left, right), ("lt", left, right)
+        elif mnem == "jg":
+            return ("gt", left, right), ("le", left, right)
+        elif mnem == "jle":
+            return ("le", left, right), ("gt", left, right)
+    elif op == "test":
+        left, right = flags_sym[1], flags_sym[2]
+        test_expr = ("and", left, right)
+        if mnem in ("je", "jz"):
+            return ("eq", test_expr, ("val", 0)), ("ne", test_expr, ("val", 0))
+        elif mnem in ("jne", "jnz"):
+            return ("ne", test_expr, ("val", 0)), ("eq", test_expr, ("val", 0))
+            
+    return ("taken", flags_sym), ("fallthrough", flags_sym)
+
+
 class TinyEmulator:
     def __init__(self, start_ea):
         import ida_funcs
@@ -1829,6 +1981,10 @@ class TinyEmulator:
         self.dereferenced_pointers = set()
         self.virtual_calls = []
         self.arg_derefs = {}
+        self.sym_regs = {}
+        self.sym_mem = {}
+        self.flags_sym = None
+        self.path_constraints = []
 
     def setup_argument_pointers(self):
         # We assign dummy pointers in the range 0x10000000 - 0x60000000
@@ -1857,6 +2013,10 @@ class TinyEmulator:
         other.dereferenced_pointers = set(self.dereferenced_pointers)
         other.virtual_calls = list(self.virtual_calls)
         other.arg_derefs = {k: list(v) for k, v in self.arg_derefs.items()}
+        other.sym_regs = dict(self.sym_regs)
+        other.sym_mem = dict(self.sym_mem)
+        other.flags_sym = self.flags_sym
+        other.path_constraints = list(self.path_constraints)
         return other
 
     def _normalize_reg_name(self, name):
@@ -1889,8 +2049,11 @@ class TinyEmulator:
         norm = self._normalize_reg_name(name)
         if state:
             self.tainted_regs.add(norm)
+            if norm not in self.sym_regs:
+                self.sym_regs[norm] = ("reg", norm)
         else:
             self.tainted_regs.discard(norm)
+            self.sym_regs.pop(norm, None)
 
     def is_mem_tainted(self, addr, size=1):
         for i in range(size):
@@ -1902,8 +2065,11 @@ class TinyEmulator:
         for i in range(size):
             if state:
                 self.tainted_mem.add(addr + i)
+                if (addr + i) not in self.sym_mem:
+                    self.sym_mem[addr + i] = ("mem", ("val", addr + i), 1)
             else:
                 self.tainted_mem.discard(addr + i)
+                self.sym_mem.pop(addr + i, None)
 
     def get_reg(self, name):
         name = name.lower()
@@ -2160,6 +2326,144 @@ class TinyEmulator:
         size = self.dtype_size(op.dtype)
         return size * 8
 
+    def get_address_sym(self, expr_str):
+        expr_str = expr_str.lower()
+        if '[' in expr_str:
+            expr_str = expr_str.split('[')[1].split(']')[0]
+        else:
+            return ("val", 0)
+        
+        import re
+        tokens = re.split(r'(\+|\-)', expr_str)
+        sym_expr = ("val", 0)
+        current_op = '+'
+        for tok in tokens:
+            tok = tok.strip()
+            if not tok:
+                continue
+            if tok in ('+', '-'):
+                current_op = tok
+                continue
+            
+            tok_sym = None
+            if '*' in tok:
+                parts = tok.split('*')
+                reg_name = parts[0].strip()
+                try:
+                    scale = int(parts[1].strip(), 0)
+                except ValueError:
+                    scale = 1
+                norm_reg = self._normalize_reg_name(reg_name)
+                if self.is_reg_tainted(reg_name):
+                    reg_sym = self.sym_regs.get(norm_reg, ("reg", norm_reg))
+                    tok_sym = ("mul", reg_sym, ("val", scale))
+                else:
+                    tok_sym = ("val", self.get_reg(reg_name) * scale)
+            elif tok.endswith('h'):
+                try:
+                    tok_val = int(tok[:-1], 16)
+                except ValueError:
+                    tok_val = 0
+                tok_sym = ("val", tok_val)
+            elif re.match(r'^[0-9a-f]+$', tok):
+                try:
+                    tok_val = int(tok, 16)
+                except ValueError:
+                    tok_val = 0
+                tok_sym = ("val", tok_val)
+            elif self._normalize_reg_name(tok) in self.regs or tok in ('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'r8d', 'r9d', 'r10d', 'r11d', 'r12d', 'r13d', 'r14d', 'r15d', 'ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'al', 'bl', 'cl', 'dl'):
+                norm_reg = self._normalize_reg_name(tok)
+                if self.is_reg_tainted(tok):
+                    tok_sym = self.sym_regs.get(norm_reg, ("reg", norm_reg))
+                else:
+                    tok_sym = ("val", self.get_reg(tok))
+            else:
+                try:
+                    tok_val = int(tok, 0)
+                except ValueError:
+                    tok_val = 0
+                tok_sym = ("val", tok_val)
+            
+            if current_op == '+':
+                if sym_expr == ("val", 0):
+                    sym_expr = tok_sym
+                else:
+                    sym_expr = ("add", sym_expr, tok_sym)
+            else:
+                sym_expr = ("sub", sym_expr, tok_sym)
+        return sym_expr
+
+    def get_op_sym(self, insn, op_idx):
+        import ida_ua
+        import idc
+        op = insn.ops[op_idx]
+        if op.type == ida_ua.o_reg:
+            reg_name = idc.print_operand(insn.ea, op_idx)
+            norm = self._normalize_reg_name(reg_name)
+            if self.is_reg_tainted(reg_name):
+                return self.sym_regs.get(norm, ("reg", norm))
+            else:
+                return ("val", self.get_reg(reg_name))
+        elif op.type == ida_ua.o_imm:
+            return ("val", op.value)
+        elif op.type in (ida_ua.o_phrase, ida_ua.o_displ):
+            op_str = idc.print_operand(insn.ea, op_idx)
+            concrete_addr = self.parse_address_expr(op_str)
+            size = self.dtype_size(op.dtype)
+            
+            addr_is_symbolic = False
+            for r in self.regs:
+                if r in op_str.lower() and self.is_reg_tainted(r):
+                    addr_is_symbolic = True
+                    break
+            
+            addr_sym = self.get_address_sym(op_str)
+            mem_tainted = self.is_mem_tainted(concrete_addr, size)
+            
+            if mem_tainted:
+                for offset in range(size):
+                    if (concrete_addr + offset) in self.sym_mem:
+                        return self.sym_mem[concrete_addr + offset]
+                return ("mem", addr_sym, size)
+            elif addr_is_symbolic:
+                return ("mem", addr_sym, size)
+            else:
+                return ("val", self.read_mem(concrete_addr, size))
+        elif op.type == ida_ua.o_mem:
+            size = self.dtype_size(op.dtype)
+            if self.is_mem_tainted(op.addr, size):
+                for offset in range(size):
+                    if (op.addr + offset) in self.sym_mem:
+                        return self.sym_mem[op.addr + offset]
+                return ("mem", ("val", op.addr), size)
+            else:
+                return ("val", self.read_mem(op.addr, size))
+        return ("val", 0)
+
+    def set_op_sym(self, insn, op_idx, sym_expr, tainted):
+        import ida_ua
+        import idc
+        op = insn.ops[op_idx]
+        if op.type == ida_ua.o_reg:
+            reg_name = idc.print_operand(insn.ea, op_idx)
+            norm = self._normalize_reg_name(reg_name)
+            if tainted:
+                self.sym_regs[norm] = sym_expr
+            else:
+                self.sym_regs.pop(norm, None)
+        elif op.type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+            if op.type == ida_ua.o_mem:
+                addr = op.addr
+            else:
+                op_str = idc.print_operand(insn.ea, op_idx)
+                addr = self.parse_address_expr(op_str)
+            size = self.dtype_size(op.dtype)
+            for i in range(size):
+                if tainted:
+                    self.sym_mem[addr + i] = sym_expr
+                else:
+                    self.sym_mem.pop(addr + i, None)
+
     def step(self):
         import ida_ua
         import idc
@@ -2175,31 +2479,35 @@ class TinyEmulator:
             op0_str = idc.print_operand(self.ip, 0)
             val1 = self.parse_op(insn, 1)
             t1 = self.parse_op_taint(insn, 1)
+            sym1 = self.get_op_sym(insn, 1)
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
                 self.write_mem(addr, val1, size)
                 self.set_mem_taint(addr, size, t1)
+                self.set_op_sym(insn, 0, sym1, t1)
                 if t1:
                     self.taint_log.append((self.ip, f"Taint stored to mem address {hex(addr)}"))
             else:
                 self.set_reg(op0_str, val1)
                 self.set_reg_taint(op0_str, t1)
+                self.set_op_sym(insn, 0, sym1, t1)
                 if t1:
                     self.taint_log.append((self.ip, f"Taint moved to register {op0_str}"))
                 
         elif mnem == "lea":
             op0_str = idc.print_operand(self.ip, 0)
             addr = self.parse_op(insn, 1)
-            # Check taint of any reg used in address computation
             t1 = False
             op1_str = idc.print_operand(self.ip, 1)
             for r in self.regs:
                 if r in op1_str.lower() and self.is_reg_tainted(r):
                     t1 = True
                     break
+            sym1 = self.get_address_sym(op1_str)
             self.set_reg(op0_str, addr)
             self.set_reg_taint(op0_str, t1)
+            self.set_op_sym(insn, 0, sym1, t1)
             if t1:
                 self.taint_log.append((self.ip, f"Taint loaded to register {op0_str} via LEA"))
             
@@ -2212,18 +2520,25 @@ class TinyEmulator:
             
             t0 = self.parse_op_taint(insn, 0)
             t1 = self.parse_op_taint(insn, 1)
-            t_res = (t0 or t1) if op0_str != op1_str else False # xor reg, reg clears taint
+            t_res = (t0 or t1) if op0_str != op1_str else False
+            
+            sym0 = self.get_op_sym(insn, 0)
+            sym1 = self.get_op_sym(insn, 1)
+            sym_res = ("xor", sym0, sym1) if op0_str != op1_str else ("val", 0)
             
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
                 self.write_mem(addr, res, size)
                 self.set_mem_taint(addr, size, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
             self.flags_tainted = t_res
+            self.flags_sym = sym_res if t_res else None
             
         elif mnem in ("add", "sub"):
             op0_str = idc.print_operand(self.ip, 0)
@@ -2235,16 +2550,23 @@ class TinyEmulator:
             t1 = self.parse_op_taint(insn, 1)
             t_res = t0 or t1
             
+            sym0 = self.get_op_sym(insn, 0)
+            sym1 = self.get_op_sym(insn, 1)
+            sym_res = (mnem, sym0, sym1)
+            
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
                 self.write_mem(addr, res, size)
                 self.set_mem_taint(addr, size, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
             self.flags_tainted = t_res
+            self.flags_sym = sym_res if t_res else None
             
         elif mnem in ("inc", "dec"):
             op0_str = idc.print_operand(self.ip, 0)
@@ -2252,17 +2574,22 @@ class TinyEmulator:
             res = (val0 + 1) if mnem == "inc" else (val0 - 1)
             
             t_res = self.parse_op_taint(insn, 0)
+            sym0 = self.get_op_sym(insn, 0)
+            sym_res = ("add" if mnem == "inc" else "sub", sym0, ("val", 1))
             
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
                 self.write_mem(addr, res, size)
                 self.set_mem_taint(addr, size, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
             self.flags_tainted = t_res
+            self.flags_sym = sym_res if t_res else None
             
         elif mnem == "cmp":
             val0 = self.parse_op(insn, 0)
@@ -2271,6 +2598,9 @@ class TinyEmulator:
             self.regs['zf'] = 1 if diff == 0 else 0
             self.regs['sf'] = 1 if diff < 0 else 0
             self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
+            sym0 = self.get_op_sym(insn, 0)
+            sym1 = self.get_op_sym(insn, 1)
+            self.flags_sym = ("cmp", sym0, sym1) if self.flags_tainted else None
             
         elif mnem == "test":
             val0 = self.parse_op(insn, 0)
@@ -2278,14 +2608,23 @@ class TinyEmulator:
             res = val0 & val1
             self.regs['zf'] = 1 if res == 0 else 0
             self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
+            sym0 = self.get_op_sym(insn, 0)
+            sym1 = self.get_op_sym(insn, 1)
+            self.flags_sym = ("test", sym0, sym1) if self.flags_tainted else None
 
         elif mnem == "push":
             val = self.parse_op(insn, 0)
             t = self.parse_op_taint(insn, 0)
+            sym = self.get_op_sym(insn, 0)
             rsp = self.get_reg("rsp") - 8
             self.set_reg("rsp", rsp)
             self.write_mem(rsp, val, 8)
             self.set_mem_taint(rsp, 8, t)
+            for i in range(8):
+                if t:
+                    self.sym_mem[rsp + i] = sym
+                else:
+                    self.sym_mem.pop(rsp + i, None)
             if t:
                 self.taint_log.append((self.ip, f"Taint pushed to stack [rsp]: {hex(rsp)}"))
 
@@ -2294,26 +2633,46 @@ class TinyEmulator:
             rsp = self.get_reg("rsp")
             val = self.read_mem(rsp, 8)
             t = self.is_mem_tainted(rsp, 8)
+            sym = None
+            if t:
+                for i in range(8):
+                    if (rsp + i) in self.sym_mem:
+                        sym = self.sym_mem[rsp + i]
+                        break
+                if sym is None:
+                    sym = ("mem", ("val", rsp), 8)
             self.set_reg("rsp", rsp + 8)
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
                 self.write_mem(addr, val, size)
                 self.set_mem_taint(addr, size, t)
+                self.set_op_sym(insn, 0, sym, t)
             else:
                 self.set_reg(op0_str, val)
                 self.set_reg_taint(op0_str, t)
+                self.set_op_sym(insn, 0, sym, t)
             if t:
                 self.taint_log.append((self.ip, f"Taint popped from stack [rsp] ({hex(rsp)}) to {op0_str}"))
 
         elif mnem == "call":
-            # Propagate taint to RAX if any of the common argument registers is tainted
             arg_regs = ["rcx", "rdx", "r8", "r9", "rdi", "rsi"]
             any_tainted = any(self.is_reg_tainted(r) for r in arg_regs)
-            self.set_reg("rax", 0)  # Reset RAX or keep dummy
+            self.set_reg("rax", 0)
             self.set_reg_taint("rax", any_tainted)
             if any_tainted:
+                func_op = idc.print_operand(self.ip, 0)
+                args_sym = []
+                for r in arg_regs:
+                    if self.is_reg_tainted(r):
+                        args_sym.append(self.sym_regs.get(r, ("reg", r)))
+                    else:
+                        args_sym.append(("val", self.get_reg(r)))
+                func_sym = ("call", func_op, args_sym)
+                self.sym_regs["rax"] = func_sym
                 self.taint_log.append((self.ip, "Taint propagated to RAX via CALL return value"))
+            else:
+                self.sym_regs.pop("rax", None)
 
         elif mnem in ("and", "or"):
             op0_str = idc.print_operand(self.ip, 0)
@@ -2323,16 +2682,22 @@ class TinyEmulator:
             t0 = self.parse_op_taint(insn, 0)
             t1 = self.parse_op_taint(insn, 1)
             t_res = t0 or t1
+            sym0 = self.get_op_sym(insn, 0)
+            sym1 = self.get_op_sym(insn, 1)
+            sym_res = (mnem, sym0, sym1)
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
                 self.write_mem(addr, res, size)
                 self.set_mem_taint(addr, size, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
             self.flags_tainted = t_res
+            self.flags_sym = sym_res if t_res else None
 
         elif mnem in ("shl", "shr", "sar"):
             op0_str = idc.print_operand(self.ip, 0)
@@ -2347,17 +2712,25 @@ class TinyEmulator:
                     res = (val0 >> val1) | (~(0xffffffffffffffff >> val1))
                 else:
                     res = val0 >> val1
-            t_res = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
+            t0 = self.parse_op_taint(insn, 0)
+            t1 = self.parse_op_taint(insn, 1)
+            t_res = t0 or t1
+            sym0 = self.get_op_sym(insn, 0)
+            sym1 = self.get_op_sym(insn, 1)
+            sym_res = (mnem, sym0, sym1)
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
                 self.write_mem(addr, res, size)
                 self.set_mem_taint(addr, size, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
             self.flags_tainted = t_res
+            self.flags_sym = sym_res if t_res else None
 
         elif mnem in ("rol", "ror"):
             op0_str = idc.print_operand(self.ip, 0)
@@ -2383,15 +2756,20 @@ class TinyEmulator:
             
             t0 = self.parse_op_taint(insn, 0)
             t_res = t0 or t1
+            sym0 = self.get_op_sym(insn, 0)
+            sym1 = self.get_op_sym(insn, 1)
+            sym_res = (mnem, sym0, sym1)
             
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = width // 8
                 self.write_mem(addr, res, size)
                 self.set_mem_taint(addr, size, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
 
         elif mnem in ("not", "neg"):
             op0_str = idc.print_operand(self.ip, 0)
@@ -2401,6 +2779,8 @@ class TinyEmulator:
             val0 = val0 & mask
             
             t_res = self.parse_op_taint(insn, 0)
+            sym0 = self.get_op_sym(insn, 0)
+            sym_res = (mnem, sym0)
             
             if mnem == "not":
                 res = (~val0) & mask
@@ -2409,15 +2789,18 @@ class TinyEmulator:
                 self.regs['zf'] = 1 if res == 0 else 0
                 self.regs['sf'] = 1 if (res & (1 << (width - 1))) != 0 else 0
                 self.flags_tainted = t_res
+                self.flags_sym = sym_res if t_res else None
                 
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = width // 8
                 self.write_mem(addr, res, size)
                 self.set_mem_taint(addr, size, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
 
         elif mnem in ("cmovz", "cmove", "cmovnz", "cmovne"):
             cond = False
@@ -2432,15 +2815,24 @@ class TinyEmulator:
                 t1 = self.parse_op_taint(insn, 1)
                 t_res = t1 or self.flags_tainted
                 
+                sym1 = self.get_op_sym(insn, 1)
+                if self.flags_tainted:
+                    sym0 = self.get_op_sym(insn, 0)
+                    sym_res = ("cmov", mnem, sym1, sym0)
+                else:
+                    sym_res = sym1
+                
                 if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                     addr = self.parse_op(insn, 0)
                     width = self.get_op_width(insn, 0)
                     size = width // 8
                     self.write_mem(addr, val1, size)
                     self.set_mem_taint(addr, size, t_res)
+                    self.set_op_sym(insn, 0, sym_res, t_res)
                 else:
                     self.set_reg(op0_str, val1)
                     self.set_reg_taint(op0_str, t_res)
+                    self.set_op_sym(insn, 0, sym_res, t_res)
                     if t_res:
                         self.taint_log.append((self.ip, f"Taint conditionally moved to register {op0_str}"))
 
@@ -2453,15 +2845,18 @@ class TinyEmulator:
                 
             res = 1 if cond else 0
             t_res = self.flags_tainted
+            sym_res = ("set", mnem, self.flags_sym) if t_res else ("val", res)
             
             op0_str = idc.print_operand(self.ip, 0)
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 self.write_mem(addr, res, 1)
                 self.set_mem_taint(addr, 1, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             else:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
 
         elif mnem in ("imul", "mul"):
             op0_str = idc.print_operand(self.ip, 0)
@@ -2471,29 +2866,46 @@ class TinyEmulator:
                     num_ops += 1
             t_res = False
             res = 0
+            sym_res = None
             if num_ops == 1:
                 val0 = self.get_reg("rax")
                 val1 = self.parse_op(insn, 0)
                 res = val0 * val1
                 t_res = self.is_reg_tainted("rax") or self.parse_op_taint(insn, 0)
+                sym0 = self.sym_regs.get("rax", ("reg", "rax")) if self.is_reg_tainted("rax") else ("val", val0)
+                sym1 = self.get_op_sym(insn, 0)
+                sym_res = ("mul", sym0, sym1)
                 self.set_reg("rax", res)
                 self.set_reg_taint("rax", t_res)
+                if t_res:
+                    self.sym_regs["rax"] = sym_res
+                else:
+                    self.sym_regs.pop("rax", None)
             elif num_ops == 2:
                 val0 = self.parse_op(insn, 0)
                 val1 = self.parse_op(insn, 1)
                 res = val0 * val1
                 t_res = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
+                sym0 = self.get_op_sym(insn, 0)
+                sym1 = self.get_op_sym(insn, 1)
+                sym_res = ("mul", sym0, sym1)
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             elif num_ops == 3:
                 val1 = self.parse_op(insn, 1)
                 val2 = self.parse_op(insn, 2)
                 res = val1 * val2
                 t_res = self.parse_op_taint(insn, 1) or self.parse_op_taint(insn, 2)
+                sym1 = self.get_op_sym(insn, 1)
+                sym2 = self.get_op_sym(insn, 2)
+                sym_res = ("mul", sym1, sym2)
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
+                self.set_op_sym(insn, 0, sym_res, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
             self.flags_tainted = t_res
+            self.flags_sym = sym_res if t_res else None
             
         elif mnem in ("jmp", "je", "jne", "jz", "jnz", "jb", "jae"):
             target = self.parse_op(insn, 0)
@@ -2508,6 +2920,15 @@ class TinyEmulator:
                 jump = (self.regs['sf'] != 0)
             elif mnem == "jae":
                 jump = (self.regs['sf'] == 0)
+            
+            if self.flags_tainted:
+                taken_c, fallthrough_c = get_branch_constraints(mnem, self.flags_sym)
+                if jump:
+                    if taken_c:
+                        self.path_constraints.append((self.ip, taken_c))
+                else:
+                    if fallthrough_c:
+                        self.path_constraints.append((self.ip, fallthrough_c))
             
             if jump and self.func_start <= target < self.func_end:
                 next_ip = target
@@ -2593,15 +3014,21 @@ class TinyEmulator:
                     next_ip = ea + insn.size
                     
                     if current_emu.flags_tainted:
+                        taken_constraint, fallthrough_constraint = get_branch_constraints(mnem, current_emu.flags_sym)
+                        
                         if current_emu.func_start <= target < current_emu.func_end:
                             emu_taken = current_emu.clone()
                             emu_taken.ip = target
                             emu_taken.flags_tainted = False
+                            if taken_constraint:
+                                emu_taken.path_constraints.append((ea, taken_constraint))
                             paths.append(emu_taken)
                         
                         emu_fallthrough = current_emu.clone()
                         emu_fallthrough.ip = next_ip
                         emu_fallthrough.flags_tainted = False
+                        if fallthrough_constraint:
+                            emu_fallthrough.path_constraints.append((ea, fallthrough_constraint))
                         paths.append(emu_fallthrough)
                         
                         current_emu.opaque_predicates[ea] = "symbolic_branch"
@@ -2668,6 +3095,17 @@ class TinyEmulator:
                         seen_d.add(key)
                         merged_arg_derefs.setdefault(reg, []).append(d)
             
+        path_details = []
+        for idx, emu in enumerate(completed_paths + paths):
+            c_strs = [format_constraint(c[1]) for c in emu.path_constraints]
+            solutions = solve_constraints([c[1] for c in emu.path_constraints])
+            path_details.append({
+                "path_id": idx,
+                "last_address": hex(emu.ip),
+                "constraints": c_strs,
+                "solved_inputs": {k: hex(v) if isinstance(v, int) else v for k, v in solutions.items()}
+            })
+            
         return {
             "reachable_eas": sorted([hex(x) for x in reachable_eas]),
             "opaque_predicates": {hex(k): v for k, v in merged_opaque_predicates.items()},
@@ -2677,6 +3115,7 @@ class TinyEmulator:
             "dereferenced_pointers": sorted(list(merged_dereferenced_pointers)),
             "virtual_calls": merged_virtual_calls,
             "argument_dereferences": merged_arg_derefs,
+            "paths": path_details,
         }
 
 
@@ -2775,10 +3214,13 @@ def _trace_analysis_merged_dispatch(action, kwargs) -> dict:
                 "reachable_eas": res["reachable_eas"],
                 "opaque_predicates": res["opaque_predicates"],
                 "taint_log": res["taint_log"],
+                "paths": res["paths"],
             }
         else:
             # Single-path run
             strings = emu.run_emulation(steps)
+            c_strs = [format_constraint(c[1]) for c in emu.path_constraints]
+            solutions = solve_constraints([c[1] for c in emu.path_constraints])
             return {
                 "ok": True,
                 "emulated_address": hex(ea),
@@ -2788,6 +3230,8 @@ def _trace_analysis_merged_dispatch(action, kwargs) -> dict:
                 "stack_strings": emu.get_stack_strings(),
                 "written_memory_bytes": len(emu.mem),
                 "taint_log": [{"addr": hex(ea_log), "description": desc} for ea_log, desc in emu.taint_log],
+                "constraints": c_strs,
+                "solved_inputs": {k: hex(v) if isinstance(v, int) else v for k, v in solutions.items()}
             }
     return make_error(MCPError.INVALID_ARGS, f"Unknown merged action: {action}")
 

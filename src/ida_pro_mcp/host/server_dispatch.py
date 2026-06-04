@@ -27,18 +27,75 @@ from .server_response import truncate_response
 
 
 class ServerDispatchMixin:
+    def _extract_addresses_from_args(self, args: Any) -> list[str]:
+        addrs = []
+        if isinstance(args, dict):
+            for key in ("addr", "ea", "address", "addrs"):
+                val = args.get(key)
+                if val is not None:
+                    if isinstance(val, list):
+                        for item in val:
+                            addrs.extend(self._extract_addresses_from_args(item))
+                    elif isinstance(val, (int, str)):
+                        try:
+                            if isinstance(val, int):
+                                addrs.append(hex(val))
+                            else:
+                                if val.lower().startswith("0x"):
+                                    addrs.append(hex(int(val, 16)))
+                                else:
+                                    addrs.append(hex(int(val)))
+                        except Exception:
+                            pass
+            for val in args.values():
+                if isinstance(val, (dict, list)):
+                    addrs.extend(self._extract_addresses_from_args(val))
+        elif isinstance(args, list):
+            for item in args:
+                addrs.extend(self._extract_addresses_from_args(item))
+        return list(set(addrs))
+
+    def _promote_eligible_surveys(self, store):
+        visited = set(store.get_visited_addresses())
+        surveys = store.list_surveys()
+        for s in surveys:
+            status = s["status"]
+            addr = s["addr"]
+            if status == "DORMANT":
+                deps = s.get("dependencies", [])
+                if deps and any(d in visited for d in deps):
+                    store.save_survey(
+                        addr=addr,
+                        status="ACTIVE",
+                        variables=s["variables"],
+                        dependencies=deps,
+                        deferred_until=s.get("deferred_until", []),
+                        reason=s.get("reason", "")
+                    )
+            elif status == "DEFERRED":
+                deferred_until = s.get("deferred_until", [])
+                if deferred_until and any(d in visited for d in deferred_until):
+                    store.save_survey(
+                        addr=addr,
+                        status="ACTIVE",
+                        variables=s["variables"],
+                        dependencies=s["dependencies"],
+                        deferred_until=deferred_until,
+                        reason=s.get("reason", "")
+                    )
+
     @staticmethod
     def _runtime_alive(runtime: Any) -> bool:
-            """Best-effort runtime liveness check for runtime dict records."""
-            if not isinstance(runtime, dict):
-                return False
-            proc = runtime.get("process")
-            if not proc:
-                return False
-            try:
-                return proc.poll() is None
-            except Exception:
-                return False
+        """Best-effort runtime liveness check for runtime dict records."""
+        if not isinstance(runtime, dict):
+            return False
+        proc = runtime.get("process")
+        if not proc:
+            return False
+        try:
+            return proc.poll() is None
+        except Exception:
+            return False
 
     def call_tool(self, tool_name, idb_path, **kwargs):
             session = self._resolve_session_from_idb_ref(idb_path)
@@ -725,6 +782,20 @@ class ServerDispatchMixin:
                 )
 
             result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
+            
+            # Record visited addresses and promote surveys
+            if isinstance(result, dict) and result.get("ok", True) and "error" not in result:
+                try:
+                    visited_addrs = self._extract_addresses_from_args(args)
+                    if visited_addrs:
+                        from .survey_store import SurveyStore
+                        store = SurveyStore()
+                        for addr in visited_addrs:
+                            store.add_visited_address(addr)
+                        self._promote_eligible_surveys(store)
+                except Exception as e:
+                    log_rpc(f"Survey visited address logging/promotion failed: {e}")
+
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             latency_ms = (time.perf_counter() - start_ts) * 1000.0
             action_name = str(args.get("action", "")) if isinstance(args, dict) else ""
@@ -777,6 +848,32 @@ class ServerDispatchMixin:
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+
+            # ---- Active Survey Lock Check ----
+            if tool_name not in {"survey", "blackboard", "session"}:
+                try:
+                    from .survey_store import SurveyStore
+                    store = SurveyStore()
+                    active_surveys = [s for s in store.list_surveys() if s["status"] == "ACTIVE"]
+                    if active_surveys:
+                        s = active_surveys[0]
+                        addr = s.get("addr", "unknown")
+                        return make_error(
+                            MCPError.SURVEY_REQUIRED,
+                            f"ACTIVE SURVEY PENDING for {addr}. You must resolve or delay the survey first.",
+                            details={
+                                "addr": addr,
+                                "reason": s.get("reason", ""),
+                                "variables": s.get("variables", []),
+                                "dependencies": s.get("dependencies", []),
+                                "actions": {
+                                    "submit": f"survey(action='submit', addr='{addr}', renames={{...}})",
+                                    "delay": f"survey(action='delay', addr='{addr}', delay_until_any=[...], reason='...')"
+                                }
+                            }
+                        )
+                except Exception as e:
+                    log_rpc(f"Survey lock check failed: {e}")
 
             # ---- Deterministic policy preflight ----
             if tool_name != "blackboard":

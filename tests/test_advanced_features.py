@@ -484,3 +484,251 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.read_mem(0x1000, 1) == 0
         assert emu.is_mem_tainted(0x1000, 1)
+
+
+def test_symbolic_expression_solving_and_formatting():
+    from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import (
+        format_sym_expr, format_constraint, solve_constraints
+    )
+    
+    # Test expression formatting
+    expr1 = ("add", ("reg", "rdi"), ("val", 0x10))
+    assert format_sym_expr(expr1) == "(rdi + 0x10)"
+    
+    expr2 = ("mem", ("sub", ("reg", "rbp"), ("val", 8)), 8)
+    assert format_sym_expr(expr2) == "[(rbp - 8)]"
+    
+    # Test constraint formatting
+    const1 = ("eq", expr1, ("val", 0x1337))
+    assert format_constraint(const1) == "(rdi + 0x10) == 0x1337"
+    
+    const2 = ("zero", ("xor", ("reg", "rax"), ("val", 0xff)))
+    assert format_constraint(const2) == "(rax ^ 0xff) == 0"
+    
+    # Test solving constraints
+    solutions = solve_constraints([const1, const2])
+    assert solutions["rdi"] == 0x1337 - 0x10
+    assert solutions["rax"] == 0xff
+
+
+def test_tiny_emulator_symbolic_execution_branch_split():
+    with mock_ida_context():
+        import sys
+        from unittest.mock import MagicMock
+        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import TinyEmulator, _trace_analysis_merged_dispatch
+        
+        import ida_ua
+        ida_ua.o_reg = 1
+        ida_ua.o_mem = 2
+        ida_ua.o_phrase = 3
+        ida_ua.o_displ = 4
+        ida_ua.o_imm = 5
+        ida_ua.o_near = 7
+        
+        # Set up a dictionary to hold our mocked instruction sequence
+        mock_instructions = {}
+        
+        def mock_decode_insn(insn, ip):
+            if ip in mock_instructions:
+                inst_info = mock_instructions[ip]
+                insn.size = inst_info.get("size", 4)
+                insn.ea = ip
+                ops = []
+                for op_data in inst_info.get("ops", []):
+                    op = MagicMock()
+                    op.type = op_data.get("type", 0)
+                    op.dtype = op_data.get("dtype", 0)
+                    op.value = op_data.get("value", 0)
+                    op.addr = op_data.get("addr", 0)
+                    ops.append(op)
+                while len(ops) < 6:
+                    ops.append(MagicMock(type=0, dtype=0, value=0, addr=0))
+                insn.ops = ops
+                return 1
+            return 0
+            
+        sys.modules["ida_ua"].decode_insn.side_effect = mock_decode_insn
+        
+        def mock_print_insn_mnem(ip):
+            if ip in mock_instructions:
+                return mock_instructions[ip]["mnem"]
+            return ""
+            
+        sys.modules["idc"].print_insn_mnem.side_effect = mock_print_insn_mnem
+        
+        def mock_print_operand(ip, op_idx):
+            if ip in mock_instructions:
+                op_strs = mock_instructions[ip].get("op_strs", [])
+                if op_idx < len(op_strs):
+                    return op_strs[op_idx]
+            return ""
+            
+        sys.modules["idc"].print_operand.side_effect = mock_print_operand
+        sys.modules["ida_funcs"].get_func.return_value = None
+        
+        # Set up instructions:
+        # 0x1000: add rdi, 0x10
+        # 0x1004: cmp rdi, 0x1337
+        # 0x1008: je 0x1020
+        # 0x100c: ret
+        # 0x1020: ret
+        mock_instructions[0x1000] = {
+            "mnem": "add",
+            "op_strs": ["rdi", "0x10"],
+            "ops": [{"type": 1, "dtype": 7}, {"type": 5, "value": 0x10}],
+            "size": 4
+        }
+        mock_instructions[0x1004] = {
+            "mnem": "cmp",
+            "op_strs": ["rdi", "0x1337"],
+            "ops": [{"type": 1, "dtype": 7}, {"type": 5, "value": 0x1337}],
+            "size": 4
+        }
+        mock_instructions[0x1008] = {
+            "mnem": "je",
+            "op_strs": ["0x1020"],
+            "ops": [{"type": 7, "addr": 0x1020}],
+            "size": 4
+        }
+        mock_instructions[0x100c] = {
+            "mnem": "ret",
+            "op_strs": [],
+            "ops": [],
+            "size": 1
+        }
+        mock_instructions[0x1020] = {
+            "mnem": "ret",
+            "op_strs": [],
+            "ops": [],
+            "size": 1
+        }
+        
+        # Run speculative emulation via merged dispatch dispatcher
+        res = _trace_analysis_merged_dispatch(
+            action="deobfuscate_emulate",
+            kwargs={
+                "addr": "0x1000",
+                "taint_regs": ["rdi"],
+                "speculative": True,
+                "max_depth": 10
+            }
+        )
+        
+        assert res["ok"] is True
+        assert "paths" in res
+        paths = res["paths"]
+        assert len(paths) == 2
+        
+        # Check path properties
+        p0 = paths[0]
+        assert p0["last_address"] == "0x1020"
+        assert "(rdi + 0x10) == 0x1337" in p0["constraints"]
+        assert p0["solved_inputs"]["rdi"] == hex(0x1337 - 0x10)
+        
+        p1 = paths[1]
+        assert p1["last_address"] == "0x100c"
+        assert "(rdi + 0x10) != 0x1337" in p1["constraints"]
+
+
+def test_survey_system_and_differential_decomp(tmp_path):
+    # Set up clean DB path inside tmp_path
+    db_file = os.path.join(tmp_path, "test_re_experience.db")
+    with patch("src.ida_pro_mcp.host.survey_store._resolve_survey_db_path", return_value=db_file), \
+         patch("ida_pro_mcp.host.survey_store._resolve_survey_db_path", return_value=db_file, create=True):
+        from src.ida_pro_mcp.host.survey_store import SurveyStore
+        store = SurveyStore()
+        
+        # Assert tables are empty initially
+        assert len(store.list_surveys()) == 0
+        assert len(store.get_visited_addresses()) == 0
+        
+        # Register a dormant survey for 0x1000 with dependencies [0x2000]
+        store.save_survey(
+            addr="0x1000",
+            status="DORMANT",
+            variables=["v1", "v2"],
+            dependencies=["0x2000"],
+            deferred_until=[],
+            reason="Generic variables found"
+        )
+        
+        s = store.get_survey("0x1000")
+        assert s is not None
+        assert s["status"] == "DORMANT"
+        assert s["dependencies"] == ["0x2000"]
+        
+        # Simulate visitor logging on dispatcher
+        from src.ida_pro_mcp.host.server_dispatch import ServerDispatchMixin
+        class MockDispatcher(ServerDispatchMixin):
+            def __init__(self):
+                self.current_session = MagicMock()
+                self.current_session.idb_path = "test.idb"
+        
+        dispatcher = MockDispatcher()
+        
+        # Test visited address extraction
+        addrs = dispatcher._extract_addresses_from_args({"addr": "0x2000", "some_other": "val"})
+        assert "0x2000" in addrs
+        
+        # Visited address logging
+        store.add_visited_address("0x2000")
+        assert store.get_visited_addresses() == ["0x2000"]
+        
+        # Promote surveys
+        dispatcher._promote_eligible_surveys(store)
+        
+        # Verify state transition: DORMANT -> ACTIVE
+        s = store.get_survey("0x1000")
+        assert s["status"] == "ACTIVE"
+        
+        # Test survey postponement (delay action)
+        with mock_ida_context():
+            from src.ida_pro_mcp.ida_mcp.tools.survey import survey
+            res = survey(action="delay", addr="0x1000", delay_until_any=["0x3000"], reason="Need context")
+            assert res["ok"] is True
+            
+            # Verify status is DEFERRED
+            s = store.get_survey("0x1000")
+            assert s["status"] == "DEFERRED"
+            assert s["deferred_until"] == ["0x3000"]
+            
+            # Visited logging of deferred address reactivation
+            store.add_visited_address("0x3000")
+            dispatcher._promote_eligible_surveys(store)
+            
+            # Verify it reactivated to ACTIVE
+            s = store.get_survey("0x1000")
+            assert s["status"] == "ACTIVE"
+            
+            # Test submit action
+            mock_cfunc = MagicMock()
+            mock_lvar = MagicMock()
+            mock_lvar.name = "v1"
+            mock_cfunc.lvars = [mock_lvar]
+            mock_cfunc.rename_lvar.return_value = True
+            
+            sys.modules["ida_funcs"].get_func.return_value = MagicMock(start_ea=0x1000)
+            sys.modules["ida_hexrays"].decompile.return_value = mock_cfunc
+            
+            res = survey(action="submit", addr="0x1000", renames={"v1": "data_ptr"})
+            assert res["ok"] is True
+            
+            # Verify it is deleted from active surveys list
+            assert store.get_survey("0x1000") is None
+            
+            # Check experience table has entry
+            with store._conn() as conn:
+                row = conn.execute("SELECT address, applied_changes FROM re_experience").fetchone()
+                assert row is not None
+                import json
+                assert row[0] == 0x1000
+                changes = json.loads(row[1])
+                assert changes["renames"] == {"v1": "data_ptr"}
+                
+    # Test Ghidra simulation logic in code.py
+    from src.ida_pro_mcp.ida_mcp.tools.code import _simulate_ghidra_decomp
+    simulated = _simulate_ghidra_decomp("int v1 = 0; sub_4010(v1);", "test_func", 0x4000)
+    assert "uVar1" in simulated
+    assert "FUN_4010" in simulated
+    assert "FUN_00004000" in simulated
+

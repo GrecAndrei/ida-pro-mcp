@@ -114,6 +114,8 @@ TOOLS = [
     "knowledge",
     # --- Relocation/fixup management (specialized; not advertised) ---
     "fixups",
+    # --- Survey Tool ---
+    "survey",
 ]
 
 ADVERTISED_TOOLS = [
@@ -181,6 +183,7 @@ ADVERTISED_TOOLS = [
     "taint",
     "trace_analysis",
     "yara_hunt",
+    "survey",
 ]
 
 _EXTRA_TOOL_ALIASES = {
@@ -1345,6 +1348,12 @@ TOOL_ACTIONS = {
         "extract_strings",
         "xref_matches",
     ],
+    "survey": [
+        "list",
+        "submit",
+        "delay",
+        "status",
+    ],
 }
 
 TOOL_ARG_SCHEMAS = {
@@ -1973,5 +1982,30 @@ TOOL_ARG_SCHEMAS = {
         "db_path": {"type": "string", "description": "Override path to symbol knowledge SQLite DB"},
         "chip_family": {"type": "string", "description": "Optional chip family tag for export_session"},
         "session_id": {"type": "string", "description": "Optional source session identifier for export_session"},
+    },
+    "survey": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["survey"]},
+        "addr": {"type": "string", "description": "Address of the function or offset related to the survey"},
+        "renames": {"type": "object", "description": "Map of generic variable names to new names (action=submit)"},
+        "blackboard_publish": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"}
+                },
+                "required": ["title", "content"]
+            },
+            "description": "List of findings to publish to blackboard (action=submit)"
+        },
+        "bookmark": {"type": "string", "description": "Bookmark tag name to apply to the function (action=submit)"},
+        "delay_until_any": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "List of addresses the LLM wants to check first (action=delay)"
+        },
+        "reason": {"type": "string", "description": "Reason for delaying the survey (action=delay)"}
     },
 }
