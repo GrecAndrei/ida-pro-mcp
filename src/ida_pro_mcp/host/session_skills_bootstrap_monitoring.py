@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 
 
 class SessionBootstrapMonitoringMixin:
@@ -99,7 +99,7 @@ class SessionBootstrapMonitoringMixin:
         """Detailed bootstrap diagnostics including per-policy calibration bins."""
         with self._lock:
             base = self.bootstrap_summary(sid)
-            if base.get("error") or not base.get("initialized"):
+            if is_error_result(base) or not base.get("initialized"):
                 return base
 
             data = self._load_skills(sid)
@@ -162,7 +162,7 @@ class SessionBootstrapMonitoringMixin:
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             summary = self.bootstrap_summary(sid)
-            if summary.get("error"):
+            if is_error_result(summary):
                 return summary
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
@@ -333,7 +333,7 @@ class SessionBootstrapMonitoringMixin:
             baseline = bootstrap.get("baseline") or {}
             if not baseline:
                 baseline_res = self.bootstrap_update_baseline(sid, window=max(30, window))
-                if baseline_res.get("error"):
+                if is_error_result(baseline_res):
                     return baseline_res
                 data = self._load_skills(sid)
                 bootstrap = data.get("bootstrap") or {}
@@ -399,4 +399,3 @@ class SessionBootstrapMonitoringMixin:
                     "prior_mean_window": round(sum(prior_vals) / max(1, len(prior_vals)), 6),
                 },
             }
-

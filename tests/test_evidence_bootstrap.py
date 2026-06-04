@@ -403,6 +403,142 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         self.assertFalse(out.get("ok"))
         self.assertEqual(out.get("code"), "DB_ERROR")
 
+    def test_bootstrap_evaluate_alerts_propagates_ok_false_baseline_errors(self):
+        original = self.server.session_mgr.bootstrap_update_baseline
+        self.server.session_mgr.bootstrap_update_baseline = lambda _sid, window=0: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "baseline unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {"action": "bootstrap_evaluate_alerts", "session_id": self.sid, "window": 2},
+            )
+        finally:
+            self.server.session_mgr.bootstrap_update_baseline = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_bootstrap_apply_mitigation_uses_default_seed_paths(self):
+        self.server._execute_tool("session", {"action": "bootstrap_init", "session_id": self.sid})
+
+        original_plan = self.server.session_mgr.bootstrap_mitigation_plan
+        original_eval = self.server.session_mgr.bootstrap_evaluate_alerts
+        self.server.session_mgr.bootstrap_mitigation_plan = lambda _sid, window=20: {  # type: ignore[method-assign]
+            "ok": True,
+            "severity": "medium",
+            "alerts": [{"type": "ece_regression"}],
+            "actions": [{"action": "bootstrap_run_tournament", "params": {"rounds": 2}}],
+        }
+        self.server.session_mgr.bootstrap_evaluate_alerts = lambda _sid, window=20: {  # type: ignore[method-assign]
+            "ok": True,
+            "enough_data": True,
+            "alerts": [],
+            "severity": "none",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {"action": "bootstrap_apply_mitigation", "session_id": self.sid, "window": 2, "max_actions": 1},
+            )
+        finally:
+            self.server.session_mgr.bootstrap_mitigation_plan = original_plan  # type: ignore[method-assign]
+            self.server.session_mgr.bootstrap_evaluate_alerts = original_eval  # type: ignore[method-assign]
+
+        self.assertTrue(out.get("ok"))
+        self.assertEqual(out.get("actions_requested"), 1)
+        self.assertTrue(out.get("executed", [{}])[0].get("ok"))
+
+    def test_bootstrap_apply_mitigation_propagates_ok_false_post_eval(self):
+        self.server._execute_tool("session", {"action": "bootstrap_init", "session_id": self.sid})
+
+        original_plan = self.server.session_mgr.bootstrap_mitigation_plan
+        original_eval = self.server.session_mgr.bootstrap_evaluate_alerts
+        self.server.session_mgr.bootstrap_mitigation_plan = lambda _sid, window=20: {  # type: ignore[method-assign]
+            "ok": True,
+            "severity": "low",
+            "alerts": [],
+            "actions": [{"action": "bootstrap_snapshot", "params": {"name": "mitigation"}}],
+        }
+        self.server.session_mgr.bootstrap_evaluate_alerts = lambda _sid, window=20: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "post eval unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {"action": "bootstrap_apply_mitigation", "session_id": self.sid, "window": 2, "max_actions": 1},
+            )
+        finally:
+            self.server.session_mgr.bootstrap_mitigation_plan = original_plan  # type: ignore[method-assign]
+            self.server.session_mgr.bootstrap_evaluate_alerts = original_eval  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_bootstrap_autopilot_propagates_ok_false_pre_eval(self):
+        original = self.server.session_mgr.bootstrap_evaluate_alerts
+        self.server.session_mgr.bootstrap_evaluate_alerts = lambda _sid, window=20: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "pre eval unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {"action": "bootstrap_autopilot", "session_id": self.sid, "window": 2},
+            )
+        finally:
+            self.server.session_mgr.bootstrap_evaluate_alerts = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_bootstrap_autopilot_propagates_ok_false_post_eval(self):
+        calls = {"eval": 0}
+        original_eval = self.server.session_mgr.bootstrap_evaluate_alerts
+        original_plan = self.server.session_mgr.bootstrap_mitigation_plan
+        original_apply = self.server.session_mgr.bootstrap_apply_mitigation
+        original_reweight = self.server.session_mgr.bootstrap_policy_reweight
+
+        def _eval(_sid, window=20):
+            calls["eval"] += 1
+            if calls["eval"] == 1:
+                return {"ok": True, "enough_data": True, "alerts": [], "severity": "low"}
+            return {"ok": False, "code": "DB_ERROR", "message": "post eval unavailable"}
+
+        self.server.session_mgr.bootstrap_evaluate_alerts = _eval  # type: ignore[method-assign]
+        self.server.session_mgr.bootstrap_mitigation_plan = lambda _sid, window=20: {  # type: ignore[method-assign]
+            "ok": True,
+            "severity": "low",
+            "alerts": [],
+            "actions": [],
+        }
+        self.server.session_mgr.bootstrap_apply_mitigation = lambda _sid, window=20, max_actions=4, dry_run=False: {  # type: ignore[method-assign]
+            "ok": True,
+            "executed": [],
+        }
+        self.server.session_mgr.bootstrap_policy_reweight = lambda _sid, window=20, max_shift=0.08, dry_run=False: {  # type: ignore[method-assign]
+            "ok": True,
+            "updates": [],
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {"action": "bootstrap_autopilot", "session_id": self.sid, "window": 2},
+            )
+        finally:
+            self.server.session_mgr.bootstrap_evaluate_alerts = original_eval  # type: ignore[method-assign]
+            self.server.session_mgr.bootstrap_mitigation_plan = original_plan  # type: ignore[method-assign]
+            self.server.session_mgr.bootstrap_apply_mitigation = original_apply  # type: ignore[method-assign]
+            self.server.session_mgr.bootstrap_policy_reweight = original_reweight  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
     def test_dispute_lifecycle(self):
         self.server._execute_tool("session", {"action": "bootstrap_init", "session_id": self.sid})
         opened = self.server._execute_tool(

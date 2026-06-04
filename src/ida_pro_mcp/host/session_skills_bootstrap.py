@@ -4,11 +4,12 @@
 import json
 import math
 import random
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .session_skills_bootstrap_monitoring import SessionBootstrapMonitoringMixin
 
 
@@ -97,7 +98,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             bootstrap = data.get("bootstrap")
             if not bootstrap:
                 init_res = self.bootstrap_init(sid)
-                if init_res.get("error"):
+                if is_error_result(init_res):
                     return init_res
                 data = self._load_skills(sid)
                 bootstrap = data.get("bootstrap")
@@ -257,7 +258,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
         """Generate bounded mitigation actions from current alert state."""
         with self._lock:
             eval_res = self.bootstrap_evaluate_alerts(sid, window=window)
-            if eval_res.get("error"):
+            if is_error_result(eval_res):
                 return eval_res
             if not eval_res.get("enough_data"):
                 return {
@@ -343,7 +344,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
 
             plan = self.bootstrap_mitigation_plan(sid, window=window)
-            if plan.get("error"):
+            if is_error_result(plan):
                 return plan
             actions = list(plan.get("actions") or [])[: max(1, min(int(max_actions), 10))]
             if dry_run:
@@ -392,6 +393,8 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 )
 
             final_eval = self.bootstrap_evaluate_alerts(sid, window=window)
+            if is_error_result(final_eval):
+                return final_eval
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
             hist = bootstrap.setdefault("mitigation_history", [])
@@ -532,7 +535,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 return make_error(MCPError.INVALID_ARGS, "Bootstrap policies not initialized")
 
             eff = self.bootstrap_mitigation_effectiveness(sid, window=window)
-            if eff.get("error"):
+            if is_error_result(eff):
                 return eff
             if not eff.get("enough_data"):
                 return {
@@ -778,8 +781,10 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     pass
 
             pre_eval = self.bootstrap_evaluate_alerts(sid, window=window)
+            if is_error_result(pre_eval):
+                return pre_eval
             plan = self.bootstrap_mitigation_plan(sid, window=window)
-            if plan.get("error"):
+            if is_error_result(plan):
                 return plan
             apply_res = self.bootstrap_apply_mitigation(
                 sid,
@@ -787,7 +792,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 max_actions=int(policy.get("max_live_actions", 4)),
                 dry_run=dry_run,
             )
-            if apply_res.get("error"):
+            if is_error_result(apply_res):
                 return apply_res
             reweight = self.bootstrap_policy_reweight(
                 sid,
@@ -795,10 +800,12 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 max_shift=0.08,
                 dry_run=dry_run,
             )
-            if reweight.get("error"):
+            if is_error_result(reweight):
                 return reweight
 
             post_eval = self.bootstrap_evaluate_alerts(sid, window=window)
+            if is_error_result(post_eval):
+                return post_eval
             rollback = None
             if not dry_run and bool(policy.get("rollback_on_regression", True)):
                 pre_sev = str((pre_eval or {}).get("severity") or "none")
@@ -869,7 +876,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     skill_id=None,
                     delay_seconds=0,
                 )
-                if out.get("error"):
+                if is_error_result(out):
                     return out
                 brier_sum += float(out.get("brier", 0.0))
             self._save_skills(sid, data)
@@ -1097,7 +1104,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 skill_id=skill_id,
                 delay_seconds=delay_seconds,
             )
-            if res.get("error"):
+            if is_error_result(res):
                 return res
             self._save_skills(sid, data)
             return res
@@ -1114,7 +1121,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
         bootstrap = data.get("bootstrap")
         if not bootstrap:
             init_res = self.bootstrap_init(sid)
-            if init_res.get("error"):
+            if is_error_result(init_res):
                 return init_res
             refreshed = self._load_skills(sid)
             data.clear()
@@ -1195,7 +1202,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             bootstrap = data.get("bootstrap")
             if not bootstrap:
                 init_res = self.bootstrap_init(sid)
-                if init_res.get("error"):
+                if is_error_result(init_res):
                     return init_res
                 data = self._load_skills(sid)
                 bootstrap = data.get("bootstrap")
@@ -1272,7 +1279,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 skill_id=target.get("skill_id"),
                 delay_seconds=int(delay_seconds),
             )
-            if ingest.get("error"):
+            if is_error_result(ingest):
                 return ingest
 
             bootstrap2 = data.get("bootstrap") or {}
