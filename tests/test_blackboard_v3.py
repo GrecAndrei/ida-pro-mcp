@@ -12,59 +12,13 @@ import json
 import math
 import os
 import struct
-import sys
 import tempfile
 import time
-import types
-import importlib.util
+from tests._isolated_repo_loader import load_host_module, load_tool_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-# ── load modules ──────────────────────────────────────────────────────────────
-
-def _load_bb():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "ida_mcp", "tools", "blackboard.py")
-    spec = importlib.util.spec_from_file_location("_bb_v3", path)
-    mod = importlib.util.module_from_spec(spec)
-    _stub_names = ["idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
-                   "ida_segment", "ida_name", "ida_typeinf", "ida_nalt",
-                   "ida_hexrays", "ida_frame", "ida_struct", "ida_lines"]
-    _saved = {m: sys.modules.get(m) for m in _stub_names}
-    for m in _stub_names:
-        if m not in sys.modules:
-            sys.modules[m] = types.ModuleType(m)
-    if not hasattr(sys.modules["idaapi"], "BADADDR"):
-        sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        for m, orig in _saved.items():
-            if orig is None:
-                sys.modules.pop(m, None)
-            else:
-                sys.modules[m] = orig
-    return mod
-
-def _load_engine():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "host", "analysis_engine.py")
-    spec = importlib.util.spec_from_file_location("_ae_v3", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-def _load_resources():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "host", "resources.py")
-    spec = importlib.util.spec_from_file_location("_res_v3", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-_bb = _load_bb()
-_ae = _load_engine()
-_res = _load_resources()
+_bb = load_tool_module("blackboard")
+_ae = load_host_module("analysis_engine")
+_res = load_host_module("resources")
 
 BlackboardStore = _bb.BlackboardStore
 AnalysisEngine = _ae.AnalysisEngine

@@ -8,51 +8,15 @@ Tests for blackboard v4:
 """
 import json
 import os
-import sys
 import tempfile
 import time
-import types
-import importlib.util
+from tests._isolated_repo_loader import load_host_module, load_tool_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _load_bb():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "ida_mcp", "tools", "blackboard.py")
-    spec = importlib.util.spec_from_file_location("_bb_v4", path)
-    mod = importlib.util.module_from_spec(spec)
-    _stubs = ["idaapi","idc","idautils","ida_funcs","ida_bytes","ida_segment",
-              "ida_name","ida_typeinf","ida_nalt","ida_hexrays","ida_frame",
-              "ida_struct","ida_lines"]
-    _saved = {m: sys.modules.get(m) for m in _stubs}
-    for m in _stubs:
-        if m not in sys.modules:
-            sys.modules[m] = types.ModuleType(m)
-    if not hasattr(sys.modules["idaapi"], "BADADDR"):
-        sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        for m, orig in _saved.items():
-            if orig is None: sys.modules.pop(m, None)
-            else: sys.modules[m] = orig
-    return mod
-
-
-_root = os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "host")
-_kg_mod = _load("_kg_v4", os.path.join(_root, "knowledge_graph.py"))
-_ne_mod = _load("_ne_v4", os.path.join(_root, "narrative_engine.py"))
-_ge_mod = _load("_ge_v4", os.path.join(_root, "gap_engine.py"))
-_res_mod = _load("_res_v4", os.path.join(_root, "resources.py"))
-_bb_mod = _load_bb()
+_kg_mod = load_host_module("knowledge_graph")
+_ne_mod = load_host_module("narrative_engine")
+_ge_mod = load_host_module("gap_engine")
+_res_mod = load_host_module("resources")
+_bb_mod = load_tool_module("blackboard")
 
 KnowledgeGraph = _kg_mod.KnowledgeGraph
 NarrativeEngine = _ne_mod.NarrativeEngine

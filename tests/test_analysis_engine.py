@@ -14,22 +14,9 @@ import struct
 import tempfile
 import threading
 import time
-import types
-import importlib.util
+from tests._isolated_repo_loader import load_host_module, load_tool_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-# ── load analysis_engine without IDA ─────────────────────────────────────────
-
-def _load_engine_mod():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "host", "analysis_engine.py")
-    spec = importlib.util.spec_from_file_location("_ae_test", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-_ae = _load_engine_mod()
+_ae = load_host_module("analysis_engine")
 ProposalStore = _ae.ProposalStore
 AnalysisEngine = _ae.AnalysisEngine
 
@@ -38,38 +25,7 @@ def _ps():
     return ProposalStore(db_path=tempfile.mktemp(suffix=".db"))
 
 
-# ── load blackboard without IDA ───────────────────────────────────────────────
-
-def _load_bb_mod():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "ida_mcp", "tools", "blackboard.py")
-    spec = importlib.util.spec_from_file_location("_bb_ae_test", path)
-    mod = importlib.util.module_from_spec(spec)
-    # Inject IDA stubs into the module's own namespace so imports inside
-    # blackboard.py resolve without touching sys.modules
-    _stub_names = ["idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
-                   "ida_segment", "ida_name", "ida_typeinf", "ida_nalt",
-                   "ida_hexrays", "ida_frame", "ida_struct", "ida_lines"]
-    _saved = {}
-    for m in _stub_names:
-        _saved[m] = sys.modules.get(m)
-        if m not in sys.modules:
-            stub = types.ModuleType(m)
-            sys.modules[m] = stub
-    if not hasattr(sys.modules["idaapi"], "BADADDR"):
-        sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        # Restore sys.modules to pre-test state
-        for m, orig in _saved.items():
-            if orig is None:
-                sys.modules.pop(m, None)
-            else:
-                sys.modules[m] = orig
-    return mod
-
-_bb = _load_bb_mod()
+_bb = load_tool_module("blackboard")
 
 
 def _pack(v):
@@ -372,15 +328,7 @@ def test_taint_tracer_detects_sink():
 # ida://state resource
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _load_resources_mod():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "host", "resources.py")
-    spec = importlib.util.spec_from_file_location("_res_test", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-_res = _load_resources_mod()
+_res = load_host_module("resources")
 ResourceResolver = _res.ResourceResolver
 
 
