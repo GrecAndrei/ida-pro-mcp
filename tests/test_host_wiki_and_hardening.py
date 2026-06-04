@@ -830,6 +830,69 @@ class TestResponseCompaction(unittest.TestCase):
         self.assertTrue(normalized.get("include_evidence"))
         self.assertEqual(normalized.get("limit"), 33)
 
+    def test_threat_hunt_legacy_propagates_ok_false_child_failures(self):
+        def fake_call_tool(tool_name, idb_path, **kwargs):
+            self.assertEqual(idb_path, "sample.idb")
+            action = kwargs.get("action")
+            if tool_name == "trace_analysis" and action == "find_loops":
+                return {"ok": False, "code": MCPError.DB_ERROR, "message": "trace unavailable"}
+            return {"ok": False, "code": MCPError.DB_ERROR, "message": f"{tool_name}.{action} unavailable"}
+
+        self.server._get_active_survey = lambda: None  # type: ignore[method-assign]
+        self.server.call_tool = fake_call_tool
+        res = self.server._execute_tool(
+            "threat_hunt",
+            {
+                "action": "legacy",
+                "legacy_tool": "trace_analysis",
+                "legacy_action": "find_loops",
+                "idb": "sample.idb",
+                "include_evidence": True,
+            },
+        )
+        self.assertTrue(res.get("error"))
+        self.assertEqual(res.get("code"), MCPError.DB_ERROR)
+        details = res.get("details", {})
+        self.assertEqual((details.get("pipeline") or {}).get("steps_ok"), 0)
+        self.assertEqual((details.get("pipeline") or {}).get("steps_failed"), 1)
+        self.assertEqual((details.get("steps") or [{}])[0].get("tool"), "trace_analysis")
+        self.assertFalse((details.get("steps") or [{}])[0].get("ok"))
+
+    def test_threat_hunt_keeps_success_when_seed_findings_exist_despite_failed_legacy_step(self):
+        def fake_call_tool(tool_name, idb_path, **kwargs):
+            action = kwargs.get("action")
+            if tool_name == "search" and action == "vulnerable":
+                return {
+                    "ok": True,
+                    "results": [
+                        {
+                            "addr": "0x401000",
+                            "summary": "possible unsafe copy",
+                            "type": "memory_issue",
+                        }
+                    ],
+                }
+            if tool_name == "trace_analysis" and action == "find_loops":
+                return {"ok": False, "code": MCPError.DB_ERROR, "message": "trace unavailable"}
+            return {"ok": True, "results": []}
+
+        self.server._get_active_survey = lambda: None  # type: ignore[method-assign]
+        self.server.call_tool = fake_call_tool
+        res = self.server._execute_tool(
+            "threat_hunt",
+            {
+                "action": "legacy",
+                "legacy_tool": "trace_analysis",
+                "legacy_action": "find_loops",
+                "idb": "sample.idb",
+                "include_evidence": True,
+            },
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertGreaterEqual(res.get("count", 0), 1)
+        self.assertEqual((res.get("pipeline") or {}).get("steps_failed"), 1)
+        self.assertFalse((res.get("steps") or [{}])[0].get("ok"))
+
     def test_normalize_session_and_code_aliases_accept_noisy_variants(self):
         s = self.server._normalize_tool_call_args(
             "session",

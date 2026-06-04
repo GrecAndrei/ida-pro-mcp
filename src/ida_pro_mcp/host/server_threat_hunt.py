@@ -9,7 +9,7 @@ from .config import (
     _bounded_int,
     _coerce_bool,
 )
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .intelligence_helpers import coerce_int
 from .schemas_data import (
     THREAT_LEGACY_CONDITIONAL_PASSTHROUGH,
@@ -45,7 +45,7 @@ class ServerThreatHuntMixin:
                 "action": action,
                 "error": str(e),
             }
-        if isinstance(result, dict) and result.get("error"):
+        if isinstance(result, dict) and is_error_result(result):
             return {
                 "ok": False,
                 "tool": tool,
@@ -545,6 +545,7 @@ class ServerThreatHuntMixin:
                     "action": step_action,
                     "ok": bool(st.get("ok")),
                     "error": st.get("error"),
+                    "code": st.get("code"),
                 }
             )
             if st.get("ok"):
@@ -563,6 +564,8 @@ class ServerThreatHuntMixin:
         dedup_freq: dict[str, int] = {}
         for f in raw_findings:
             if not isinstance(f, dict):
+                continue
+            if f.get("error"):
                 continue
             addr = str(f.get("addr") or f.get("address") or f.get("ea") or "")
             kind = str(f.get("type") or f.get("kind") or f.get("action") or "")
@@ -595,6 +598,34 @@ class ServerThreatHuntMixin:
         attack_paths = self._synthesize_attack_paths(findings)
         ok_steps = sum(1 for s in steps if s.get("ok"))
         failed_steps = len(steps) - ok_steps
+        if steps and ok_steps == 0 and not findings:
+            first_failed = next((s for s in steps if not s.get("ok")), {}) or {}
+            details = {
+                "action": "legacy" if action == "legacy" else "run",
+                "profile": profile,
+                "pipeline": {
+                    "modules": {
+                        "vuln": include_vuln,
+                        "malware": include_malware,
+                        "tracing": include_tracing,
+                    },
+                    "steps_total": len(steps),
+                    "steps_ok": ok_steps,
+                    "steps_failed": failed_steps,
+                },
+                "steps": steps,
+            }
+            if legacy_meta:
+                details["legacy"] = legacy_meta
+            if include_evidence:
+                details["evidence"] = {
+                    "raw_findings": raw_findings[: min(300, len(raw_findings))]
+                }
+            return make_error(
+                str(first_failed.get("code") or MCPError.RPC_CONNECTION_ERROR),
+                str(first_failed.get("error") or "Threat hunt failed before producing findings"),
+                details=details,
+            )
         out = {
             "ok": True,
             "action": "legacy" if action == "legacy" else "run",
