@@ -2,9 +2,9 @@ import os
 import sys
 import types
 import pytest
+from tests._isolated_repo_loader import load_tool_submodule
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(ROOT, "src"))
 
 # Mock IDA modules in-place to avoid breaking other tests
 for mod_name in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
@@ -95,7 +95,7 @@ def setup_mocks():
 # Imports list for caching stub
 sys.modules["ida_nalt"].get_import_module_qty = lambda: 0
 
-from ida_pro_mcp.ida_mcp.tools.search.refs import search_func_by_sig
+search_func_by_sig = load_tool_submodule("search.refs").search_func_by_sig
 
 def test_func_by_sig_and_logic():
     setup_mocks()
@@ -131,4 +131,3 @@ def test_func_by_sig_and_logic():
     # 4. Test no matching constraint
     res = search_func_by_sig("size:>1000", offset=0, limit=10)
     assert not res.get("matches", "")
-

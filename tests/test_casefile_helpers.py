@@ -1,13 +1,9 @@
-import os
-import sys
+from tests._isolated_repo_loader import load_host_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from ida_pro_mcp.host.casefile_helpers import (
-    build_chain_of_custody,
-    build_risk_summary,
-    to_markdown_casefile,
-)
+_casefile_helpers = load_host_module("casefile_helpers")
+build_chain_of_custody = _casefile_helpers.build_chain_of_custody
+build_risk_summary = _casefile_helpers.build_risk_summary
+to_markdown_casefile = _casefile_helpers.to_markdown_casefile
 
 
 def test_build_risk_summary_scores_debt_and_risk_level():

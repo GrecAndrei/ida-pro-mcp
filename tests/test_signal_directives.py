@@ -1,14 +1,13 @@
 """Unit tests for build_signal_directives in response_enrichment.py."""
-import os
-import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from tests._isolated_repo_loader import load_host_module
+
+build_signal_directives = load_host_module("response_enrichment").build_signal_directives
 
 
 class TestSignalDirectives(unittest.TestCase):
     def _get(self, tool, action, payload, addr=""):
-        from ida_pro_mcp.host.response_enrichment import build_signal_directives
         return build_signal_directives(tool, action, payload, func_addr=addr)
 
     # ── code(decompile) ───────────────────────────────────────────────────────

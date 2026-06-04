@@ -12,6 +12,10 @@ These tests are pure-Python (no IDA required) and verify:
 import ast
 import os
 import re
+import sys
+import types
+
+from tests._isolated_repo_loader import load_tool_submodule
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 SEARCH_DIR = os.path.join(
@@ -20,10 +24,6 @@ SEARCH_DIR = os.path.join(
 COMBINATORS = os.path.join(SEARCH_DIR, "combinators.py")
 INIT = os.path.join(SEARCH_DIR, "__init__.py")
 CORE = os.path.join(SEARCH_DIR, "core.py")
-
-import sys
-import types
-sys.path.insert(0, os.path.join(ROOT, "src"))
 
 # Mock IDA modules in-place to avoid breaking other tests
 for mod_name in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
@@ -70,6 +70,8 @@ sys.modules["sync"].idaread = lambda f: f
 sys.modules["sync"].idawrite = lambda f: f
 if not hasattr(sys.modules["sync"], "IDAError"):
     sys.modules["sync"].IDAError = type("IDAError", (Exception,), {})
+
+cb = load_tool_submodule("search.combinators")
 
 
 def _read(path):
@@ -214,8 +216,6 @@ def test_search_aliases_include_combinator_aliases():
 
 def test_bool_tokenizer_handles_simple_primitive():
     """Test the tokenizer by importing the function with stub IDA modules."""
-    from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
-
     toks = cb._tokenize_bool("api:Crypt* AND name:key")
     assert toks == ["api:Crypt*", "AND", "name:key"], f"got {toks}"
 
@@ -237,8 +237,6 @@ def test_bool_tokenizer_handles_simple_primitive():
 
 def test_bool_parser_precedence():
     """AND binds tighter than OR; NOT applies to the next atom."""
-    from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
-
     # Stub the handlers so we can test parser precedence without IDA.
     s_name, s_api = {1, 2}, {2, 3}
     cb._BOOL_PRIMITIVES["name"] = lambda pat, **kw: {int(p) for p in pat.split(",") if p}
@@ -293,8 +291,6 @@ def test_search_docstring_lists_combinators():
 
 
 def test_bool_new_primitives():
-    from ida_pro_mcp.ida_mcp.tools.search import combinators as cb
-
     class MockFunc:
         def __init__(self, start, end):
             self.start_ea = start

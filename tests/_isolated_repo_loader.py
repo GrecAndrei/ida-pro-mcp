@@ -122,6 +122,16 @@ def _load_module(fullname: str, path: Path):
     return mod
 
 
+def _ensure_nested_namespace(base_name: str, base_path: Path, module_relpath: str) -> None:
+    parts = [part for part in module_relpath.split(".") if part]
+    current_name = base_name
+    current_path = base_path
+    for part in parts[:-1]:
+        current_name = f"{current_name}.{part}"
+        current_path = current_path / part
+        _ensure_namespace_package(current_name, current_path)
+
+
 def load_tool_module(module_basename: str, *, common_overrides: dict | None = None):
     install_common_stub(common_overrides)
     fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
@@ -129,8 +139,22 @@ def load_tool_module(module_basename: str, *, common_overrides: dict | None = No
     return _load_module(fullname, path)
 
 
+def load_tool_submodule(module_relpath: str, *, common_overrides: dict | None = None):
+    install_common_stub(common_overrides)
+    _ensure_nested_namespace("ida_pro_mcp.ida_mcp.tools", TOOLS_ROOT, module_relpath)
+    rel = module_relpath.replace(".", "/")
+    path = TOOLS_ROOT / rel
+    if path.is_dir():
+        path = path / "__init__.py"
+    else:
+        path = path.with_suffix(".py")
+    fullname = f"ida_pro_mcp.ida_mcp.tools.{module_relpath}"
+    return _load_module(fullname, path)
+
+
 def load_ida_module(module_relpath: str):
     _ensure_package_layout()
+    _ensure_nested_namespace("ida_pro_mcp.ida_mcp", IDA_MCP_ROOT, module_relpath)
     rel = module_relpath.replace(".", "/")
     path = IDA_MCP_ROOT / f"{rel}.py"
     fullname = f"ida_pro_mcp.ida_mcp.{module_relpath}"
@@ -146,6 +170,7 @@ def load_support_module(module_basename: str):
 
 def load_host_module(module_relpath: str):
     _ensure_package_layout()
+    _ensure_nested_namespace("ida_pro_mcp.host", HOST_ROOT, module_relpath)
     rel = module_relpath.replace(".", "/")
     path = HOST_ROOT / f"{rel}.py"
     fullname = f"ida_pro_mcp.host.{module_relpath}"
