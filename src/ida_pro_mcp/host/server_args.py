@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from .config import _bounded_int, _coerce_bool
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .schemas import (
     ACTION_ALIASES_BY_TOOL,
     ACTION_PREFIX_RE,
@@ -419,7 +419,7 @@ class ServerArgsMixin:
         return [payload], "payload", "list"
 
     def _cache_next_page(self, tool_name: str, args: dict, payload: Any) -> Any:
-        if not isinstance(payload, dict) or payload.get("error"):
+        if not isinstance(payload, dict) or is_error_result(payload):
             return payload
         if not _coerce_bool(payload.get("truncated"), False):
             return payload

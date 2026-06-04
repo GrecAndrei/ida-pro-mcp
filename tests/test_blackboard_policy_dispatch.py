@@ -273,6 +273,29 @@ def test_wrapper_actions_propagate_ok_false_child_failures(monkeypatch):
     assert res.get("code") == "NOT_FOUND"
 
 
+def test_cache_next_page_skips_ok_false_truncated_payloads():
+    srv = _DummyDispatchServer()
+    srv._next_cache = {}
+    srv._next_cache_ttl_seconds = 60.0
+    srv._prune_next_cache = types.MethodType(ServerArgsMixin._prune_next_cache, srv)  # type: ignore[method-assign]
+    srv._cache_next_page = types.MethodType(ServerArgsMixin._cache_next_page, srv)  # type: ignore[method-assign]
+
+    payload = {
+        "ok": False,
+        "code": "NOT_FOUND",
+        "message": "missing page",
+        "truncated": True,
+        "offset": 0,
+        "count": 10,
+        "total": 25,
+    }
+    result = srv._cache_next_page("funcs", {"action": "list", "offset": 0}, payload)
+
+    assert result == payload
+    assert "next_token" not in result
+    assert srv._next_cache == {}
+
+
 def test_dispatch_strict_policy_blocks_non_blackboard_tool_when_stale():
     srv = _DummyDispatchServer()
     set_policy = srv._handle_blackboard(
