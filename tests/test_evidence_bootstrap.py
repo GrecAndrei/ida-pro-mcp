@@ -321,6 +321,88 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         self.assertTrue(out.get("ok"))
         self.assertIn("embedding_focus", out)
 
+    def test_bootstrap_readiness_gate_propagates_ok_false_nested_results(self):
+        original = self.server.session_mgr.bootstrap_summary
+        self.server.session_mgr.bootstrap_summary = lambda _sid: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "summary unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {"action": "bootstrap_readiness_gate", "session_id": self.sid},
+            )
+        finally:
+            self.server.session_mgr.bootstrap_summary = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_bootstrap_record_readiness_propagates_ok_false_gate(self):
+        original = self.server.session_mgr.bootstrap_readiness_gate
+        self.server.session_mgr.bootstrap_readiness_gate = lambda _sid, **_kwargs: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "gate unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {"action": "bootstrap_record_readiness", "session_id": self.sid, "tag": "smoke"},
+            )
+        finally:
+            self.server.session_mgr.bootstrap_readiness_gate = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_bootstrap_readiness_regression_guard_propagates_ok_false_trend(self):
+        original = self.server.session_mgr.bootstrap_readiness_trend
+        self.server.session_mgr.bootstrap_readiness_trend = lambda _sid, window=50: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "trend unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {
+                    "action": "bootstrap_readiness_regression_guard",
+                    "session_id": self.sid,
+                    "window": 2,
+                    "auto_snapshot": False,
+                },
+            )
+        finally:
+            self.server.session_mgr.bootstrap_readiness_trend = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_bootstrap_finalize_report_propagates_ok_false_nested_results(self):
+        original = self.server.session_mgr.bootstrap_mitigation_effectiveness
+        self.server.session_mgr.bootstrap_mitigation_effectiveness = lambda _sid, window=50: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "effectiveness unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "session",
+                {
+                    "action": "bootstrap_finalize_report",
+                    "session_id": self.sid,
+                    "trend_window": 2,
+                    "effectiveness_window": 10,
+                },
+            )
+        finally:
+            self.server.session_mgr.bootstrap_mitigation_effectiveness = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
     def test_dispute_lifecycle(self):
         self.server._execute_tool("session", {"action": "bootstrap_init", "session_id": self.sid})
         opened = self.server._execute_tool(

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .config import log_rpc
 from .session_skills_bootstrap import SessionBootstrapMixin
 
@@ -203,16 +203,16 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
 
             plan = self.bootstrap_plan_status(sid)
-            if plan.get("error"):
+            if is_error_result(plan):
                 return plan
             summary = self.bootstrap_summary(sid)
-            if summary.get("error"):
+            if is_error_result(summary):
                 return summary
             calib = self.bootstrap_calibration_report(sid, min_bin_n=1)
-            if calib.get("error"):
+            if is_error_result(calib):
                 return calib
             eff = self.bootstrap_mitigation_effectiveness(sid, window=50)
-            if eff.get("error"):
+            if is_error_result(eff):
                 return eff
 
             runtime = plan.get("runtime") or {}
@@ -260,7 +260,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         """Record a readiness-gate snapshot into rolling history."""
         with self._lock:
             gate = self.bootstrap_readiness_gate(sid)
-            if gate.get("error"):
+            if is_error_result(gate):
                 return gate
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
@@ -361,7 +361,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         """Guardrail action when readiness trend regresses."""
         with self._lock:
             trend = self.bootstrap_readiness_trend(sid, window=window)
-            if trend.get("error"):
+            if is_error_result(trend):
                 return trend
             if not trend.get("enough_data"):
                 return {"ok": True, "triggered": False, "reason": "insufficient_data", "trend": trend}
@@ -409,19 +409,19 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
 
             plan = self.bootstrap_plan_status(sid)
-            if plan.get("error"):
+            if is_error_result(plan):
                 return plan
             gate = self.bootstrap_readiness_gate(sid)
-            if gate.get("error"):
+            if is_error_result(gate):
                 return gate
             trend = self.bootstrap_readiness_trend(sid, window=trend_window)
-            if trend.get("error"):
+            if is_error_result(trend):
                 return trend
             eff = self.bootstrap_mitigation_effectiveness(sid, window=effectiveness_window)
-            if eff.get("error"):
+            if is_error_result(eff):
                 return eff
             summary = self.bootstrap_summary(sid)
-            if summary.get("error"):
+            if is_error_result(summary):
                 return summary
 
             release_ready = bool(gate.get("readiness")) and bool(plan.get("overall", {}).get("coverage", 0.0) >= 100.0)
@@ -994,4 +994,3 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         # Only keep functions appearing in multiple sessions
         cross = {k: v for k, v in shared_funcs.items() if len(set(v)) > 1}
         return {"ok": True, "shared_functions": list(cross.keys()), "details": cross}
-
