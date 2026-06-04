@@ -6,7 +6,7 @@ import os
 from collections import Counter
 
 from .config import _bounded_int
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .schemas import TOOL_ACTIONS
 
 
@@ -142,7 +142,7 @@ class ServerPredictorMixin:
         context = str(args.get("context") or "").strip()
 
         activity = self.session_mgr.get_activity_log(str(sid), limit=recent_n)
-        if isinstance(activity, dict) and activity.get("error"):
+        if is_error_result(activity):
             return activity
         log = list((activity or {}).get("log") or [])
 
@@ -198,7 +198,9 @@ class ServerPredictorMixin:
             strategy_rows = []
             strategy_confidence = 0.5
             bootstrap_prior = 0.5
-            if isinstance(strategy, dict) and not strategy.get("error"):
+            if is_error_result(strategy):
+                return strategy
+            if isinstance(strategy, dict):
                 bootstrap_prior = float(strategy.get("bootstrap_prior", 0.5))
                 for s in (strategy.get("suggestions") or [])[:limit]:
                     score = float(s.get("score", s.get("q_value", 0.0)))
@@ -253,7 +255,7 @@ class ServerPredictorMixin:
                     "context": context,
                 }
             )
-            if not isinstance(tool_res, dict) or tool_res.get("error"):
+            if not isinstance(tool_res, dict) or is_error_result(tool_res):
                 return tool_res
             focus_res = self._handle_predictor(
                 {
@@ -264,7 +266,7 @@ class ServerPredictorMixin:
                     "context": context,
                 }
             )
-            if not isinstance(focus_res, dict) or focus_res.get("error"):
+            if not isinstance(focus_res, dict) or is_error_result(focus_res):
                 return focus_res
             addr_res = self._handle_predictor(
                 {
@@ -275,7 +277,7 @@ class ServerPredictorMixin:
                     "context": context,
                 }
             )
-            if not isinstance(addr_res, dict) or addr_res.get("error"):
+            if not isinstance(addr_res, dict) or is_error_result(addr_res):
                 return addr_res
             stall_res = self._handle_predictor(
                 {
@@ -285,7 +287,7 @@ class ServerPredictorMixin:
                     "context": context,
                 }
             )
-            if not isinstance(stall_res, dict) or stall_res.get("error"):
+            if not isinstance(stall_res, dict) or is_error_result(stall_res):
                 return stall_res
 
             return {
@@ -325,7 +327,9 @@ class ServerPredictorMixin:
             dead_end = self.session_mgr._detect_dead_end(log)
             phase = self.session_mgr.get_phase(str(sid))
             phase_tools = []
-            if isinstance(phase, dict) and not phase.get("error"):
+            if is_error_result(phase):
+                return phase
+            if isinstance(phase, dict):
                 phase_tools = list(phase.get("suggested_tools") or [])
 
             pivots = []
@@ -590,7 +594,9 @@ class ServerPredictorMixin:
                     pass
             try:
                 strategy = self.session_mgr.suggest_strategy(str(sid), context=f"{target_tool}:{target_action}")
-                if isinstance(strategy, dict) and not strategy.get("error"):
+                if is_error_result(strategy):
+                    return strategy
+                if isinstance(strategy, dict):
                     suggs = strategy.get("suggestions") or []
                     if suggs:
                         weights["strategy_weight"] = max(
@@ -658,4 +664,3 @@ class ServerPredictorMixin:
             f"Unsupported predictor action: '{action}'",
             hint=f"Valid predictor actions: {', '.join(TOOL_ACTIONS.get('predictor', []))}",
         )
-

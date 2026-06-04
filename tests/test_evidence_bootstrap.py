@@ -214,6 +214,100 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
         self.assertIn("address_suggestions", bundle)
         self.assertIn("stall_risk", bundle)
 
+    def test_predictor_suggest_next_tool_propagates_activity_errors(self):
+        original = self.server.session_mgr.get_activity_log
+        self.server.session_mgr.get_activity_log = lambda _sid, limit=0: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "activity unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "predictor",
+                {
+                    "action": "suggest_next_tool",
+                    "session_id": self.sid,
+                    "context": "network beacon c2",
+                    "limit": 3,
+                },
+            )
+        finally:
+            self.server.session_mgr.get_activity_log = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_predictor_recommend_bundle_propagates_ok_false_subcalls(self):
+        original = self.server._handle_predictor
+
+        def _wrapped(args):
+            if args.get("action") == "suggest_focus":
+                return {"ok": False, "code": "DB_ERROR", "message": "focus unavailable"}
+            return original(args)
+
+        self.server._handle_predictor = _wrapped  # type: ignore[method-assign]
+        try:
+            out = self.server._execute_tool(
+                "predictor",
+                {
+                    "action": "recommend_bundle",
+                    "session_id": self.sid,
+                    "context": "beacon triage",
+                    "limit": 3,
+                },
+            )
+        finally:
+            self.server._handle_predictor = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_predictor_suggest_focus_propagates_phase_errors(self):
+        original = self.server.session_mgr.get_phase
+        self.server.session_mgr.get_phase = lambda _sid: {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "phase unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "predictor",
+                {
+                    "action": "suggest_focus",
+                    "session_id": self.sid,
+                    "context": "auth parser crypto",
+                    "limit": 3,
+                },
+            )
+        finally:
+            self.server.session_mgr.get_phase = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
+    def test_predictor_explain_decision_propagates_strategy_errors(self):
+        original = self.server.session_mgr.suggest_strategy
+        self.server.session_mgr.suggest_strategy = lambda _sid, context="": {  # type: ignore[method-assign]
+            "ok": False,
+            "code": "DB_ERROR",
+            "message": "strategy unavailable",
+        }
+        try:
+            out = self.server._execute_tool(
+                "predictor",
+                {
+                    "action": "explain_decision",
+                    "session_id": self.sid,
+                    "target_tool": "search",
+                    "target_action": "find",
+                },
+            )
+        finally:
+            self.server.session_mgr.suggest_strategy = original  # type: ignore[method-assign]
+
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "DB_ERROR")
+
     def test_predictor_suggest_focus_exposes_embedding_focus_field(self):
         out = self.server._execute_tool(
             "predictor",
