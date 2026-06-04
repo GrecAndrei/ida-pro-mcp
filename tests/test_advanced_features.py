@@ -744,6 +744,32 @@ def test_survey_system_and_differential_decomp(tmp_path):
                 assert row[0] == 0x1000
                 changes = json.loads(row[1])
                 assert changes["renames"] == {"v1": "data_ptr"}
+
+            missing_submit = survey(action="submit", addr="0x1000", renames={"v1": "late_name"})
+            assert missing_submit["ok"] is False
+            assert missing_submit["code"] in {"NOT_FOUND", "INVALID_ARGS"}
+
+        # Re-create dormant survey to ensure non-active transitions are rejected.
+        store.save_survey(
+            addr="0x4000",
+            status="DORMANT",
+            variables=["v9"],
+            dependencies=["0x5000"],
+            deferred_until=[],
+            reason="Dormant test",
+        )
+        with mock_ida_context():
+            sys.modules["idc"].get_idb_path.return_value = ""
+            survey_mod = load_tool_module("survey")
+            survey = survey_mod.survey
+
+            dormant_delay = survey(action="delay", addr="0x4000", delay_until_any=["0x6000"], reason="bad state")
+            assert dormant_delay["ok"] is False
+            assert dormant_delay["code"] == "INVALID_ARGS"
+
+            dormant_submit = survey(action="submit", addr="0x4000", renames={"v9": "real_name"})
+            assert dormant_submit["ok"] is False
+            assert dormant_submit["code"] == "INVALID_ARGS"
                 
     # Test Ghidra simulation logic in code.py
     code_mod = load_tool_module("code")

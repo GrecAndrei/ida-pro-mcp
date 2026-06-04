@@ -14,6 +14,30 @@ except ImportError:
     from host.survey_store import SurveyStore  # type: ignore[import-not-found]
 
 
+def _require_active_survey(store: SurveyStore, hex_addr: str, *, action: str) -> dict | None:
+    current = store.get_survey(hex_addr)
+    if not current:
+        not_found_code = getattr(MCPError, "NOT_FOUND", MCPError.INVALID_ARGS)
+        return make_error(
+            not_found_code,
+            f"No survey found for address {hex_addr}",
+            hint=f"Use survey(action='list') to inspect the scoped backlog before {action}.",
+        )
+    if current.get("status") != "ACTIVE":
+        return make_error(
+            MCPError.INVALID_ARGS,
+            f"Survey for {hex_addr} is {current.get('status', 'unknown')}, not ACTIVE",
+            hint=f"Only ACTIVE surveys can be {action}. Visit dependencies or inspect survey(action='status').",
+            details={
+                "addr": hex_addr,
+                "status": current.get("status"),
+                "dependencies": current.get("dependencies", []),
+                "deferred_until": current.get("deferred_until", []),
+            },
+        )
+    return current
+
+
 @tool
 @idawrite
 def survey(
@@ -70,9 +94,9 @@ def survey(
                 return err
             
             hex_addr = hex(ea)
-            curr = store.get_survey(hex_addr)
-            if not curr:
-                return make_error(MCPError.INVALID_ARGS, f"No survey found for address {hex_addr}")
+            curr = _require_active_survey(store, hex_addr, action="delayed")
+            if isinstance(curr, dict) and curr.get("ok") is False:
+                return curr
             
             # Detect circular dependencies
             clean_deferred = []
@@ -110,9 +134,9 @@ def survey(
                 return err
             
             hex_addr = hex(ea)
-            curr = store.get_survey(hex_addr)
-            if not curr:
-                curr = {"variables": []}
+            curr = _require_active_survey(store, hex_addr, action="submitted")
+            if isinstance(curr, dict) and curr.get("ok") is False:
+                return curr
             
             # 1. Apply Renames to IDA Pro variables
             applied_renames = {}
