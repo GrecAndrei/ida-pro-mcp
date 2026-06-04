@@ -2143,6 +2143,23 @@ class TinyEmulator:
                 val -= tok_val
         return val & 0xffffffffffffffff
 
+    def get_op_width(self, insn, op_idx):
+        import ida_ua
+        import idc
+        op = insn.ops[op_idx]
+        if op.type == ida_ua.o_reg:
+            reg_name = idc.print_operand(insn.ea, op_idx).lower().strip()
+            if reg_name in ('rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15'):
+                return 64
+            if reg_name in ('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'r8d', 'r9d', 'r10d', 'r11d', 'r12d', 'r13d', 'r14d', 'r15d'):
+                return 32
+            if reg_name in ('ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp'):
+                return 16
+            if reg_name in ('al', 'bl', 'cl', 'dl', 'ah', 'bh', 'ch', 'dh', 'r8b', 'r9b', 'r10b', 'r11b', 'r12b', 'r13b', 'r14b', 'r15b'):
+                return 8
+        size = self.dtype_size(op.dtype)
+        return size * 8
+
     def step(self):
         import ida_ua
         import idc
@@ -2341,6 +2358,106 @@ class TinyEmulator:
                 self.set_reg_taint(op0_str, t_res)
             self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
             self.flags_tainted = t_res
+
+        elif mnem in ("rol", "ror"):
+            op0_str = idc.print_operand(self.ip, 0)
+            val0 = self.parse_op(insn, 0)
+            val1 = self.parse_op(insn, 1)
+            width = self.get_op_width(insn, 0)
+            mask = (1 << width) - 1
+            val0 = val0 & mask
+            
+            shift = val1 % width
+            if shift == 0:
+                res = val0
+            else:
+                if mnem == "rol":
+                    res = ((val0 << shift) | (val0 >> (width - shift))) & mask
+                else:
+                    res = ((val0 >> shift) | (val0 << (width - shift))) & mask
+            
+            t0 = self.parse_op_taint(insn, 0)
+            t1 = self.parse_op_taint(insn, 1)
+            t_res = t0 or t1
+            
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                size = width // 8
+                self.write_mem(addr, res, size)
+                self.set_mem_taint(addr, size, t_res)
+            else:
+                self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
+
+        elif mnem in ("not", "neg"):
+            op0_str = idc.print_operand(self.ip, 0)
+            val0 = self.parse_op(insn, 0)
+            width = self.get_op_width(insn, 0)
+            mask = (1 << width) - 1
+            val0 = val0 & mask
+            
+            t_res = self.parse_op_taint(insn, 0)
+            
+            if mnem == "not":
+                res = (~val0) & mask
+            else:  # neg
+                res = (-val0) & mask
+                self.regs['zf'] = 1 if res == 0 else 0
+                self.regs['sf'] = 1 if (res & (1 << (width - 1))) != 0 else 0
+                self.flags_tainted = t_res
+                
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                size = width // 8
+                self.write_mem(addr, res, size)
+                self.set_mem_taint(addr, size, t_res)
+            else:
+                self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
+
+        elif mnem in ("cmovz", "cmove", "cmovnz", "cmovne"):
+            cond = False
+            if mnem in ("cmovz", "cmove"):
+                cond = (self.regs['zf'] == 1)
+            elif mnem in ("cmovnz", "cmovne"):
+                cond = (self.regs['zf'] == 0)
+                
+            if cond:
+                op0_str = idc.print_operand(self.ip, 0)
+                val1 = self.parse_op(insn, 1)
+                t1 = self.parse_op_taint(insn, 1)
+                t_res = t1 or self.flags_tainted
+                
+                if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                    addr = self.parse_op(insn, 0)
+                    width = self.get_op_width(insn, 0)
+                    size = width // 8
+                    self.write_mem(addr, val1, size)
+                    self.set_mem_taint(addr, size, t_res)
+                else:
+                    self.set_reg(op0_str, val1)
+                    self.set_reg_taint(op0_str, t_res)
+                    if t_res:
+                        self.taint_log.append((self.ip, f"Taint conditionally moved to register {op0_str}"))
+
+        elif mnem in ("setz", "sete", "setnz", "setne"):
+            cond = False
+            if mnem in ("setz", "sete"):
+                cond = (self.regs['zf'] == 1)
+            elif mnem in ("setnz", "setne"):
+                cond = (self.regs['zf'] == 0)
+                
+            res = 1 if cond else 0
+            t_res = self.flags_tainted
+            
+            op0_str = idc.print_operand(self.ip, 0)
+            if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
+                addr = self.parse_op(insn, 0)
+                self.write_mem(addr, res, 1)
+                self.set_mem_taint(addr, 1, t_res)
+            else:
+                self.set_reg(op0_str, res)
+                self.set_reg_taint(op0_str, t_res)
 
         elif mnem in ("imul", "mul"):
             op0_str = idc.print_operand(self.ip, 0)
