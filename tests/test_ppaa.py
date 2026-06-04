@@ -3,8 +3,12 @@ import sqlite3
 import unittest
 from unittest.mock import MagicMock, patch
 
-from src.ida_pro_mcp.host.intelligence.ppaa import PPAAEngine
-from src.ida_pro_mcp.host.intelligence.structural_index import get_db_path
+from tests._isolated_repo_loader import load_host_module
+
+_ppaa_mod = load_host_module("intelligence.ppaa")
+_structural_index_mod = load_host_module("intelligence.structural_index")
+PPAAEngine = _ppaa_mod.PPAAEngine
+get_db_path = _structural_index_mod.get_db_path
 
 class TestPPAAEngine(unittest.TestCase):
     def setUp(self):

@@ -13,30 +13,10 @@ import json
 import struct
 import tempfile
 import math
+import pytest
+from tests._isolated_repo_loader import ROOT, load_support_module, load_tool_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-# ─── Blackboard tests (no IDA needed) ────────────────────────────────────────
-
-import importlib.util
-
-def _load_blackboard():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "ida_mcp", "tools", "blackboard.py")
-    spec = importlib.util.spec_from_file_location("_bb_test", path)
-    mod = importlib.util.module_from_spec(spec)
-    # Stub out IDA imports
-    import types
-    for m in ["idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
-              "ida_segment", "ida_name", "ida_typeinf", "ida_nalt",
-              "ida_hexrays", "ida_frame", "ida_struct", "ida_lines"]:
-        sys.modules.setdefault(m, types.ModuleType(m))
-    sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_bb_mod = _load_blackboard()
+_bb_mod = load_tool_module("blackboard")
 BlackboardStore = _bb_mod.BlackboardStore
 auto_capture_memory = _bb_mod.auto_capture_memory
 auto_capture_calc = _bb_mod.auto_capture_calc
@@ -289,6 +269,7 @@ def test_auto_capture_dedup():
 
 def _load_agent_kmeans():
     """Load just the _kmeans_numpy function from agent.py without executing IDA imports."""
+    pytest.importorskip("numpy")
     # We only need _kmeans_numpy which has no IDA dependencies.
     # Extract it by compiling just the function definition.
     import ast, types as _types
@@ -361,16 +342,7 @@ def test_kmeans_deterministic():
 
 # ─── Query lang AND-splitting fix ─────────────────────────────────────────────
 
-def _load_query_lang():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "ida_mcp", "support", "query_lang.py")
-    spec = importlib.util.spec_from_file_location("_ql_test", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_ql_mod = _load_query_lang()
+_ql_mod = load_support_module("query_lang")
 QueryParser = _ql_mod.QueryParser
 
 
@@ -566,7 +538,7 @@ def test_build_decompiler_dataflow_assignment_with_comparison():
     
     try:
         # Load code.py
-        path = os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "code.py")
+        path = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "code.py"
         spec = importlib.util.spec_from_file_location("_code_test", path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

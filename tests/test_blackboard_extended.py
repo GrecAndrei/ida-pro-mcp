@@ -11,28 +11,10 @@ import sys
 import json
 import struct
 import tempfile
-import importlib.util
-import types
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from tests._isolated_repo_loader import load_tool_module
 
-# ─── Load blackboard module ───────────────────────────────────────────────────
-
-def _load_bb():
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
-                        "ida_pro_mcp", "ida_mcp", "tools", "blackboard.py")
-    spec = importlib.util.spec_from_file_location("_bb_ext_test", path)
-    mod = importlib.util.module_from_spec(spec)
-    for m in ["idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
-              "ida_segment", "ida_name", "ida_typeinf", "ida_nalt",
-              "ida_hexrays", "ida_frame", "ida_struct", "ida_lines"]:
-        sys.modules.setdefault(m, types.ModuleType(m))
-    sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_bb = _load_bb()
+_bb = load_tool_module("blackboard")
 BlackboardStore = _bb.BlackboardStore
 _BackgroundCrawler = _bb._BackgroundCrawler
 

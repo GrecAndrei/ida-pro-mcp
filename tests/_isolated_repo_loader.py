@@ -13,6 +13,7 @@ SRC_ROOT = ROOT / "src"
 PACKAGE_ROOT = SRC_ROOT / "ida_pro_mcp"
 IDA_MCP_ROOT = PACKAGE_ROOT / "ida_mcp"
 TOOLS_ROOT = IDA_MCP_ROOT / "tools"
+SUPPORT_ROOT = IDA_MCP_ROOT / "support"
 HOST_ROOT = PACKAGE_ROOT / "host"
 HOST_INTELLIGENCE_ROOT = HOST_ROOT / "intelligence"
 
@@ -36,6 +37,7 @@ def _ensure_package_layout() -> None:
     _ensure_namespace_package("ida_pro_mcp", PACKAGE_ROOT, attrs={"__version__": "test"})
     _ensure_namespace_package("ida_pro_mcp.ida_mcp", IDA_MCP_ROOT)
     _ensure_namespace_package("ida_pro_mcp.ida_mcp.tools", TOOLS_ROOT)
+    _ensure_namespace_package("ida_pro_mcp.ida_mcp.support", SUPPORT_ROOT)
     _ensure_namespace_package("ida_pro_mcp.host", HOST_ROOT)
     _ensure_namespace_package("ida_pro_mcp.host.intelligence", HOST_INTELLIGENCE_ROOT)
 
@@ -114,6 +116,18 @@ def load_tool_module(module_basename: str, *, common_overrides: dict | None = No
     install_common_stub(common_overrides)
     fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
     path = TOOLS_ROOT / f"{module_basename}.py"
+    spec = importlib.util.spec_from_file_location(fullname, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[fullname] = mod
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def load_support_module(module_basename: str):
+    _ensure_package_layout()
+    fullname = f"ida_pro_mcp.ida_mcp.support.{module_basename}"
+    path = SUPPORT_ROOT / f"{module_basename}.py"
     spec = importlib.util.spec_from_file_location(fullname, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[fullname] = mod
