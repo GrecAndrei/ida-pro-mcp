@@ -19,6 +19,7 @@ Deterministic and ML-powered reverse engineering for IDA Pro via the Model Conte
 - [Bootstrap Control Loop](#bootstrap-control-loop)
 - [Production Hardening](#production-hardening)
 - [Auto-Blackboard and Context Injection](#auto-blackboard-and-context-injection)
+- [Predictive Prefetching & Speculative Emulation](#predictive-prefetching--speculative-emulation)
 - [Session Management](#session-management)
 - [Guardrails](#guardrails)
 - [Architecture Graphs](#architecture-graphs)
@@ -495,6 +496,28 @@ Before every tool call, the intelligence layer injects relevance-ranked context 
 3. Returns top-K entries ranked by relevance, weighted by MemRL Q-values
 
 This gives the LLM a persistent, auto-maintained working memory that survives context window resets.
+
+## Predictive Prefetching & Speculative Emulation
+
+To eliminate the overhead of repetitive analysis requests and speed up context grounding, `ida-pro-mcp` features a predictive prefetching pipeline and a symbolic speculative emulator.
+
+### Predictive Prefetching Suite
+
+The prefetching pipeline resolves deep, high-fidelity context ahead of time when decompiling or inspecting a function. This is injected as the `prefetch` field under `_nudge` in response payloads. 
+
+Key strategies include:
+- **AST-Based Structure Resolution**: Replaces text-heuristic offset parsing with a compiler-level Hex-Rays AST structure visitor. It walks member accesses (`cot_memptr`, `cot_memref`) and dynamically maps member offsets to structural types and names from the local structure database and the Type Information Library (TIL).
+- **Structure Definitions Extraction**: Resolves complete struct/class declarations (size, member names, offsets, types) of all structures referenced in the decompiled function, preventing roundtrips to fetch type schemas.
+- **Global VTable Reconstruct & Demangling**: Scans and parses GCC and MSVC virtual tables (`vtable for Class`, `_ZTV*`) to resolve demangled method pointers and layouts.
+- **Inline Small Callees**: Automatically decompiles and inlines small helper callee functions (size $\le 256$ bytes, pseudocode $< 25$ lines, or disassembly $< 15$ instructions) directly inside the prefetch nudge context.
+- **Call Graph Neighborhood & Demangling**: Extracts callers, callees, and demangled function signatures globally.
+
+### Speculative Symbolic Emulation
+
+`TinyEmulator` is a lightweight, zero-dependency symbolic CPU emulator running directly inside the IDA Python process. When a function is targeted, `TinyEmulator` performs symbolic path exploration:
+- **Argument Pointer Tracking**: Auto-maps registers (`rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9`) to distinct virtual dummy pointer regions (`0x10000000` - `0x60000000`) to trace struct member read/write offsets on arguments.
+- **Speculative Path Exploration**: Speculatively executes instruction paths (up to a configurable depth and path count limit), propagating taint state across registers and memory.
+- **Context Mining**: Captures loops, stack strings, opaque predicates (branches that are always taken or always fall through), virtual calls (e.g. C++ dynamic dispatch), and dynamic pointer dereferences.
 
 ## Session Management
 
