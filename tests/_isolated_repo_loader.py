@@ -152,6 +152,19 @@ def load_tool_submodule(module_relpath: str, *, common_overrides: dict | None = 
     return _load_module(fullname, path)
 
 
+def load_package_module(module_relpath: str):
+    _ensure_package_layout()
+    _ensure_nested_namespace("ida_pro_mcp", PACKAGE_ROOT, module_relpath)
+    rel = module_relpath.replace(".", "/")
+    path = PACKAGE_ROOT / rel
+    if path.is_dir():
+        path = path / "__init__.py"
+    else:
+        path = path.with_suffix(".py")
+    fullname = f"ida_pro_mcp.{module_relpath}"
+    return _load_module(fullname, path)
+
+
 def load_ida_module(module_relpath: str):
     _ensure_package_layout()
     _ensure_nested_namespace("ida_pro_mcp.ida_mcp", IDA_MCP_ROOT, module_relpath)
@@ -181,3 +194,9 @@ def load_test_module(module_relpath: str, *, module_name: str | None = None):
     relpath = Path(module_relpath)
     fullname = module_name or f"_tests_support_{relpath.stem}"
     return _load_module(fullname, TESTS_ROOT / relpath)
+
+
+def load_repo_module(module_filename: str, *, module_name: str | None = None):
+    path = ROOT / module_filename
+    fullname = module_name or Path(module_filename).stem
+    return _load_module(fullname, path)

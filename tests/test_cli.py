@@ -2,10 +2,10 @@ import os
 import sys
 import json
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from tests._isolated_repo_loader import load_package_module
 
-import ida_pro_mcp.cli as cli_mod
-from ida_pro_mcp.cli import _normalize_tool_result
+cli_mod = load_package_module("cli")
+_normalize_tool_result = cli_mod._normalize_tool_result
 
 
 def test_normalize_tool_result_single_json_text_block():
@@ -100,7 +100,7 @@ def test_cli_capsule_passthrough(monkeypatch):
         captured["argv"] = list(argv)
         return 0
 
-    import ida_pro_mcp.capsule.cli as cap_cli
+    cap_cli = load_package_module("capsule.cli")
 
     monkeypatch.setattr(cap_cli, "main", _fake_capsule_main)
     monkeypatch.setattr(sys, "argv", [

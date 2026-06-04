@@ -5,12 +5,6 @@ Covers thread safety, atomic writes, defensive copies, path validation,
 and all 31 new SessionManager methods + their _execute_tool handlers.
 """
 import os
-import sys
-
-# Add project dirs to path BEFORE importing project modules
-_project_root = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, _project_root)
-sys.path.insert(0, os.path.join(_project_root, "src"))
 
 import json
 import tempfile
@@ -20,17 +14,18 @@ import copy
 import unittest
 import threading
 from unittest.mock import patch
-import ida_pro_mcp.host.session
-import ida_mcp_stdio
+from tests._isolated_repo_loader import load_host_module, load_package_module, load_repo_module
 
-from ida_mcp_stdio import (
-    SessionManager,
-    Session,
-    IDAMCPServer,
-    make_error,
-    MCPError,
-    validate_path,
-)
+session_mod = load_host_module("session")
+load_package_module("host")
+ida_mcp_stdio = load_repo_module("ida_mcp_stdio.py", module_name="ida_mcp_stdio")
+
+SessionManager = ida_mcp_stdio.SessionManager
+Session = ida_mcp_stdio.Session
+IDAMCPServer = ida_mcp_stdio.IDAMCPServer
+make_error = ida_mcp_stdio.make_error
+MCPError = ida_mcp_stdio.MCPError
+validate_path = ida_mcp_stdio.validate_path
 
 
 class TestValidatePathSecurity(unittest.TestCase):
@@ -1033,7 +1028,7 @@ class TestDuplicateSIDCollision(unittest.TestCase):
                 self.hex = hex_value
 
         with patch.object(
-            ida_pro_mcp.host.session.uuid,
+            session_mod.uuid,
             "uuid4",
             side_effect=[_FakeUUID(existing_prefix), _FakeUUID(fresh_prefix)],
         ):

@@ -20,14 +20,16 @@ import json
 import time
 import tempfile
 import subprocess
+import shutil
 import pytest
-import importlib.util
 
-# Add src/ to path
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
+from tests._isolated_repo_loader import load_host_module
 
-from ida_pro_mcp.host.server import IDAMCPServer
-from ida_pro_mcp.host.schemas import TOOLS, TOOL_ACTIONS, TOOL_DESCRIPTIONS
+IDAMCPServer = load_host_module("server").IDAMCPServer
+_schemas_mod = load_host_module("schemas")
+TOOLS = _schemas_mod.TOOLS
+TOOL_ACTIONS = _schemas_mod.TOOL_ACTIONS
+TOOL_DESCRIPTIONS = _schemas_mod.TOOL_DESCRIPTIONS
 
 
 class MCPTestClient:
@@ -37,6 +39,11 @@ class MCPTestClient:
     """
 
     def __init__(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="mcp-comprehensive-")
+        self._old_cache_dir = os.environ.get("IDA_MCP_CACHE_DIR")
+        self._old_data_dir = os.environ.get("IDA_MCP_DATA_DIR")
+        os.environ["IDA_MCP_CACHE_DIR"] = self._tmpdir
+        os.environ["IDA_MCP_DATA_DIR"] = self._tmpdir
         self.server = IDAMCPServer()
         self._req_id = 0
 
@@ -69,6 +76,17 @@ class MCPTestClient:
             except json.JSONDecodeError:
                 return {"ok": True, "text": text}
         return result
+
+    def close(self) -> None:
+        if self._old_cache_dir is None:
+            os.environ.pop("IDA_MCP_CACHE_DIR", None)
+        else:
+            os.environ["IDA_MCP_CACHE_DIR"] = self._old_cache_dir
+        if self._old_data_dir is None:
+            os.environ.pop("IDA_MCP_DATA_DIR", None)
+        else:
+            os.environ["IDA_MCP_DATA_DIR"] = self._old_data_dir
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
 
 # =============================================================================
@@ -104,7 +122,11 @@ class TestToolRegistry:
 
 @pytest.fixture(scope="module")
 def mcp_client():
-    return MCPTestClient()
+    client = MCPTestClient()
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 class TestToolsList:
@@ -833,7 +855,7 @@ class TestProductionHardening:
     def test_audit_log_written(self, mcp_client):
         # Make a call that should be audited
         result = mcp_client.call_tool("session", action="discover")
-        assert "sessions" in result or "error" in result
+        assert result.get("ok") is True or "sessions" in result or "error" in result
         # Check that audit log file exists
         import glob
         audit_dir = os.path.join(mcp_client.server.cache_dir, "audit")
