@@ -15,34 +15,12 @@ to LLM clients.
 
 from __future__ import annotations
 
-import importlib.util
 import os
-import sys
 
 import pytest
+from tests._isolated_repo_loader import load_host_module, load_tool_module
 
-# Load bridge_search.py from tools/ (it is the one surviving tool, no host
-# equivalent). We use spec_from_file_location to bypass the package's
-# `__init__.py` which pulls in zeromcp.
-_base = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "src",
-    "ida_pro_mcp",
-    "ida_mcp",
-    "tools",
-)
-
-
-def _load_bridge_search():
-    path = os.path.join(_base, "bridge_search.py")
-    spec = importlib.util.spec_from_file_location("bridge_search", path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["bridge_search"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_bridge_search = _load_bridge_search()
+_bridge_search = load_tool_module("bridge_search")
 bridge_search = _bridge_search.bridge_search
 
 
@@ -50,17 +28,16 @@ bridge_search = _bridge_search.bridge_search
 # PreferenceMemoryBank — the canonical MemRL backend
 # ---------------------------------------------------------------------------
 
-from ida_pro_mcp.host.intelligence_preference_store import (
-    DEFAULT_ALPHA,
-    PreferenceMemoryBank,
-    Q_CEILING,
-    Q_FLOOR,
-    REWARD_ACCEPT,
-    REWARD_PARTIAL,
-    REWARD_REJECT,
-    REWARD_DANGEROUS,
-    REWARD_NEUTRAL,
-)
+_preference_store_mod = load_host_module("intelligence_preference_store")
+DEFAULT_ALPHA = _preference_store_mod.DEFAULT_ALPHA
+PreferenceMemoryBank = _preference_store_mod.PreferenceMemoryBank
+Q_CEILING = _preference_store_mod.Q_CEILING
+Q_FLOOR = _preference_store_mod.Q_FLOOR
+REWARD_ACCEPT = _preference_store_mod.REWARD_ACCEPT
+REWARD_PARTIAL = _preference_store_mod.REWARD_PARTIAL
+REWARD_REJECT = _preference_store_mod.REWARD_REJECT
+REWARD_DANGEROUS = _preference_store_mod.REWARD_DANGEROUS
+REWARD_NEUTRAL = _preference_store_mod.REWARD_NEUTRAL
 
 
 class TestPreferenceMemoryBank:
@@ -154,7 +131,7 @@ class TestEmitPreferenceSuggestion:
     a successful tool action. It must round-trip via PreferenceMemoryBank."""
 
     def test_emit_returns_suggestion_id(self, tmp_path):
-        from ida_pro_mcp.host.intelligence_core import emit_preference_suggestion
+        emit_preference_suggestion = load_host_module("intelligence_core").emit_preference_suggestion
 
         db = os.path.join(tmp_path, "memrl_emit.db")
         sid = emit_preference_suggestion(
@@ -176,7 +153,7 @@ class TestEmitPreferenceSuggestion:
 class TestBridgeSearch:
     def test_extract_bridges_requires_db(self, tmp_path):
         # The multi-hop bridge index requires a schemaboot DB; test with empty/nonexistent
-        from ida_pro_mcp.host.intelligence_bridge_retrieval import MultiHopBridgeIndex
+        MultiHopBridgeIndex = load_host_module("intelligence_bridge_retrieval").MultiHopBridgeIndex
         db = os.path.join(tmp_path, "nonexistent.db")
         engine = MultiHopBridgeIndex(db_path=db)
         # Should return empty bridges without crashing

@@ -1,21 +1,15 @@
 import os
 import sys
-import importlib.util
 import types
 
-ROOT = os.path.dirname(os.path.dirname(__file__))
-SRC = os.path.join(ROOT, "src")
-if SRC not in sys.path:
-    sys.path.insert(0, SRC)
-
-_PROMPTS_PATH = os.path.join(SRC, "ida_pro_mcp", "ida_mcp", "prompts.py")
 if "rpc" not in sys.modules:
     _rpc = types.ModuleType("rpc")
     _rpc.prompt = lambda f: f
     sys.modules["rpc"] = _rpc
-_SPEC = importlib.util.spec_from_file_location("_prompts_mod", _PROMPTS_PATH)
-prompts_mod = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(prompts_mod)
+
+from tests._isolated_repo_loader import load_ida_module
+
+prompts_mod = load_ida_module("prompts")
 
 
 def test_quickref_mentions_firmware_triage_snapshot():

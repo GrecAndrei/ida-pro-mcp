@@ -6,19 +6,9 @@ Run with: python3 -m pytest tests/test_governance_engine.py -v
 Or standalone: python3 tests/test_governance_engine.py
 """
 
-import sys
-import os
-import importlib.util
+from tests._isolated_repo_loader import load_tool_module
 
-# Load governance engine module via importlib to avoid shadowing stdlib modules.
-_governance_engine_path = os.path.join(
-    os.path.dirname(__file__), "..",
-    "src", "ida_pro_mcp", "ida_mcp", "tools", "governance_engine.py"
-)
-_spec = importlib.util.spec_from_file_location("_governance_engine_test_mod", _governance_engine_path)
-_governance_engine = importlib.util.module_from_spec(_spec)
-sys.modules["_governance_engine_test_mod"] = _governance_engine
-_spec.loader.exec_module(_governance_engine)
+_governance_engine = load_tool_module("governance_engine")
 
 GovernanceEngine = _governance_engine.GovernanceEngine
 OperationType = _governance_engine.OperationType

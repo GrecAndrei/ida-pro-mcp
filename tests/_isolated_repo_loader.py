@@ -129,6 +129,14 @@ def load_tool_module(module_basename: str, *, common_overrides: dict | None = No
     return _load_module(fullname, path)
 
 
+def load_ida_module(module_relpath: str):
+    _ensure_package_layout()
+    rel = module_relpath.replace(".", "/")
+    path = IDA_MCP_ROOT / f"{rel}.py"
+    fullname = f"ida_pro_mcp.ida_mcp.{module_relpath}"
+    return _load_module(fullname, path)
+
+
 def load_support_module(module_basename: str):
     _ensure_package_layout()
     fullname = f"ida_pro_mcp.ida_mcp.support.{module_basename}"

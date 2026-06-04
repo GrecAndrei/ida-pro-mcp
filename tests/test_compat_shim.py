@@ -1,24 +1,16 @@
 """Tests for ida_mcp/compat.py — runtime feature-detection shim."""
 from __future__ import annotations
 
-import importlib.util
 import sys
 import unittest
-from pathlib import Path
 from unittest import mock
 
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
+from tests._isolated_repo_loader import load_ida_module
 
 
 def _load_compat():
-    """Load compat.py directly (bypassing ida_mcp/__init__.py which needs idaapi)."""
-    spec = importlib.util.spec_from_file_location("compat_under_test", SRC / "ida_pro_mcp" / "ida_mcp" / "compat.py")
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Load compat.py directly through the shared isolated loader."""
+    return load_ida_module("compat")
 
 
 class CompatOutsideIdaTests(unittest.TestCase):
