@@ -214,6 +214,30 @@ def test_dispatch_policy_blocks_disallowed_purpose_in_enforce_mode(monkeypatch):
     assert not srv._tool_calls
 
 
+def test_survey_gate_allows_workflow_meta_actions(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
+    srv = _DummyDispatchServer()
+    srv._get_active_survey = lambda: {"addr": "0x1000", "status": "ACTIVE"}  # type: ignore[method-assign]
+    srv._handle_workflow = lambda args: {"ok": True, "action": args.get("action")}  # type: ignore[attr-defined]
+
+    for action in ("catalog", "plan", "explain", "estimate", "compose", "prioritize", "audit_plan"):
+        res = srv._execute_tool_inner("workflow", "workflow", {"action": action})
+        assert res.get("ok") is True
+        assert res.get("action") == action
+
+
+def test_survey_gate_still_blocks_executable_workflow_actions(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
+    srv = _DummyDispatchServer()
+    srv._get_active_survey = lambda: {"addr": "0x1000", "status": "ACTIVE"}  # type: ignore[method-assign]
+    srv._handle_workflow = lambda args: {"ok": True, "action": args.get("action")}  # type: ignore[attr-defined]
+
+    blocked = srv._execute_tool_inner("workflow", "workflow", {"action": "triage_fast"})
+
+    assert blocked.get("error") is True
+    assert blocked.get("code") == "SURVEY_REQUIRED"
+
+
 def test_dispatch_strict_policy_blocks_non_blackboard_tool_when_stale():
     srv = _DummyDispatchServer()
     set_policy = srv._handle_blackboard(

@@ -27,6 +27,18 @@ from .server_response import truncate_response
 
 
 class ServerDispatchMixin:
+    _SURVEY_GATE_EXEMPT_WORKFLOW_ACTIONS = frozenset(
+        {
+            "audit_plan",
+            "catalog",
+            "compose",
+            "estimate",
+            "explain",
+            "plan",
+            "prioritize",
+        }
+    )
+
     def _extract_addresses_from_args(self, args: Any) -> list[str]:
         addrs = []
         if isinstance(args, dict):
@@ -103,6 +115,15 @@ class ServerDispatchMixin:
         except Exception as e:
             log_rpc(f"Survey lock check failed: {e}")
         return None
+
+    def _survey_gate_exempt(self, tool_name: str, args: dict[str, Any]) -> bool:
+        if tool_name in {"survey", "blackboard", "session"}:
+            return True
+        if tool_name == "workflow":
+            action = str(args.get("action") or "").strip().lower()
+            if action in self._SURVEY_GATE_EXEMPT_WORKFLOW_ACTIONS:
+                return True
+        return False
 
     @staticmethod
     def _runtime_alive(runtime: Any) -> bool:
@@ -869,7 +890,7 @@ class ServerDispatchMixin:
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
 
             # ---- Active Survey Lock Check ----
-            if tool_name not in {"survey", "blackboard", "session"}:
+            if not self._survey_gate_exempt(tool_name, args):
                 s = self._get_active_survey()
                 if s:
                     addr = s.get("addr", "unknown")
