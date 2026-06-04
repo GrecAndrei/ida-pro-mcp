@@ -268,6 +268,33 @@ class TestActivityRecording:
         assert call["action"] == "find"
         assert "0x401000" in call["result"]
 
+    def test_record_activity_skips_ok_false_results(self):
+        server = IDAMCPServer()
+
+        class StubSessionMgr:
+            def __init__(self):
+                self.calls = []
+
+            def log_activity(self, sid, tool, action, result):
+                self.calls.append(
+                    {
+                        "sid": sid,
+                        "tool": tool,
+                        "action": action,
+                        "result": result,
+                    }
+                )
+
+        stub = StubSessionMgr()
+        server.session_mgr = stub
+        server._record_activity(
+            "search",
+            {"action": "find", "session_id": "ABCD1234", "query": "malloc"},
+            {"ok": False, "code": "NOT_FOUND", "message": "missing"},
+        )
+
+        assert stub.calls == []
+
 
 # =============================================================================
 # Auto-nudge Rerouting Safety

@@ -88,3 +88,48 @@ def test_call_tool_restarts_dead_runtime_before_rpc():
     assert res.get("ok") is True
     server._start_server.assert_called_once()
     server._send_rpc_raw.assert_called_once()
+
+
+def test_apply_session_options_propagates_ok_false_analysis_failures():
+    server = IDAMCPServer()
+    session = _make_session()
+    session.analysis_options = {"options": {"baseaddr": "0x400000"}}
+
+    server.session_mgr._save_metadata = Mock()
+    server._send_rpc_raw = Mock(
+        side_effect=[
+            {"ok": False, "code": "IDA_ERROR", "message": "set_options failed"},
+        ]
+    )
+
+    res = server._apply_session_options(session, {"port": 31337})
+
+    assert res.get("ok") is False
+    assert res.get("code") == "IDA_ERROR"
+    assert "set_options failed" in str(res.get("message") or "")
+
+
+def test_apply_session_options_ignores_ok_false_bootstrap_sidecars_and_current_options():
+    server = IDAMCPServer()
+    session = _make_session()
+    session.analysis_options = {"chip_family": "AIC8800D80", "apply_once": False}
+
+    server.session_mgr._save_metadata = Mock()
+    server._send_rpc_raw = Mock(
+        side_effect=[
+            {"ok": False, "code": "NOT_FOUND", "message": "chip unknown"},
+            {"ok": False, "code": "NOT_FOUND", "message": "no imports"},
+            {"ok": False, "code": "NOT_FOUND", "message": "bootstrap unavailable"},
+            {"ok": False, "code": "NOT_FOUND", "message": "get_options unavailable"},
+        ]
+    )
+
+    res = server._apply_session_options(session, {"port": 31337})
+
+    assert res.get("ok") is True
+    assert res.get("current_options") is None
+    assert res.get("bootstrap_report") is None
+    assert res.get("bootstrap_knowledge") == {
+        "chip_family": None,
+        "imported_symbol_count": 0,
+    }

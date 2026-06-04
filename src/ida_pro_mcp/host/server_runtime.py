@@ -37,7 +37,7 @@ from .config import (
     log_rpc,
 )
 from .context_density import ContextDensityOptimizer
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .insight_index import InsightIndex
 from .intelligence_context import get_assembler
 from .patterns import GlobalFactsDatabase
@@ -380,7 +380,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
         ):
             if not isinstance(call_args, dict):
                 return
-            if not isinstance(result, dict) or result.get("error"):
+            if not isinstance(result, dict) or is_error_result(result):
                 return
             sid = session_id
             if not sid:
@@ -876,7 +876,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             self.session_runtimes[session.session_id] = runtime
                         self._write_runtime_lease(session.session_id, runtime)
                         apply_res = self._apply_session_options(session, runtime)
-                        if apply_res.get("error"):
+                        if is_error_result(apply_res):
                             return apply_res
                         # Kick off heavy indexing in background so session create returns fast
                         self._background_index(session.session_id, server_port)
@@ -1072,7 +1072,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             runtime = self.session_runtimes.get(session.session_id)
             if runtime:
                 apply_res = self._apply_session_options(session, runtime)
-                if apply_res.get("error"):
+                if is_error_result(apply_res):
                     return apply_res
                 result["current_options"] = apply_res.get("current_options")
 
@@ -1134,7 +1134,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             for action_args in actions:
                 res = self._send_rpc_raw({"tool": "analysis", "args": action_args}, port)
-                if res.get("error"):
+                if is_error_result(res):
                     return res
 
             # After setting architecture, synchronously fix segment state for
@@ -1200,7 +1200,7 @@ for seg_ea in idautils.Segments():
                 if opts.get("end") is not None:
                     reanalyze_args["end"] = opts.get("end")
                 res = self._send_rpc_raw({"tool": "analysis", "args": reanalyze_args}, port)
-                if res.get("error"):
+                if is_error_result(res):
                     return res
 
             bootstrap_knowledge = {"chip_family": None, "imported_symbol_count": 0}
@@ -1210,7 +1210,7 @@ for seg_ea in idautils.Segments():
                     {"tool": "knowledge", "args": {"action": "chip_identify"}},
                     port,
                 )
-                if isinstance(chip_res, dict) and not chip_res.get("error"):
+                if isinstance(chip_res, dict) and not is_error_result(chip_res):
                     prof = chip_res.get("profile")
                     if isinstance(prof, dict) and prof.get("chip_family"):
                         bootstrap_knowledge["chip_family"] = prof.get("chip_family")
@@ -1225,7 +1225,7 @@ for seg_ea in idautils.Segments():
                     },
                     port,
                 )
-                if isinstance(import_res, dict) and not import_res.get("error"):
+                if isinstance(import_res, dict) and not is_error_result(import_res):
                     bootstrap_knowledge["imported_symbol_count"] = int(import_res.get("imported", 0) or 0)
             except Exception:
                 pass
@@ -1242,7 +1242,7 @@ for seg_ea in idautils.Segments():
                         "post_load_actions": opts.get("post_load_actions") or [],
                     }
                     fw_res = self._send_rpc_raw({"tool": "firmware_view", "args": fw_args}, port)
-                    if isinstance(fw_res, dict) and not fw_res.get("error"):
+                    if isinstance(fw_res, dict) and not is_error_result(fw_res):
                         bootstrap_report = fw_res.get("bootstrap_report") or fw_res
             except Exception:
                 bootstrap_report = None
@@ -1299,7 +1299,7 @@ for seg_ea in idautils.Segments():
                 pass
             return {
                 "ok": True,
-                "current_options": current_options if not current_options.get("error") else None,
+                "current_options": current_options if not is_error_result(current_options) else None,
                 "bootstrap_knowledge": bootstrap_knowledge,
                 "bootstrap_report": bootstrap_report,
             }
