@@ -1,0 +1,144 @@
+{
+  "started_at": "2026-06-02T20:07:32.283539+00:00",
+  "finished_at": "2026-06-02T20:07:32.518590+00:00",
+  "status": "ok",
+  "steps": [
+    {
+      "name": "kill_ida",
+      "status": "skipped",
+      "detail": "not requested"
+    },
+    {
+      "name": "runtime",
+      "status": "ok",
+      "detail": "/home/grec-alexander/Downloads/ida-pro-mcp/.venv/bin/python"
+    },
+    {
+      "name": "clients",
+      "status": "ok",
+      "detail": "configured 14 clients"
+    },
+    {
+      "name": "skills",
+      "status": "dry-run",
+      "detail": "would install 1 entries to /home/grec-alexander/.codex/skills"
+    },
+    {
+      "name": "shell",
+      "status": "skipped",
+      "detail": "not requested"
+    }
+  ],
+  "warnings": [],
+  "errors": [],
+  "backups": [
+    {
+      "target": "/home/grec-alexander/.gemini/settings.json",
+      "backup": "/home/grec-alexander/.gemini/settings.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.gemini/antigravity/mcp_config.json",
+      "backup": "/home/grec-alexander/.gemini/antigravity/mcp_config.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.gemini/antigravity/mcp_config.json",
+      "backup": "/home/grec-alexander/.gemini/antigravity/mcp_config.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.gemini/antigravity-cli/plugins/ida-pro-mcp/mcp_config.json",
+      "backup": "/home/grec-alexander/.gemini/antigravity-cli/plugins/ida-pro-mcp/mcp_config.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.claude.json",
+      "backup": "/home/grec-alexander/.claude.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.codex/config.toml",
+      "backup": "/home/grec-alexander/.codex/config.toml.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.config/copilot/mcp-config.json",
+      "backup": "/home/grec-alexander/.config/copilot/mcp-config.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.config/opencode/opencode.json",
+      "backup": "/home/grec-alexander/.config/opencode/opencode.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.config/Claude/claude_desktop_config.json",
+      "backup": "/home/grec-alexander/.config/Claude/claude_desktop_config.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.cursor/mcp.json",
+      "backup": "/home/grec-alexander/.cursor/mcp.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.config/Code/User/globalStorage/github.copilot/mcp.json",
+      "backup": "/home/grec-alexander/.config/Code/User/globalStorage/github.copilot/mcp.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.windsurf/mcp_config.json",
+      "backup": "/home/grec-alexander/.windsurf/mcp_config.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+      "backup": "/home/grec-alexander/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json.bak.20260602200732"
+    },
+    {
+      "target": "/home/grec-alexander/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+      "backup": "/home/grec-alexander/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json.bak.20260602200732"
+    }
+  ],
+  "modified_files": [
+    "/home/grec-alexander/.gemini/settings.json",
+    "/home/grec-alexander/.gemini/antigravity/mcp_config.json",
+    "/home/grec-alexander/.gemini/antigravity/mcp_config.json",
+    "/home/grec-alexander/.gemini/antigravity-cli/plugins/ida-pro-mcp/mcp_config.json",
+    "/home/grec-alexander/.claude.json",
+    "/home/grec-alexander/.codex/config.toml",
+    "/home/grec-alexander/.config/copilot/mcp-config.json",
+    "/home/grec-alexander/.config/opencode/opencode.json",
+    "/home/grec-alexander/.config/Claude/claude_desktop_config.json",
+    "/home/grec-alexander/.cursor/mcp.json",
+    "/home/grec-alexander/.config/Code/User/globalStorage/github.copilot/mcp.json",
+    "/home/grec-alexander/.windsurf/mcp_config.json",
+    "/home/grec-alexander/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+    "/home/grec-alexander/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json"
+  ],
+  "metadata": {
+    "install_root": "/home/grec-alexander/Downloads/ida-pro-mcp",
+    "source_root": "/home/grec-alexander/Downloads/ida-pro-mcp",
+    "ida_install": {
+      "path": "/home/grec-alexander/ida-pro-9.3",
+      "version": [
+        9,
+        3
+      ],
+      "build": "260421.be7de18d",
+      "idat_binary": "/home/grec-alexander/ida-pro-9.3/idat",
+      "arch": "x64",
+      "flavor": "pro",
+      "source": "home_scan"
+    },
+    "ida_version": "9.3.260421.be7de18d",
+    "venv_python": "/home/grec-alexander/Downloads/ida-pro-mcp/.venv/bin/python",
+    "embed_model": "/home/grec-alexander/Downloads/bge-code-v1-q8_0.gguf",
+    "embed_server_bin": "/home/linuxbrew/.linuxbrew/bin/llama-server",
+    "configured_clients": [
+      "Gemini CLI",
+      "Antigravity",
+      "Antigravity IDE",
+      "Antigravity CLI",
+      "Claude Code",
+      "Codex",
+      "Copilot CLI",
+      "OpenCode",
+      "Claude Desktop",
+      "Cursor",
+      "VS Code",
+      "Windsurf",
+      "Cline",
+      "Roo Code"
+    ]
+  }
+}

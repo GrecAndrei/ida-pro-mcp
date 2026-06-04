@@ -180,8 +180,6 @@ Primary documentation now lives under `docs/`:
 - `docs/wiki/`: wiki content used by the `wiki` MCP tool.
 - `docs/TECHNICAL_REFERENCE.md`: low-level technical details.
 - `docs/TOOLS_REFERENCE.md`: tool-focused reference.
-- `docs/DEDUPLICATION_PLAN.md`: canonical-vs-compat tool surface and consolidation rules.
-- `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`: phase-by-phase bootstrap plan implementation matrix.
 - `docs/design/CAPSULES.md`: experimental Sideband capsule architecture and trust model.
 - `ARCHITECTURE.md`: high-level boundaries and module ownership map.
 - `CONTRIBUTING.md`: contribution workflow, guardrails, and PR expectations.
@@ -329,8 +327,6 @@ The `session` tool now includes a complete bootstrap evidence control loop desig
 - Drift and gating: snapshots, baseline update, alert evaluation, readiness gate/trend/guard
 - Closed-loop control: mitigation planning/apply, effectiveness scoring, policy reweight, autopilot safeguards
 - Finalization: `bootstrap_plan_status` and `bootstrap_finalize_report` for one-shot implementation + runtime readiness state
-
-For a complete phase matrix, see `docs/BOOTSTRAP_IMPLEMENTATION_STATUS.md`.
 
 ### Canonical vs compatibility tool names
 

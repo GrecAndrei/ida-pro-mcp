@@ -217,19 +217,6 @@ def test_tools_reference_alias_table_routes_to_annotation():
     assert "| `comments_ai` | `comment_mgr` |" not in text
 
 
-def test_dedup_plan_doc_routes_to_annotation():
-    """DEDUPLICATION_PLAN.md routes comments_ai to annotation (not
-    comment_mgr) and removes the comment_mgr from canonical workflow
-    routing."""
-    text = _read(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..", "docs", "DEDUPLICATION_PLAN.md",
-        )
-    )
-    assert "`comments_ai` -> `annotation`" in text
-    assert "`comment_mgr`" not in text
-
 
 def test_wiki_index_drops_comment_mgr():
     """docs/wiki/INDEX.md no longer lists the comment_mgr page."""

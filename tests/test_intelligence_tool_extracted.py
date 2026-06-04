@@ -261,17 +261,6 @@ def test_tools_reference_md_documents_intelligence_tool():
         )
 
 
-def test_dedup_plan_doc_acknowledges_intelligence_extraction():
-    """`DEDUPLICATION_PLAN.md` references the intelligence tool
-    extraction (or at least the agent slim-down)."""
-    text = _read("docs/DEDUPLICATION_PLAN.md")
-    # We don't require exact text — just that intelligence extraction
-    # is mentioned somewhere in the plan.
-    if "intelligence" not in text.lower():
-        # Fallback: at least confirm the plan is aware of the agent
-        # slim-down (the extraction was a Step-5 entry).
-        assert "agent" in text.lower()
-
 
 def test_intelligence_capsule_uses_intelligence_owner_string():
     """The `evidence_card` action persists to CapsuleStore with
