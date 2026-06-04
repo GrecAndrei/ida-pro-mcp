@@ -72,6 +72,45 @@ class TestMCPResources:
         assert "resources" in caps
         assert "tools" in caps
 
+    def test_resource_skills_falls_back_on_ok_false_session_result(self):
+        calls = []
+
+        def exec_fn(tool_name, kwargs):
+            calls.append((tool_name, kwargs))
+            return {"ok": False, "code": "DB_ERROR", "message": "skills unavailable"}
+
+        resolver = ResourceResolver(exec_fn, session_mgr=object())
+        result = resolver.read("ida://skills")
+        payload = json.loads(result["text"])
+
+        assert calls == [("session", {"action": "list_skills"})]
+        assert payload == {"skills": [], "note": "No skills available"}
+
+    def test_resource_archive_falls_back_on_ok_false_session_result(self):
+        calls = []
+
+        def exec_fn(tool_name, kwargs):
+            calls.append((tool_name, kwargs))
+            return {"ok": False, "code": "DB_ERROR", "message": "archive unavailable"}
+
+        resolver = ResourceResolver(exec_fn, session_mgr=object())
+        result = resolver.read("ida://archive")
+        payload = json.loads(result["text"])
+
+        assert calls == [("session", {"action": "stats"})]
+        assert payload == {"archive": [], "note": "Archive not available"}
+
+    def test_resource_archive_preserves_successful_stats_payload(self):
+        def exec_fn(_tool_name, _kwargs):
+            return {"ok": True, "stats": {"sessions_total": 3, "active": 1}}
+
+        resolver = ResourceResolver(exec_fn, session_mgr=object())
+        result = resolver.read("ida://archive")
+        payload = json.loads(result["text"])
+
+        assert payload["stats"] == {"sessions_total": 3, "active": 1}
+        assert "activity logs" in payload["note"].lower()
+
 
 # =============================================================================
 # Universal Output Filtering

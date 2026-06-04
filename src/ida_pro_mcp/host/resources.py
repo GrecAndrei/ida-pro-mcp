@@ -51,6 +51,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from .errors import is_error_result
+
 # TTL cache for ida://state coverage stats (expensive: calls data/functions)
 _STATE_CACHE: Dict[str, Any] = {}
 _STATE_CACHE_TTL = 30.0  # seconds
@@ -847,7 +849,7 @@ class ResourceResolver:
         if not self.session_mgr:
             return _make_json_content({"error": "Session manager not available"})
         result = self._exec("session", action="list_skills")
-        if isinstance(result, dict) and result.get("error"):
+        if is_error_result(result):
             return _make_json_content({"skills": [], "note": "No skills available"})
         return _make_json_content(result)
 
@@ -864,7 +866,7 @@ class ResourceResolver:
         if not self.session_mgr:
             return _make_json_content({"error": "Session manager not available"})
         result = self._exec("session", action="stats")
-        if isinstance(result, dict) and result.get("error"):
+        if is_error_result(result):
             return _make_json_content({"archive": [], "note": "Archive not available"})
         return _make_json_content({
             "stats": result.get("stats", {}),
