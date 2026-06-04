@@ -41,10 +41,12 @@ Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plug
 - `endian`: `string`
 - `flags`: `integer`
 - `loader`: `string`
+- `max_wait`: `number`
 - `name`: `string` - Plugin name for plugin_run
 - `options`: `object`
 - `processor`: `string`
 - `start`: `string`
+- `timeout`: `number`
 - `value`: `string|object`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
