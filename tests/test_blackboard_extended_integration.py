@@ -2,19 +2,13 @@
 IDA integration tests for extended blackboard features.
 Requires licensed IDA Pro configured via IDA_DIR or IDADIR.
 """
-import os
-import sys
-import importlib.util as _ilu
 import pytest
+from tests._isolated_repo_loader import load_test_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-_integration_conftest_path = os.path.join(
-    os.path.dirname(__file__), "integration", "conftest.py"
+_integration_conftest = load_test_module(
+    "integration/conftest.py",
+    module_name="_integration_conftest2",
 )
-_spec = _ilu.spec_from_file_location("_integration_conftest2", _integration_conftest_path)
-_integration_conftest = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_integration_conftest)
 IDARunner = _integration_conftest.IDARunner
 ida_is_available = _integration_conftest.ida_is_available
 

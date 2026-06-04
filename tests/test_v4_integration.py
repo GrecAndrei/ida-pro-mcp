@@ -7,17 +7,10 @@ IDA integration tests for blackboard v4 features:
 - response_enrichment → KG update
 - UsageIntelligence session report
 """
-import os
-import sys
-import importlib.util as _ilu
 import pytest
+from tests._isolated_repo_loader import load_test_module
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-_conftest_path = os.path.join(os.path.dirname(__file__), "integration", "conftest.py")
-_spec = _ilu.spec_from_file_location("_ic_v4", _conftest_path)
-_ic = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_ic)
+_ic = load_test_module("integration/conftest.py", module_name="_ic_v4")
 IDARunner = _ic.IDARunner
 ida_is_available = _ic.ida_is_available
 

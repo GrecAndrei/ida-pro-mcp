@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = ROOT / "src"
+TESTS_ROOT = ROOT / "tests"
 PACKAGE_ROOT = SRC_ROOT / "ida_pro_mcp"
 IDA_MCP_ROOT = PACKAGE_ROOT / "ida_mcp"
 TOOLS_ROOT = IDA_MCP_ROOT / "tools"
@@ -112,28 +113,27 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     return common
 
 
-def load_tool_module(module_basename: str, *, common_overrides: dict | None = None):
-    install_common_stub(common_overrides)
-    fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
-    path = TOOLS_ROOT / f"{module_basename}.py"
+def _load_module(fullname: str, path: Path):
     spec = importlib.util.spec_from_file_location(fullname, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[fullname] = mod
     assert spec.loader is not None
     spec.loader.exec_module(mod)
     return mod
+
+
+def load_tool_module(module_basename: str, *, common_overrides: dict | None = None):
+    install_common_stub(common_overrides)
+    fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
+    path = TOOLS_ROOT / f"{module_basename}.py"
+    return _load_module(fullname, path)
 
 
 def load_support_module(module_basename: str):
     _ensure_package_layout()
     fullname = f"ida_pro_mcp.ida_mcp.support.{module_basename}"
     path = SUPPORT_ROOT / f"{module_basename}.py"
-    spec = importlib.util.spec_from_file_location(fullname, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[fullname] = mod
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-    return mod
+    return _load_module(fullname, path)
 
 
 def load_host_module(module_relpath: str):
@@ -141,9 +141,10 @@ def load_host_module(module_relpath: str):
     rel = module_relpath.replace(".", "/")
     path = HOST_ROOT / f"{rel}.py"
     fullname = f"ida_pro_mcp.host.{module_relpath}"
-    spec = importlib.util.spec_from_file_location(fullname, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[fullname] = mod
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-    return mod
+    return _load_module(fullname, path)
+
+
+def load_test_module(module_relpath: str, *, module_name: str | None = None):
+    relpath = Path(module_relpath)
+    fullname = module_name or f"_tests_support_{relpath.stem}"
+    return _load_module(fullname, TESTS_ROOT / relpath)
