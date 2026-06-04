@@ -1,11 +1,9 @@
-import os
-import sys
 import types
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from tests._isolated_repo_loader import load_host_module
 
-from ida_pro_mcp.host.server_blackboard import ServerBlackboardMixin
-from ida_pro_mcp.host.server_dispatch import ServerDispatchMixin
+ServerBlackboardMixin = load_host_module("server_blackboard").ServerBlackboardMixin
+ServerDispatchMixin = load_host_module("server_dispatch").ServerDispatchMixin
 
 
 class _FakeStore:

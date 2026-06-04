@@ -1,9 +1,8 @@
 import json
-import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from ida_pro_mcp.host.server_blackboard import ServerBlackboardMixin
+from tests._isolated_repo_loader import load_host_module
+
+ServerBlackboardMixin = load_host_module("server_blackboard").ServerBlackboardMixin
 
 
 class _FakeStore:

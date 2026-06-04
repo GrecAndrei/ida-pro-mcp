@@ -3,12 +3,19 @@ import math
 import os
 import sqlite3
 import struct
-import sys
 import tempfile
 import time
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from tests._isolated_repo_loader import load_host_module
+
+_frontier_mod = load_host_module("frontier")
+_blackboard_store_mod = load_host_module("blackboard_store")
+FrontierEngine = _frontier_mod.FrontierEngine
+_kmeans = _frontier_mod._kmeans
+_cosine = _frontier_mod._cosine
+BlackboardStore = _blackboard_store_mod.BlackboardStore
+_pack_vec = _blackboard_store_mod._pack_vec
 
 
 def _make_emb_db(path: str, entries: list) -> None:
@@ -63,7 +70,6 @@ def _make_bb_db(path: str, entries: list) -> None:
 
 class TestFrontierEngineBasic(unittest.TestCase):
     def setUp(self):
-        from ida_pro_mcp.host.frontier import FrontierEngine
         self.FrontierEngine = FrontierEngine
         self.tmp = tempfile.mkdtemp()
         self.emb_db = os.path.join(self.tmp, "test.embeddings.db")
@@ -255,7 +261,6 @@ class TestFrontierEngineBasic(unittest.TestCase):
 
 class TestFrontierKMeans(unittest.TestCase):
     def test_kmeans_assigns_all(self):
-        from ida_pro_mcp.host.frontier import _kmeans
         vecs = [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]]
         assignments = _kmeans(vecs, k=2)
         self.assertEqual(len(assignments), 4)
@@ -265,19 +270,16 @@ class TestFrontierKMeans(unittest.TestCase):
         self.assertNotEqual(assignments[0], assignments[2])
 
     def test_kmeans_k_larger_than_n(self):
-        from ida_pro_mcp.host.frontier import _kmeans
         vecs = [[1.0, 0.0], [0.0, 1.0]]
         assignments = _kmeans(vecs, k=10)
         self.assertEqual(len(assignments), 2)
 
     def test_kmeans_k_equals_1(self):
-        from ida_pro_mcp.host.frontier import _kmeans
         vecs = [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]
         assignments = _kmeans(vecs, k=1)
         self.assertEqual(set(assignments), {0})
 
     def test_cosine_similarity(self):
-        from ida_pro_mcp.host.frontier import _cosine
         a = [1.0, 0.0, 0.0]
         b = [1.0, 0.0, 0.0]
         self.assertAlmostEqual(_cosine(a, b), 1.0)
@@ -287,13 +289,11 @@ class TestFrontierKMeans(unittest.TestCase):
         self.assertAlmostEqual(_cosine(a, d), -1.0)
 
     def test_cosine_zero_vector(self):
-        from ida_pro_mcp.host.frontier import _cosine
         self.assertAlmostEqual(_cosine([0.0, 0.0], [1.0, 0.0]), 0.0)
 
 
 class TestFrontierAndBlackboardSmarter(unittest.TestCase):
     def setUp(self):
-        from ida_pro_mcp.host.frontier import FrontierEngine
         self.FrontierEngine = FrontierEngine
         self.tmp = tempfile.mkdtemp()
         self.emb_db = os.path.join(self.tmp, "test.embeddings.db")
@@ -380,7 +380,6 @@ class TestFrontierAndBlackboardSmarter(unittest.TestCase):
             self.assertGreater(crypto_res["score"], network_res["score"])
 
     def test_next_target_with_query_semantic_scoring(self):
-        from ida_pro_mcp.host.blackboard_store import BlackboardStore
         import sys
         import types
         from unittest import mock
@@ -395,7 +394,6 @@ class TestFrontierAndBlackboardSmarter(unittest.TestCase):
         store = BlackboardStore(self.bb_db)
 
         # Write entries with vectors
-        from ida_pro_mcp.host.blackboard_store import _pack_vec
         vec_crypto = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         vec_network = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
@@ -421,8 +419,6 @@ class TestFrontierAndBlackboardSmarter(unittest.TestCase):
             self.assertEqual(targets[1]["semantic_similarity"], 0.0)
 
     def test_next_target_with_query_keyword_fallback(self):
-        from ida_pro_mcp.host.blackboard_store import BlackboardStore
-
         store = BlackboardStore(self.bb_db)
 
         with store._conn() as conn:
