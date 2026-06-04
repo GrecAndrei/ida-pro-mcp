@@ -525,6 +525,98 @@ def test_score_gadgets_behavior_with_fake_embedder():
     assert result["top_primitive"] == "rop_chain"
 
 
+def test_build_decompiler_dataflow_assignment_with_comparison():
+    import importlib.util
+    import types
+    import sys
+    import typing
+    
+    # Save original modules to restore later
+    old_modules = dict(sys.modules)
+    
+    # Create mock _common module
+    mock_common = types.ModuleType("_common")
+    mock_common.hex_ea = lambda ea: hex(ea)
+    mock_common.validate_addr = lambda addr, *a, **kw: (int(addr, 16) if isinstance(addr, str) and addr.startswith("0x") else 0x401000, None)
+    mock_common.make_error = lambda *a, **kw: {"error": True}
+    mock_common.handle_error = lambda *a, **kw: {"error": True}
+    class MockMCPError:
+        INVALID_ARGS = "INVALID_ARGS"
+        DECOMPILER_FAILED = "DECOMPILER_FAILED"
+    mock_common.MCPError = MockMCPError
+    mock_common.ERROR_HINTS = {}
+    mock_common.normalize_list_input = lambda val: [val] if not isinstance(val, list) else val
+    mock_common.get_prototype = lambda *a: "void func()"
+    mock_common.tool = lambda fn: fn
+    mock_common.idaread = lambda fn: fn
+    mock_common.Annotated = typing.Annotated
+    mock_common.Optional = typing.Optional
+    mock_common.Literal = typing.Literal
+    mock_common.Union = typing.Union
+    mock_common.Any = typing.Any
+    
+    # Inject stubs
+    sys.modules["_common"] = mock_common
+    for m in ["idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
+              "ida_segment", "ida_name", "ida_typeinf", "ida_nalt",
+              "ida_hexrays", "ida_frame", "ida_struct", "ida_lines", "ida_ua", "ida_kernwin"]:
+        mod_mock = sys.modules.setdefault(m, types.ModuleType(m))
+        setattr(mock_common, m, mod_mock)
+    sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
+    
+    try:
+        # Load code.py
+        path = os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "code.py")
+        spec = importlib.util.spec_from_file_location("_code_test", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        
+        # Mock cfunc
+        class MockVar:
+            def __init__(self, name, is_arg=False):
+                self.name = name
+                self.is_arg_var = is_arg
+                
+        class MockCFunc:
+            def __init__(self, vars_list):
+                self.lvars = vars_list
+                
+        cfunc = MockCFunc([
+            MockVar("v5"),
+            MockVar("v2"),
+            MockVar("v4"),
+            MockVar("s1"),
+            MockVar("s2")
+        ])
+        
+        # Mock expression rows
+        mock_rows = [
+            (0x401000, "v5 = v2 == 3"),
+            (0x401010, "v4 = strcmp(s1, s2) == 0")
+        ]
+        
+        # Patch _collect_expr_rows_from_cfunc
+        orig_collect = mod._collect_expr_rows_from_cfunc
+        mod._collect_expr_rows_from_cfunc = lambda *a, **kw: mock_rows
+        try:
+            flow = mod._build_decompiler_dataflow(cfunc)
+        finally:
+            mod._collect_expr_rows_from_cfunc = orig_collect
+            
+        edges = flow["edges"]
+        assign_edges = [e for e in edges if e["kind"] == "assign"]
+        assert len(assign_edges) == 3
+        # v2 -> v5
+        assert any(e["from"] == "v2" and e["to"] == "v5" and e["ea"] == "0x401000" for e in assign_edges)
+        # s1 -> v4
+        assert any(e["from"] == "s1" and e["to"] == "v4" and e["ea"] == "0x401010" for e in assign_edges)
+        # s2 -> v4
+        assert any(e["from"] == "s2" and e["to"] == "v4" and e["ea"] == "0x401010" for e in assign_edges)
+    finally:
+        sys.modules.clear()
+        sys.modules.update(old_modules)
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

@@ -130,8 +130,11 @@ def _build_decompiler_dataflow(cfunc, max_items=800):
         if not text:
             continue
         # Assignment dependency: rhs vars influence lhs var.
-        if "=" in text and "==" not in text and "<=" not in text and ">=" not in text and "!=" not in text:
-            lhs, rhs = text.split("=", 1)
+        match = re.search(r'(?<![<>=!])=(?!=)', text)
+        if match:
+            idx = match.start()
+            lhs = text[:idx].strip().rstrip('+-*/%&|^<>=!')
+            rhs = text[idx+1:].strip()
             lhs_vars = _extract_vars(lhs)
             rhs_vars = _extract_vars(rhs)
             if lhs_vars:
@@ -997,24 +1000,35 @@ def code(
                     field_offset = None
                     field_type_str = None
                     found_struct = None
-                    for ordinal in range(1, qty_func(til) + 1):
+                    if struct_name:
                         tinfo = ida_typeinf.tinfo_t()
-                        if not tinfo.get_numbered_type(til, ordinal):
-                            continue
-                        type_name = tinfo.get_type_name()
-                        if struct_name and type_name != struct_name:
-                            continue
-                        if tinfo.is_struct() or tinfo.is_union():
-                            udt = ida_typeinf.udt_type_data_t()
-                            if tinfo.get_udt_details(udt):
-                                for member in udt:
-                                    if member.name == actual_field:
-                                        field_offset = member.offset  # bytes in IDA 9
-                                        field_type_str = str(member.type)
-                                        found_struct = type_name
-                                        break
-                        if field_offset is not None:
-                            break
+                        if tinfo.get_named_type(til, struct_name):
+                            if tinfo.is_struct() or tinfo.is_union():
+                                udt = ida_typeinf.udt_type_data_t()
+                                if tinfo.get_udt_details(udt):
+                                    for member in udt:
+                                        if member.name == actual_field:
+                                            field_offset = member.offset
+                                            field_type_str = str(member.type)
+                                            found_struct = struct_name
+                                            break
+                    else:
+                        for ordinal in range(1, qty_func(til) + 1):
+                            tinfo = ida_typeinf.tinfo_t()
+                            if not tinfo.get_numbered_type(til, ordinal):
+                                continue
+                            type_name = tinfo.get_type_name()
+                            if tinfo.is_struct() or tinfo.is_union():
+                                udt = ida_typeinf.udt_type_data_t()
+                                if tinfo.get_udt_details(udt):
+                                    for member in udt:
+                                        if member.name == actual_field:
+                                            field_offset = member.offset  # bytes in IDA 9
+                                            field_type_str = str(member.type)
+                                            found_struct = type_name
+                                            break
+                            if field_offset is not None:
+                                break
                     
                     if field_offset is None:
                         results.append({"addr": addr, "field": field_name, "xrefs": [],
@@ -1516,7 +1530,7 @@ def code(
                 str_refs = []
                 for item in idautils.FuncItems(func.start_ea):
                     for xr in idautils.XrefsFrom(item, 0):
-                        s = idc.get_strlit_contents(xr.to, -1, -1)
+                        s = idc.get_strlit_contents(xr.to)
                         if s:
                             try:
                                 str_refs.append(s.decode("utf-8", errors="replace")[:80])
