@@ -5,20 +5,18 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import sys
 import tempfile
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+from tests._isolated_repo_loader import load_host_module
 
-from ida_pro_mcp.host.intelligence.entropy import FunctionEntropyCalculator
-from ida_pro_mcp.host.intelligence.reasoner import VulnerabilityReasoner
-from ida_pro_mcp.host.intelligence.structural_index import (
-    ensure_tables,
-    upsert_functions_batch,
-)
-from ida_pro_mcp.host.intelligence_preference_store import PreferenceMemoryBank
+FunctionEntropyCalculator = load_host_module("intelligence.entropy").FunctionEntropyCalculator
+VulnerabilityReasoner = load_host_module("intelligence.reasoner").VulnerabilityReasoner
+_structural_index_mod = load_host_module("intelligence.structural_index")
+ensure_tables = _structural_index_mod.ensure_tables
+upsert_functions_batch = _structural_index_mod.upsert_functions_batch
+PreferenceMemoryBank = load_host_module("intelligence_preference_store").PreferenceMemoryBank
 
 
 def evaluate_triage_prioritization_quality():

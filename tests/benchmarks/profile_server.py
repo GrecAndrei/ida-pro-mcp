@@ -2,13 +2,14 @@
 """
 Profile hot paths in the MCP server.
 """
-import os, sys, time, cProfile, pstats, io
+import os, time, cProfile, pstats, io
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 os.environ["IDA_MCP_DISABLE_STUCK_DETECTION"] = "1"
 os.environ["IDA_MCP_DISABLE_RATE_LIMIT"] = "1"
 
-from ida_pro_mcp.host.server import IDAMCPServer
+from tests._isolated_repo_loader import load_host_module
+
+IDAMCPServer = load_host_module("server").IDAMCPServer
 
 def profile_tool_dispatch():
     server = IDAMCPServer()

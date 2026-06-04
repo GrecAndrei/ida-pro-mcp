@@ -2,13 +2,12 @@
 """Microbenchmarks for adaptive intelligence enrichment paths."""
 
 import os
-import sys
 import time
 import statistics
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+from tests._isolated_repo_loader import load_host_module
 
-from ida_pro_mcp.host.intelligence_context import ContextAssembler
+ContextAssembler = load_host_module("intelligence.context").ContextAssembler
 
 
 class FakeEmbedder:

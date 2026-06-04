@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import os
-import sys
 import time
 import statistics
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+from tests._isolated_repo_loader import load_host_module
 
-from ida_pro_mcp.host.intelligence.crystallizer import AgentMacroCrystallizer
+AgentMacroCrystallizer = load_host_module("intelligence.crystallizer").AgentMacroCrystallizer
 
 
 def _summ(name, samples):

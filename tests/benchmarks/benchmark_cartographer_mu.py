@@ -11,7 +11,6 @@ Measures:
   6. Scalability: performance vs blackboard size
 """
 import os
-import sys
 import time
 import json
 import tempfile
@@ -19,18 +18,43 @@ import shutil
 import random
 import statistics
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from tests._isolated_repo_loader import load_host_module
 
 import numpy as np
-from ida_pro_mcp.host.cartographer_mu import (
-    S4REncoder,
-    TurboQuantLite,
-    BridgeRAGLite,
-    MemRLUtility,
-    SchemaBootRE,
-    ContextComposer,
-    CartographerMu,
-)
+
+
+def _make_unavailable_type(name, reason):
+    class _Unavailable:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(reason)
+
+    _Unavailable.__name__ = name
+    return _Unavailable
+
+
+try:
+    _cartographer_mod = load_host_module("cartographer_mu")
+    S4REncoder = _cartographer_mod.S4REncoder
+    TurboQuantLite = _cartographer_mod.TurboQuantLite
+    BridgeRAGLite = _cartographer_mod.BridgeRAGLite
+    MemRLUtility = _cartographer_mod.MemRLUtility
+    SchemaBootRE = _cartographer_mod.SchemaBootRE
+    ContextComposer = _cartographer_mod.ContextComposer
+    CartographerMu = _cartographer_mod.CartographerMu
+    _CARTOGRAPHER_IMPORT_ERROR = None
+except FileNotFoundError as exc:
+    _CARTOGRAPHER_IMPORT_ERROR = exc
+    _reason = (
+        "Cartographer-mu benchmark is unavailable because the cartographer_mu "
+        "module is not present in this checkout."
+    )
+    S4REncoder = _make_unavailable_type("S4REncoder", _reason)
+    TurboQuantLite = _make_unavailable_type("TurboQuantLite", _reason)
+    BridgeRAGLite = _make_unavailable_type("BridgeRAGLite", _reason)
+    MemRLUtility = _make_unavailable_type("MemRLUtility", _reason)
+    SchemaBootRE = _make_unavailable_type("SchemaBootRE", _reason)
+    ContextComposer = _make_unavailable_type("ContextComposer", _reason)
+    CartographerMu = _make_unavailable_type("CartographerMu", _reason)
 
 # =============================================================================
 # Benchmark Configuration

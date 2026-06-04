@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Benchmarks for Evidence Physics bootstrap calibration pipeline."""
 import os
-import sys
 import time
 import tempfile
 import shutil
 import statistics
 
-_project_root = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, _project_root)
-sys.path.insert(0, os.path.join(_project_root, "src"))
+from tests._isolated_repo_loader import load_package_module, load_repo_module
 
-from ida_mcp_stdio import SessionManager, IDAMCPServer
+load_package_module("host")
+_stdio_mod = load_repo_module("ida_mcp_stdio.py", module_name="ida_mcp_stdio")
+SessionManager = _stdio_mod.SessionManager
+IDAMCPServer = _stdio_mod.IDAMCPServer
 
 
 def _setup():

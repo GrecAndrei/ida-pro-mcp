@@ -4,25 +4,23 @@
 import os
 import random
 import statistics
-import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "ida_pro_mcp", "ida_mcp", "support"))
+from tests._isolated_repo_loader import load_support_module
 
-from firmware_heuristics import (
-    aggregate_fingerprint_scores,
-    apply_fingerprint_boost,
-    ascii_run_stats,
-    build_campaign_execution_plan,
-    build_carve_plan,
-    cluster_pointer_hits,
-    dedup_regions_by_fingerprint,
-    rank_region_plans,
-    region_fingerprint,
-    region_priority_score,
-    shannon_entropy,
-    summarize_campaign_regions,
-)
+_fw_heuristics = load_support_module("firmware_heuristics")
+aggregate_fingerprint_scores = _fw_heuristics.aggregate_fingerprint_scores
+apply_fingerprint_boost = _fw_heuristics.apply_fingerprint_boost
+ascii_run_stats = _fw_heuristics.ascii_run_stats
+build_campaign_execution_plan = _fw_heuristics.build_campaign_execution_plan
+build_carve_plan = _fw_heuristics.build_carve_plan
+cluster_pointer_hits = _fw_heuristics.cluster_pointer_hits
+dedup_regions_by_fingerprint = _fw_heuristics.dedup_regions_by_fingerprint
+rank_region_plans = _fw_heuristics.rank_region_plans
+region_fingerprint = _fw_heuristics.region_fingerprint
+region_priority_score = _fw_heuristics.region_priority_score
+shannon_entropy = _fw_heuristics.shannon_entropy
+summarize_campaign_regions = _fw_heuristics.summarize_campaign_regions
 
 
 def _summ(name, samples):
