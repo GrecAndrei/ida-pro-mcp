@@ -41,7 +41,7 @@ def trace_analysis(
             "deobfuscate_emulate",
             "prefetch_context",
         ],
-        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis|get|clear|set_options|static_trace|decrypt_strings|eval_expr|deobfuscate_emulate",
+        "Action: import_trace|analyze_coverage|find_loops|extract_api_calls|basic_blocks_hit|execution_timeline_graph|cross_run_diff|coverage_debug_plan|anti_analysis_detect|trace_entropy|api_sequence|loop_analysis|get|clear|set_options|static_trace|decrypt_strings|eval_expr|deobfuscate_emulate|prefetch_context",
     ],
     path: Annotated[Optional[str], "Path to trace file"] = None,
     addr: Annotated[Optional[str], "Function or address to analyze"] = None,

@@ -367,7 +367,7 @@ TOOL_DESCRIPTIONS = {
     "symbols": "Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.",
     "taint": "Data flow taint analysis from user-controlled sources to dangerous sinks. Actions: sources (list all taint sources: recv/read/fgets/getenv imports + blackboard IOCs), sinks (dangerous sinks reachable from a source), trace (trace forward from addr/source, write vuln entries to blackboard), paths (full call-graph paths source→sink with dataflow description), report (all sources → all reachable sinks). Example: taint(action='trace', source='recv') finds all paths from recv to memcpy/strcpy/system.",
     "threat_hunt": "Runs automated threat-hunting passes to detect malware patterns, vulnerabilities, and suspicious behaviors. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy.",
-    "trace_analysis": "Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Also provides runtime execution-trace access (get/clear/set_options) and static control-flow tracing (static_trace, decrypt_strings, eval_expr). Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis, get, clear, set_options, static_trace, decrypt_strings, eval_expr.",
+    "trace_analysis": "Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Also provides runtime execution-trace access (get/clear/set_options), static control-flow tracing (static_trace, decrypt_strings, eval_expr, prefetch_context), and emulation-driven deobfuscation (deobfuscate_emulate). Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis, get, clear, set_options, static_trace, decrypt_strings, eval_expr, deobfuscate_emulate, prefetch_context.",
     "truncation": "Continues a previously truncated tool response to retrieve remaining output. Actions: continue.",
     "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph.",
     "wiki": "Accesses built-in documentation and tool usage guides within MCP context. Actions: list_topics, read, search, semantic_search, index, sections, suggest.",
@@ -1296,6 +1296,8 @@ TOOL_ACTIONS = {
         "static_trace",
         "decrypt_strings",
         "eval_expr",
+        "deobfuscate_emulate",
+        "prefetch_context",
     ],
     "truncation": [
         "continue",

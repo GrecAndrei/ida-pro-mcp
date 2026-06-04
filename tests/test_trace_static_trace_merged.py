@@ -26,12 +26,13 @@ def test_standalone_trace_files_removed():
 
 
 def test_trace_analysis_enum_lists_merged_actions():
-    """trace_analysis Literal includes all 6 merged actions
-    (3 from trace, 3 from static_trace)."""
+    """trace_analysis Literal includes the merged runtime/static actions
+    plus the newer emulation/context helpers."""
     text = _read("src/ida_pro_mcp/ida_mcp/tools/trace_analysis.py")
     for action in (
         "get", "clear", "set_options",
         "static_trace", "decrypt_strings", "eval_expr",
+        "deobfuscate_emulate", "prefetch_context",
     ):
         assert f'"{action}"' in text, (
             f"trace_analysis Literal missing merged action {action}"
@@ -54,9 +55,17 @@ def test_schemas_data_drops_trace_and_static_trace():
     text = _read("src/ida_pro_mcp/host/schemas_data.py")
     assert '"trace": [' not in text
     assert '"static_trace": [' not in text
-    # And trace_analysis picked up the 6 merged actions.
+    # And trace_analysis picked up the merged actions plus the newer helpers.
     assert '"get",' in text
     assert '"static_trace",' in text
+    assert '"deobfuscate_emulate",' in text
+    assert '"prefetch_context",' in text
+
+
+def test_trace_analysis_description_mentions_new_actions():
+    text = _read("src/ida_pro_mcp/host/schemas_data.py")
+    assert "deobfuscate_emulate" in text
+    assert "prefetch_context" in text
 
 
 def test_schemas_data_drops_legacy_arg_schemas():
