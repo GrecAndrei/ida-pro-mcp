@@ -448,6 +448,31 @@ def test_evidence_gravity_attached_to_write_and_decision_card():
     assert dc.get("gravity", {}).get("ok") is True
 
 
+def test_evidence_gravity_marks_ok_false_child_pulls_as_failed():
+    srv = _DummyServer()
+
+    def failing_execute_tool(tool_name, args):
+        srv._tool_calls.append((tool_name, dict(args)))
+        if tool_name == "graph":
+            return {"ok": False, "code": "NOT_FOUND", "message": "graph missing"}
+        return {"ok": True, "matches": [f"{args.get('query', args.get('addr'))} hit"]}
+
+    srv._execute_tool = failing_execute_tool  # type: ignore[method-assign]
+    gravity = srv._evidence_gravity(
+        srv._get_blackboard_store(),
+        source_entry_id="seed1",
+        addr="0x401000",
+        source_text="seed",
+    )
+
+    assert gravity.get("ok") is True
+    entry = srv._get_blackboard_store().read(gravity["entry_id"])
+    payload = json.loads(entry["content"])
+    graph_pull = next(p for p in payload["pulls"] if p.get("tool") == "graph")
+    assert graph_pull.get("ok") is False
+    assert graph_pull.get("result", {}).get("ok") is False
+
+
 def test_commit_contract_requires_strict_spec():
     srv = _DummyServer()
     srv._handle_blackboard({"action": "phase_set", "phase": "commit"})

@@ -11,7 +11,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from .config import _bounded_int
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 from .schemas import TOOL_ACTIONS
 from .symbol_db import SymbolDB
 from .intelligence_helpers import parse_str_list
@@ -502,7 +502,14 @@ class ServerBlackboardMixin:
         for tool, targs in probes:
             try:
                 res = self._execute_tool(tool, targs)
-                pulls.append({"tool": tool, "args": targs, "ok": bool(isinstance(res, dict) and not res.get("error")), "result": res})
+                pulls.append(
+                    {
+                        "tool": tool,
+                        "args": targs,
+                        "ok": bool(isinstance(res, dict) and not is_error_result(res)),
+                        "result": res,
+                    }
+                )
             except Exception as exc:
                 pulls.append({"tool": tool, "args": targs, "ok": False, "error": str(exc)})
         embedding_neighbors = []
