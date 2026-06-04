@@ -26,7 +26,7 @@ from .config import (
     SEMANTIC_INDEX_WAIT_SECONDS,
     _parse_str_list,
 )
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 
 
 class ServerSemanticMixin:
@@ -159,7 +159,7 @@ class ServerSemanticMixin:
                 limit=source_limit,
                 max_insns=max_insns,
             )
-            if isinstance(result, dict) and result.get("error"):
+            if isinstance(result, dict) and is_error_result(result):
                 errors.append(
                     {
                         "action": source_action,
@@ -193,6 +193,18 @@ class ServerSemanticMixin:
                         digest,
                     )
                 )
+
+        if not indexed_rows and errors:
+            first_error = errors[0]
+            return make_error(
+                str(first_error.get("code") or MCPError.RPC_CONNECTION_ERROR),
+                str(first_error.get("message") or "Semantic gadget index rebuild failed"),
+                details={
+                    "source_actions": source_actions,
+                    "errors": errors,
+                    "db_path": db_path,
+                },
+            )
 
         with self._semantic_index_lock:
             conn = self._semantic_index_connect(db_path)
@@ -301,6 +313,8 @@ class ServerSemanticMixin:
             rebuild_info = self._semantic_index_rebuild(
                 session, source_actions, source_limit, max_insns
             )
+            if is_error_result(rebuild_info):
+                return rebuild_info
 
         with self._semantic_index_lock:
             conn = self._semantic_index_connect(db_path)

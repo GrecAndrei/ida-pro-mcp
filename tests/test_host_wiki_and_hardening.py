@@ -1082,6 +1082,73 @@ class TestGadgetSemanticIndex(unittest.TestCase):
         self.assertTrue(second.get("ok"))
         self.assertNotIn("index_refresh", second)
 
+    def test_semantic_find_propagates_complete_source_failure(self):
+        def fake_call_tool(tool_name, idb_path, **kwargs):
+            self.assertEqual(tool_name, "gadgets")
+            action = kwargs.get("action")
+            return {
+                "ok": False,
+                "code": MCPError.DB_ERROR,
+                "message": f"{action} unavailable",
+            }
+
+        self.server.call_tool = fake_call_tool
+        res = self.server._execute_tool(
+            "gadgets",
+            {
+                "action": "semantic_find",
+                "query": "xchg rsp",
+                "source_actions": ["rop", "stack_pivot"],
+                "source_limit": 20,
+                "_risk_ack": True,
+            },
+        )
+        self.assertTrue(res.get("error"))
+        self.assertEqual(res.get("code"), MCPError.DB_ERROR)
+        details = res.get("details", {})
+        self.assertEqual(details.get("source_actions"), ["rop", "stack_pivot"])
+        self.assertEqual(len(details.get("errors", [])), 2)
+
+    def test_semantic_find_keeps_partial_index_when_some_sources_fail(self):
+        def fake_call_tool(tool_name, idb_path, **kwargs):
+            self.assertEqual(tool_name, "gadgets")
+            action = kwargs.get("action")
+            if action == "rop":
+                return {
+                    "ok": True,
+                    "action": "rop",
+                    "gadgets": [
+                        {
+                            "addr": "0x401000",
+                            "insns": 2,
+                            "gadget": "pop rax ; ret",
+                        }
+                    ],
+                }
+            return {
+                "ok": False,
+                "code": MCPError.DB_ERROR,
+                "message": f"{action} unavailable",
+            }
+
+        self.server.call_tool = fake_call_tool
+        res = self.server._execute_tool(
+            "gadgets",
+            {
+                "action": "semantic_find",
+                "query": "pop rax",
+                "source_actions": ["rop", "stack_pivot"],
+                "source_limit": 20,
+                "_risk_ack": True,
+            },
+        )
+        self.assertTrue(res.get("ok"))
+        self.assertGreaterEqual(res.get("count", 0), 1)
+        self.assertIn("index_refresh", res)
+        self.assertEqual(res["index_refresh"].get("rows_indexed"), 1)
+        self.assertEqual(len(res["index_refresh"].get("errors", [])), 1)
+        self.assertEqual(res["index_refresh"]["errors"][0].get("action"), "stack_pivot")
+
     def test_semantic_find_rejects_invalid_source_actions(self):
         res = self.server._execute_tool(
             "gadgets",
