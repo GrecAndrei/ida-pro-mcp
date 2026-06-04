@@ -166,8 +166,8 @@ def survey(
             bookmarked = False
             if bookmark:
                 try:
-                    import idc
-                    idc.set_func_cmt(ea, f"[Survey Tag] {bookmark}", 0)
+                    import idc as _idc
+                    _idc.set_func_cmt(ea, f"[Survey Tag] {bookmark}", 0)
                     bookmarked = True
                 except Exception:
                     pass

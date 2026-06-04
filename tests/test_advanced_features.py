@@ -7,6 +7,8 @@ import pytest
 import contextlib
 from unittest.mock import MagicMock, patch
 
+from tests._isolated_repo_loader import load_host_module, load_tool_module
+
 # Add search paths for local imports
 _tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "ida_pro_mcp", "ida_mcp", "tools")
 if _tools_dir not in sys.path:
@@ -35,6 +37,11 @@ def mock_ida_context():
         mock_mod = MagicMock()
         if m == "idaapi":
             mock_mod.get_kernel_version.return_value = "9.3"
+        elif m == "idc":
+            mock_mod.get_idb_path.return_value = ""
+        elif m == "ida_loader":
+            mock_mod.get_path.return_value = ""
+            mock_mod.PATH_TYPE_IDB = 0
         sys.modules[m] = mock_mod
         
     try:
@@ -49,7 +56,8 @@ def mock_ida_context():
 
 def test_parse_register_offset():
     with mock_ida_context():
-        from src.ida_pro_mcp.ida_mcp.tools.intelligence import _parse_register_offset
+        intelligence_mod = load_tool_module("intelligence")
+        _parse_register_offset = intelligence_mod._parse_register_offset
         # Test offset parsing from typical memory operands
         assert _parse_register_offset("[rsi+10h]") == ("rsi", 16)
         assert _parse_register_offset("[rdi-8]") == ("rdi", -8)
@@ -60,7 +68,8 @@ def test_parse_register_offset():
 
 def test_tiny_emulator_parsing():
     with mock_ida_context():
-        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import TinyEmulator
+        trace_mod = load_tool_module("trace_analysis")
+        TinyEmulator = trace_mod.TinyEmulator
         
         # Mock get_func to return None inside mock context
         sys.modules["ida_funcs"].get_func.return_value = None
@@ -79,7 +88,8 @@ def test_federation_blackboards(tmp_path):
     remote_db = str(tmp_path / "remote.blackboard.db")
     
     # Initialize local Blackboard with one entry
-    from src.ida_pro_mcp.host.blackboard_store import BlackboardStore
+    blackboard_store_mod = load_host_module("blackboard_store")
+    BlackboardStore = blackboard_store_mod.BlackboardStore
     local_store = BlackboardStore(local_db)
     
     # Populate local entry
@@ -113,7 +123,8 @@ def test_federation_blackboards(tmp_path):
         conn.commit()
         
     # Import Host-side FederationBridge (no IDA modules imported here)
-    from src.ida_pro_mcp.host.intelligence.federation import FederationBridge
+    federation_mod = load_host_module("intelligence.federation")
+    FederationBridge = federation_mod.FederationBridge
     bridge = FederationBridge(local_db)
     stats = bridge.federate_blackboards([remote_db])
     
@@ -136,7 +147,8 @@ def test_federation_blackboards(tmp_path):
 
 def test_tiny_emulator_advanced():
     with mock_ida_context():
-        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import TinyEmulator
+        trace_mod = load_tool_module("trace_analysis")
+        TinyEmulator = trace_mod.TinyEmulator
         
         sys.modules["ida_funcs"].get_func.return_value = None
         
@@ -194,7 +206,8 @@ def test_prefetch_context():
         
         sys.modules["ida_ua"].decode_insn.return_value = 0
         
-        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import _prefetch_function_context
+        trace_mod = load_tool_module("trace_analysis")
+        _prefetch_function_context = trace_mod._prefetch_function_context
         res = _prefetch_function_context(0x1000)
         assert res["ok"] is True
         assert res["function_address"] == "0x1000"
@@ -207,7 +220,8 @@ def test_tiny_emulator_new_instructions():
     with mock_ida_context():
         import sys
         from unittest.mock import MagicMock
-        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import TinyEmulator
+        trace_mod = load_tool_module("trace_analysis")
+        TinyEmulator = trace_mod.TinyEmulator
         
         # Configure mocked ida modules and constants
         import ida_ua
@@ -487,9 +501,10 @@ def test_tiny_emulator_new_instructions():
 
 
 def test_symbolic_expression_solving_and_formatting():
-    from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import (
-        format_sym_expr, format_constraint, solve_constraints
-    )
+    trace_mod = load_tool_module("trace_analysis")
+    format_sym_expr = trace_mod.format_sym_expr
+    format_constraint = trace_mod.format_constraint
+    solve_constraints = trace_mod.solve_constraints
     
     # Test expression formatting
     expr1 = ("add", ("reg", "rdi"), ("val", 0x10))
@@ -515,7 +530,9 @@ def test_tiny_emulator_symbolic_execution_branch_split():
     with mock_ida_context():
         import sys
         from unittest.mock import MagicMock
-        from src.ida_pro_mcp.ida_mcp.tools.trace_analysis import TinyEmulator, _trace_analysis_merged_dispatch
+        trace_mod = load_tool_module("trace_analysis")
+        TinyEmulator = trace_mod.TinyEmulator
+        _trace_analysis_merged_dispatch = trace_mod._trace_analysis_merged_dispatch
         
         import ida_ua
         ida_ua.o_reg = 1
@@ -633,9 +650,9 @@ def test_tiny_emulator_symbolic_execution_branch_split():
 def test_survey_system_and_differential_decomp(tmp_path):
     # Set up clean DB path inside tmp_path
     db_file = os.path.join(tmp_path, "test_re_experience.db")
-    with patch("src.ida_pro_mcp.host.survey_store._resolve_survey_db_path", return_value=db_file), \
-         patch("ida_pro_mcp.host.survey_store._resolve_survey_db_path", return_value=db_file, create=True):
-        from src.ida_pro_mcp.host.survey_store import SurveyStore
+    survey_store_mod = load_host_module("survey_store")
+    with patch.object(survey_store_mod, "_resolve_survey_db_path", return_value=db_file):
+        SurveyStore = survey_store_mod.SurveyStore
         store = SurveyStore()
         
         # Assert tables are empty initially
@@ -658,7 +675,8 @@ def test_survey_system_and_differential_decomp(tmp_path):
         assert s["dependencies"] == ["0x2000"]
         
         # Simulate visitor logging on dispatcher
-        from src.ida_pro_mcp.host.server_dispatch import ServerDispatchMixin
+        server_dispatch_mod = load_host_module("server_dispatch")
+        ServerDispatchMixin = server_dispatch_mod.ServerDispatchMixin
         class MockDispatcher(ServerDispatchMixin):
             def __init__(self):
                 self.current_session = MagicMock()
@@ -683,7 +701,9 @@ def test_survey_system_and_differential_decomp(tmp_path):
         
         # Test survey postponement (delay action)
         with mock_ida_context():
-            from src.ida_pro_mcp.ida_mcp.tools.survey import survey
+            sys.modules["idc"].get_idb_path.return_value = ""
+            survey_mod = load_tool_module("survey")
+            survey = survey_mod.survey
             res = survey(action="delay", addr="0x1000", delay_until_any=["0x3000"], reason="Need context")
             assert res["ok"] is True
             
@@ -726,9 +746,9 @@ def test_survey_system_and_differential_decomp(tmp_path):
                 assert changes["renames"] == {"v1": "data_ptr"}
                 
     # Test Ghidra simulation logic in code.py
-    from src.ida_pro_mcp.ida_mcp.tools.code import _simulate_ghidra_decomp
+    code_mod = load_tool_module("code")
+    _simulate_ghidra_decomp = code_mod._simulate_ghidra_decomp
     simulated = _simulate_ghidra_decomp("int v1 = 0; sub_4010(v1);", "test_func", 0x4000)
     assert "uVar1" in simulated
     assert "FUN_4010" in simulated
     assert "FUN_00004000" in simulated
-
