@@ -508,19 +508,31 @@ def test_session_retrieval_stats_cache_invalidation_on_merge():
 
 def test_intelligence_health_perf_block_when_profile_enabled():
     import sys
+    import types
     active_core = sys.modules.get("ida_pro_mcp.host.intelligence.core", intel_mod)
-    old_active = active_core.INTEL_PROFILE
-    old_intel = intel_mod.INTEL_PROFILE
     
-    active_core.INTEL_PROFILE = True
-    intel_mod.INTEL_PROFILE = True
-
-    # Also mutate any duplicate imports of intelligence.core
-    cores = []
-    for name, mod in list(sys.modules.items()):
-        if mod and (name.endswith("intelligence.core") or "intelligence.core" in name):
-            cores.append((mod, getattr(mod, "INTEL_PROFILE", False)))
-            mod.INTEL_PROFILE = True
+    # Scan for all core module objects in memory
+    core_modules = set()
+    for mod in list(sys.modules.values()):
+        if isinstance(mod, types.ModuleType):
+            file_path = getattr(mod, "__file__", "") or ""
+            name = getattr(mod, "__name__", "") or ""
+            if "intelligence/core.py" in file_path or name.endswith("intelligence.core") or name == "ida_pro_mcp.host.intelligence_core":
+                core_modules.add(mod)
+            for attr_val in list(mod.__dict__.values()):
+                if isinstance(attr_val, types.ModuleType):
+                    f = getattr(attr_val, "__file__", "") or ""
+                    n = getattr(attr_val, "__name__", "") or ""
+                    if "intelligence/core.py" in f or n.endswith("intelligence.core") or n == "ida_pro_mcp.host.intelligence_core":
+                        core_modules.add(attr_val)
+                        
+    core_modules.add(active_core)
+    core_modules.add(intel_mod)
+    
+    old_values = {}
+    for m in core_modules:
+        old_values[m] = getattr(m, "INTEL_PROFILE", False)
+        m.INTEL_PROFILE = True
 
     try:
         asm = ContextAssembler()
@@ -531,10 +543,8 @@ def test_intelligence_health_perf_block_when_profile_enabled():
         assert "perf" in health
         assert "assemble" in health["perf"]
     finally:
-        active_core.INTEL_PROFILE = old_active
-        intel_mod.INTEL_PROFILE = old_intel
-        for mod, old_val in cores:
-            mod.INTEL_PROFILE = old_val
+        for m, val in old_values.items():
+            m.INTEL_PROFILE = val
 
 
 def test_debounced_policy_save_and_flush_persists_file():
