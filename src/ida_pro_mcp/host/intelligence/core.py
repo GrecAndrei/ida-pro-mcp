@@ -843,12 +843,14 @@ class BehaviorClassifier:
         """Report how many functions match each anchor above min_similarity."""
         rows = []
         try:
+            import idautils
             funcs = list(idautils.Functions())[:max(1, int(max_funcs))]
         except Exception:
             funcs = []
         cache: List[Tuple[int, List[float]]] = []
         for ea in funcs:
             try:
+                import ida_hexrays
                 cfunc = ida_hexrays.decompile(ea)
                 if not cfunc:
                     continue
