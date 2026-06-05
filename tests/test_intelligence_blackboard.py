@@ -511,8 +511,17 @@ def test_intelligence_health_perf_block_when_profile_enabled():
     active_core = sys.modules.get("ida_pro_mcp.host.intelligence.core", intel_mod)
     old_active = active_core.INTEL_PROFILE
     old_intel = intel_mod.INTEL_PROFILE
+    
     active_core.INTEL_PROFILE = True
     intel_mod.INTEL_PROFILE = True
+
+    # Also mutate any duplicate imports of intelligence.core
+    cores = []
+    for name, mod in list(sys.modules.items()):
+        if mod and (name.endswith("intelligence.core") or "intelligence.core" in name):
+            cores.append((mod, getattr(mod, "INTEL_PROFILE", False)))
+            mod.INTEL_PROFILE = True
+
     try:
         asm = ContextAssembler()
         sess = "sess-perf"
@@ -524,6 +533,8 @@ def test_intelligence_health_perf_block_when_profile_enabled():
     finally:
         active_core.INTEL_PROFILE = old_active
         intel_mod.INTEL_PROFILE = old_intel
+        for mod, old_val in cores:
+            mod.INTEL_PROFILE = old_val
 
 
 def test_debounced_policy_save_and_flush_persists_file():
