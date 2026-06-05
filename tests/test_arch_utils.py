@@ -18,7 +18,7 @@ if _tools_dir not in sys.path:
 
 # We need to mock idaapi before importing arch_utils
 _mock_idaapi = MagicMock()
-sys.modules.setdefault("idaapi", _mock_idaapi)
+sys.modules["idaapi"] = _mock_idaapi
 
 
 class _FakeInfo:
