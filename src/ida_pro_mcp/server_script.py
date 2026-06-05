@@ -219,6 +219,122 @@ def _build_error(tool_name, message, code="INVALID_ARGS", details=None, hint=Non
             res["details"] = compacted
     return res
 
+def process_single(r):
+    if not isinstance(r, dict):
+        return _build_error("bridge", "Invalid request format", code="INVALID_REQUEST")
+        
+    if _SESSION_TOKEN:
+        provided = str(r.get("session_token") or "")
+        if not provided or not hmac.compare_digest(provided, _SESSION_TOKEN):
+            return _build_error(
+                "auth",
+                "Unauthorized session token",
+                code="UNAUTHORIZED",
+                hint="Use the host-managed authenticated session runtime.",
+            )
+            
+    if r.get("type") == "ping":
+        return {"pong": True}
+        
+    tool_name = r.get("tool")
+    args = r.get("args", {})
+    log_ev(f"Calling tool: {tool_name}")
+    try:
+        canonical_tool = _canonical_tool_name(tool_name)
+        if canonical_tool not in TOOLS:
+            loaded_tool, loaded_name, load_err = _try_load_single_tool(tool_name)
+            if loaded_tool:
+                canonical_tool = loaded_name
+                TOOLS[tool_name] = loaded_tool
+                TOOLS[canonical_tool] = loaded_tool
+
+        if canonical_tool not in TOOLS:
+            available_tools = sorted(TOOLS.keys())
+            res = _build_error(
+                tool_name,
+                f"Tool not found: {tool_name}",
+                code="TOOL_NOT_FOUND",
+                details={
+                    "available_tools": available_tools[:20],
+                    "available_tools_more": max(0, len(available_tools) - 20),
+                    "canonical_tool": canonical_tool,
+                    "load_error": load_err if 'load_err' in locals() else None,
+                },
+            )
+        else:
+            tool_func = TOOLS[canonical_tool]
+            siginfo = _tool_signature_info(tool_func)
+            # Pre-validate action if possible
+            if "action" in args and siginfo["actions"]:
+                action = args.get("action")
+                if action not in siginfo["actions"]:
+                    suggestion = _suggest_choice(action, siginfo["actions"])
+                    details = {"available_actions": siginfo["actions"]}
+                    if suggestion:
+                        details["suggested_action"] = suggestion
+                    res = _build_error(
+                        tool_name,
+                        f"Unknown action: {action}",
+                        details=details,
+                        hint="Use a valid action for this tool.",
+                    )
+                else:
+                    res = tool_func(**args)
+            else:
+                res = tool_func(**args)
+
+            if isinstance(res, dict) and res.get("error"):
+                # Augment INVALID_ARGS with available actions/args and suggestions
+                if res.get("code") in ("INVALID_ARGS", "UNKNOWN_ERROR"):
+                    res.setdefault("details", {})
+                    details = res["details"]
+                    if siginfo.get("actions"):
+                        details.setdefault("available_actions", siginfo["actions"])
+                        action = args.get("action")
+                        if action and action not in siginfo["actions"]:
+                            suggestion = _suggest_choice(action, siginfo["actions"])
+                            if suggestion:
+                                details.setdefault("suggested_action", suggestion)
+                                res.setdefault("hint", "Use a valid action for this tool.")
+                    if siginfo.get("params"):
+                        details.setdefault("available_args", siginfo["params"])
+                    # Missing arg hint from message
+                    msg = res.get("message", "")
+                    m = re.search(r"([a-zA-Z_]+) required", msg)
+                    if m:
+                        missing_arg = m.group(1)
+                        details.setdefault("missing_arg", missing_arg)
+                        details.setdefault("required_args", siginfo.get("required", []))
+                        res.setdefault("hint", "Provide the missing required argument.")
+        return res
+    except Exception as e:
+        # Attach helpful hints for common arg mistakes
+        tool_func = TOOLS.get(tool_name)
+        siginfo = _tool_signature_info(tool_func) if tool_func else {"params": [], "required": [], "actions": []}
+        msg = str(e)
+        details = {"available_args": siginfo.get("params", [])}
+        hint = None
+
+        # Unexpected keyword argument
+        m = re.search(r"unexpected keyword argument '([^']+)'", msg)
+        if m:
+            bad_arg = m.group(1)
+            suggestion = _suggest_choice(bad_arg, siginfo.get("params", []))
+            details["unexpected_arg"] = bad_arg
+            if suggestion:
+                details["suggested_arg"] = suggestion
+            hint = "Remove the unexpected argument or use the suggested name."
+
+        # Missing required positional argument
+        m = re.search(r"missing .* required positional argument: '([^']+)'", msg)
+        if m:
+            missing_arg = m.group(1)
+            details["required_args"] = siginfo.get("required", [])
+            details["missing_arg"] = missing_arg
+            hint = "Provide the missing required argument."
+
+        return _build_error(tool_name, msg, details=details, hint=hint)
+
 def run_server():
     port = int(os.environ.get("IDA_MCP_PORT", 13337))
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -229,6 +345,7 @@ def run_server():
     log_ev(f"Listening on {port}")
 
     while True:
+        conn = None
         try:
             # Poll for new connection
             readable, _, _ = select.select([server_sock], [], [], 0.05)
@@ -242,7 +359,6 @@ def run_server():
             
             raw_len = conn.recv(4)
             if not raw_len:
-                conn.close()
                 continue
                 
             length = int.from_bytes(raw_len, 'big')
@@ -256,7 +372,6 @@ def run_server():
                 )
                 resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
                 conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
-                conn.close()
                 continue
             data = b""
             while len(data) < length:
@@ -273,134 +388,28 @@ def run_server():
                 )
                 resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
                 conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
-                conn.close()
                 continue
                 
             req = json.loads(data.decode('utf-8'))
-            if _SESSION_TOKEN:
-                provided = str(req.get("session_token") or "")
-                if not provided or not hmac.compare_digest(provided, _SESSION_TOKEN):
-                    res = _build_error(
-                        "auth",
-                        "Unauthorized session token",
-                        code="UNAUTHORIZED",
-                        hint="Use the host-managed authenticated session runtime.",
-                    )
-                    resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
-                    conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
-                    conn.close()
-                    continue
             
-            if req.get("type") == "ping":
-                resp = b'{"pong":true}'
-                conn.sendall((len(resp)).to_bytes(4, 'big') + resp)
+            if isinstance(req, list):
+                res = [process_single(r) for r in req]
             else:
-                tool_name = req.get("tool")
-                args = req.get("args", {})
-                log_ev(f"Calling tool: {tool_name}")
-                try:
-                    canonical_tool = _canonical_tool_name(tool_name)
-                    if canonical_tool not in TOOLS:
-                        loaded_tool, loaded_name, load_err = _try_load_single_tool(tool_name)
-                        if loaded_tool:
-                            canonical_tool = loaded_name
-                            TOOLS[tool_name] = loaded_tool
-                            TOOLS[canonical_tool] = loaded_tool
-
-                    if canonical_tool not in TOOLS:
-                        available_tools = sorted(TOOLS.keys())
-                        res = _build_error(
-                            tool_name,
-                            f"Tool not found: {tool_name}",
-                            code="TOOL_NOT_FOUND",
-                            details={
-                                "available_tools": available_tools[:20],
-                                "available_tools_more": max(0, len(available_tools) - 20),
-                                "canonical_tool": canonical_tool,
-                                "load_error": load_err if 'load_err' in locals() else None,
-                            },
-                        )
-                    else:
-                        tool_func = TOOLS[canonical_tool]
-                        siginfo = _tool_signature_info(tool_func)
-                        # Pre-validate action if possible
-                        if "action" in args and siginfo["actions"]:
-                            action = args.get("action")
-                            if action not in siginfo["actions"]:
-                                suggestion = _suggest_choice(action, siginfo["actions"])
-                                details = {"available_actions": siginfo["actions"]}
-                                if suggestion:
-                                    details["suggested_action"] = suggestion
-                                res = _build_error(
-                                    tool_name,
-                                    f"Unknown action: {action}",
-                                    details=details,
-                                    hint="Use a valid action for this tool.",
-                                )
-                            else:
-                                res = tool_func(**args)
-                        else:
-                            res = tool_func(**args)
-
-                        if isinstance(res, dict) and res.get("error"):
-                            # Augment INVALID_ARGS with available actions/args and suggestions
-                            if res.get("code") in ("INVALID_ARGS", "UNKNOWN_ERROR"):
-                                res.setdefault("details", {})
-                                details = res["details"]
-                                if siginfo.get("actions"):
-                                    details.setdefault("available_actions", siginfo["actions"])
-                                    action = args.get("action")
-                                    if action and action not in siginfo["actions"]:
-                                        suggestion = _suggest_choice(action, siginfo["actions"])
-                                        if suggestion:
-                                            details.setdefault("suggested_action", suggestion)
-                                            res.setdefault("hint", "Use a valid action for this tool.")
-                                if siginfo.get("params"):
-                                    details.setdefault("available_args", siginfo["params"])
-                                # Missing arg hint from message
-                                msg = res.get("message", "")
-                                m = re.search(r"([a-zA-Z_]+) required", msg)
-                                if m:
-                                    missing_arg = m.group(1)
-                                    details.setdefault("missing_arg", missing_arg)
-                                    details.setdefault("required_args", siginfo.get("required", []))
-                                    res.setdefault("hint", "Provide the missing required argument.")
-                except Exception as e:
-                    # Attach helpful hints for common arg mistakes
-                    tool_func = TOOLS.get(tool_name)
-                    siginfo = _tool_signature_info(tool_func) if tool_func else {"params": [], "required": [], "actions": []}
-                    msg = str(e)
-                    details = {"available_args": siginfo.get("params", [])}
-                    hint = None
-
-                    # Unexpected keyword argument
-                    m = re.search(r"unexpected keyword argument '([^']+)'", msg)
-                    if m:
-                        bad_arg = m.group(1)
-                        suggestion = _suggest_choice(bad_arg, siginfo.get("params", []))
-                        details["unexpected_arg"] = bad_arg
-                        if suggestion:
-                            details["suggested_arg"] = suggestion
-                        hint = "Remove the unexpected argument or use the suggested name."
-
-                    # Missing required positional argument
-                    m = re.search(r"missing .* required positional argument: '([^']+)'", msg)
-                    if m:
-                        missing_arg = m.group(1)
-                        details["required_args"] = siginfo.get("required", [])
-                        details["missing_arg"] = missing_arg
-                        hint = "Provide the missing required argument."
-
-                    res = _build_error(tool_name, msg, details=details, hint=hint)
+                res = process_single(req)
                 
-                resp_json = json.dumps(res, separators=(",", ":")).encode('utf-8')
-                conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
+            resp_json = json.dumps(res, separators=(",", ":")).encode('utf-8')
+            conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
             
-            conn.close()
             log_ev("Request finished")
         except socket.timeout: log_ev("Socket timeout")
         except KeyboardInterrupt: break
         except Exception as e: log_ev(f"Loop error: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 def _apply_pre_analysis_options():
     """Apply processor/bitness/endian/loader_options BEFORE auto-analysis."""
