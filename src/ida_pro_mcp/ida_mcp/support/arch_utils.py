@@ -592,6 +592,10 @@ def is_return_mnemonic(mnem_lower, disasm_lower="", arch=None):
             return True
         if mnem_lower == "ldp" and "pc" in disasm_lower:
             return True
+        if mnem_lower.startswith("ldm") and "pc" in disasm_lower:
+            return True
+        if mnem_lower == "ldr" and "pc" in disasm_lower:
+            return True
         return False
 
     if is_mips_family(arch):
