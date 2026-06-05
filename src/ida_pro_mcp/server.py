@@ -4,6 +4,7 @@ import json
 import argparse
 import http.client
 import traceback
+import tempfile
 import tomllib
 import tomli_w
 from typing import TYPE_CHECKING
@@ -42,7 +43,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
     try:
         if isinstance(request, dict):
-            request = json.dumps(request)
+            request = json.dumps(request).encode("utf-8")
         elif isinstance(request, str):
             request = request.encode("utf-8")
         conn.request("POST", "/mcp", request, {"Content-Type": "application/json"})
