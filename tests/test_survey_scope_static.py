@@ -63,7 +63,7 @@ def test_survey_call_sites_are_context_scoped():
     code_tool_text = CODE_TOOL_PATH.read_text(encoding="utf-8")
 
     assert "def _survey_context_key(self) -> Optional[str]:" in dispatch_text
-    assert "return SurveyStore(context_key=self._survey_context_key())" in dispatch_text
+    assert "return SurveyStore(db_path=db_path, context_key=self._survey_context_key())" in dispatch_text
     assert "store = self._get_survey_store()" in dispatch_text
     assert "SurveyStore()" not in dispatch_text
     assert 'SurveyStore(context_key=idc.get_idb_path() or "")' in survey_tool_text
