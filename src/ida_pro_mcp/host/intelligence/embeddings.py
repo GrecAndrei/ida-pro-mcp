@@ -84,6 +84,28 @@ class FunctionEmbeddingIndex:
             self._init_db()
 
         self._init_meta()
+        try:
+            if self.needs_rebuild(self._embedder):
+                with self._conn() as conn:
+                    conn.execute("DELETE FROM func_embeddings")
+                    now = _now_iso()
+                    base = {
+                        "index_schema_version": str(self.INDEX_SCHEMA_VERSION),
+                        "signature_extractor_version": "v1",
+                        "anchor_set_hash": "",
+                        "created_at": now,
+                        "updated_at": now,
+                        "source_idb_path": self._source_idb_path(),
+                        "source_binary_path": "",
+                        "source_fingerprint": self._source_fingerprint(),
+                    }
+                    base.update(self._embedder_meta_snapshot())
+                    for k, v in base.items():
+                        self._meta_set(conn, k, v)
+                    conn.commit()
+                self._cache.clear()
+        except Exception:
+            pass
         self._load_cache()
 
     def _conn(self) -> sqlite3.Connection:
