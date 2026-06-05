@@ -507,7 +507,11 @@ def test_session_retrieval_stats_cache_invalidation_on_merge():
 
 
 def test_intelligence_health_perf_block_when_profile_enabled():
-    old = intel_mod.INTEL_PROFILE
+    import sys
+    active_core = sys.modules.get("ida_pro_mcp.host.intelligence.core", intel_mod)
+    old_active = active_core.INTEL_PROFILE
+    old_intel = intel_mod.INTEL_PROFILE
+    active_core.INTEL_PROFILE = True
     intel_mod.INTEL_PROFILE = True
     try:
         asm = ContextAssembler()
@@ -518,7 +522,8 @@ def test_intelligence_health_perf_block_when_profile_enabled():
         assert "perf" in health
         assert "assemble" in health["perf"]
     finally:
-        intel_mod.INTEL_PROFILE = old
+        active_core.INTEL_PROFILE = old_active
+        intel_mod.INTEL_PROFILE = old_intel
 
 
 def test_debounced_policy_save_and_flush_persists_file():
