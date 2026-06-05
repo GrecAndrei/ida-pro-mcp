@@ -104,7 +104,13 @@ class ServerDispatchMixin:
     def _get_survey_store(self):
         from .survey_store import SurveyStore
 
-        return SurveyStore(context_key=self._survey_context_key())
+        cache_dir = getattr(self, "cache_dir", None)
+        if cache_dir:
+            db_path = os.path.join(cache_dir, "re_experience.db")
+        else:
+            db_path = None
+
+        return SurveyStore(db_path=db_path, context_key=self._survey_context_key())
 
     def _get_active_survey(self) -> Optional[Dict[str, Any]]:
         try:
