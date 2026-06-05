@@ -7,7 +7,10 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
-TOOLS = os.path.join(SRC, "ida_pro_mcp", "ida_mcp", "tools")
+IDA_MCP = os.path.join(SRC, "ida_pro_mcp", "ida_mcp")
+if IDA_MCP not in sys.path:
+    sys.path.insert(0, IDA_MCP)
+TOOLS = os.path.join(IDA_MCP, "tools")
 if TOOLS not in sys.path:
     sys.path.insert(0, TOOLS)
 
