@@ -70,7 +70,7 @@ class TestBehaviorClassifierManagement(unittest.TestCase):
 class TestClassifySchemaHelpers(unittest.TestCase):
     def setUp(self):
         self._orig_modules = {}
-        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling"):
+        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling", "classify"):
             self._orig_modules[name] = sys.modules.get(name)
         sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
         for name in ("idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines"):
@@ -103,6 +103,7 @@ class TestClassifySchemaHelpers(unittest.TestCase):
             setattr(eh_mod, name, lambda *args, **kwargs: None)
         sys.modules["error_handling"] = eh_mod
         import importlib
+        sys.modules.pop("classify", None)
         self.classify_mod = importlib.import_module("classify")
 
         class FakeFn:
@@ -190,7 +191,7 @@ class TestClassifySchemaHelpers(unittest.TestCase):
 class TestRawBinaryPlanning(unittest.TestCase):
     def setUp(self):
         self._orig_modules = {}
-        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling"):
+        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling", "llm_helpers"):
             self._orig_modules[name] = sys.modules.get(name)
         sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
         for name in ("idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines"):
@@ -223,6 +224,7 @@ class TestRawBinaryPlanning(unittest.TestCase):
             setattr(eh_mod, name, lambda *args, **kwargs: None)
         sys.modules["error_handling"] = eh_mod
         import importlib
+        sys.modules.pop("llm_helpers", None)
         self.llm_helpers_mod = importlib.import_module("llm_helpers")
 
     def tearDown(self):
@@ -267,7 +269,7 @@ class TestRawBinaryPlanning(unittest.TestCase):
 class TestFirmwareViewBounds(unittest.TestCase):
     def setUp(self):
         self._orig_modules = {}
-        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling", "memrl", "blackboard"):
+        for name in ("ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines", "rpc", "sync", "utils", "error_handling", "memrl", "blackboard", "firmware_view"):
             self._orig_modules[name] = sys.modules.get(name)
         sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
         for name in ("idaapi", "idautils", "idc", "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin", "ida_frame", "ida_lines"):
@@ -307,6 +309,7 @@ class TestFirmwareViewBounds(unittest.TestCase):
         bb_mod.BlackboardStore = None
         sys.modules["blackboard"] = bb_mod
         import importlib
+        sys.modules.pop("firmware_view", None)
         self.firmware_view_mod = importlib.import_module("firmware_view")
 
     def tearDown(self):
@@ -436,7 +439,7 @@ class TestIdbOverviewRouting(unittest.TestCase):
             "ida_mcp", "idaapi", "idautils", "idc", "ida_name", "ida_bytes",
             "ida_hexrays", "ida_typeinf", "ida_nalt", "ida_segment", "ida_funcs",
             "ida_kernwin", "ida_frame", "ida_lines", "ida_entry", "ida_ida",
-            "rpc", "sync", "utils", "error_handling"
+            "rpc", "sync", "utils", "error_handling", "idb"
         ):
             self._orig_modules[name] = sys.modules.get(name)
         sys.modules["ida_mcp"] = types.ModuleType("ida_mcp")
@@ -474,6 +477,7 @@ class TestIdbOverviewRouting(unittest.TestCase):
             setattr(eh_mod, name, lambda *args, **kwargs: None)
         sys.modules["error_handling"] = eh_mod
         import importlib
+        sys.modules.pop("idb", None)
         self.idb_mod = importlib.import_module("idb")
 
     def tearDown(self):
