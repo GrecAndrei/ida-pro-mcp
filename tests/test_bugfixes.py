@@ -503,5 +503,43 @@ class TestSessionSwitchCloseRebuild(unittest.TestCase):
         self.assertEqual(r["code"], "SESSION_NOT_FOUND")
 
 
+# =============================================================================
+# 9. Tests for Worker R2 Fixes
+# =============================================================================
+
+
+class TestWorkerR2Fixes(unittest.TestCase):
+    def test_arm_return_mnemonics(self):
+        from support.arch_utils import is_return_mnemonic
+        
+        # Test ARM load multiple restoring pc
+        self.assertTrue(is_return_mnemonic("ldm", "ldm sp!, {r4-r11, pc}", "arm"))
+        self.assertTrue(is_return_mnemonic("ldmfd", "ldmfd sp!, {r4-r11, pc}", "arm"))
+        self.assertTrue(is_return_mnemonic("ldmia", "ldmia sp!, {r4-r11, pc}", "arm"))
+        
+        # Test ARM direct load restoring pc
+        self.assertTrue(is_return_mnemonic("ldr", "ldr pc, [sp], #4", "arm"))
+        
+        # Test normal ARM non-return
+        self.assertFalse(is_return_mnemonic("ldr", "ldr r0, [sp], #4", "arm"))
+        self.assertFalse(is_return_mnemonic("ldm", "ldm sp!, {r4-r11}", "arm"))
+
+    def test_socket_bridge_batch_handling(self):
+        import sys
+        from unittest.mock import MagicMock
+        sys.modules['idaapi'] = MagicMock()
+        sys.modules['idc'] = MagicMock()
+        sys.modules['ida_auto'] = MagicMock()
+        sys.modules['idautils'] = MagicMock()
+        sys.modules['ida_segment'] = MagicMock()
+        
+        from src.ida_pro_mcp.server_script import process_single
+        
+        # Test that non-dict request format is handled gracefully
+        res = process_single(["not", "a", "dict"])
+        self.assertEqual(res["code"], "INVALID_REQUEST")
+        self.assertTrue(res["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
