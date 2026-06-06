@@ -16,6 +16,17 @@ from typing import Any, Dict, List, Optional, Tuple
 from .helpers import dot_product as _cosine
 
 
+_SEARCH_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}|0x[0-9a-fA-F]+|\b\d+\b")
+_SEARCH_NOISE_TOKENS = frozenset({
+    "the", "and", "for", "with", "this", "that", "from", "into", "while",
+    "void", "char", "int", "uint", "long", "short", "bool", "true", "false",
+    "const", "struct", "class", "return", "case", "break", "default", "null",
+    "auto", "static", "extern", "signed", "unsigned", "size", "len", "buf",
+    "ptr", "tmp", "ret", "arg", "args", "result", "value", "values", "data",
+    "var", "vars", "out", "dst", "src", "count", "index", "idx",
+})
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -40,6 +51,37 @@ def _safe_stat(path: str) -> tuple[int, int]:
         return 0, 0
     st = os.stat(path)
     return int(st.st_size), int(st.st_mtime_ns)
+
+
+def _normalize_search_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _tokenize_search_text(text: str, max_tokens: int = 96) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for tok in _SEARCH_TOKEN_RE.findall(str(text or "")):
+        low = tok.lower()
+        if low in seen or low in _SEARCH_NOISE_TOKENS:
+            continue
+        if low.isdigit() and len(low) < 3:
+            continue
+        seen.add(low)
+        out.append(low)
+        if len(out) >= max_tokens:
+            break
+    return out
+
+
+def _extract_signature_text(pseudocode: str, max_tokens: int = 96) -> str:
+    return " ".join(_tokenize_search_text(pseudocode, max_tokens=max_tokens))
+
+
+def _clip_signature(text: str, max_len: int = 160) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "").strip())
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 3] + "..."
 
 
 class FunctionEmbeddingIndex:
@@ -357,31 +399,56 @@ class FunctionEmbeddingIndex:
     def _phash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
+    def _row_meta_for_eas(self, eas: List[str]) -> Dict[str, Dict[str, Any]]:
+        if not eas:
+            return {}
+        rows: Dict[str, Dict[str, Any]] = {}
+        try:
+            with self._conn() as conn:
+                ph = ",".join("?" * len(eas))
+                for row in conn.execute(
+                    f"SELECT ea, name, signature_text, indexed_at FROM func_embeddings WHERE ea IN ({ph})",
+                    eas,
+                ):
+                    rows[str(row[0])] = {
+                        "name": str(row[1] or row[0]),
+                        "signature_text": str(row[2] or ""),
+                        "indexed_at": row[3],
+                    }
+        except Exception:
+            return {}
+        return rows
+
     def index(self, func_ea: str, name: str, pseudocode: str) -> None:
         """Embed and store a function. Skips if pseudocode unchanged."""
         ph = self._phash(pseudocode)
+        signature_text = _extract_signature_text(pseudocode)
+        signature_hash = self._phash(signature_text or pseudocode)
         try:
             with self._conn() as conn:
                 row = conn.execute(
-                    "SELECT pseudo_hash, name FROM func_embeddings WHERE ea=?", (func_ea,)
+                    "SELECT pseudo_hash, name, signature_hash, signature_text FROM func_embeddings WHERE ea=?",
+                    (func_ea,),
                 ).fetchone()
                 if row and row[0] == ph:
-                    if row[1] == name:
+                    stored_sig_hash = str(row[2] or "") if len(row) > 2 else ""
+                    stored_sig_text = str(row[3] or "") if len(row) > 3 else ""
+                    if row[1] == name and stored_sig_hash == signature_hash and stored_sig_text == signature_text:
                         return  # completely unchanged
-                    else:
-                        conn.execute(
-                            "UPDATE func_embeddings SET name=? WHERE ea=?", (name, func_ea)
-                        )
-                        conn.commit()
-                        return
+                    conn.execute(
+                        "UPDATE func_embeddings SET name=?, signature_text=?, signature_hash=?, indexed_at=? WHERE ea=?",
+                        (name, signature_text, signature_hash, time.time(), func_ea),
+                    )
+                    self._meta_set(conn, "updated_at", _now_iso())
+                    conn.commit()
+                    return
         except Exception:
             pass
 
         vec = self._embedder.embed(pseudocode)
         blob = self._pack(vec)
         self._cache[func_ea] = vec
-        sig_hash = self._phash(pseudocode)
-        src_hash = hashlib.sha256(f"{func_ea}:{sig_hash}".encode("utf-8")).hexdigest()[:24]
+        src_hash = hashlib.sha256(f"{func_ea}:{ph}".encode("utf-8")).hexdigest()[:24]
         try:
             with self._conn() as conn:
                 conn.execute(
@@ -410,8 +477,8 @@ class FunctionEmbeddingIndex:
                         time.time(),
                         "function",
                         src_hash,
-                        None,
-                        sig_hash,
+                        signature_text,
+                        signature_hash,
                     ),
                 )
                 self._meta_set(conn, "updated_at", _now_iso())
@@ -425,14 +492,17 @@ class FunctionEmbeddingIndex:
     def index_async(self, func_ea: str, name: str, pseudocode: str) -> None:
         """Non-blocking index: fire-and-forget in background thread."""
         ph = self._phash(pseudocode)
+        signature_text = _extract_signature_text(pseudocode)
+        signature_hash = self._phash(signature_text or pseudocode)
         if self._cache.get(func_ea) is not None:
             # Check if we already have this exact pseudocode
             try:
                 with self._conn() as conn:
                     row = conn.execute(
-                        "SELECT pseudo_hash, name FROM func_embeddings WHERE ea=?", (func_ea,)
+                        "SELECT pseudo_hash, name, signature_hash, signature_text FROM func_embeddings WHERE ea=?",
+                        (func_ea,),
                     ).fetchone()
-                    if row and row[0] == ph and row[1] == name:
+                    if row and row[0] == ph and row[1] == name and str(row[2] or "") == signature_hash and str(row[3] or "") == signature_text:
                         return
             except Exception:
                 pass
@@ -465,18 +535,14 @@ class FunctionEmbeddingIndex:
         if not scored:
             return []
         top_eas = [ea for _, ea in scored[:top_k]]
-        names: Dict[str, str] = {}
-        try:
-            with self._conn() as conn:
-                ph = ",".join("?" * len(top_eas))
-                for row in conn.execute(
-                    f"SELECT ea, name FROM func_embeddings WHERE ea IN ({ph})", top_eas
-                ):
-                    names[row[0]] = row[1] or row[0]
-        except Exception:
-            pass
+        meta = self._row_meta_for_eas(top_eas)
         return [
-            {"ea": ea, "name": names.get(ea, ea), "similarity": round(sim, 4)}
+            {
+                "ea": ea,
+                "name": meta.get(ea, {}).get("name", ea),
+                "similarity": round(sim, 4),
+                "signature": _clip_signature(str(meta.get(ea, {}).get("signature_text") or "")),
+            }
             for sim, ea in scored[:top_k]
         ]
 
@@ -503,21 +569,182 @@ class FunctionEmbeddingIndex:
             return []
         # Fetch names for top results
         top_eas = [ea for _, ea in scored[:top_k]]
-        names: Dict[str, str] = {}
-        try:
-            with self._conn() as conn:
-                ph = ",".join("?" * len(top_eas))
-                for row in conn.execute(
-                    f"SELECT ea, name FROM func_embeddings WHERE ea IN ({ph})",
-                    top_eas,
-                ):
-                    names[row[0]] = row[1] or row[0]
-        except Exception:
-            pass
+        meta = self._row_meta_for_eas(top_eas)
         return [
-            {"ea": ea, "name": names.get(ea, ea), "similarity": round(sim, 4)}
+            {
+                "ea": ea,
+                "name": meta.get(ea, {}).get("name", ea),
+                "similarity": round(sim, 4),
+                "signature": _clip_signature(str(meta.get(ea, {}).get("signature_text") or "")),
+            }
             for sim, ea in scored[:top_k]
         ]
+
+    def search_text(
+        self,
+        query: str,
+        top_k: int = 10,
+        threshold: float = 0.0,
+        exclude_ea: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Rank indexed functions by lexical overlap over stored signatures and names."""
+        q_norm = _normalize_search_text(query)
+        q_tokens = set(_tokenize_search_text(query, max_tokens=48))
+        if not q_norm and not q_tokens:
+            return []
+
+        rows: List[Dict[str, Any]] = []
+        try:
+            with self._conn() as conn:
+                for row in conn.execute(
+                    "SELECT ea, name, signature_text, indexed_at FROM func_embeddings"
+                ):
+                    ea = str(row[0])
+                    if exclude_ea and ea == exclude_ea:
+                        continue
+                    name = str(row[1] or ea)
+                    signature_text = str(row[2] or "")
+                    blob = f"{name} {signature_text}".strip()
+                    if not blob:
+                        continue
+                    blob_norm = _normalize_search_text(blob)
+                    row_tokens = set(_tokenize_search_text(blob, max_tokens=96))
+                    overlap = len(q_tokens.intersection(row_tokens)) / max(1, len(q_tokens)) if q_tokens else 0.0
+                    exact = 1.0 if q_norm and q_norm in blob_norm else 0.0
+                    prefix = 0.35 if q_norm and (name.lower().startswith(q_norm) or any(tok.startswith(q_norm) for tok in row_tokens)) else 0.0
+                    score = round((exact * 1.4) + overlap + prefix, 4)
+                    if score < float(threshold):
+                        continue
+                    rows.append(
+                        {
+                            "ea": ea,
+                            "name": name,
+                            "score": score,
+                            "exact_match": bool(exact),
+                            "matched_tokens": sorted(q_tokens.intersection(row_tokens))[:12],
+                            "signature": _clip_signature(signature_text),
+                            "indexed_at": row[3],
+                        }
+                    )
+        except Exception:
+            return []
+
+        rows.sort(
+            key=lambda r: (
+                float(r.get("score") or 0.0),
+                len(r.get("matched_tokens") or []),
+                float(r.get("indexed_at") or 0.0),
+            ),
+            reverse=True,
+        )
+        return rows[: max(1, int(top_k))]
+
+    def hybrid_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        threshold: float = 0.0,
+        exclude_ea: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Blend semantic similarity with lexical signature overlap."""
+        if not query:
+            return []
+
+        semantic_hits: List[Dict[str, Any]] = []
+        lexical_hits = self.search_text(
+            query,
+            top_k=max(max(1, int(top_k)) * 6, 48),
+            threshold=0.0,
+            exclude_ea=exclude_ea,
+        )
+        try:
+            query_text = _extract_signature_text(query, max_tokens=64) or str(query)
+            query_vec = self._embedder.embed(query_text)
+            semantic_hits = self.similar_vec(
+                query_vec,
+                top_k=max(max(1, int(top_k)) * 6, 48),
+                exclude_ea=exclude_ea,
+                threshold=0.0,
+            )
+        except Exception:
+            semantic_hits = []
+
+        sem_max = max((float(h.get("similarity") or 0.0) for h in semantic_hits), default=1.0) or 1.0
+        lex_max = max((float(h.get("score") or 0.0) for h in lexical_hits), default=1.0) or 1.0
+        merged: Dict[str, Dict[str, Any]] = {}
+
+        for hit in semantic_hits:
+            ea = str(hit.get("ea") or "")
+            if not ea:
+                continue
+            merged[ea] = {
+                "ea": ea,
+                "name": hit.get("name") or ea,
+                "similarity": round(float(hit.get("similarity") or 0.0), 4),
+                "lexical_score": 0.0,
+                "exact_match": False,
+                "matched_tokens": [],
+                "signature": hit.get("signature") or "",
+            }
+
+        for hit in lexical_hits:
+            ea = str(hit.get("ea") or "")
+            if not ea:
+                continue
+            row = merged.setdefault(
+                ea,
+                {
+                    "ea": ea,
+                    "name": hit.get("name") or ea,
+                    "similarity": 0.0,
+                    "lexical_score": 0.0,
+                    "exact_match": False,
+                    "matched_tokens": [],
+                    "signature": hit.get("signature") or "",
+                },
+            )
+            row["name"] = row.get("name") or hit.get("name") or ea
+            row["lexical_score"] = round(max(float(row.get("lexical_score") or 0.0), float(hit.get("score") or 0.0)), 4)
+            row["exact_match"] = bool(row.get("exact_match") or hit.get("exact_match"))
+            row["matched_tokens"] = sorted(set(list(row.get("matched_tokens") or []) + list(hit.get("matched_tokens") or [])))[:12]
+            if not row.get("signature"):
+                row["signature"] = hit.get("signature") or ""
+
+        ranked: List[Dict[str, Any]] = []
+        for row in merged.values():
+            sem_norm = float(row.get("similarity") or 0.0) / sem_max if sem_max > 0 else 0.0
+            lex_norm = float(row.get("lexical_score") or 0.0) / lex_max if lex_max > 0 else 0.0
+            exact_bonus = 0.12 if row.get("exact_match") else 0.0
+            score = (0.68 * sem_norm) + (0.32 * lex_norm) + exact_bonus
+            row["score"] = round(score, 4)
+            if float(row.get("score") or 0.0) >= float(threshold):
+                ranked.append(row)
+
+        ranked.sort(
+            key=lambda r: (
+                float(r.get("score") or 0.0),
+                float(r.get("similarity") or 0.0),
+                float(r.get("lexical_score") or 0.0),
+            ),
+            reverse=True,
+        )
+        return ranked[: max(1, int(top_k))]
+
+    def search(
+        self,
+        query_or_vec: Any,
+        top_k: int = 10,
+        threshold: float = 0.0,
+        exclude_ea: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Compatibility entrypoint for semantic or hybrid function search."""
+        if isinstance(query_or_vec, (list, tuple)):
+            try:
+                vec = [float(v) for v in query_or_vec]
+            except Exception:
+                return []
+            return self.similar_vec(vec, top_k=top_k, exclude_ea=exclude_ea, threshold=threshold)
+        return self.hybrid_search(str(query_or_vec or ""), top_k=top_k, threshold=threshold, exclude_ea=exclude_ea)
 
     @property
     def size(self) -> int:

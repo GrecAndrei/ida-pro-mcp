@@ -401,9 +401,8 @@ def search(
                     return make_error(MCPError.INVALID_ARGS,
                                       "No embeddings indexed yet. Decompile some functions first "
                                       "or run schemaboot(action='ingest').")
-                # Embed the query and search (with lightweight embedding-driven expansion).
-                q_vec = asm._embedder.embed(actual_pattern)
-                results_raw = idx.search(q_vec, top_k=max(6, limit * 3), threshold=0.0)
+                # Hybrid search over indexed functions, then behavior-driven expansion.
+                results_raw = idx.search(actual_pattern, top_k=max(6, limit * 3), threshold=0.0)
                 expansion_queries = []
                 try:
                     classifier = asm._behavior_classifier()
@@ -425,8 +424,7 @@ def search(
                             merged_by_ea[ea_key] = dict(r)
                     for extra_q in expansion_queries[:3]:
                         try:
-                            extra_vec = asm._embedder.embed(extra_q)
-                            extra_hits = idx.search(extra_vec, top_k=max(3, limit), threshold=0.0)
+                            extra_hits = idx.search(extra_q, top_k=max(3, limit), threshold=0.0)
                         except Exception:
                             continue
                         for h in extra_hits:
@@ -470,9 +468,10 @@ def search(
                     "results": "\n".join(rows),
                     "count": len(rows),
                     "items": [{"addr": r.get("ea"), "name": r.get("name"),
-                               "similarity": r.get("similarity")} for r in results_raw],
-                    "note": "Results ranked by bge-code-v1 cosine similarity. "
-                            "Higher similarity = more semantically similar to query.",
+                               "similarity": r.get("similarity"),
+                               "score": r.get("score"),
+                               "signature": r.get("signature")} for r in results_raw],
+                    "note": "Results ranked by hybrid function-index retrieval: embedding similarity plus indexed lexical signature overlap.",
                 }
             except Exception as e:
                 response = make_error(MCPError.IDA_ERROR, f"nl search failed: {e}",

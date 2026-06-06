@@ -207,10 +207,9 @@ def query(
                     "backend": embedder.backend,
                     "note": "No functions indexed yet. Run code(action='decompile') on functions first.",
                 }
-            q_vec = embedder.embed(q)
             top_k = int(args.get("limit") or 10)
             min_conf = _normalize_conf(args.get("min_confidence"), default=0.25)
-            results = idx.similar_vec(q_vec, top_k=top_k * 3, threshold=0.0)
+            results = idx.search(q, top_k=top_k * 3, threshold=0.0)
             expansion_queries = []
             try:
                 from ida_pro_mcp.host.intelligence_core import BehaviorClassifier
@@ -239,8 +238,7 @@ def query(
                         by_addr[ea] = dict(r)
                 for eq in expansion_queries[:3]:
                     try:
-                        ev = embedder.embed(eq)
-                        extras = idx.similar_vec(ev, top_k=max(3, top_k), threshold=0.0)
+                        extras = idx.search(eq, top_k=max(3, top_k), threshold=0.0)
                     except Exception:
                         continue
                     for r in extras:

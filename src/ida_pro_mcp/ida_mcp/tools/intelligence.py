@@ -587,8 +587,7 @@ def intelligence(
             top_k = max(1, int(kwargs.get("top_k", max_items)))
             threshold = float(kwargs.get("threshold", 0.0))
             idx, db_path = _index_for_current_idb()
-            qvec = embedder.embed(str(query))
-            rows = idx.similar_vec(qvec, top_k=top_k, threshold=threshold)
+            rows = idx.search(str(query), top_k=top_k, threshold=threshold)
             persisted_state = _persist_embedder_state(
                 idx,
                 "semantic_search",
@@ -598,6 +597,7 @@ def intelligence(
                 "ok": True,
                 "query": str(query),
                 "backend": embedder.backend,
+                "search_strategy": "hybrid_function_index",
                 "matches": rows,
                 "index": {"path": db_path, "size": idx.size},
                 "capsule_embedding_state": persisted_state,

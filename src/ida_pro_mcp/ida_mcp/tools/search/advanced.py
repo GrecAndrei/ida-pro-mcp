@@ -1,5 +1,6 @@
 """SEARCH.ADVANCED - Vulnerable, constants, decompiled, and structured search."""
 
+import re
 import time as _time
 
 try:
@@ -9,10 +10,270 @@ except ImportError:
 
 from .core import (
     clip_text, paginate_records, build_response, resolve_target,
-    iter_segments, iter_code, _cache_get, _cache_set, _cache_key,
-    MAX_LIMIT, derive_vuln_type, get_cached_constant_db,
+    iter_segments, iter_code, _cache_get, _cache_set, _cache_key, _SEARCH_CACHE,
+    MAX_LIMIT, derive_vuln_type, get_cached_constant_db, get_cached_imports, get_cached_strings,
     _get_db_fingerprint, SearchTimeout, safe_generate_disasm_line,
 )
+
+
+_DECOMPILED_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+_DECOMPILED_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "that", "this", "from", "into", "while",
+    "void", "char", "int", "uint", "long", "short", "bool", "true", "false",
+    "const", "struct", "class", "return", "case", "break", "default", "null",
+})
+
+
+def _iter_function_starts(range_start=None, range_end=None):
+    """Yield function starts, respecting an optional address range."""
+    if range_start is None or range_end is None:
+        yield from idautils.Functions()
+        return
+
+    seen = set()
+    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+        for func_ea in idautils.Functions(seg_start, seg_end):
+            if func_ea in seen:
+                continue
+            seen.add(func_ea)
+            yield func_ea
+
+
+def _function_in_range(func, range_start=None, range_end=None) -> bool:
+    if range_start is None or range_end is None:
+        return True
+    return bool(func) and func.start_ea < range_end and func.end_ea > range_start
+
+
+def _decompiled_query_tokens(pattern: str) -> list[str]:
+    seen = set()
+    tokens = []
+    for tok in _DECOMPILED_TOKEN_RE.findall(pattern or ""):
+        low = tok.lower()
+        if low in seen or low in _DECOMPILED_STOPWORDS or low.isdigit():
+            continue
+        seen.add(low)
+        tokens.append(low)
+    tokens.sort(key=len, reverse=True)
+    return tokens[:8]
+
+
+def _blob_matches_tokens(blob: str, tokens: list[str]) -> bool:
+    if not blob or not tokens:
+        return False
+    lowered = blob.lower()
+    return any(tok in lowered for tok in tokens)
+
+
+def _coerce_ea(value) -> int:
+    try:
+        return int(str(value), 0)
+    except Exception:
+        return idaapi.BADADDR
+
+
+def _get_intelligence_index():
+    try:
+        from ida_pro_mcp.host.intelligence_context import get_assembler
+    except ImportError:
+        try:
+            from host.intelligence_context import get_assembler  # type: ignore
+        except ImportError:
+            return None, None, ""
+    try:
+        asm = get_assembler()
+        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+        if not idb_path:
+            return asm, None, ""
+        return asm, asm._get_index(idb_path), idb_path
+    except Exception:
+        return None, None, ""
+
+
+def _seed_decompiled_candidates(pattern, matcher, range_start, range_end, max_functions, timeout_ms):
+    """Rank likely matching functions before falling back to broad sampling."""
+    planning_budget_ms = min(2000, max(250, timeout_ms // 4))
+    timer = SearchTimeout(planning_budget_ms)
+    tokens = _decompiled_query_tokens(pattern)
+    seed_cap = max(128, max_functions * 3)
+    xref_cap = 64
+
+    scores = {}
+    reasons = {"cached": 0, "names": 0, "strings": 0, "imports": 0, "intelligence": 0, "behavior": 0}
+    planning_timed_out = False
+    intelligence_index_size = 0
+    expansion_queries = []
+
+    def add_candidate(ea: int, score: float, reason: str):
+        if ea == idaapi.BADADDR:
+            return
+        func = idaapi.get_func(ea)
+        if not func or not _function_in_range(func, range_start, range_end):
+            return
+        start_ea = func.start_ea
+        if start_ea not in scores and len(scores) >= seed_cap:
+            return
+        if start_ea not in scores:
+            reasons[reason] = reasons.get(reason, 0) + 1
+            scores[start_ea] = float(score)
+        else:
+            scores[start_ea] = max(scores[start_ea], float(score)) + 1.0
+
+    try:
+        asm = None
+        idx = None
+        if pattern:
+            asm, idx, _idb_path = _get_intelligence_index()
+            intelligence_index_size = int(getattr(idx, "size", 0) or 0) if idx is not None else 0
+            if idx is not None and intelligence_index_size > 0:
+                try:
+                    for hit in idx.search(pattern, top_k=max(seed_cap, 48), threshold=0.0):
+                        try:
+                            timer.check()
+                        except TimeoutError:
+                            planning_timed_out = True
+                            break
+                        fea = _coerce_ea(hit.get("ea"))
+                        if fea == idaapi.BADADDR:
+                            continue
+                        sim = float(hit.get("similarity") or 0.0)
+                        lex = float(hit.get("lexical_score") or hit.get("score") or 0.0)
+                        add_candidate(fea, 210.0 + (sim * 35.0) + (lex * 12.0), "intelligence")
+                    if asm is not None and not planning_timed_out:
+                        classifier = asm._behavior_classifier()
+                        q_hits = classifier.classify(pattern[:600], threshold=0.0, top_k=4, block=False)
+                        expansion_queries = [
+                            str(h.get("behavior") or "").strip().replace("_", " ")
+                            for h in (q_hits or [])
+                            if h.get("behavior")
+                        ]
+                        expansion_queries = [q for q in expansion_queries if q]
+                        for extra_q in expansion_queries[:3]:
+                            for hit in idx.search(extra_q, top_k=max(max_functions * 2, 24), threshold=0.0):
+                                try:
+                                    timer.check()
+                                except TimeoutError:
+                                    planning_timed_out = True
+                                    break
+                                fea = _coerce_ea(hit.get("ea"))
+                                if fea == idaapi.BADADDR:
+                                    continue
+                                sim = float(hit.get("similarity") or 0.0)
+                                lex = float(hit.get("lexical_score") or hit.get("score") or 0.0)
+                                add_candidate(fea, 145.0 + (sim * 26.0) + (lex * 8.0), "behavior")
+                            if planning_timed_out:
+                                break
+                except Exception:
+                    pass
+
+        for key, cached in list(_SEARCH_CACHE.items()):
+            try:
+                timer.check()
+            except TimeoutError:
+                planning_timed_out = True
+                break
+            if not key.startswith("decomp:") or not isinstance(cached, str):
+                continue
+            parts = key.split(":", 2)
+            if len(parts) < 2:
+                continue
+            try:
+                func_ea = int(parts[1])
+            except Exception:
+                continue
+            if matcher(cached) or _blob_matches_tokens(cached, tokens):
+                add_candidate(func_ea, 250.0, "cached")
+
+        if not planning_timed_out:
+            for func_ea in _iter_function_starts(range_start, range_end):
+                try:
+                    timer.check()
+                except TimeoutError:
+                    planning_timed_out = True
+                    break
+                func_name = idc.get_func_name(func_ea) or ""
+                if func_name and (matcher(func_name) or _blob_matches_tokens(func_name, tokens)):
+                    add_candidate(func_ea, 180.0, "names")
+
+        if not planning_timed_out:
+            for srec in get_cached_strings():
+                try:
+                    timer.check()
+                except TimeoutError:
+                    planning_timed_out = True
+                    break
+                sval = srec.get("string") or ""
+                if not sval or not (matcher(sval) or _blob_matches_tokens(sval, tokens)):
+                    continue
+                for idx, xref in enumerate(idautils.XrefsTo(srec["ea"], 0)):
+                    if idx >= xref_cap:
+                        break
+                    add_candidate(xref.frm, 130.0, "strings")
+                    if len(scores) >= seed_cap:
+                        break
+                if len(scores) >= seed_cap:
+                    break
+
+        if not planning_timed_out:
+            for irec in get_cached_imports():
+                try:
+                    timer.check()
+                except TimeoutError:
+                    planning_timed_out = True
+                    break
+                name = irec.get("name") or ""
+                if not name or not (matcher(name) or _blob_matches_tokens(name, tokens)):
+                    continue
+                for idx, xref in enumerate(idautils.XrefsTo(irec["ea"], 0)):
+                    if idx >= xref_cap:
+                        break
+                    add_candidate(xref.frm, 120.0, "imports")
+                    if len(scores) >= seed_cap:
+                        break
+                if len(scores) >= seed_cap:
+                    break
+    except Exception:
+        pass
+
+    ranked = [ea for ea, _score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))]
+    return ranked, {
+        "tokens": tokens,
+        "seeded_candidates": len(ranked),
+        "seed_reasons": reasons,
+        "planning_timed_out": planning_timed_out,
+        "intelligence_index_size": intelligence_index_size,
+        "expansion_queries": expansion_queries[:3],
+    }
+
+
+def _spread_sample_functions(all_funcs: list[int], seen: set[int], remaining: int) -> list[int]:
+    if remaining <= 0:
+        return []
+
+    pool = [ea for ea in all_funcs if ea not in seen]
+    if remaining >= len(pool):
+        return pool
+
+    out = []
+    step = max(1, len(pool) // remaining)
+    start = min(len(pool) - 1, step // 2)
+    for idx in range(start, len(pool), step):
+        ea = pool[idx]
+        if ea in seen:
+            continue
+        out.append(ea)
+        seen.add(ea)
+        if len(out) >= remaining:
+            return out
+
+    for ea in pool:
+        if ea in seen:
+            continue
+        out.append(ea)
+        seen.add(ea)
+        if len(out) >= remaining:
+            break
+    return out
 
 
 def search_vulnerable(pattern, include_context, offset, limit, include_items, include_breakdown, **kwargs):
@@ -153,13 +414,23 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
     except (ValueError, TypeError):
         timeout_ms = 8000
     try:
-        max_functions = max(1, min(int(kwargs.get("max_functions", kwargs.get("sample_max_funcs", 180))), 5000))
+        max_functions = max(1, min(int(kwargs.get("max_functions", kwargs.get("sample_max_funcs", 512))), 5000))
     except (ValueError, TypeError):
-        max_functions = 180
+        max_functions = 512
     sample = bool(kwargs.get("sample", False))
 
     target_funcs = []
     scope_func = None
+    planning_meta = {
+        "tokens": [],
+        "seeded_candidates": 0,
+        "seed_reasons": {"cached": 0, "names": 0, "strings": 0, "imports": 0, "intelligence": 0, "behavior": 0},
+        "planning_timed_out": False,
+        "intelligence_index_size": 0,
+        "expansion_queries": [],
+    }
+    total_available = 0
+    coverage_mode = "scope"
     if scope_addr:
         target_ea, err = validate_addr(str(scope_addr))
         if err:
@@ -169,14 +440,37 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
             return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {scope_addr}")
         target_funcs = [scope_func.start_ea]
     else:
-        all_funcs = list(idautils.Functions())
-        if sample and len(all_funcs) > max_functions:
-            step = max(1, len(all_funcs) // max_functions)
-            target_funcs = all_funcs[::step][:max_functions]
-        else:
-            target_funcs = all_funcs[:max_functions]
+        all_funcs = list(_iter_function_starts(range_start, range_end))
+        total_available = len(all_funcs)
+        seeded_funcs, planning_meta = _seed_decompiled_candidates(
+            pattern, matcher, range_start, range_end, max_functions, timeout_ms
+        )
+        seen = set()
+        for func_ea in seeded_funcs:
+            if func_ea in seen:
+                continue
+            seen.add(func_ea)
+            target_funcs.append(func_ea)
+            if len(target_funcs) >= max_functions:
+                break
 
-    scan_truncated = (not scope_func) and (len(target_funcs) >= max_functions)
+        remaining = max(0, max_functions - len(target_funcs))
+        if remaining > 0:
+            if sample or total_available > max_functions:
+                target_funcs.extend(_spread_sample_functions(all_funcs, seen, remaining))
+                coverage_mode = "seeded_sample" if seeded_funcs else "sample"
+            else:
+                for func_ea in all_funcs:
+                    if func_ea in seen:
+                        continue
+                    target_funcs.append(func_ea)
+                    if len(target_funcs) >= max_functions:
+                        break
+                coverage_mode = "seeded_full" if seeded_funcs else "full"
+        else:
+            coverage_mode = "seeded" if seeded_funcs else "sample"
+
+    scan_truncated = (not scope_func) and (total_available > len(target_funcs))
 
     rows = []
     scanned = 0
@@ -185,6 +479,13 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
     failures = 0
     failure_samples = []
     started_at = _time.time()
+    target_rank = {ea: idx for idx, ea in enumerate(target_funcs)}
+    intelligence_backfilled = 0
+    try:
+        intelligence_backfill_limit = max(0, min(int(kwargs.get("intelligence_backfill", 12)), 64))
+    except (TypeError, ValueError):
+        intelligence_backfill_limit = 12
+    asm, intelligence_idx, _idb_path = _get_intelligence_index() if not scope_func else (None, None, "")
 
     for func_ea in target_funcs:
         if (_time.time() - started_at) >= (timeout_ms / 1000.0):
@@ -218,12 +519,23 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
 
         decompiled += 1
         func_name = idc.get_func_name(func_ea) or hex(func_ea)
+        if (
+            intelligence_idx is not None
+            and intelligence_backfilled < intelligence_backfill_limit
+            and hex(func_ea) not in getattr(intelligence_idx, "_cache", {})
+        ):
+            try:
+                intelligence_idx.index_async(hex(func_ea), func_name, pseudocode)
+                intelligence_backfilled += 1
+            except Exception:
+                pass
         for line_num, line in enumerate(pseudocode.splitlines(), 1):
             if matcher(line):
                 text = clip_text(line.strip(), 220)
                 rows.append({
                     "address_ea": func_ea, "address": hex(func_ea),
                     "function": func_name, "line_num": line_num,
+                    "target_rank": target_rank.get(func_ea, scanned),
                     "line": f"{hex(func_ea)}  {func_name}  L{line_num}: {text}",
                 })
 
@@ -232,11 +544,22 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
             MCPError.DECOMPILER_FAILED,
             "Decompiled search failed to decompile any function",
             hint=ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
-            details={"scanned": scanned, "failures": failures, "sample_errors": failure_samples},
+            details={
+                "scanned": scanned,
+                "failures": failures,
+                "sample_errors": failure_samples,
+                "candidate_strategy": coverage_mode,
+                "candidate_pool": total_available,
+                "seeded_candidates": planning_meta.get("seeded_candidates", 0),
+                "seed_reasons": planning_meta.get("seed_reasons", {}),
+                "query_tokens": planning_meta.get("tokens", []),
+                "intelligence_index_size": planning_meta.get("intelligence_index_size", 0),
+                "expansion_queries": planning_meta.get("expansion_queries", []),
+            },
         )
 
     page, total, is_truncated = paginate_records(
-        rows, offset, limit, sort_key=lambda r: (r["address_ea"], r["line_num"]), reverse=False
+        rows, offset, limit, sort_key=lambda r: (r.get("target_rank", 0), r["address_ea"], r["line_num"]), reverse=False
     )
     result = build_response(
         [r["line"] for r in page], offset, limit, total, is_truncated,
@@ -244,11 +567,26 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         decompile_failures=failures, scan_limit=max_functions if not scope_func else 1,
         timeout_ms=timeout_ms, timed_out=timed_out,
     )
+    if not scope_func:
+        result["candidate_strategy"] = coverage_mode
+        result["candidate_pool"] = total_available
+        result["seeded_candidates"] = planning_meta.get("seeded_candidates", 0)
+        result["seed_reasons"] = planning_meta.get("seed_reasons", {})
+        result["query_tokens"] = planning_meta.get("tokens", [])
+        result["intelligence_index_size"] = planning_meta.get("intelligence_index_size", 0)
+        result["expansion_queries"] = planning_meta.get("expansion_queries", [])
+        result["intelligence_backfilled"] = intelligence_backfilled
+        if planning_meta.get("planning_timed_out"):
+            result["planning_timed_out"] = True
     if scope_func:
         result["scope"] = hex(scope_func.start_ea)
     if scan_truncated or timed_out:
         result["analysis_truncated"] = True
-        result["hint"] = "Increase timeout_ms or scope with addr to search one function." if timed_out else "Increase max_functions or set sample=false for broader coverage."
+        result["hint"] = (
+            "Increase timeout_ms or scope with addr to search one function."
+            if timed_out
+            else "Increase max_functions, narrow with range/addr, or use search.find/search.nl to seed a tighter area first."
+        )
     if include_items:
         result["items"] = [{"address": r["address"], "function": r["function"], "line_num": r["line_num"]} for r in page]
 

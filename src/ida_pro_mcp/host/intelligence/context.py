@@ -1505,18 +1505,22 @@ class ContextAssembler(
                 idx._cache[addr] = query_vec
                 blob = idx._pack(query_vec)
                 ph   = idx._phash(pseudocode)
+                sig  = _extract_signature(pseudocode, max_idents=64) or ""
+                sig_hash = hashlib.md5((sig or pseudocode).encode("utf-8", errors="replace")).hexdigest()[:16]
                 def _persist(ea=addr, name=func_name, b=blob, p=ph, v=query_vec):
                     try:
                         with idx._conn() as conn:
                             conn.execute(
                                 """INSERT INTO func_embeddings
-                                   (ea, name, dim, vec_blob, pseudo_hash, indexed_at)
-                                   VALUES(?,?,?,?,?,?)
+                                   (ea, name, dim, vec_blob, pseudo_hash, indexed_at, signature_text, signature_hash)
+                                   VALUES(?,?,?,?,?,?,?,?)
                                    ON CONFLICT(ea) DO UPDATE SET
-                                       name=excluded.name, vec_blob=excluded.vec_blob,
-                                       pseudo_hash=excluded.pseudo_hash,
-                                       indexed_at=excluded.indexed_at""",
-                                (ea, name, len(v), b, p, time.time()),
+                                        name=excluded.name, vec_blob=excluded.vec_blob,
+                                        pseudo_hash=excluded.pseudo_hash,
+                                        indexed_at=excluded.indexed_at,
+                                        signature_text=excluded.signature_text,
+                                        signature_hash=excluded.signature_hash""",
+                                (ea, name, len(v), b, p, time.time(), sig, sig_hash),
                             )
                             conn.commit()
                     except Exception:
