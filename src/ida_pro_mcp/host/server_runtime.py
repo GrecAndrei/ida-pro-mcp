@@ -960,6 +960,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             to a packed .i64 IDB. Leaving them in place causes IDA to find the unpacked
             base, refuse to start (Permission denied / error 4), and abort the open
             before the existing packed IDB is even consulted.
+
+            Two naming patterns exist depending on the IDA workflow:
+              1) Legacy: <binary>.id0 / .id1 / .nam / .til (base strips .i64)
+              2) Modern: <binary>.i64.blackboard.db / .embeddings.db (base keeps .i64)
+            We cover both forms by computing both the splitext base and the full stem.
             """
             removed: List[str] = []
             if not packed_idb_path:
@@ -987,19 +992,29 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 ".embeddings.db-shm",
                 ".embeddings.db-wal",
             ]
-            for fam_ext in sibling_exts:
-                path = f"{base}{fam_ext}"
-                if not os.path.exists(path):
+            seen_paths: set = set()
+            for stem in (base, packed_idb_path):
+                if not stem:
                     continue
-                # Don't clobber the actual packed IDB the user is opening.
-                if os.path.realpath(path) == os.path.realpath(packed_idb_path):
-                    continue
-                try:
-                    os.remove(path)
-                    removed.append(path)
-                    log_rpc(f"Removed packed-IDB sibling: {path}")
-                except Exception as e:
-                    log_rpc(f"Failed to remove packed-IDB sibling {path}: {e}")
+                for fam_ext in sibling_exts:
+                    path = f"{stem}{fam_ext}"
+                    if path in seen_paths:
+                        continue
+                    seen_paths.add(path)
+                    if not os.path.exists(path):
+                        continue
+                    # Don't clobber the actual packed IDB the user is opening.
+                    try:
+                        if os.path.realpath(path) == os.path.realpath(packed_idb_path):
+                            continue
+                    except Exception:
+                        pass
+                    try:
+                        os.remove(path)
+                        removed.append(path)
+                        log_rpc(f"Removed packed-IDB sibling: {path}")
+                    except Exception as e:
+                        log_rpc(f"Failed to remove packed-IDB sibling {path}: {e}")
             return removed
 
     def _terminate_ida_processes_for_path(self, target_path: str) -> List[int]:
@@ -1244,22 +1259,21 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if use_existing_idb:
                 log_rpc(f"Opening existing session IDB: {effective_idb_path}")
                 # If this is a packed .i64 IDB, kill any orphaned IDA processes
-                # still holding the unpacked siblings (.id0/.id1/.nam/.til) next to
-                # the packed file, and remove stale sidecar artifacts before launch.
-                # Without this, IDA finds the leftover unpacked base, hits
-                # "Permission denied" on .id0, and aborts with
+                # still holding the unpacked siblings (.id0/.id1/.nam/.til) next
+                # to the packed file. Without this, the next launch hits
+                # "Permission denied" on .id0 and aborts with
                 # "Database initialization failed with error 4".
+                # We intentionally do NOT delete the sibling files - they are
+                # IDA's working state (a re-openable cache) and on a 3 GB+ IDB
+                # thrashing them on every launch wastes GB of disk I/O. If the
+                # siblings are corrupted, IDA will surface the error and the
+                # user can clean manually.
                 if getattr(session, "packed_idb", False):
                     killed = self._terminate_ida_processes_for_path(effective_idb_path)
                     if killed:
                         log_rpc(
                             f"Pre-launch cleanup killed {len(killed)} stale IDA process(es) "
                             f"for {effective_idb_path}"
-                        )
-                    removed = self._cleanup_packed_idb_siblings(effective_idb_path)
-                    if removed:
-                        log_rpc(
-                            f"Pre-launch cleanup removed {len(removed)} packed-IDB sibling file(s)"
                         )
             else:
                 log_rpc(
@@ -1473,20 +1487,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             )
 
             # If the failed launch was a packed-IDB open, the cause is almost
-            # always orphan unpacked siblings (.id0/.id1/.nam/.til) sitting next
-            # to the packed file (from a previous crashed run). Force-clean
-            # them here so the next attempt is a clean packed-only open.
+            # always an orphan IDA process still holding the unpacked siblings
+            # (.id0/.id1/.nam/.til) next to the packed file from a previous
+            # crashed run. Kill those processes so the next attempt can open
+            # the siblings for read/write.
+            # We intentionally do NOT delete the sibling files - they are
+            # IDA's working state and on a 3 GB+ IDB thrashing them on every
+            # recovery wastes GB of disk I/O. If the siblings are corrupted,
+            # IDA will surface the error and the user can clean manually.
             if getattr(session, "packed_idb", False) and session.binary_path:
                 killed = self._terminate_ida_processes_for_path(session.binary_path)
                 if killed:
                     log_rpc(
                         f"Recovery killed {len(killed)} stale IDA process(es) "
                         f"holding {session.binary_path}"
-                    )
-                removed = self._cleanup_packed_idb_siblings(session.binary_path)
-                if removed:
-                    log_rpc(
-                        f"Recovery removed {len(removed)} packed-IDB sibling file(s)"
                     )
 
             if not session.binary_path or not os.path.exists(session.binary_path):
