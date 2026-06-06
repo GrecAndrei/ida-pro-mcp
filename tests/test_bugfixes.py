@@ -527,18 +527,46 @@ class TestWorkerR2Fixes(unittest.TestCase):
     def test_socket_bridge_batch_handling(self):
         import sys
         from unittest.mock import MagicMock
-        sys.modules['idaapi'] = MagicMock()
-        sys.modules['idc'] = MagicMock()
-        sys.modules['ida_auto'] = MagicMock()
-        sys.modules['idautils'] = MagicMock()
-        sys.modules['ida_segment'] = MagicMock()
         
-        from src.ida_pro_mcp.server_script import process_single
-        
-        # Test that non-dict request format is handled gracefully
-        res = process_single(["not", "a", "dict"])
-        self.assertEqual(res["code"], "INVALID_REQUEST")
-        self.assertTrue(res["error"])
+        # Save original modules
+        orig_modules = {}
+        for mod in ['idaapi', 'idc', 'ida_auto', 'idautils', 'ida_segment']:
+            if mod in sys.modules:
+                orig_modules[mod] = sys.modules[mod]
+            else:
+                orig_modules[mod] = None
+                
+        try:
+            sys.modules['idaapi'] = MagicMock()
+            sys.modules['idc'] = MagicMock()
+            sys.modules['ida_auto'] = MagicMock()
+            sys.modules['idautils'] = MagicMock()
+            sys.modules['ida_segment'] = MagicMock()
+            
+            if 'src.ida_pro_mcp.server_script' in sys.modules:
+                del sys.modules['src.ida_pro_mcp.server_script']
+            if 'ida_pro_mcp.server_script' in sys.modules:
+                del sys.modules['ida_pro_mcp.server_script']
+                
+            from src.ida_pro_mcp.server_script import process_single
+            
+            # Test that non-dict request format is handled gracefully
+            res = process_single(["not", "a", "dict"])
+            self.assertEqual(res["code"], "INVALID_REQUEST")
+            self.assertTrue(res["error"])
+        finally:
+            # Restore original modules
+            for mod, val in orig_modules.items():
+                if val is None:
+                    if mod in sys.modules:
+                        del sys.modules[mod]
+                else:
+                    sys.modules[mod] = val
+                    
+            if 'src.ida_pro_mcp.server_script' in sys.modules:
+                del sys.modules['src.ida_pro_mcp.server_script']
+            if 'ida_pro_mcp.server_script' in sys.modules:
+                del sys.modules['ida_pro_mcp.server_script']
 
 
 if __name__ == "__main__":
