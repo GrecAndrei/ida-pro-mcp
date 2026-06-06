@@ -104,12 +104,13 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
     return res
 
 def sync_wrapper(ff, safety_mode: IDASafety):
-    """Wrapper to enable batch mode during IDA synchronization."""
-    old_batch = idc.batch(1)
-    try:
-        return _sync_wrapper(ff, safety_mode)
-    finally:
-        idc.batch(old_batch)
+    """Run a synchronized IDA callback without forcing global batch mode.
+
+    For MCP use we want IDA to stay responsive while background auto-analysis
+    continues, which matches normal interactive IDA behavior better than
+    toggling ``idc.batch(1)`` around every tool call.
+    """
+    return _sync_wrapper(ff, safety_mode)
 
 
 def idawrite(f):
