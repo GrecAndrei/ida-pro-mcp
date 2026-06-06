@@ -24,12 +24,44 @@ def test_parse_args_setup_embedder_enables_client_setup():
     assert opts.only == {"clients"}
 
 
-def test_find_embed_model_no_home_fallback(monkeypatch):
+def test_find_embed_model_finds_model_in_user_downloads(monkeypatch):
     with tempfile.TemporaryDirectory() as td:
         home = Path(td) / "home"
         downloads = home / "Downloads"
         downloads.mkdir(parents=True, exist_ok=True)
         (downloads / "bge-code-v1-q8_0.gguf").write_text("x", encoding="utf-8")
+        install_root = Path(td) / "install"
+        install_root.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
+        result = runtime_mod.find_embed_model(install_root)
+        assert result
+        assert Path(result).name == "bge-code-v1-q8_0.gguf"
+        assert Path(result).parent.name == "Downloads"
+
+
+def test_find_embed_model_finds_model_in_user_models_dir(monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td) / "home"
+        models = home / "models"
+        models.mkdir(parents=True, exist_ok=True)
+        (models / "bge-code-v1.gguf").write_text("x", encoding="utf-8")
+        install_root = Path(td) / "install"
+        install_root.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
+        result = runtime_mod.find_embed_model(install_root)
+        assert result
+        assert Path(result).name == "bge-code-v1.gguf"
+        assert Path(result).parent.name == "models"
+
+
+def test_find_embed_model_returns_empty_when_nothing_present(monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td) / "home"
+        home.mkdir(parents=True, exist_ok=True)
         install_root = Path(td) / "install"
         install_root.mkdir(parents=True, exist_ok=True)
 

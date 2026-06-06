@@ -106,42 +106,132 @@ def find_embed_model(install_root: Path) -> str:
     if env_val and Path(env_val).is_file():
         return env_val
 
-    # Keep discovery deterministic and workspace-scoped by default.
-    candidates = [
-        install_root / "bge-code-v1-q8_0.gguf",
-        install_root / "bge-code-v1.gguf",
-        install_root / "models" / "bge-code-v1-q8_0.gguf",
-        install_root / "models" / "bge-code-v1.gguf",
-        install_root.parent / "bge-code-v1-q8_0.gguf",
-    ]
-    for c in candidates:
-        if c.is_file():
-            return str(c)
+    # Manual override via embedder.json (mirrors host discovery).
+    try:
+        from ida_pro_mcp.host.intelligence_core import (
+            _read_embedder_state,
+            _select_state_path,
+        )
+        manual = _select_state_path(_read_embedder_state().get("model_path"))
+        if manual:
+            return manual
+    except Exception:
+        pass
 
+    home = Path.home()
+    model_filenames = ("bge-code-v1-q8_0.gguf", "bge-code-v1.gguf")
+    # Keep discovery deterministic and workspace-scoped by default, but also
+    # check common user-level locations so the install wizard can auto-detect
+    # an existing bge-code-v1 on Windows / macOS / Linux.
+    bases = [
+        install_root,
+        install_root / "models",
+        install_root.parent,
+        home / "models",
+        home / "Downloads",
+        home / "Documents",
+    ]
+    seen: set[Path] = set()
+    for base in bases:
+        if not base:
+            continue
+        for fn in model_filenames:
+            c = base / fn
+            try:
+                rp = c.resolve()
+            except OSError:
+                continue
+            if rp in seen:
+                continue
+            seen.add(rp)
+            if c.is_file():
+                return str(c)
+
+    # Hugging Face cache snapshots.
+    hf_root = home / ".cache" / "huggingface" / "hub"
+    if hf_root.is_dir():
+        for f in hf_root.glob("models--*/snapshots/*/bge-code-v1*.gguf"):
+            if f.is_file():
+                return str(f)
+
+    # Last-ditch recursive scan under the install root.
     for f in install_root.rglob("bge-code-v1*.gguf"):
-        return str(f)
+        if f.is_file():
+            return str(f)
 
     return ""
 
 
 def find_llama_server_bin(install_root: Path) -> str:
     env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "").strip()
-    if env_val and Path(env_val).is_file() and os.access(env_val, os.X_OK):
+    if env_val and Path(env_val).is_file():
         return env_val
 
-    binary_name = "llama-server.exe" if sys.platform == "win32" else "llama-server"
-    candidates = [
-        install_root / binary_name,
-        install_root / "bin" / binary_name,
-        install_root.parent / binary_name,
-    ]
-    for c in candidates:
-        if c.is_file() and os.access(str(c), os.X_OK):
-            return str(c)
+    # Manual override via embedder.json (mirrors host discovery).
+    try:
+        from ida_pro_mcp.host.intelligence_core import (
+            _read_embedder_state,
+            _select_state_path,
+        )
+        manual = _select_state_path(_read_embedder_state().get("server_bin"))
+        if manual:
+            return manual
+    except Exception:
+        pass
 
-    for name in ("llama-server", "llama-server.exe"):
+    def _is_executable(p: Path) -> bool:
+        if not p.is_file():
+            return False
+        if sys.platform == "win32":
+            low = str(p).lower()
+            if not (low.endswith(".exe") or low.endswith(".bat") or low.endswith(".cmd")):
+                return False
+            return True
+        return os.access(str(p), os.X_OK)
+
+    binary_names = ("llama-server.exe", "llama-server") if sys.platform == "win32" else (
+        "llama-server", "llama-server.exe",
+    )
+    home = Path.home()
+    roots: list[Path] = [
+        install_root,
+        install_root / "bin",
+        install_root.parent,
+    ]
+    if sys.platform == "win32":
+        roots.extend([
+            home / "scoop" / "apps" / "llama.cpp" / "current",
+            home / "scoop" / "apps" / "llama.cpp" / "current" / "bin",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "llama.cpp" / "bin",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "llama.cpp" / "bin",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "llama.cpp" / "bin",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "llama.cpp",
+        ])
+    else:
+        roots.extend([
+            home / ".local" / "bin",
+            Path("/usr/local/bin"),
+            Path("/usr/bin"),
+        ])
+        if sys.platform == "darwin":
+            roots.extend([Path("/opt/homebrew/bin"), Path("/opt/local/bin")])
+
+    seen: set[str] = set()
+    for root in roots:
+        if not root or not root.is_dir():
+            continue
+        for n in binary_names:
+            cand = root / n
+            ap = str(cand.resolve())
+            if ap in seen:
+                continue
+            seen.add(ap)
+            if _is_executable(cand):
+                return str(cand)
+
+    for name in binary_names:
         found = shutil.which(name)
-        if found:
+        if found and _is_executable(Path(found)):
             return found
 
     return ""

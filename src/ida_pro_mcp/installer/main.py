@@ -591,6 +591,17 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 ui.warn("No embedding model detected; semantic embedding features remain disabled")
             if embed_server:
                 report.metadata["embed_server_bin"] = embed_server
+            if (embed_model or embed_server) and not opts.dry_run:
+                try:
+                    from ida_pro_mcp.host.intelligence_core import write_embedder_state
+                    state_path = write_embedder_state(
+                        install_root,
+                        model_path=embed_model,
+                        server_bin=embed_server,
+                    )
+                    report.metadata["embedder_state"] = str(state_path)
+                except Exception as exc:
+                    ui.warn(f"Could not persist embedder.json: {exc}")
             server_cfg = build_stdio_config(
                 python_exe,
                 install_root,

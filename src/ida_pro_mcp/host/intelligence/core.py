@@ -18,6 +18,20 @@ Environment variables:
   IDA_MCP_EMBED_THREADS      CPU threads (default: cpu_count // 2)
   IDA_MCP_EMBED_CTX          context tokens (default: 2048)
   IDA_MCP_EMBED_DISABLED     set to 1 to force TF-IDF fallback
+
+Manual override:
+  The installer (or a user) may write an `embedder.json` file under the
+  install root / cache dir / user config dir to pin a specific model and
+  server binary. This is the only way to override discovery when the
+  defaults are not on PATH and env vars cannot be set. See
+  `write_embedder_state()` and `_read_embedder_state()` for the schema.
+
+Discovery:
+  `_find_llama_server()` and `_find_model()` are fully cross-platform.
+  On Windows they look under the install root, %LOCALAPPDATA%\\Programs,
+  %USERPROFILE%\\scoop\\apps\\llama.cpp, %ProgramFiles%\\llama.cpp\\bin
+  and other conventional locations, and they accept `llama-server.exe`
+  alongside the bare `llama-server` name everywhere.
 """
 
 from __future__ import annotations
@@ -32,11 +46,13 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .embeddings import FunctionEmbeddingIndex, SemanticObject, SemanticObjectIndex
@@ -125,69 +141,360 @@ def model_fingerprint(path: str, deep_hash: bool = False) -> dict:
 def server_fingerprint(path: str, deep_hash: bool = False) -> dict:
     return _file_fingerprint(path, deep_hash=deep_hash)
 
-def _find_llama_server() -> str:
-    """Locate llama-server binary from env, generic local paths, or PATH."""
-    env = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
-    if env and os.path.isfile(env) and os.access(env, os.X_OK):
-        return env
+def _install_root() -> str:
+    """Compute the installer-managed install root.
 
-    for candidate in (
-        os.path.join(os.path.expanduser("~"), ".local", "bin", "llama-server"),
-        "/usr/local/bin/llama-server",
-        "/usr/bin/llama-server",
-    ):
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
+    Mirrors `installer.runtime.get_install_root()` but is inlined here so the
+    host does not pull in installer (which would create a circular import —
+    the installer itself imports this module).
+    """
+    override = os.environ.get("IDA_PRO_MCP_HOME")
+    if override:
+        return os.path.realpath(os.path.expanduser(override))
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(
+            str(Path.home()), "AppData", "Local"
+        )
+        return os.path.realpath(os.path.join(base, "ida-pro-mcp"))
+    return os.path.realpath(
+        os.path.join(str(Path.home()), ".local", "share", "ida-pro-mcp")
+    )
 
-    by_path = shutil.which("llama-server")
-    if by_path:
-        return by_path
 
-    candidates = [
-        os.path.join(_PROJECT_ROOT, "bin", "llama-server"),
-        os.path.join(_PROJECT_ROOT, "llama-server"),
-    ]
+def _llama_server_binary_names() -> tuple[str, ...]:
+    """Return the platform-appropriate binary name variants for llama-server."""
+    if sys.platform == "win32":
+        return ("llama-server.exe", "llama-server")
+    return ("llama-server", "llama-server.exe")
+
+
+def _is_executable(path: str) -> bool:
+    """Cross-platform 'is this a runnable binary' check.
+
+    On Windows `os.access(path, os.X_OK)` is a no-op (any existing file
+    passes), so we also require a recognized executable extension.
+    """
+    if not path or not os.path.isfile(path):
+        return False
+    if sys.platform == "win32":
+        low = path.lower()
+        if not (low.endswith(".exe") or low.endswith(".bat") or low.endswith(".cmd")):
+            return False
+        return True
+    return os.access(path, os.X_OK)
+
+
+EMBEDDER_STATE_FILE = "embedder.json"
+
+
+def _read_embedder_state() -> dict:
+    """Load the optional manual-override `embedder.json` config file.
+
+    The file may live in any of (first match wins):
+      1. <install_root>/embedder.json      — written by the installer
+      2. <cache_dir>/embedder.json         — runtime override
+      3. <user-config>/ida-pro-mcp/embedder.json
+         - Windows: %APPDATA%\\ida-pro-mcp
+         - POSIX:   $XDG_CONFIG_HOME/ida-pro-mcp  or  ~/.config/ida-pro-mcp
+    """
+    candidates: list[str] = []
+    try:
+        candidates.append(os.path.join(_install_root(), EMBEDDER_STATE_FILE))
+    except Exception:
+        pass
+    try:
+        candidates.append(os.path.join(CACHE_DIR, EMBEDDER_STATE_FILE))
+    except Exception:
+        pass
+    try:
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA") or os.path.join(
+                str(Path.home()), "AppData", "Roaming"
+            )
+            candidates.append(os.path.join(appdata, "ida-pro-mcp", EMBEDDER_STATE_FILE))
+        else:
+            xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+                str(Path.home()), ".config"
+            )
+            candidates.append(os.path.join(xdg, "ida-pro-mcp", EMBEDDER_STATE_FILE))
+    except Exception:
+        pass
+    for p in candidates:
+        if not p or not os.path.isfile(p):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            data.setdefault("_source", p)
+            return data
+    return {}
+
+
+def _select_state_path(value: Any) -> str:
+    """Resolve a `embedder.json` override into a concrete file path.
+
+    Accepts a single string or a list of strings (the first existing file
+    wins). Expands ~ and env vars. Returns "" if nothing usable.
+    """
+    if value is None or value is False:
+        return ""
+    if isinstance(value, str):
+        candidates: list[str] = [value]
+    elif isinstance(value, list):
+        candidates = [str(x) for x in value if x]
+    else:
+        return ""
     for c in candidates:
-        if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
+        try:
+            expanded = os.path.expandvars(os.path.expanduser(c))
+        except Exception:
+            continue
+        if os.path.isfile(expanded):
+            return os.path.abspath(expanded)
+    return ""
+
+
+def write_embedder_state(
+    install_root: str | os.PathLike,
+    *,
+    model_path: str = "",
+    server_bin: str = "",
+    disabled: bool | None = None,
+) -> str:
+    """Persist a manual embedder override to `<install_root>/embedder.json`.
+
+    Mirrors the installer pattern used for `ida-install.json` so a user (or
+    a future installer subcommand) can pin the llama-server binary and the
+    bge-code-v1 GGUF without relying on env vars or PATH.
+
+    Returns the path of the written file.
+    """
+    root = os.fspath(install_root)
+    os.makedirs(root, exist_ok=True)
+    state_path = os.path.join(root, EMBEDDER_STATE_FILE)
+    payload: dict[str, Any] = {
+        "updated_at": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat(),
+    }
+    if model_path:
+        payload["model_path"] = os.path.abspath(os.path.expanduser(model_path))
+    if server_bin:
+        payload["server_bin"] = os.path.abspath(os.path.expanduser(server_bin))
+    if disabled is not None:
+        payload["disabled"] = bool(disabled)
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return state_path
+
+
+def _find_llama_server() -> str:
+    """Locate llama-server binary.
+
+    Resolution order:
+      1. `IDA_MCP_EMBED_SERVER_BIN` env var (string or `;`-separated list)
+      2. Manual override in `embedder.json` (`server_bin`)
+      3. Install root: `<install_root>/bin/llama-server[.exe]`,
+         `<install_root>/llama-server[.exe]`
+      4. Per-platform conventional install dirs
+         - Linux:  `~/.local/bin`, `/usr/local/bin`, `/usr/bin`
+         - macOS:  `/usr/local/bin`, `/opt/homebrew/bin`, `/opt/local/bin`
+         - Windows: %ProgramFiles%\\llama.cpp\\bin,
+                    %ProgramFiles(x86)%\\llama.cpp\\bin,
+                    %LOCALAPPDATA%\\Programs\\llama.cpp\\bin,
+                    %USERPROFILE%\\scoop\\apps\\llama.cpp\\current,
+                    %USERPROFILE%\\scoop\\apps\\llama.cpp\\current\\bin
+      5. `shutil.which()` for both `llama-server` and `llama-server.exe`
+      6. Project-local: `<project>/bin/llama-server[.exe]`,
+         `<project>/llama-server[.exe]`
+    """
+    def _accept(path: str) -> str:
+        if not path:
+            return ""
+        try:
+            expanded = os.path.expandvars(os.path.expanduser(path))
+        except Exception:
+            return ""
+        if _is_executable(expanded):
+            return os.path.abspath(expanded)
+        # Allow directory pointers: if a directory is supplied, scan it.
+        if os.path.isdir(expanded):
+            for n in _llama_server_binary_names():
+                cand = os.path.join(expanded, n)
+                if _is_executable(cand):
+                    return os.path.abspath(cand)
+        return ""
+
+    # 1) explicit env var (string or list)
+    env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
+    if env_val:
+        for piece in re.split(r"[;:]", env_val):
+            out = _accept(piece.strip())
+            if out:
+                return out
+
+    # 2) embedder.json manual override
+    state = _read_embedder_state()
+    manual = _select_state_path(state.get("server_bin"))
+    if manual:
+        return manual
+
+    # 3–4) install root and per-platform conventional directories
+    install_root = _install_root()
+    home = str(Path.home())
+    roots: list[str] = [install_root, os.path.join(install_root, "bin")]
+    if sys.platform == "win32":
+        roots.extend(
+            [
+                os.path.join(home, "scoop", "apps", "llama.cpp", "current"),
+                os.path.join(home, "scoop", "apps", "llama.cpp", "current", "bin"),
+                os.path.join(
+                    os.environ.get("ProgramFiles", r"C:\Program Files"),
+                    "llama.cpp",
+                    "bin",
+                ),
+                os.path.join(
+                    os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                    "llama.cpp",
+                    "bin",
+                ),
+                os.path.join(
+                    os.environ.get("LOCALAPPDATA", ""), "Programs", "llama.cpp", "bin"
+                ),
+                os.path.join(
+                    os.environ.get("LOCALAPPDATA", ""), "Programs", "llama.cpp"
+                ),
+            ]
+        )
+    elif sys.platform == "darwin":
+        roots.extend(
+            [
+                os.path.join(home, ".local", "bin"),
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "/opt/local/bin",
+                "/usr/bin",
+            ]
+        )
+    else:
+        roots.extend(
+            [
+                os.path.join(home, ".local", "bin"),
+                "/usr/local/bin",
+                "/usr/bin",
+            ]
+        )
+
+    seen: set[str] = set()
+    for root in roots:
+        if not root or not os.path.isdir(root):
+            continue
+        for n in _llama_server_binary_names():
+            cand = os.path.join(root, n)
+            ap = os.path.abspath(cand)
+            if ap in seen:
+                continue
+            seen.add(ap)
+            if _is_executable(cand):
+                return ap
+
+    # 5) PATH lookup for both name variants
+    for n in _llama_server_binary_names():
+        resolved = shutil.which(n)
+        if resolved and _is_executable(resolved):
+            return os.path.abspath(resolved)
+
+    # 6) project-local candidates
+    for n in _llama_server_binary_names():
+        for c in (
+            os.path.join(_PROJECT_ROOT, "bin", n),
+            os.path.join(_PROJECT_ROOT, n),
+        ):
+            if _is_executable(c):
+                return os.path.abspath(c)
+
     return ""  # will trigger TF-IDF fallback
 
 
 def _find_model() -> str:
-    """Locate the embedding GGUF from env and generic local paths."""
+    """Locate the embedding GGUF model.
+
+    Resolution order:
+      1. `IDA_MCP_EMBED_MODEL` env var (string or `;`-separated list)
+      2. Manual override in `embedder.json` (`model_path`)
+      3. Project-local: `<project>/bge-code-v1[-q8_0].gguf`,
+         `<project>/models/bge-code-v1[-q8_0].gguf`
+      4. Install root: `<install_root>/bge-code-v1[-q8_0].gguf`,
+         `<install_root>/models/bge-code-v1[-q8_0].gguf`
+      5. User home: `~/models`, `~/Downloads`, `~/Documents`
+      6. Hugging Face cache: `~/.cache/huggingface/hub/models--*/snapshots/*/bge-code-v1*.gguf`
+    """
     global _MODEL_PATH_CACHE
     if isinstance(_MODEL_PATH_CACHE, str):
         return _MODEL_PATH_CACHE
-    env = os.environ.get("IDA_MCP_EMBED_MODEL", "")
-    if env and os.path.isfile(env):
-        _MODEL_PATH_CACHE = env
-        return env
-    candidates = [
-        os.path.join(_PROJECT_ROOT, "bge-code-v1-q8_0.gguf"),
-        os.path.join(_PROJECT_ROOT, "models", "bge-code-v1-q8_0.gguf"),
-        os.path.join(os.path.expanduser("~"), "models", "bge-code-v1-q8_0.gguf"),
-        os.path.join(os.path.expanduser("~"), "Downloads", "bge-code-v1-q8_0.gguf"),
-    ]
+
+    # 1) explicit env var
+    env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "")
+    if env_val:
+        for piece in re.split(r"[;:]", env_val):
+            cand = piece.strip()
+            if not cand:
+                continue
+            try:
+                expanded = os.path.expandvars(os.path.expanduser(cand))
+            except Exception:
+                continue
+            if os.path.isfile(expanded):
+                _MODEL_PATH_CACHE = os.path.abspath(expanded)
+                return _MODEL_PATH_CACHE
+
+    # 2) embedder.json manual override
+    state = _read_embedder_state()
+    manual = _select_state_path(state.get("model_path"))
+    if manual:
+        _MODEL_PATH_CACHE = manual
+        return _MODEL_PATH_CACHE
+
+    home = str(Path.home())
+    install_root = _install_root()
+    candidates: list[str] = []
+    model_filenames = ("bge-code-v1-q8_0.gguf", "bge-code-v1.gguf")
+    bases = [_PROJECT_ROOT, install_root, os.path.join(install_root, "models"),
+             os.path.join(home, "models"),
+             os.path.join(home, "Downloads"),
+             os.path.join(home, "Documents")]
+    for base in bases:
+        if not base:
+            continue
+        for fn in model_filenames:
+            candidates.append(os.path.join(base, fn))
+
+    seen: set[str] = set()
     for c in candidates:
-        p = os.path.abspath(c)
+        try:
+            p = os.path.abspath(c)
+        except Exception:
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
         if os.path.isfile(p):
             _MODEL_PATH_CACHE = p
             return p
-    # Hugging Face cache snapshots for local model files.
-    hf_glob = os.path.join(
-        os.path.expanduser("~"),
-        ".cache",
-        "huggingface",
-        "hub",
-        "models--*",
-        "snapshots",
-        "*",
-        "bge-code-v1*.gguf",
-    )
-    for p in glob.glob(hf_glob):
-        if os.path.isfile(p):
-            _MODEL_PATH_CACHE = os.path.abspath(p)
-            return _MODEL_PATH_CACHE
+
+    # 6) Hugging Face cache snapshots for local model files
+    hf_root = os.path.join(home, ".cache", "huggingface", "hub")
+    if os.path.isdir(hf_root):
+        for p in glob.glob(
+            os.path.join(hf_root, "models--*", "snapshots", "*", "bge-code-v1*.gguf")
+        ):
+            if os.path.isfile(p):
+                _MODEL_PATH_CACHE = os.path.abspath(p)
+                return _MODEL_PATH_CACHE
+
     _MODEL_PATH_CACHE = ""
     return ""
 
