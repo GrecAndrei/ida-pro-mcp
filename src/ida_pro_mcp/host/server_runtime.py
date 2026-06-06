@@ -743,6 +743,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         runtime = self.session_runtimes.get(session_id)
                     if not self._runtime_alive(runtime):
                         return
+                    if int(self._session_inflight_calls.get(session_id, 0) or 0) > 0:
+                        continue
                     last_activity = float(self._session_last_activity.get(session_id, 0.0) or 0.0)
                     if last_activity and (time.time() - last_activity) < float(self._idle_index_delay_seconds):
                         continue
@@ -773,6 +775,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     for addr in pending[: int(self._idle_index_slice_size)]:
                         if stop_event.is_set():
                             return
+                        if int(self._session_inflight_calls.get(session_id, 0) or 0) > 0:
+                            break
                         last_activity = float(self._session_last_activity.get(session_id, 0.0) or 0.0)
                         if last_activity and (time.time() - last_activity) < float(self._idle_index_delay_seconds):
                             break
@@ -1630,6 +1634,7 @@ for seg_ea in idautils.Segments():
             self._stop_idle_index_worker(sid, join_timeout=0.5)
             self._stop_analysis_engine(sid)
             self._session_last_activity.pop(sid, None)
+            self._session_inflight_calls.pop(sid, None)
             with self._runtime_lock:
                 runtime = self.session_runtimes.pop(sid, None)
             self._remove_runtime_lease(sid)

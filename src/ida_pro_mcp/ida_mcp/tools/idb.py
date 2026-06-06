@@ -76,8 +76,10 @@ def idb(
             return {"ok": True, **idb_summary()}
         if action == "overview":
             meta = idb_meta()
-            summary = idb_summary()
-            segs = idb_segments_detailed()
+            # Keep overview responsive on large databases: use a lighter summary
+            # and avoid per-segment head scans.
+            summary = idb_summary(fast=True)
+            segs = idb_segments_detailed(include_head_counts=False)
             entries = idb_entrypoints_detailed()
             arch_profile = idb_architecture_profile(meta=meta, summary=summary)
             inferred = arch_profile.get("inferred_from_binary") if isinstance(arch_profile, dict) else {}
@@ -206,7 +208,7 @@ def idb_meta():
     return out
 
 @idaread
-def idb_segments_detailed():
+def idb_segments_detailed(include_head_counts=True):
     """Detailed segment information."""
     segments = []
     for ea in idautils.Segments():
@@ -230,19 +232,21 @@ def idb_segments_detailed():
                 seg_types[getattr(ida_segment, attr_name)] = type_name
         seg_type = seg_types.get(seg.type, f"type_{seg.type}")
         
-        # Count items in segment
-        code_count = 0
-        data_count = 0
-        head = seg.start_ea
-        while head < seg.end_ea and code_count + data_count < 10000:
-            flags = ida_bytes.get_flags(head)
-            if ida_bytes.is_code(flags):
-                code_count += 1
-            elif ida_bytes.is_data(flags):
-                data_count += 1
-            head = idc.next_head(head, seg.end_ea)
-            if head == idaapi.BADADDR:
-                break
+        code_count = None
+        data_count = None
+        if include_head_counts:
+            code_count = 0
+            data_count = 0
+            head = seg.start_ea
+            while head < seg.end_ea and code_count + data_count < 10000:
+                flags = ida_bytes.get_flags(head)
+                if ida_bytes.is_code(flags):
+                    code_count += 1
+                elif ida_bytes.is_data(flags):
+                    data_count += 1
+                head = idc.next_head(head, seg.end_ea)
+                if head == idaapi.BADADDR:
+                    break
         
         segments.append({
             "name": ida_segment.get_segm_name(seg),
@@ -318,7 +322,7 @@ def idb_bookmarks():
     return {"bookmarks": bookmarks, "count": len(bookmarks)}
 
 @idaread
-def idb_summary():
+def idb_summary(fast=False):
     """Comprehensive analysis summary."""
     # Count functions
     all_funcs = list(idautils.Functions())
@@ -335,9 +339,27 @@ def idb_summary():
             import_count += 1
             return True
         ida_nalt.enum_import_names(i, count_cb)
-    
+
     export_count = ida_entry.get_entry_qty()
-    
+
+    if fast:
+        return {
+            "functions": len(all_funcs),
+            "named_functions": named_funcs,
+            "auto_named_functions": len(all_funcs) - named_funcs,
+            "segments": len(list(idautils.Segments())),
+            "strings": string_count,
+            "imports": import_count,
+            "exports": export_count,
+            "comments": None,
+            "analysis_ok": idaapi.auto_is_ok(),
+            "code_coverage_pct": None,
+            "defined_code_bytes": None,
+            "total_code_bytes": None,
+            "approximate": True,
+            "note": "Fast summary for overview; skip full comment and coverage scans on large IDBs.",
+        }
+
     # Count comments
     comment_count = 0
     for seg_ea in idautils.Segments():
