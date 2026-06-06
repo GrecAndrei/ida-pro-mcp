@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Also provides runtime execution-trace access (get/clear/set_options) and static control-flow tracing (static_trace, decrypt_strings, eval_expr). Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis, get, clear, set_options, static_trace, decrypt_strings, eval_expr.
+Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Also provides runtime execution-trace access (get/clear/set_options), static control-flow tracing (static_trace, decrypt_strings, eval_expr, prefetch_context), and emulation-driven deobfuscation (deobfuscate_emulate). Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis, get, clear, set_options, static_trace, decrypt_strings, eval_expr, deobfuscate_emulate, prefetch_context.
 
 ## Actions
 - `import_trace` (tool-specific)
@@ -27,6 +27,8 @@ Analyzes imported execution traces for coverage, loops, API sequences, and anti-
 - `static_trace` (tool-specific)
 - `decrypt_strings` (tool-specific)
 - `eval_expr` (tool-specific)
+- `deobfuscate_emulate` (tool-specific)
+- `prefetch_context` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
