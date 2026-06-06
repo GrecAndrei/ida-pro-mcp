@@ -955,6 +955,146 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 except Exception as e:
                     log_rpc(f"Failed to remove stale IDB artifact {path}: {e}")
 
+    def _cleanup_packed_idb_siblings(self, packed_idb_path: str) -> List[str]:
+            """Remove stale unpacked siblings (.id0/.id1/.nam/.til/.schemaboot.db/...) next
+            to a packed .i64 IDB. Leaving them in place causes IDA to find the unpacked
+            base, refuse to start (Permission denied / error 4), and abort the open
+            before the existing packed IDB is even consulted.
+            """
+            removed: List[str] = []
+            if not packed_idb_path:
+                return removed
+            base, ext = os.path.splitext(packed_idb_path)
+            sibling_exts = [
+                ".id0",
+                ".id1",
+                ".id2",
+                ".id3",
+                ".id4",
+                ".nam",
+                ".til",
+                ".dmp",
+                ".asm",
+                ".i64",
+                ".idb",
+                ".schemaboot.db",
+                ".schemaboot.db-shm",
+                ".schemaboot.db-wal",
+                ".blackboard.db",
+                ".blackboard.db-shm",
+                ".blackboard.db-wal",
+                ".embeddings.db",
+                ".embeddings.db-shm",
+                ".embeddings.db-wal",
+            ]
+            for fam_ext in sibling_exts:
+                path = f"{base}{fam_ext}"
+                if not os.path.exists(path):
+                    continue
+                # Don't clobber the actual packed IDB the user is opening.
+                if os.path.realpath(path) == os.path.realpath(packed_idb_path):
+                    continue
+                try:
+                    os.remove(path)
+                    removed.append(path)
+                    log_rpc(f"Removed packed-IDB sibling: {path}")
+                except Exception as e:
+                    log_rpc(f"Failed to remove packed-IDB sibling {path}: {e}")
+            return removed
+
+    def _terminate_ida_processes_for_path(self, target_path: str) -> List[int]:
+            """Best-effort terminate any idat/ida processes whose command line references
+            the given target. Returns the list of PIDs that were killed. Used to recover
+            from orphaned IDA processes that still hold the IDB / unpacked sidecars.
+            """
+            killed: List[int] = []
+            if not target_path:
+                return killed
+            target_norm = os.path.realpath(os.path.abspath(target_path)).lower()
+            if not target_norm:
+                return killed
+            try:
+                import psutil  # type: ignore
+                have_psutil = True
+            except Exception:
+                have_psutil = False
+            proc_iter = None
+            if have_psutil:
+                try:
+                    import psutil as _ps
+                    proc_iter = _ps.process_iter(["pid", "name", "cmdline"])
+                except Exception:
+                    proc_iter = None
+            if proc_iter is None:
+                try:
+                    out = subprocess.run(
+                        ["wmic", "process", "where", "name like '%idat%' or name like '%ida%'",
+                         "get", "ProcessId,CommandLine", "/format:list"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    block_pid = None
+                    for line in (out.stdout or "").splitlines():
+                        line = line.rstrip()
+                        if line.lower().startswith("processid"):
+                            try:
+                                block_pid = int(line.split(":", 1)[1].strip())
+                            except Exception:
+                                block_pid = None
+                        elif line.lower().startswith("commandline"):
+                            cmd = line.split(":", 1)[1].strip().lower()
+                            if target_norm in cmd and block_pid:
+                                try:
+                                    subprocess.run(
+                                        ["taskkill", "/T", "/F", "/PID", str(block_pid)],
+                                        capture_output=True, timeout=5,
+                                    )
+                                    killed.append(block_pid)
+                                except Exception:
+                                    pass
+                                block_pid = None
+                        else:
+                            block_pid = None
+                except Exception:
+                    pass
+                return killed
+            for proc in proc_iter:
+                try:
+                    name = (proc.info.get("name") or "").lower()
+                except Exception:
+                    name = ""
+                if not (("ida" in name) and (name.endswith("t") or name.endswith(".exe") or name == "ida" or name == "ida.exe")):
+                    if "idat" not in name and "ida" not in name:
+                        continue
+                try:
+                    cmdline_parts = proc.info.get("cmdline") or []
+                    cmdline = " ".join(cmdline_parts).lower() if cmdline_parts else ""
+                except Exception:
+                    cmdline = ""
+                if not cmdline or target_norm not in cmdline:
+                    continue
+                try:
+                    pid = int(proc.info.get("pid") or 0)
+                except Exception:
+                    pid = 0
+                if not pid:
+                    continue
+                try:
+                    if sys.platform == "win32":
+                        subprocess.run(
+                            ["taskkill", "/T", "/F", "/PID", str(pid)],
+                            capture_output=True, timeout=5,
+                        )
+                    else:
+                        try:
+                            os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        except Exception:
+                            proc.kill()
+                    killed.append(pid)
+                    log_rpc(f"Terminated stale IDA pid={pid} holding {target_norm}")
+                except Exception as e:
+                    log_rpc(f"Failed to terminate stale IDA pid={pid}: {e}")
+            return killed
+
     def _nuclear_reset(self, idb_path, aggressive: bool = False):
             if not idb_path:
                 return
@@ -1076,7 +1216,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             env["IDA_MCP_SESSION_ID"] = session.session_id
             env["IDA_MCP_CACHE_DIR"] = self.cache_dir
             env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
-            env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
+            # For packed .i64 IDBs, never force pre-analysis architecture
+            # overrides onto an existing database — the IDB already encodes the
+            # correct processor/bitness, and forcing a different processor here
+            # causes IDA to unload the existing IDP module and abort with
+            # "Database initialization failed with error 4".
+            force_preload = has_preload_request and not getattr(session, "packed_idb", False)
+            env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if force_preload else "0"
 
             # Determine whether to open existing IDB or create new one
             # Packed .i64 databases should be opened directly as existing IDBs
@@ -1097,6 +1243,24 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # Launch IDA: Open existing IDB if present, otherwise analyze binary
             if use_existing_idb:
                 log_rpc(f"Opening existing session IDB: {effective_idb_path}")
+                # If this is a packed .i64 IDB, kill any orphaned IDA processes
+                # still holding the unpacked siblings (.id0/.id1/.nam/.til) next to
+                # the packed file, and remove stale sidecar artifacts before launch.
+                # Without this, IDA finds the leftover unpacked base, hits
+                # "Permission denied" on .id0, and aborts with
+                # "Database initialization failed with error 4".
+                if getattr(session, "packed_idb", False):
+                    killed = self._terminate_ida_processes_for_path(effective_idb_path)
+                    if killed:
+                        log_rpc(
+                            f"Pre-launch cleanup killed {len(killed)} stale IDA process(es) "
+                            f"for {effective_idb_path}"
+                        )
+                    removed = self._cleanup_packed_idb_siblings(effective_idb_path)
+                    if removed:
+                        log_rpc(
+                            f"Pre-launch cleanup removed {len(removed)} packed-IDB sibling file(s)"
+                        )
             else:
                 log_rpc(
                     f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
@@ -1307,6 +1471,23 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             self._nuclear_reset(
                 session.idb_path, aggressive=bool(opts.get("aggressive_cleanup", True))
             )
+
+            # If the failed launch was a packed-IDB open, the cause is almost
+            # always orphan unpacked siblings (.id0/.id1/.nam/.til) sitting next
+            # to the packed file (from a previous crashed run). Force-clean
+            # them here so the next attempt is a clean packed-only open.
+            if getattr(session, "packed_idb", False) and session.binary_path:
+                killed = self._terminate_ida_processes_for_path(session.binary_path)
+                if killed:
+                    log_rpc(
+                        f"Recovery killed {len(killed)} stale IDA process(es) "
+                        f"holding {session.binary_path}"
+                    )
+                removed = self._cleanup_packed_idb_siblings(session.binary_path)
+                if removed:
+                    log_rpc(
+                        f"Recovery removed {len(removed)} packed-IDB sibling file(s)"
+                    )
 
             if not session.binary_path or not os.path.exists(session.binary_path):
                 return make_error(
