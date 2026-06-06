@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 import importlib.util
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -149,8 +150,13 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         )
         self._thread.start()
 
-    def stop(self):
+    def stop(self, join_timeout: float = 2.0):
         self._stop.set()
+        t = self._thread
+        if t and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=max(0.0, float(join_timeout or 0.0)))
+        if t and not t.is_alive():
+            self._thread = None
 
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
@@ -333,7 +339,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         # Get all entries with vectors that we haven't checked yet
         try:
             import sqlite3
-            with sqlite3.connect(self._bb_path, timeout=5) as conn:
+            with closing(sqlite3.connect(self._bb_path, timeout=5)) as conn:
                 conn.execute("PRAGMA journal_mode=WAL")
                 rows = conn.execute(
                     "SELECT id, title, content, category, addr, vector, confidence "
@@ -561,7 +567,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         """Compare new embeddings against all other session embedding indexes."""
         try:
             import sqlite3
-            with sqlite3.connect(self._bb_path, timeout=5) as conn:
+            with closing(sqlite3.connect(self._bb_path, timeout=5)) as conn:
                 conn.execute("PRAGMA journal_mode=WAL")
                 new_entries = conn.execute(
                     "SELECT id, title, addr, vector FROM blackboard "
@@ -622,7 +628,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
 
         for db_path in other_dbs:
             try:
-                with sqlite3.connect(db_path, timeout=3) as conn:
+                with closing(sqlite3.connect(db_path, timeout=3)) as conn:
                     rows = conn.execute(
                         "SELECT addr, name, vector FROM embeddings WHERE vector IS NOT NULL"
                     ).fetchall()
@@ -951,7 +957,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             entropy_map: dict = {}
             try:
                 import sqlite3 as _sq3
-                with _sq3.connect(self._bb_path, timeout=5) as conn:
+                with closing(_sq3.connect(self._bb_path, timeout=5)) as conn:
                     for row in conn.execute(
                         "SELECT addr, xref_count, entropy FROM blackboard "
                         "WHERE addr != '' AND addr IS NOT NULL"

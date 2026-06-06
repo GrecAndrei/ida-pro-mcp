@@ -111,6 +111,7 @@ class Session:
         auto_name: str = "",
         phase: str = "triage",
         linked_sessions: Optional[List[str]] = None,
+        packed_idb: bool = False,
     ):
         self.session_id = session_id
         self.idb_path = idb_path
@@ -125,6 +126,7 @@ class Session:
         self.auto_name = auto_name or self._derive_auto_name()
         self.phase = phase
         self.linked_sessions = linked_sessions or []
+        self.packed_idb = bool(packed_idb)
 
     def _derive_auto_name(self) -> str:
         if self.binary_path:
@@ -156,6 +158,7 @@ class Session:
             "auto_name": self.auto_name,
             "phase": self.phase,
             "linked_sessions": self.linked_sessions,
+            "packed_idb": self.packed_idb,
         }
 
     @classmethod
@@ -184,6 +187,7 @@ class Session:
             data.get("auto_name", ""),
             data.get("phase", "triage"),
             data.get("linked_sessions", []) or [],
+            data.get("packed_idb", False),
         )
 
 
@@ -440,11 +444,14 @@ class SessionManager(SessionSkillsMixin):
         self, binary_path: str, use_existing: Optional[str] = None,
         analysis_options: Optional[dict] = None, idb_path: Optional[str] = None,
         ida_args: Optional[List[str]] = None, tags: Optional[List[str]] = None,
-        notes: str = "",
+        notes: str = "", packed_idb: bool = False,
     ) -> Session:
         with self._lock:
             sid = self._new_session_id()
             idb_base = os.path.basename(binary_path) if binary_path else f"session_{sid}"
+            # Strip .i64 extension from base to avoid double extension (SID_xxx_foo.i64.i64)
+            if idb_base.endswith(".i64"):
+                idb_base = idb_base[:-4]
             idb_name = f"SID_{sid}_{idb_base}.i64"
             resolved_idb = idb_path or use_existing or os.path.join(self.session_dir, idb_name)
             if resolved_idb and os.path.isdir(resolved_idb):
@@ -454,7 +461,7 @@ class SessionManager(SessionSkillsMixin):
             session = Session(
                 sid, resolved_idb, binary_path or "",
                 analysis_options=analysis_options, analysis_applied=False,
-                ida_args=ida_args or [],
+                ida_args=ida_args or [], packed_idb=packed_idb,
                 tags=self._sanitize_tags(tags),
                 notes=self._sanitize_note(notes),
             )
@@ -514,6 +521,13 @@ class SessionManager(SessionSkillsMixin):
                     deleted = True
                 except Exception as e:
                     log_rpc(f"Failed to delete {log_path}: {e}")
+        for cache_pattern in (f"{sid}.blackboard.db*", f"{sid}.proposals.db*"):
+            for cache_path in glob.glob(os.path.join(self.cache_dir, cache_pattern)):
+                try:
+                    os.remove(cache_path)
+                    deleted = True
+                except Exception as e:
+                    log_rpc(f"Failed to delete {cache_path}: {e}")
         return bool(session) or deleted
 
     def delete_session(self, sid: str) -> bool:

@@ -177,6 +177,30 @@ _EVIDENCE_TOOL_HINTS = {
 
 
 class ServerBlackboardMixin:
+    def _session_blackboard_path(self, session_obj=None, sid: Optional[str] = None) -> str:
+        session = session_obj
+        sid_text = str(sid or "").strip()
+        if session is None and sid_text:
+            try:
+                session = self.session_mgr.get_session(sid_text)
+            except Exception:
+                session = None
+        if session is None and self.current_session and sid_text:
+            current_sid = str(getattr(self.current_session, "session_id", "") or "").upper()
+            if current_sid == sid_text.upper():
+                session = self.current_session
+        if session is None and self.current_session and not sid_text:
+            session = self.current_session
+
+        idb_path = str(getattr(session, "idb_path", "") or "").strip() if session else ""
+        if idb_path:
+            return idb_path + ".blackboard.db"
+
+        fallback_sid = sid_text or str(getattr(session, "session_id", "") or "").strip()
+        if fallback_sid:
+            return os.path.join(self.cache_dir, f"{fallback_sid}.blackboard.db")
+        return ""
+
     def _phase_state(self) -> Dict[str, Any]:
         state = getattr(self, "_blackboard_phase_state", None)
         if not isinstance(state, dict):
@@ -1396,9 +1420,7 @@ class ServerBlackboardMixin:
                 type(self)._blackboard_module = mod
             mod = type(self)._blackboard_module
             # Per-binary scoping: derive path from current session IDB
-            idb = None
-            if self.current_session and getattr(self.current_session, "idb_path", None):
-                idb = self.current_session.idb_path + ".blackboard.db"
+            idb = self._session_blackboard_path()
             return mod.BlackboardStore(db_path=idb)
         except Exception:
             # Last-resort fallback: global store
@@ -1492,7 +1514,7 @@ class ServerBlackboardMixin:
                     baseaddr = int(raw_base)
             except Exception:
                 baseaddr = 0
-            bb_path = str(getattr(session_obj, "idb_path", "") or "") + ".blackboard.db"
+            bb_path = self._session_blackboard_path(session_obj=session_obj)
             store = type(self)._blackboard_module.BlackboardStore(db_path=bb_path) if type(self)._blackboard_module else self._get_blackboard_store()
             if store is None:
                 return 0
@@ -2212,7 +2234,7 @@ class ServerBlackboardMixin:
                 })
                 return {"ok": True, "proposal_id": pid, "accepted_items": len(result.get("accepted_items", [])), "applied": applied}
             else:
-                bb_path = os.path.join(self.cache_dir, f"{sid}.blackboard.db")
+                bb_path = self._session_blackboard_path(sid=sid)
                 ok = engine.proposals.reject(pid, bb_path=bb_path)
                 if not ok:
                     return make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found or already processed")

@@ -7,10 +7,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
-
 from .common import InstallReport
 
 
@@ -358,6 +358,58 @@ def download_and_install_llama_server(
     return str(target_path)
 
 
+def _venv_python_exe(venv_dir: Path) -> Path:
+    return venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
+
+def _probe_venv(python_exe: Path) -> bool:
+    """Return True if the venv's python can launch and reports its own path."""
+    if not python_exe.is_file():
+        return False
+    try:
+        result = subprocess.run(
+            [str(python_exe), "-c", "import sys; print(sys.executable)"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    return result.stdout.strip().lower() == str(python_exe).lower()
+
+
+def _wipe_venv(venv_dir: Path) -> None:
+    """Best-effort removal of an existing venv directory.
+
+    On Windows, .exe handles may briefly keep files locked even after the
+    owning process exits, so we retry with backoff.  If the rmtree keeps
+    failing, we rename the stale venv out of the way so the new venv can
+    be created alongside it; the user can clean up later.
+    """
+    if not venv_dir.exists():
+        return
+    deadline = time.time() + 15.0
+    last_err: Exception | None = None
+    while time.time() < deadline:
+        try:
+            shutil.rmtree(venv_dir)
+            return
+        except OSError as exc:
+            last_err = exc
+            time.sleep(0.5)
+    try:
+        backup = venv_dir.with_name(f".venv.stale.{int(time.time())}")
+        venv_dir.rename(backup)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not remove stale venv at {venv_dir} "
+            f"(processes may still be using it). Close any running MCP server "
+            f"and re-run the installer. Last error: {exc}"
+        ) from exc
+
+
 def setup_runtime_environment(
     install_root: Path,
     source_root: Path,
@@ -366,13 +418,35 @@ def setup_runtime_environment(
     report: InstallReport,
 ) -> Path:
     venv_dir = install_root / ".venv"
-    python_exe = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    python_exe = _venv_python_exe(venv_dir)
     if dry_run:
         report.metadata["venv_python"] = str(python_exe)
         return python_exe
 
     install_root.mkdir(parents=True, exist_ok=True)
-    run_checked([sys.executable, "-m", "venv", str(venv_dir)])
+
+    # If a previous venv exists and is healthy, reuse it.  This avoids the
+    # Windows race where a long-lived venv's .exe handles keep `python -m venv`
+    # from overwriting the existing directory.
+    if venv_dir.exists():
+        if _probe_venv(python_exe):
+            report.add_step("venv", "reused", str(python_exe))
+        else:
+            report.add_step("venv", "recreating", f"stale venv at {venv_dir}")
+            _wipe_venv(venv_dir)
+            run_checked([sys.executable, "-m", "venv", str(venv_dir)])
+    else:
+        run_checked([sys.executable, "-m", "venv", str(venv_dir)])
+
+    # Sanity: the venv's python must launch.  If it doesn't, wipe and retry.
+    if not _probe_venv(python_exe):
+        _wipe_venv(venv_dir)
+        run_checked([sys.executable, "-m", "venv", str(venv_dir)])
+        if not _probe_venv(python_exe):
+            raise RuntimeError(
+                f"venv python at {python_exe} is not functional after creation"
+            )
+
     run_checked([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
 
     resolved_source = choose_runtime_source(runtime_source, source_root)

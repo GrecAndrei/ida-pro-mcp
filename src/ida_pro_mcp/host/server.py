@@ -261,6 +261,34 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         self._next_cache_ttl_seconds = 1800
         self._activity_log: List[Dict[str, Any]] = []
         self._activity_log_max = 4000
+        self._session_last_activity: Dict[str, float] = {}
+        self._idle_index_lock = threading.RLock()
+        self._idle_index_threads: Dict[str, threading.Thread] = {}
+        self._idle_index_stop_events: Dict[str, threading.Event] = {}
+        self._idle_index_delay_seconds = _bounded_int(
+            os.environ.get("IDA_MCP_IDLE_INDEX_DELAY", 20),
+            20,
+            min_value=3,
+            max_value=600,
+        )
+        self._idle_index_slice_size = _bounded_int(
+            os.environ.get("IDA_MCP_IDLE_INDEX_SLICE_SIZE", 4),
+            4,
+            min_value=1,
+            max_value=64,
+        )
+        self._idle_index_seed_limit = _bounded_int(
+            os.environ.get("IDA_MCP_IDLE_INDEX_SEED_LIMIT", 12),
+            12,
+            min_value=1,
+            max_value=128,
+        )
+        self._idle_index_rpc_timeout = _bounded_int(
+            os.environ.get("IDA_MCP_IDLE_INDEX_RPC_TIMEOUT", 20),
+            20,
+            min_value=5,
+            max_value=300,
+        )
         self._pointer_note_interval_seconds = _bounded_int(
             os.environ.get("IDA_MCP_POINTER_NOTE_INTERVAL", 900),
             900,
@@ -523,6 +551,13 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                 else:
                     res = self._handle_batch(call_args)
             else:
+                sid_hint = None
+                if isinstance(call_args, dict):
+                    sid_hint = _normalize_session_id(call_args.get("session_id"))
+                if not sid_hint and self.current_session:
+                    sid_hint = getattr(self.current_session, "session_id", None)
+                if sid_hint:
+                    self._session_last_activity[str(sid_hint)] = time.time()
                 res = self._execute_tool(tn, call_args)
                 # Preference observation: compare next call bridges with injected entries
                 if isinstance(call_args, dict):
@@ -572,10 +607,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                 engine=self._analysis_engines.get(
                     getattr(self, "current_session", None) or ""
                 ),
-                bb_path=os.path.join(
-                    self.cache_dir,
-                    f"{getattr(self, 'current_session', '') or ''}.blackboard.db"
-                ),
+                bb_path=self._session_blackboard_path(session_obj=self.current_session),
                 usage_intel=getattr(self, "_usage_intel", None),
             )
             resource = resolver.read(uri)

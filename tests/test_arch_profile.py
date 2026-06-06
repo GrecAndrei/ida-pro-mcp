@@ -92,3 +92,21 @@ def test_infer_binary_arch_profile_cortex_assigns_chip_family():
         assert inf.get("load_base") is not None
     finally:
         os.unlink(path)
+
+
+def test_infer_binary_arch_profile_packed_idb_magic():
+    """IDA2 magic → packed_idb detection with no processor override."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".i64") as tf:
+        # IDA2 magic (0x49444132) identifies a packed IDA database.
+        tf.write(b"IDA2")
+        tf.write(b"\x00" * 256)
+        path = tf.name
+    try:
+        inf = infer_binary_arch_profile(path)
+        assert inf["file_kind"] == "packed_idb"
+        assert float(inf["confidence"]) == 1.0
+        # Must NOT set processor/bitness — let IDA load the DB as-is.
+        assert inf.get("processor") is None
+        assert inf.get("bitness") is None
+    finally:
+        os.unlink(path)

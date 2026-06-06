@@ -7,6 +7,7 @@ import json
 import threading
 import time
 import uuid
+from contextlib import closing
 from typing import Dict, List, Optional
 
 
@@ -34,7 +35,7 @@ class ProposalStore:
         return conn
 
     def _init_db(self):
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS proposals (
                     id TEXT PRIMARY KEY,
@@ -55,7 +56,7 @@ class ProposalStore:
             items: List[Dict], confidence: float = 0.5,
             session_id: str = "") -> str:
         pid = uuid.uuid4().hex[:12]
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             conn.execute(
                 "INSERT INTO proposals VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (pid, proposal_type, title, summary,
@@ -66,7 +67,7 @@ class ProposalStore:
         return pid
 
     def list_pending(self) -> List[Dict]:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             rows = conn.execute(
                 "SELECT id,proposal_type,title,summary,items,confidence,created_at,session_id "
                 "FROM proposals WHERE status='pending' ORDER BY confidence DESC"
@@ -81,7 +82,7 @@ class ProposalStore:
     def accept(self, proposal_id: str, scope: str = "all",
                selected_ids: Optional[List[str]] = None) -> Optional[Dict]:
         """Accept a proposal. Returns the proposal dict with accepted items."""
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             row = conn.execute(
                 "SELECT id,proposal_type,title,items FROM proposals WHERE id=? AND status='pending'",
                 (proposal_id,)
@@ -103,7 +104,7 @@ class ProposalStore:
 
     def reject(self, proposal_id: str, bb_path: str = "") -> bool:
         """Reject a proposal and write a dead_end entry to the blackboard."""
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             row = conn.execute(
                 "SELECT id,proposal_type,title,items FROM proposals WHERE id=? AND status='pending'",
                 (proposal_id,)
@@ -121,7 +122,7 @@ class ProposalStore:
             try:
                 items = json.loads(row[3] or "[]")
                 import sqlite3 as _sq3
-                with _sq3.connect(bb_path, timeout=5) as bconn:
+                with closing(_sq3.connect(bb_path, timeout=5)) as bconn:
                     bconn.execute("PRAGMA journal_mode=WAL")
                     for item in items[:10]:
                         addr = item.get("addr", "")
@@ -159,7 +160,7 @@ class ProposalStore:
         return True
 
     def count_pending(self) -> int:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM proposals WHERE status='pending'"
             ).fetchone()[0]

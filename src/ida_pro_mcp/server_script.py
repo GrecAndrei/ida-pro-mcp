@@ -1,7 +1,7 @@
 """
-Truly Non-Blocking IDA Server
-Designed for maximum stability in IDA 9.2 Headless.
-Uses non-blocking sockets to ensure IDA main thread never hangs.
+IDA RPC Server
+Designed for stability in IDA 9.2 headless mode.
+Uses non-blocking sockets for connection handling, but tool execution remains synchronous.
 """
 import sys, os, json, socket, traceback, time, select, re, hmac
 import inspect

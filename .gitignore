@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.run-i64-repro/
 *.pyc
 *.pyo
 *.egg-info/

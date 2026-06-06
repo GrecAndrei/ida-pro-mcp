@@ -120,3 +120,190 @@ def test_main_embedder_doctor_bypasses_install(monkeypatch):
     assert rc == 0
     assert called["doctor"] == 1
     assert called["install"] == 0
+
+
+# ─── venv reuse / stale-venv recovery ───────────────────────────────────────
+
+
+def _fake_python_exe(path: Path, body: str = "#!fake\n") -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_probe_venv_accepts_working_python(monkeypatch, tmp_path: Path):
+    venv = tmp_path / ".venv"
+    scripts = venv / ("Scripts" if main_mod.sys.platform == "win32" else "bin")
+    scripts.mkdir(parents=True)
+    py = scripts / ("python.exe" if main_mod.sys.platform == "win32" else "python")
+    _fake_python_exe(py)
+    # Stub subprocess.run so the probe uses our fake binary's output.
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        from subprocess import CompletedProcess
+        return CompletedProcess(cmd, 0, stdout=str(py) + "\n", stderr="")
+
+    monkeypatch.setattr(runtime_mod.subprocess, "run", fake_run)
+    assert runtime_mod._probe_venv(py) is True
+    assert captured["cmd"][0] == str(py)
+
+
+def test_probe_venv_rejects_missing_python(tmp_path: Path):
+    py = tmp_path / "nope.exe"
+    assert runtime_mod._probe_venv(py) is False
+
+
+def test_probe_venv_rejects_non_zero_exit(monkeypatch, tmp_path: Path):
+    py = tmp_path / "python.exe"
+    py.write_text("x", encoding="utf-8")
+    from subprocess import CompletedProcess
+
+    monkeypatch.setattr(
+        runtime_mod.subprocess, "run",
+        lambda cmd, **kwargs: CompletedProcess(cmd, 1, stdout="", stderr="bad"),
+    )
+    assert runtime_mod._probe_venv(py) is False
+
+
+def test_wipe_venv_removes_directory(tmp_path: Path):
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "file").write_text("x", encoding="utf-8")
+    runtime_mod._wipe_venv(venv)
+    assert not venv.exists()
+
+
+def test_wipe_venv_is_noop_when_missing(tmp_path: Path):
+    venv = tmp_path / ".venv"
+    runtime_mod._wipe_venv(venv)  # must not raise
+
+
+def test_wipe_venv_renames_when_rmtree_fails(monkeypatch, tmp_path: Path):
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "file").write_text("x", encoding="utf-8")
+    calls = {"n": 0}
+
+    def flaky_rmtree(*args, **kwargs):
+        calls["n"] += 1
+        raise OSError("locked")
+
+    monkeypatch.setattr(runtime_mod.shutil, "rmtree", flaky_rmtree)
+    # Make time.time() jump past the deadline on the first call so the
+    # rename fallback runs immediately.
+    counter = {"t": 0.0}
+    monkeypatch.setattr(runtime_mod.time, "time", lambda: counter["t"] + 100.0)
+    runtime_mod._wipe_venv(venv)
+    assert not venv.exists()
+    backups = list(tmp_path.glob(".venv.stale.*"))
+    assert len(backups) == 1
+
+
+def test_setup_runtime_environment_reuses_healthy_venv(monkeypatch, tmp_path: Path):
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    venv_dir = install_root / ".venv"
+    scripts = venv_dir / ("Scripts" if main_mod.sys.platform == "win32" else "bin")
+    scripts.mkdir(parents=True)
+    py = scripts / ("python.exe" if main_mod.sys.platform == "win32" else "python")
+    _fake_python_exe(py)
+
+    from ida_pro_mcp.installer.common import InstallReport
+
+    calls = {"venv": 0, "wipe": 0, "probe": 0}
+
+    monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: (calls.__setitem__("probe", calls["probe"] + 1) or True))
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_checked",
+        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1) or None,
+    )
+    monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1))
+
+    py_path = runtime_mod.setup_runtime_environment(
+        install_root=install_root,
+        source_root=tmp_path,
+        runtime_source="local",
+        dry_run=False,
+        report=InstallReport(),
+    )
+    assert py_path == py
+    assert calls["probe"] == 1
+    # Healthy venv: must NOT have wiped or re-created.
+    assert calls["wipe"] == 0
+    # We still ran pip / package install / smoke test.
+    assert calls["venv"] >= 3
+
+
+def test_setup_runtime_environment_wipes_stale_venv(monkeypatch, tmp_path: Path):
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    venv_dir = install_root / ".venv"
+    venv_dir.mkdir()  # exists but no python.exe inside — stale
+
+    from ida_pro_mcp.installer.common import InstallReport
+
+    calls = {"wipe": 0, "venv": 0}
+
+    monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: False)
+    monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1) or (d.rmdir() if d.exists() else None))
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_checked",
+        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1) or None,
+    )
+
+    py = runtime_mod.setup_runtime_environment(
+        install_root=install_root,
+        source_root=tmp_path,
+        runtime_source="local",
+        dry_run=False,
+        report=InstallReport(),
+    )
+    # Probe was called, venv was wiped, then re-created.
+    assert calls["wipe"] == 1
+    assert calls["venv"] >= 3
+    assert py == venv_dir / ("Scripts/python.exe" if main_mod.sys.platform == "win32" else "bin/python")
+
+
+def test_setup_runtime_environment_creates_missing_venv(monkeypatch, tmp_path: Path):
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+
+    from ida_pro_mcp.installer.common import InstallReport
+
+    calls = {"venv": 0, "wipe": 0}
+
+    monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: False)
+    monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1))
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_checked",
+        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1) or None,
+    )
+
+    runtime_mod.setup_runtime_environment(
+        install_root=install_root,
+        source_root=tmp_path,
+        runtime_source="local",
+        dry_run=False,
+        report=InstallReport(),
+    )
+    assert calls["wipe"] == 0  # no stale venv to wipe
+    assert calls["venv"] >= 3
+
+
+def test_setup_runtime_environment_dry_run_short_circuits(tmp_path: Path):
+    from ida_pro_mcp.installer.common import InstallReport
+
+    install_root = tmp_path / "install"
+    py = runtime_mod.setup_runtime_environment(
+        install_root=install_root,
+        source_root=tmp_path,
+        runtime_source="local",
+        dry_run=True,
+        report=InstallReport(),
+    )
+    assert not (install_root / ".venv").exists()
+    assert py.name in ("python.exe", "python")

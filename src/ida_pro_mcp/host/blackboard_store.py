@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import closing
 from typing import Any, Dict, List, Optional
 
 from .intelligence_helpers import quantile as _quantile
@@ -113,7 +114,7 @@ class BlackboardStore:
         return conn
 
     def _init_db(self) -> None:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS blackboard (
                     id           TEXT PRIMARY KEY,
@@ -283,7 +284,7 @@ class BlackboardStore:
         # source_type defaults to source for backward compat
         if not source_type:
             source_type = source
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             conn.execute("""
                 INSERT INTO blackboard
                     (id, category, title, content, addr, addr_end, tags, confidence,
@@ -315,7 +316,7 @@ class BlackboardStore:
         return entry_id
 
     def read(self, entry_id: str) -> Optional[Dict]:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             row = conn.execute("SELECT * FROM blackboard WHERE id = ?", (entry_id,)).fetchone()
             return self._row_to_dict(row) if row else None
 
@@ -350,7 +351,7 @@ class BlackboardStore:
             conditions.append("ioc_type = ?")
             params.append(ioc_type)
         where = "WHERE " + " AND ".join(conditions)
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             rows = conn.execute(
                 f"SELECT * FROM blackboard {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                 (*params, limit, offset),
@@ -369,7 +370,7 @@ class BlackboardStore:
         embedder = self._get_embedder()
         if embedder is None:
             q = query.lower()
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 rows = conn.execute("SELECT * FROM blackboard ORDER BY updated_at DESC LIMIT 200").fetchall()
             results = []
             for row in rows:
@@ -400,7 +401,7 @@ class BlackboardStore:
             conditions.append("contradicted = 0")
         where = "WHERE " + " AND ".join(conditions)
 
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             rows = conn.execute(f"SELECT * FROM blackboard {where}", params).fetchall()
             # d[1] is the column name (d[0] is the cid integer)
             col_names = [d[1] for d in conn.execute("PRAGMA table_info(blackboard)").fetchall()]
@@ -425,7 +426,7 @@ class BlackboardStore:
         return scored[:top_k]
 
     def contradict(self, entry_id: str, reason: str) -> bool:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             cur = conn.execute(
                 "UPDATE blackboard SET contradicted=1, contradiction_reason=?, updated_at=? WHERE id=?",
                 (reason, time.time(), entry_id),
@@ -434,7 +435,7 @@ class BlackboardStore:
             return cur.rowcount > 0
 
     def mark_resolved(self, entry_id: str) -> bool:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             cur = conn.execute(
                 "UPDATE blackboard SET resolved=1, updated_at=? WHERE id=?",
                 (time.time(), entry_id),
@@ -486,7 +487,7 @@ class BlackboardStore:
         Returns: coverage, top findings by category, active hypotheses,
         confirmed IOCs, open vulns, dead ends, and a recommended next action.
         """
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             total = conn.execute("SELECT COUNT(*) FROM blackboard").fetchone()[0]
             resolved = conn.execute("SELECT COUNT(*) FROM blackboard WHERE resolved=1").fetchone()[0]
             contradicted = conn.execute("SELECT COUNT(*) FROM blackboard WHERE contradicted=1").fetchone()[0]
@@ -568,7 +569,7 @@ class BlackboardStore:
 
         Returns number of entries updated.
         """
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             # Get high-confidence entries with tags and addresses
             rows = conn.execute(
                 "SELECT addr, tags FROM blackboard "
@@ -591,7 +592,7 @@ class BlackboardStore:
             return 0
 
         updated = 0
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             for addr, new_tags in addr_tags.items():
                 if not new_tags:
                     continue
@@ -640,7 +641,7 @@ class BlackboardStore:
             except Exception:
                 pass
 
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             rows = conn.execute("""
                 SELECT id, addr, category, title, confidence, depends_on,
                        created_at, xref_count, entropy, source_type, vector, content
@@ -844,7 +845,7 @@ class BlackboardStore:
                 if blob:
                     updates["vector"] = blob
         sets = ", ".join(f"{k} = ?" for k in updates)
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             cur = conn.execute(
                 f"UPDATE blackboard SET {sets} WHERE id = ?",
                 (*updates.values(), entry_id),
@@ -856,7 +857,7 @@ class BlackboardStore:
             if entry:
                 vec_blob = None
                 try:
-                    with self._conn() as conn:
+                    with closing(self._conn()) as conn:
                         row = conn.execute("SELECT vector FROM blackboard WHERE id=?", (entry_id,)).fetchone()
                         vec_blob = row[0] if row and row[0] else None
                 except Exception:
@@ -871,7 +872,7 @@ class BlackboardStore:
             conditions.append("category = ?")
             params.append(category)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             total = conn.execute(f"SELECT COUNT(*) FROM blackboard {where}", params).fetchone()[0]
             embedded = conn.execute(
                 f"SELECT COUNT(*) FROM blackboard {where + (' AND ' if where else 'WHERE ')} vector IS NOT NULL",
@@ -899,7 +900,7 @@ class BlackboardStore:
             conditions.append("vector IS NULL")
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         rebuilt = 0
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             rows = conn.execute(
                 f"SELECT id, title, content FROM blackboard {where} ORDER BY updated_at DESC LIMIT ?",
                 (*params, int(limit)),
@@ -921,13 +922,13 @@ class BlackboardStore:
         return {"ok": True, "rebuilt": rebuilt, "category": category or "", "forced": bool(force)}
 
     def delete(self, entry_id: str) -> bool:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             cur = conn.execute("DELETE FROM blackboard WHERE id = ?", (entry_id,))
             conn.commit()
             return cur.rowcount > 0
 
     def clear(self, category: Optional[str] = None) -> int:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             if category:
                 cur = conn.execute("DELETE FROM blackboard WHERE category = ?", (category,))
             else:
@@ -936,7 +937,7 @@ class BlackboardStore:
             return cur.rowcount
 
     def stats(self) -> Dict:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             total, cats, avg_conf = conn.execute(
                 "SELECT COUNT(*), COUNT(DISTINCT category), AVG(confidence) FROM blackboard"
             ).fetchone()
@@ -980,7 +981,7 @@ class BlackboardStore:
         }
 
     def prune(self, max_entries: int = 1000, min_q_value: float = 0.0, older_than_days: int = 0) -> Dict:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             total = conn.execute("SELECT COUNT(*) FROM blackboard").fetchone()[0]
             conditions = ["1=1"]
             params: list = []
@@ -1008,7 +1009,7 @@ class BlackboardStore:
         return {"pruned": 0, "remaining": total}
 
     def exists_similar(self, addr: str, category: str, title: str, threshold: float = 0.85) -> bool:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             rows = conn.execute(
                 "SELECT title FROM blackboard WHERE addr = ? AND category = ?",
                 (addr, category),
@@ -1033,7 +1034,7 @@ class BlackboardStore:
         return max(sims) >= adaptive_gate
 
     def auto_merge(self, addr: str = "", category: str = "", similarity_threshold: float = 0.85) -> Dict:
-        with self._conn() as conn:
+        with closing(self._conn()) as conn:
             conditions = ["1=1"]
             params: list = []
             if addr:
@@ -1080,7 +1081,7 @@ class BlackboardStore:
         if row is None:
             return {}
         if not hasattr(self, "_col_cache"):
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 # PRAGMA table_info returns (cid, name, type, notnull, dflt, pk)
                 self._col_cache = [d[1] for d in conn.execute("PRAGMA table_info(blackboard)").fetchall()]
         d: Dict = {}

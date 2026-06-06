@@ -300,6 +300,14 @@ def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
         inf.reason = "binary unreadable"
         return inf.to_dict()
 
+    # Packed IDA database (.i64) - magic "IDA2"
+    if head.startswith(b"IDA2"):
+        inf.file_kind = "packed_idb"
+        inf.confidence = 1.0
+        inf.reason = "IDA packed database (IDA2 magic)"
+        # Don't set processor/bitness/endian - let IDA load the DB and use its metadata
+        return inf.to_dict()
+
     if head.startswith(b"\x7fELF"):
         inf.file_kind = "elf"
         # Let loader drive arch for ELF; host does not force processor.

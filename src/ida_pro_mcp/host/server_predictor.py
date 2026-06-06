@@ -392,7 +392,7 @@ class ServerPredictorMixin:
             bb_targets = []
             try:
                 sid_str = str(sid)
-                bb_path = os.path.join(self.cache_dir, f"{sid_str}.blackboard.db")
+                bb_path = self._session_blackboard_path(sid=sid_str)
                 if os.path.exists(bb_path):
                     import importlib.util as _ilu
                     _bb_path = os.path.join(

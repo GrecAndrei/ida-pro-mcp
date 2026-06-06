@@ -284,13 +284,13 @@ class ServerRuntimeLeasesMixin:
             self._shutdown = True
             self._shutdown_requested = True
             self._stop_runtime_lease_heartbeat()
-            self._cleanup_all_runtimes()
             # Stop all analysis engines
-            for engine in list(getattr(self, "_analysis_engines", {}).values()):
+            for sid in list(getattr(self, "_analysis_engines", {}).keys()):
                 try:
-                    engine.stop()
+                    self._stop_analysis_engine(sid)
                 except Exception:
                     pass
+            self._cleanup_all_runtimes()
             # Stop usage intelligence
             if getattr(self, "_usage_intel", None):
                 try:

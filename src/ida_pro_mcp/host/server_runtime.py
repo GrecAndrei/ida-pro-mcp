@@ -48,11 +48,68 @@ from .session import BookmarkManager, Session, SessionManager
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> None:
+    """Kill a subprocess and all of its descendants.
+
+    On Windows, ``Popen.terminate()``/``Popen.kill()`` only signals the direct
+    child.  IDA's ``idat.exe`` is a tiny launcher that spawns ``ida.exe`` as a
+    separate process, so killing the launcher leaves the real IDA process
+    orphaned, holding the unpacked .id0/.id1 files open.  We use ``taskkill
+    /T /F`` to walk the process tree.
+
+    On POSIX, ``os.killpg`` against a process started in a new process group
+    will signal the whole tree.
+    """
+    if proc.poll() is not None:
+        return
+    pid = proc.pid
+    if pid is None:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                capture_output=True,
+                timeout=grace_seconds + 3,
+            )
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=grace_seconds)
+        except Exception:
+            pass
+        return
+    # POSIX: assume the child was placed in its own process group.
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=grace_seconds)
+        return
+    except Exception:
+        pass
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except Exception:
+        pass
+
+
 class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
     def _ida_binary_names(self) -> List[str]:
             if sys.platform == "win32":
-                return ["idat64.exe", "idat.exe", "ida64.exe", "ida.exe"]
-            return ["idat64", "idat", "ida64", "ida"]
+                base_names = ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]
+            else:
+                base_names = ["idat", "idat64", "ida", "ida64"]
+            ida_dir = getattr(self, "_ida_dir", None)
+            if not ida_dir:
+                return base_names
+            existing = []
+            for name in base_names:
+                path = os.path.join(ida_dir, name)
+                if os.path.isfile(path):
+                    existing.append(name)
+            return existing + [n for n in base_names if n not in existing]
 
     def _is_executable_file(self, path: str) -> bool:
             if not path:
@@ -389,6 +446,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 sid = self.current_session.session_id
             if not sid:
                 return
+            self._session_last_activity[sid] = time.time()
 
             action = call_args.get("action")
             if not isinstance(action, str):
@@ -416,6 +474,21 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 pass
 
             addresses: List[str] = []
+            for field in ("addr", "address", "ea"):
+                raw_addr = call_args.get(field)
+                if isinstance(raw_addr, int):
+                    addresses.append(hex(raw_addr))
+                elif isinstance(raw_addr, str):
+                    addresses.extend(re.findall(r"0x[0-9a-fA-F]+", raw_addr)[:4])
+            raw_addrs = call_args.get("addrs")
+            if isinstance(raw_addrs, str):
+                addresses.extend(re.findall(r"0x[0-9a-fA-F]+", raw_addrs)[:8])
+            elif isinstance(raw_addrs, list):
+                for raw_addr in raw_addrs[:8]:
+                    if isinstance(raw_addr, int):
+                        addresses.append(hex(raw_addr))
+                    elif isinstance(raw_addr, str):
+                        addresses.extend(re.findall(r"0x[0-9a-fA-F]+", raw_addr)[:2])
             if isinstance(result.get("items"), list):
                 for item in result["items"][:16]:
                     if not isinstance(item, dict):
@@ -568,6 +641,190 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 out["items"] = entries
             return out
 
+    def _update_session_indexing_metadata(self, session_id: str, **updates: Any) -> None:
+            try:
+                sess = self.session_mgr.sessions.get(session_id)
+                if not sess:
+                    return
+                sess.metadata = dict(sess.metadata or {})
+                sess.metadata.update(updates)
+                self.session_mgr._save_metadata(sess)
+            except Exception:
+                pass
+
+    def _collect_idle_index_targets(self, session_id: str, limit: int = 16) -> List[str]:
+            targets: List[str] = []
+            seen = set()
+            for row in reversed(self._activity_log):
+                if row.get("session_id") != session_id:
+                    continue
+                for addr in row.get("addresses") or []:
+                    if not isinstance(addr, str):
+                        continue
+                    norm = addr.lower()
+                    if not norm.startswith("0x") or norm in seen:
+                        continue
+                    seen.add(norm)
+                    targets.append(norm)
+                    if len(targets) >= limit:
+                        return targets
+            return targets
+
+    def _seed_idle_index_targets(self, session_id: str, server_port: int, limit: int = 12) -> List[str]:
+            targets: List[str] = []
+            seen = set()
+
+            def _push(addr: Any) -> None:
+                if isinstance(addr, int):
+                    norm = hex(addr).lower()
+                elif isinstance(addr, str):
+                    match = re.search(r"0x[0-9a-fA-F]+", addr)
+                    if not match:
+                        return
+                    norm = match.group(0).lower()
+                else:
+                    return
+                if norm in seen:
+                    return
+                seen.add(norm)
+                targets.append(norm)
+
+            try:
+                res = self._send_rpc_raw(
+                    {"tool": "idb", "args": {"action": "entrypoints"}},
+                    server_port,
+                    timeout=float(self._idle_index_rpc_timeout),
+                )
+                if isinstance(res, dict) and not is_error_result(res):
+                    for entry in res.get("entrypoints") or []:
+                        if not isinstance(entry, dict):
+                            continue
+                        _push(entry.get("addr"))
+                        if len(targets) >= limit:
+                            return targets
+            except Exception as e:
+                log_rpc(f"[idle-index] entrypoint seed failed for {session_id}: {e}")
+
+            try:
+                res = self._send_rpc_raw(
+                    {
+                        "tool": "data",
+                        "args": {"action": "functions", "count": limit},
+                    },
+                    server_port,
+                    timeout=float(self._idle_index_rpc_timeout),
+                )
+                if isinstance(res, dict) and not is_error_result(res):
+                    for line in str(res.get("functions") or "").splitlines():
+                        _push(line)
+                        if len(targets) >= limit:
+                            return targets
+            except Exception as e:
+                log_rpc(f"[idle-index] function seed failed for {session_id}: {e}")
+            return targets
+
+    def _start_idle_index_worker(self, session_id: str, server_port: int) -> None:
+            self._stop_idle_index_worker(session_id, join_timeout=0.2)
+            stop_event = threading.Event()
+
+            def _worker() -> None:
+                seeded = False
+                indexed: set[str] = set()
+                self._update_session_indexing_metadata(
+                    session_id,
+                    indexing_mode="hotset_idle",
+                    indexing_state="scheduled",
+                    hot_indexed_count=0,
+                    indexing_complete=False,
+                )
+                log_rpc(f"[idle-index] Scheduled hotset warmup for {session_id}")
+                while not stop_event.wait(1.0):
+                    with self._runtime_lock:
+                        runtime = self.session_runtimes.get(session_id)
+                    if not self._runtime_alive(runtime):
+                        return
+                    last_activity = float(self._session_last_activity.get(session_id, 0.0) or 0.0)
+                    if last_activity and (time.time() - last_activity) < float(self._idle_index_delay_seconds):
+                        continue
+
+                    targets = self._collect_idle_index_targets(
+                        session_id,
+                        limit=max(int(self._idle_index_slice_size) * 4, int(self._idle_index_seed_limit)),
+                    )
+                    if not targets and not seeded:
+                        targets = self._seed_idle_index_targets(
+                            session_id,
+                            server_port,
+                            limit=int(self._idle_index_seed_limit),
+                        )
+                        seeded = True
+                    pending = [addr for addr in targets if addr not in indexed]
+                    if not pending:
+                        continue
+
+                    self._update_session_indexing_metadata(
+                        session_id,
+                        indexing_mode="hotset_idle",
+                        indexing_state="warming",
+                        hot_indexed_count=len(indexed),
+                        indexing_complete=bool(indexed),
+                    )
+                    worked = 0
+                    for addr in pending[: int(self._idle_index_slice_size)]:
+                        if stop_event.is_set():
+                            return
+                        last_activity = float(self._session_last_activity.get(session_id, 0.0) or 0.0)
+                        if last_activity and (time.time() - last_activity) < float(self._idle_index_delay_seconds):
+                            break
+                        try:
+                            res = self._send_rpc_raw(
+                                {
+                                    "tool": "intelligence",
+                                    "args": {"action": "structural_refresh", "addr": addr},
+                                },
+                                server_port,
+                                timeout=float(self._idle_index_rpc_timeout),
+                            )
+                            if isinstance(res, dict) and not is_error_result(res) and res.get("ok"):
+                                indexed.add(addr)
+                                worked += 1
+                        except Exception as e:
+                            log_rpc(f"[idle-index] structural_refresh failed for {session_id} {addr}: {e}")
+                            break
+                    if worked:
+                        self._update_session_indexing_metadata(
+                            session_id,
+                            indexing_mode="hotset_idle",
+                            indexing_state="partial",
+                            hot_indexed_count=len(indexed),
+                            indexing_complete=True,
+                        )
+                        log_rpc(
+                            f"[idle-index] Warmed {worked} hot function(s) for {session_id}; total={len(indexed)}"
+                        )
+
+            t = threading.Thread(
+                target=_worker,
+                daemon=True,
+                name=f"idle-index-{session_id}",
+            )
+            with self._idle_index_lock:
+                self._idle_index_stop_events[session_id] = stop_event
+                self._idle_index_threads[session_id] = t
+            t.start()
+
+    def _stop_idle_index_worker(self, session_id: str, join_timeout: float = 1.0) -> None:
+            with self._idle_index_lock:
+                stop_event = self._idle_index_stop_events.pop(session_id, None)
+                thread = self._idle_index_threads.pop(session_id, None)
+            if stop_event is not None:
+                stop_event.set()
+            if thread and thread.is_alive() and thread is not threading.current_thread():
+                try:
+                    thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
+                except Exception:
+                    pass
+
     def _json_safe_value(self, value: Any) -> Any:
             """Recursively convert non-JSON-safe values to safe representations."""
             if isinstance(value, bytes):
@@ -599,7 +856,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     def _build_ida_command(
-            self, session, log_file, script_path, use_existing_idb: bool
+            self, session, log_file, script_path, use_existing_idb: bool, effective_idb_path: Optional[str] = None
         ):
             cmd = [self.idat_exe, "-A"]
             cmd.extend(session.ida_args or [])
@@ -647,7 +904,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             cmd.append(f"-S{script_path}")
             cmd.append(f"-L{log_file}")
             if use_existing_idb:
-                cmd.append(session.idb_path)
+                # For packed .i64, effective_idb_path is the binary_path (the packed .i64)
+                idb_to_open = effective_idb_path or session.idb_path
+                cmd.append(idb_to_open)
             else:
                 cmd.append(f"-o{session.idb_path}")
                 if session.binary_path:
@@ -816,7 +1075,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
 
             # Determine whether to open existing IDB or create new one
-            use_existing_idb = os.path.exists(session.idb_path)
+            # Packed .i64 databases should be opened directly as existing IDBs
+            if getattr(session, "packed_idb", False):
+                use_existing_idb = True
+                # Use the binary_path (the packed .i64) as the IDB to open
+                effective_idb_path = session.binary_path
+            else:
+                use_existing_idb = os.path.exists(session.idb_path)
+                effective_idb_path = session.idb_path
             env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
 
             sid_tag = session.session_id
@@ -826,7 +1092,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             # Launch IDA: Open existing IDB if present, otherwise analyze binary
             if use_existing_idb:
-                log_rpc(f"Opening existing session IDB: {session.idb_path}")
+                log_rpc(f"Opening existing session IDB: {effective_idb_path}")
             else:
                 log_rpc(
                     f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
@@ -834,7 +1100,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # Ensure session directory exists
                 os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
                 self._cleanup_stale_idb_family(session.idb_path)
-            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb)
+            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb, effective_idb_path)
 
             log_rpc(f"Launching IDA: {' '.join(cmd)}")
 
@@ -862,7 +1128,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         auth_token=session_token,
                     )
                     if res.get("pong"):
-                        log_rpc(f"IDA server is READY for {session.idb_path}")
+                        log_rpc(f"IDA RPC listener is ready for {session.idb_path}")
                         runtime = {
                             "process": server_process,
                             "port": server_port,
@@ -878,15 +1144,17 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         apply_res = self._apply_session_options(session, runtime)
                         if is_error_result(apply_res):
                             return apply_res
-                        # Kick off heavy indexing in background so session create returns fast
-                        self._background_index(session.session_id, server_port)
+                        # Start lightweight host services immediately, and defer
+                        # structural indexing until the session goes idle.
+                        self._start_session_background_services(session, server_port)
                         return {
                             "ok": True,
                             "idb_path": session.idb_path,
                             "current_options": apply_res.get("current_options"),
                             "bootstrap_report": apply_res.get("bootstrap_report"),
                             "analysis_in_progress": True,
-                            "hint": "IDA is auto-analyzing the binary. Poll session(action='status') to check readiness, or start querying once analysis completes.",
+                            "indexing_state": "idle_hot_scheduled",
+                            "hint": "IDA RPC is ready. Auto-analysis continues in background, and hot structural indexing starts only after the session goes idle.",
                         }
                 except Exception:
                     pass
@@ -927,7 +1195,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
             has_preload_request = any(k in opts and opts.get(k) is not None for k in preload_keys)
             env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
-            use_existing_idb = os.path.exists(session.idb_path)
+            # Packed .i64 databases should be opened directly as existing IDBs
+            if getattr(session, "packed_idb", False):
+                use_existing_idb = True
+                effective_idb_path = session.binary_path
+            else:
+                use_existing_idb = os.path.exists(session.idb_path)
+                effective_idb_path = session.idb_path
             env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
             if sanitize_env:
                 for k in (
@@ -945,13 +1219,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
 
             if use_existing_idb:
-                log_rpc(f"Opening existing session IDB: {session.idb_path}")
+                log_rpc(f"Opening existing session IDB: {effective_idb_path}")
             else:
                 log_rpc(
                     f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
                 )
                 os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
-            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb)
+            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb, effective_idb_path)
 
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")
@@ -981,7 +1255,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         auth_token=session_token,
                     )
                     if res.get("pong"):
-                        log_rpc(f"IDA server is READY for {session.idb_path}")
+                        log_rpc(f"IDA RPC listener is ready for {session.idb_path}")
                         runtime = {
                             "process": server_process,
                             "port": server_port,
@@ -1304,73 +1578,58 @@ for seg_ea in idautils.Segments():
                 "bootstrap_report": bootstrap_report,
             }
 
-    def _background_index(self, session_id: str, server_port: int):
-            """Run schemaboot + turboquant + cfg_stats indexing in background thread."""
-            import threading
+    def _start_session_background_services(self, session, server_port: int) -> None:
+            session_id = str(getattr(session, "session_id", "") or "").strip()
+            if not session_id:
+                return
+            self._session_last_activity[session_id] = time.time()
+            self._update_session_indexing_metadata(
+                session_id,
+                indexing_mode="hotset_idle",
+                indexing_state="scheduled",
+                hot_indexed_count=0,
+                indexing_complete=False,
+            )
+            try:
+                from .analysis_engine import AnalysisEngine
 
-            def _run():
-                log_rpc(f"[bg-index] Starting background indexing for {session_id}")
+                bb_path = self._session_blackboard_path(session_obj=session, sid=session_id)
+                proposals_path = os.path.join(self.cache_dir, f"{session_id}.proposals.db")
+                engine = AnalysisEngine(
+                    session_id=session_id,
+                    rpc_fn=lambda tool, args: self._send_rpc_raw(
+                        {"tool": tool, "args": args}, server_port, timeout=30.0
+                    ),
+                    notify_fn=self._send_notification,
+                    bb_path=bb_path,
+                    proposals_path=proposals_path,
+                    embeddings_dir=self.cache_dir,
+                )
+                engine.start()
+                self._analysis_engines[session_id] = engine
+                log_rpc(f"[idle-index] Analysis engine started for {session_id}")
+            except Exception as e:
+                log_rpc(f"[idle-index] Analysis engine failed to start (non-fatal): {e}")
+            self._start_idle_index_worker(session_id, server_port)
+
+    def _stop_analysis_engine(self, sid: str, join_timeout: float = 2.0) -> None:
+            engine = getattr(self, "_analysis_engines", {}).pop(sid, None)
+            if engine is None:
+                return
+            try:
+                engine.stop(join_timeout=join_timeout)
+            except TypeError:
                 try:
-                    self._send_rpc_raw(
-                        {"tool": "schemaboot", "args": {"action": "ingest"}},
-                        server_port,
-                        timeout=60.0,
-                    )
-                    log_rpc(f"[bg-index] schemaboot complete for {session_id}")
-                except Exception as e:
-                    log_rpc(f"[bg-index] schemaboot failed (non-fatal): {e}")
-                try:
-                    self._send_rpc_raw(
-                        {"tool": "turboquant", "args": {"action": "ingest"}},
-                        server_port,
-                        timeout=120.0,
-                    )
-                    log_rpc(f"[bg-index] turboquant complete for {session_id}")
-                except Exception as e:
-                    log_rpc(f"[bg-index] turboquant failed (non-fatal): {e}")
-                try:
-                    self._send_rpc_raw(
-                        {"tool": "agent", "args": {"action": "cfg_stats"}},
-                        server_port,
-                        timeout=30.0,
-                    )
-                    log_rpc(f"[bg-index] cfg_stats complete for {session_id}")
-                except Exception as e:
-                    log_rpc(f"[bg-index] cfg_stats failed (non-fatal): {e}")
-                # Mark indexing as complete in session metadata
-                try:
-                    sess = self.session_mgr.sessions.get(session_id)
-                    if sess:
-                        sess.metadata = dict(sess.metadata or {})
-                        sess.metadata["indexing_complete"] = True
-                        self.session_mgr._save_metadata(sess)
+                    engine.stop()
                 except Exception:
                     pass
-                log_rpc(f"[bg-index] Background indexing finished for {session_id}")
-                # Start the analysis engine for this session
-                try:
-                    from .analysis_engine import AnalysisEngine
-                    bb_path = os.path.join(self.cache_dir, f"{session_id}.blackboard.db")
-                    proposals_path = os.path.join(self.cache_dir, f"{session_id}.proposals.db")
-                    engine = AnalysisEngine(
-                        session_id=session_id,
-                        rpc_fn=lambda tool, args: self._send_rpc_raw(
-                            {"tool": tool, "args": args}, server_port, timeout=30.0
-                        ),
-                        notify_fn=self._send_notification,
-                        bb_path=bb_path,
-                        proposals_path=proposals_path,
-                        embeddings_dir=self.cache_dir,
-                    )
-                    engine.start()
-                    self._analysis_engines[session_id] = engine
-                    log_rpc(f"[bg-index] Analysis engine started for {session_id}")
-                except Exception as e:
-                    log_rpc(f"[bg-index] Analysis engine failed to start (non-fatal): {e}")
-
-            threading.Thread(target=_run, daemon=True, name=f"bg-index-{session_id}").start()
+            except Exception:
+                pass
 
     def _cleanup_runtime(self, sid):
+            self._stop_idle_index_worker(sid, join_timeout=0.5)
+            self._stop_analysis_engine(sid)
+            self._session_last_activity.pop(sid, None)
             with self._runtime_lock:
                 runtime = self.session_runtimes.pop(sid, None)
             self._remove_runtime_lease(sid)
@@ -1383,12 +1642,10 @@ for seg_ea in idautils.Segments():
                     self._send_rpc_raw({"type": "shutdown"}, port, timeout=1)
                 except Exception:
                     pass
-                if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=2)
-                    except Exception:
-                        proc.kill()
+                # Use _kill_process_tree so the full idat.exe -> ida.exe
+                # tree is terminated; otherwise ida.exe can be left
+                # orphaned holding the unpacked .id0/.id1 files.
+                _kill_process_tree(proc)
             for fh in runtime.get("log_handles", []):
                 try:
                     fh.close()
