@@ -1841,8 +1841,11 @@ class ServerBlackboardMixin:
                     "dry_run": True,
                     "verification": verify,
                 }
-            exec_res = self._proposal_execute(proposal_type, spec)
             verify = self._proposal_verify(proposal_type, spec)
+            if verify.get("ok"):
+                exec_res = self._proposal_execute(proposal_type, spec)
+            else:
+                exec_res = {"ok": False, "applied": 0, "failed": [], "note": "skipped: pre-execute verification failed"}
             status = "verified" if (exec_res.get("ok") and verify.get("ok")) else "failed"
             new_tags = self._proposal_status_replace(tags, status)
             meta = payload
