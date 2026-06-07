@@ -1975,7 +1975,7 @@ class TinyEmulator:
         self.arch_mask = (1 << arch_width) - 1
         self.regs = {
             'rax': 0, 'rbx': 0, 'rcx': 0, 'rdx': 0,
-            'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': 0x7ffffff0,
+            'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': EMU_STACK_INIT_RSP,
             'r8': 0, 'r9': 0, 'r10': 0, 'r11': 0, 'r12': 0, 'r13': 0, 'r14': 0, 'r15': 0,
             'zf': 0, 'sf': 0, 'cf': 0
         }
@@ -2002,14 +2002,14 @@ class TinyEmulator:
         self.path_constraints = []
 
     def setup_argument_pointers(self):
-        # We assign dummy pointers in the range 0x10000000 - 0x60000000
+        # We assign dummy pointers in the range EMU_DUMMY_ARG_BASE..EMU_DUMMY_ARG_TOP
         # for standard x64 argument registers
-        self.regs['rdi'] = 0x10000000
-        self.regs['rsi'] = 0x20000000
-        self.regs['rdx'] = 0x30000000
-        self.regs['rcx'] = 0x40000000
-        self.regs['r8']  = 0x50000000
-        self.regs['r9']  = 0x60000000
+        self.regs['rdi'] = EMU_DUMMY_ARG_BASE + 0 * EMU_DUMMY_ARG_STRIDE
+        self.regs['rsi'] = EMU_DUMMY_ARG_BASE + 1 * EMU_DUMMY_ARG_STRIDE
+        self.regs['rdx'] = EMU_DUMMY_ARG_BASE + 2 * EMU_DUMMY_ARG_STRIDE
+        self.regs['rcx'] = EMU_DUMMY_ARG_BASE + 3 * EMU_DUMMY_ARG_STRIDE
+        self.regs['r8']  = EMU_DUMMY_ARG_BASE + 4 * EMU_DUMMY_ARG_STRIDE
+        self.regs['r9']  = EMU_DUMMY_ARG_BASE + 5 * EMU_DUMMY_ARG_STRIDE
 
     def clone(self):
         other = TinyEmulator(self.ip)
@@ -2149,13 +2149,13 @@ class TinyEmulator:
         import ida_bytes
         import idc
         out = 0
-        
+
         # Check if this is a read from one of our dummy argument pointers
-        if 0x10000000 <= addr < 0x70000000:
-            reg_idx = addr // 0x10000000
+        if EMU_DUMMY_ARG_BASE <= addr < EMU_DUMMY_ARG_TOP:
+            reg_idx = (addr - EMU_DUMMY_ARG_BASE) // EMU_DUMMY_ARG_STRIDE + 1
             reg_names = {1: "rdi", 2: "rsi", 3: "rdx", 4: "rcx", 5: "r8", 6: "r9"}
             reg_name = reg_names.get(reg_idx, "unknown")
-            offset = addr % 0x10000000
+            offset = addr - EMU_DUMMY_ARG_BASE
             self.arg_derefs.setdefault(reg_name, []).append({
                 "offset": offset,
                 "offset_hex": hex(offset),
@@ -2163,7 +2163,7 @@ class TinyEmulator:
                 "access": "read"
             })
             return 0
-            
+
         for i in range(size):
             b = 0
             if (addr + i) in self.mem:
@@ -2173,11 +2173,11 @@ class TinyEmulator:
             out |= (b << (i * 8))
 
         # Track dereferenced pointers (non-stack, non-zero)
-        if not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+        if not (EMU_STACK_BASE <= addr <= EMU_STACK_TOP) and addr != 0:
             self.dereferenced_pointers.add((self.ip, addr, "read"))
 
         # Track C++ virtual calls (if reading a pointer from a vtable)
-        if size == 8 and not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+        if size == 8 and not (EMU_STACK_BASE <= addr <= EMU_STACK_TOP) and addr != 0:
             vtable_base = None
             vtable_name = None
             for offset_check in range(0, 512, 8):
@@ -2204,11 +2204,11 @@ class TinyEmulator:
 
     def write_mem(self, addr, val, size=1):
         # Check if this is a write to one of our dummy argument pointers
-        if 0x10000000 <= addr < 0x70000000:
-            reg_idx = addr // 0x10000000
+        if EMU_DUMMY_ARG_BASE <= addr < EMU_DUMMY_ARG_TOP:
+            reg_idx = (addr - EMU_DUMMY_ARG_BASE) // EMU_DUMMY_ARG_STRIDE + 1
             reg_names = {1: "rdi", 2: "rsi", 3: "rdx", 4: "rcx", 5: "r8", 6: "r9"}
             reg_name = reg_names.get(reg_idx, "unknown")
-            offset = addr % 0x10000000
+            offset = addr - EMU_DUMMY_ARG_BASE
             self.arg_derefs.setdefault(reg_name, []).append({
                 "offset": offset,
                 "offset_hex": hex(offset),
@@ -2222,12 +2222,12 @@ class TinyEmulator:
             self.mem[addr + i] = b
             self.written_addrs.add(addr + i)
             # Track stack writes
-            if 0x7f000000 <= addr <= 0x80000000:
-                offset = addr - 0x7ffffff0
+            if EMU_STACK_BASE <= addr <= EMU_STACK_TOP:
+                offset = addr - EMU_STACK_INIT_RSP
                 self.stack_writes[offset + i] = (self.ip, b)
 
         # Track dereferenced pointers (non-stack, non-zero)
-        if not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+        if not (EMU_STACK_BASE <= addr <= EMU_STACK_TOP) and addr != 0:
             self.dereferenced_pointers.add((self.ip, addr, "write"))
 
     def parse_op(self, insn, op_idx):
