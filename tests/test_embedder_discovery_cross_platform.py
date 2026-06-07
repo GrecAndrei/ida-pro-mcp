@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import textwrap
 from pathlib import Path
@@ -272,23 +273,23 @@ def test_find_llama_server_honors_embedder_state(clean_state, tmp_path: Path):
     assert _find_llama_server() == str(chosen.resolve())
 
 
-def test_find_llama_server_returns_empty_when_nothing_found(clean_state, sandbox_home):
+def test_find_llama_server_returns_empty_when_nothing_found(clean_state, sandbox_home, monkeypatch):
     clean_state.setenv("IDA_PRO_MCP_HOME", str(sandbox_home))
-    # Empty / non-existent install root with no env or state file.
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.shutil.which", lambda x: None)
     assert _find_llama_server() == ""
 
 
-def test_find_llama_server_rejects_non_executable_override(clean_state, tmp_path: Path):
+def test_find_llama_server_rejects_non_executable_override(clean_state, tmp_path: Path, monkeypatch):
     fake = tmp_path / "fake-llama"
     fake.write_text("not a real binary", encoding="utf-8")
     clean_state.setenv("IDA_MCP_EMBED_SERVER_BIN", str(fake))
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.shutil.which", lambda x: None)
     if IS_WINDOWS:
         # .exe extension is required on Windows; a bare "fake-llama" is rejected.
         assert _find_llama_server() == ""
     else:
-        # POSIX only checks the x bit, so this returns the path.  Document the
-        # behavior so a future change is intentional.
-        assert _find_llama_server() == str(fake.resolve())
+        # POSIX checks the x bit; a text file without +x is also rejected.
+        assert _find_llama_server() == ""
 
 
 # ─── _find_model ────────────────────────────────────────────────────────────
@@ -400,6 +401,7 @@ def test_windows_scoop_search(clean_state, tmp_path: Path, monkeypatch):
 def test_posix_search_usr_local_bin(clean_state, tmp_path: Path, monkeypatch):
     """/usr/local/bin/llama-server is honored on POSIX."""
     clean_state.setenv("IDA_PRO_MCP_HOME", str(tmp_path))
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.shutil.which", lambda x: None)
     # Don't let /usr/local/bin or /usr/bin from the real filesystem interfere.
     fake_root = tmp_path / "fake-root"
     fake_root.mkdir(parents=True, exist_ok=True)
@@ -408,9 +410,13 @@ def test_posix_search_usr_local_bin(clean_state, tmp_path: Path, monkeypatch):
     server = local / "llama-server"
     server.write_bytes(b"\x7fELF")
     server.chmod(0o755)
+    _real_isdir = os.path.isdir
     monkeypatch.setattr(
         "ida_pro_mcp.host.intelligence_core.os.path.isdir",
-        lambda p: (p == "/usr/local/bin" or p == "/usr/bin" or p == str(local)) or os.path.isdir(p),
+        lambda p: (p == "/usr/local/bin" or p == "/usr/bin" or p == str(local)) or _real_isdir(p),
     )
-    # The fake root is not used here, but we ensure local is hit first.
-    assert _find_llama_server() == str(server.resolve()) or _find_llama_server().endswith("llama-server")
+    monkeypatch.setattr(
+        "ida_pro_mcp.host.intelligence.core._is_executable",
+        lambda p: p in ("/usr/local/bin/llama-server", "/usr/bin/llama-server", str(server)),
+    )
+    assert _find_llama_server().endswith("llama-server")
