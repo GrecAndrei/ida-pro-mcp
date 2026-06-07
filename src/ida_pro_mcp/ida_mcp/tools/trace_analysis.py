@@ -24,6 +24,28 @@ EMU_STACK_TOP = 0x80000000
 EMU_STACK_INIT_RSP = 0x7ffffff0
 
 
+def safe_get_byte(ea: int):
+    """Read one byte from the IDB, returning None for unmapped addresses.
+
+    ida_bytes.get_byte() returns 0xff for unmapped addresses which the
+    emulator previously consumed as data. Returning None lets the read
+    path distinguish "no data" from "byte happens to be 0xff".
+    """
+    try:
+        import ida_bytes
+    except Exception:
+        return None
+    try:
+        if not ida_bytes.is_loaded(ea):
+            return None
+    except Exception:
+        return None
+    try:
+        return ida_bytes.get_byte(ea)
+    except Exception:
+        return None
+
+
 # ============================================================================
 # 36. TRACE_ANALYSIS - Post-mortem execution trace analysis
 # ============================================================================
@@ -2146,9 +2168,10 @@ class TinyEmulator:
             return
 
     def read_mem(self, addr, size=1):
-        import ida_bytes
         import idc
         out = 0
+        all_unmapped = True
+        any_unmapped = False
 
         # Check if this is a read from one of our dummy argument pointers
         if EMU_DUMMY_ARG_BASE <= addr < EMU_DUMMY_ARG_TOP:
@@ -2165,12 +2188,22 @@ class TinyEmulator:
             return 0
 
         for i in range(size):
-            b = 0
             if (addr + i) in self.mem:
                 b = self.mem[addr + i]
+                all_unmapped = False
             else:
-                b = ida_bytes.get_byte(addr + i)
+                b = safe_get_byte(addr + i)
+                if b is None:
+                    any_unmapped = True
+                    b = 0
+                else:
+                    all_unmapped = False
             out |= (b << (i * 8))
+
+        # Skip deref-pointer tracking for unmapped reads; don't synthesize
+        # deref entries that are actually just placeholder 0xff/0 returns.
+        if all_unmapped or any_unmapped:
+            return out
 
         # Track dereferenced pointers (non-stack, non-zero)
         if not (EMU_STACK_BASE <= addr <= EMU_STACK_TOP) and addr != 0:
