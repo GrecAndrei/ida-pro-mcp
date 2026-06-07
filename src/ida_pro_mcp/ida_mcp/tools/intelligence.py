@@ -825,7 +825,15 @@ def intelligence(
 
             db_path = get_db_path(idb_path)
 
-            if action == "structural_extract":
+            # Audit §5.2: the previous code re-entered `intelligence(action=...)`
+            # from inside `structural_ingest` and `structural_refresh`. The
+            # outer call already holds the `@idaread` LifoQueue lock, so a
+            # recursive dispatch through the public wrapper risks deadlock /
+            # lost-update reentrancy on the shared sync queue. The action
+            # bodies are extracted into nested helpers so the dispatch ladder
+            # and the internal call sites share the same path without going
+            # through the decorator again.
+            def _do_structural_extract():
                 funcs = list(idautils.Functions())
                 results = []
                 for func_ea in funcs:
@@ -834,16 +842,59 @@ def intelligence(
                         results.append(attrs)
                 return {"ok": True, "functions": results}
 
-            if action == "structural_extract_single":
-                if not addr:
+            def _do_structural_extract_single(_addr):
+                if not _addr:
                     return {"error": True, "message": "addr required"}
-                ea, err = validate_addr(addr, require_func=True)
+                ea, err = validate_addr(_addr, require_func=True)
                 if err:
                     return err
                 attrs = _extract_function_attributes(ea)
                 if not attrs:
                     return {"error": True, "message": "Extraction failed"}
                 return {"ok": True, "function": attrs}
+
+            def _do_structural_ingest():
+                t0 = time.time()
+                extract_res = _do_structural_extract()
+                if extract_res.get("error") or not extract_res.get("ok"):
+                    return extract_res
+                funcs_data = extract_res.get("functions") or []
+
+                try:
+                    conn = sqlite3.connect(db_path)
+                    ensure_tables(conn)
+                    ingested = upsert_functions_batch(conn, funcs_data)
+                    conn.close()
+                except Exception as e:
+                    return {"error": True, "message": f"Database error during ingest: {e}"}
+
+                try:
+                    write_insight_index(funcs_data)
+                    all_facts = []
+                    for f in funcs_data:
+                        all_facts.extend(_detect_global_facts(f))
+                    add_global_facts(all_facts)
+                    facts_count = len(all_facts)
+                except Exception:
+                    facts_count = 0
+
+                elapsed = time.time() - t0
+                return {
+                    "ok": True,
+                    "action": "structural_ingest",
+                    "total_functions": len(funcs_data),
+                    "ingested": ingested,
+                    "db_path": db_path,
+                    "l1_indexed": len(funcs_data),
+                    "l2_facts_added": facts_count,
+                    "elapsed_seconds": elapsed,
+                }
+
+            if action == "structural_extract":
+                return _do_structural_extract()
+
+            if action == "structural_extract_single":
+                return _do_structural_extract_single(addr)
 
             if action == "structural_delete":
                 if os.path.exists(db_path):
@@ -976,45 +1027,11 @@ def intelligence(
                 )
 
             if action == "structural_ingest":
-                t0 = time.time()
-                extract_res = intelligence(action="structural_extract")
-                if extract_res.get("error") or not extract_res.get("ok"):
-                    return extract_res
-                funcs_data = extract_res.get("functions") or []
-
-                try:
-                    conn = sqlite3.connect(db_path)
-                    ensure_tables(conn)
-                    ingested = upsert_functions_batch(conn, funcs_data)
-                    conn.close()
-                except Exception as e:
-                    return {"error": True, "message": f"Database error during ingest: {e}"}
-
-                try:
-                    write_insight_index(funcs_data)
-                    all_facts = []
-                    for f in funcs_data:
-                        all_facts.extend(_detect_global_facts(f))
-                    add_global_facts(all_facts)
-                    facts_count = len(all_facts)
-                except Exception:
-                    facts_count = 0
-
-                elapsed = time.time() - t0
-                return {
-                    "ok": True,
-                    "action": "structural_ingest",
-                    "total_functions": len(funcs_data),
-                    "ingested": ingested,
-                    "db_path": db_path,
-                    "l1_indexed": len(funcs_data),
-                    "l2_facts_added": facts_count,
-                    "elapsed_seconds": elapsed,
-                }
+                return _do_structural_ingest()
 
             if action == "structural_refresh":
                 if addr:
-                    extract_res = intelligence(action="structural_extract_single", addr=addr)
+                    extract_res = _do_structural_extract_single(addr)
                     if extract_res.get("error") or not extract_res.get("ok"):
                         return extract_res
                     func_data = extract_res.get("function")
@@ -1037,7 +1054,7 @@ def intelligence(
 
                     return {"ok": True, "refreshed": 1, "ea": addr}
                 else:
-                    return intelligence(action="structural_ingest")
+                    return _do_structural_ingest()
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
