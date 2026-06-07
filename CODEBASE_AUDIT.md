@@ -8,7 +8,9 @@
 
 ## 0.1 Quick Wins Applied (2026-06-07, branch `audit/quick-wins`)
 
-After the audit was written, 6 parallel workstreams (1A–1F) fixed ~40 findings across 38 commits. **1656 tests pass, 68 skip, 11 pre-existing failures unrelated to this pass.** A summary of what changed, organized by workstream.
+After the audit was written, 6 parallel workstreams (1A–1F) fixed ~40 findings across 38 commits. **1656 tests pass, 68 skip, 11 pre-existing failures unrelated to this pass.** Phase 2 added architectural refactors (2A: `_handle_session` decomposition, 2C/2D: race fixes) and cleanup items. Total changed: 25 source files, ~+2600 LOC, ~-750 LOC.
+
+A summary of what changed, organized by workstream.
 
 ### 1A — Memory tool / RPC security / BYPASS_SYNC scoping
 | Finding | Fix | Commit |
@@ -76,6 +78,32 @@ After the audit was written, 6 parallel workstreams (1A–1F) fixed ~40 findings
 | §6.5 [High] symlink guard + version parse | `Path.resolve()` guard; defensive `parse_version()` regex | `76221a0` |
 | §6.8 [Medium] find_embed_model scope | Restricted to `~/Downloads/ida-pro-mcp/` | `1ed390f` |
 | §6.9 [Medium] run_checked timeout | Added `timeout` parameter (default 300s) | `da910af` |
+
+### Phase 2 — Architectural refactors + cleanup
+
+#### 2A — `_handle_session` decomposition
+| Finding | Fix | Commit |
+|---|---|---|
+| §1.4 [Critical] 1489-line if/elif ladder | Extracted 61 action handlers into `_SESSION_ACTIONS` dispatch table; moved `_sid_arg` closure to `_resolve_session_id` method; `_handle_session` is now 14 lines | `21407fa` |
+
+#### 2D — `proposal_accept` order fix
+| Finding | Fix | Commit |
+|---|---|---|
+| §1.8 [High] execute-before-verify in proposal_accept | Swapped `_proposal_verify` before `_proposal_execute`; skip execution if verification fails | `46bbf76` |
+
+#### 2C — Concurrency tests + race fix
+| Finding | Fix | Commit |
+|---|---|---|
+| §1.3 [Critical] `_session_inflight_calls` lost-update race | Wrapped read-modify-write with `_runtime_lock` in `server.py:561-577` | `31b6c89` |
+| §1.11 [High] idle-index worker racing with in-flight counter | Same fix — lock prevents the counter from being transiently 0 during active calls | `31b6c89` |
+| §1.3 [Critical] missing concurrency test coverage | `tests/test_concurrency.py` with 4 deterministic tests (stress, dict R/W, session R/W, non-negative counter) | `31b6c89` |
+
+#### Cleanup items
+| Finding | Fix | Commit |
+|---|---|---|
+| §1.16 [Medium] dead code in `server_dispatch.py` | Removed ~30 lines of unreachable Blackboard preflight block | `6cd0094` |
+| §10.1.17 [Medium] Production/Stable classifier | Downgraded to 4 - Beta | `6cd0094` |
+| §10.1.20 [Low] `_observe_preference` no-op | Removed the dead method and its 2 call sites | `6cd0094` |
 
 ### Pre-existing failures not addressed (11 total)
 All 11 failures existed before this pass — verified against `master@ebdb601`:
