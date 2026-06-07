@@ -11,6 +11,49 @@ from .common import InstallReport
 from ..legacy_names import LEGACY_SERVER_NAMES
 
 
+def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Atomically replace `path` with `content` via tmp file + os.replace.
+
+    A mid-write crash leaves either the old file or the new file in place —
+    never a half-written byte stream that would brick the MCP client
+    (audit §6.4).  The tmp file lives in the same directory so the rename
+    stays on one filesystem.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # Best-effort cleanup of stragglers; never mask the original error.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    """Atomically replace `path` with `content` (binary)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def load_client_map(source_root: Path) -> dict:
     config_path = source_root / "client_configs.json"
     if not config_path.exists():
@@ -247,7 +290,7 @@ def update_json_config(path: Path, server_name: str, server_cfg: dict, report: I
     config.setdefault("mcpServers", {})
     _upsert_server_entry(config["mcpServers"], server_name, server_cfg)
     if not dry_run:
-        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        _atomic_write_text(path, json.dumps(config, indent=2))
     report.add_modified(path)
     return True
 
@@ -269,7 +312,7 @@ def update_opencode_config(path: Path, server_name: str, server_cfg: dict, repor
     }
     _upsert_server_entry(config["mcp"], server_name, opencode_entry)
     if not dry_run:
-        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        _atomic_write_text(path, json.dumps(config, indent=2))
     report.add_modified(path)
     return True
 
@@ -300,10 +343,12 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
     _upsert_server_entry(config["mcp_servers"], server_name, server_cfg)
     if not dry_run:
         if tomli_w is not None:
-            with open(path, "wb") as f:
-                tomli_w.dump(config, f)
+            import io
+            buf = io.BytesIO()
+            tomli_w.dump(config, buf)
+            _atomic_write_bytes(path, buf.getvalue())
         else:
-            path.write_text(_toml_dump_simple(config), encoding="utf-8")
+            _atomic_write_text(path, _toml_dump_simple(config))
     report.add_modified(path)
     return True
 

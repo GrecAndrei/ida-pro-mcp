@@ -14,6 +14,14 @@ from pathlib import Path
 from .common import InstallReport
 
 
+# Hard cap on llama.cpp release asset size. Anything larger is refused
+# before we exhaust memory or fill /tmp (audit §6.3). The largest
+# llama.cpp release asset historically clocks in under 600 MB; 2 GiB
+# leaves comfortable headroom while still bounding worst-case damage.
+MAX_DOWNLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
+_DOWNLOAD_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB
+
+
 def get_install_root() -> Path:
     override = os.environ.get("IDA_PRO_MCP_HOME")
     if override:
@@ -61,8 +69,34 @@ def detect_ida_install_dir() -> Path | None:
     return None
 
 
-def run_checked(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-    result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
+def run_checked(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float | None = 300.0,
+) -> None:
+    """Run `cmd` and raise RuntimeError on non-zero exit or hang.
+
+    `timeout` defaults to 300 s (5 minutes). Pass `None` to disable
+    the timeout for legitimately long operations (the installer never
+    does this today; the only call sites are pip install / venv
+    creation / smoke import, all of which finish in well under 5
+    minutes on a healthy machine).
+
+    Audit §6.9: previously subprocess.run was called without a
+    timeout, so a hung external command (pip stalled on a slow PyPI
+    mirror, venv creation deadlocked by file lock) would hang the
+    installer forever with no recovery.
+    """
+    try:
+        result = subprocess.run(
+            cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{' '.join(cmd)} timed out after {timeout}s"
+        ) from exc
     if result.returncode == 0:
         return
     details = (result.stderr or result.stdout or "").strip()
@@ -70,11 +104,101 @@ def run_checked(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] 
     raise RuntimeError(f"{' '.join(cmd)} failed ({result.returncode}): {tail}")
 
 
-def kill_ida_processes() -> None:
+def kill_ida_processes(binary_path: str | Path | None = None) -> None:
+    """Terminate running ida/idat processes.
+
+    If `binary_path` is provided, only kill processes whose executable path
+    (the first token of the command line) matches the canonicalized form of
+    that path.  Without a filter the installer would happily SIGKILL a
+    user's unrelated long-running IDA on a different binary — see §6.2.
+
+    On failure to enumerate processes (missing pgrep/tasklist, permission
+    error) this function silently returns; the installer prints its own
+    warning when ida_processes_running() still reports True afterwards.
+    """
+    target_resolved: str | None = None
+    if binary_path:
+        try:
+            target_resolved = str(Path(binary_path).expanduser().resolve())
+        except OSError:
+            target_resolved = str(binary_path)
+
     if sys.platform == "win32":
+        if target_resolved:
+            # Use WMIC to enumerate processes with their ExecutablePath and
+            # filter to the canonicalized target before taskkill.  Fall back
+            # to the legacy unfiltered behavior only if WMIC is missing.
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "get", "ProcessId,ExecutablePath", "/FORMAT:CSV"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                result = None
+            pids: list[str] = []
+            if result is not None and result.returncode == 0:
+                wanted = target_resolved.lower()
+                for line in (result.stdout or "").splitlines():
+                    cols = line.strip().split(",")
+                    if len(cols) < 3:
+                        continue
+                    exe = cols[1].strip()
+                    pid = cols[2].strip()
+                    if not exe or not pid.isdigit():
+                        continue
+                    try:
+                        exe_resolved = str(Path(exe).resolve()).lower()
+                    except OSError:
+                        exe_resolved = exe.lower()
+                    if exe_resolved == wanted:
+                        pids.append(pid)
+                for pid in pids:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", pid], capture_output=True
+                    )
+                return
+            # WMIC unavailable — fall through to unfiltered behavior with a
+            # narrower image-name match (still scoped to ida*/idat* only).
         for name in ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]:
             subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
         return
+
+    if target_resolved:
+        # pgrep -af lists "<pid> <cmdline>"; we match on the first token
+        # being our canonicalized target.  This avoids killing IDAs whose
+        # binary path differs even though the basename matches.
+        try:
+            result = subprocess.run(
+                ["pgrep", "-af", "(ida|idat)64?"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode in (0, 1):
+            pids: list[str] = []
+            for line in (result.stdout or "").splitlines():
+                parts = line.strip().split(None, 1)
+                if len(parts) < 2 or not parts[0].isdigit():
+                    continue
+                cmd_tokens = parts[1].split()
+                if not cmd_tokens:
+                    continue
+                exe = cmd_tokens[0]
+                try:
+                    exe_resolved = str(Path(exe).resolve())
+                except OSError:
+                    exe_resolved = exe
+                if exe_resolved == target_resolved:
+                    pids.append(parts[0])
+            for pid in pids:
+                subprocess.run(["kill", "-KILL", pid], capture_output=True)
+            return
+        # pgrep -af missing — fall through to image-name-only kill.
+
     for name in ["idat", "idat64", "ida", "ida64"]:
         subprocess.run(["pkill", "-x", name], capture_output=True)
 
@@ -120,30 +244,48 @@ def find_embed_model(install_root: Path) -> str:
 
     home = Path.home()
     model_filenames = ("bge-code-v1-q8_0.gguf", "bge-code-v1.gguf")
-    # Keep discovery deterministic and workspace-scoped by default, but also
-    # check common user-level locations so the install wizard can auto-detect
-    # an existing bge-code-v1 on Windows / macOS / Linux.
-    bases = [
+    # Scope the discovery walk to project-specific directories and an
+    # opt-in env var (audit §6.8). The previous version scanned the
+    # user's entire ~/Downloads and ~/Documents, which is slow on
+    # network shares and follows arbitrary symlinks.
+    #
+    # IDA_MCP_EMBED_SEARCH_PATHS is a PATH-style list (':' on POSIX,
+    # ';' on Windows). Each entry is a directory; we check it at the
+    # top level only (no recursion) for the candidate filenames.
+    bases: list[Path] = [
         install_root,
         install_root / "models",
         install_root.parent,
         home / "models",
-        home / "Downloads",
-        home / "Documents",
+        home / "Downloads" / "ida-pro-mcp",
+        home / "Documents" / "ida-pro-mcp",
     ]
+    extra = os.environ.get("IDA_MCP_EMBED_SEARCH_PATHS", "").strip()
+    if extra:
+        sep = ";" if sys.platform == "win32" else ":"
+        for entry in extra.split(sep):
+            entry = entry.strip()
+            if entry:
+                bases.append(Path(entry).expanduser())
     seen: set[Path] = set()
     for base in bases:
         if not base:
             continue
+        # Reject symlinks that escape the install or home tree before
+        # touching the filesystem.
+        try:
+            base_resolved = base.resolve()
+        except OSError:
+            continue
+        if base_resolved in seen:
+            continue
+        seen.add(base_resolved)
         for fn in model_filenames:
             c = base / fn
             try:
                 rp = c.resolve()
             except OSError:
                 continue
-            if rp in seen:
-                continue
-            seen.add(rp)
             if c.is_file():
                 return str(c)
 
@@ -275,12 +417,58 @@ def _score_release_asset(name: str, os_hints: list[str], arch_hints: list[str]) 
 
 
 def _extract_archive(archive: Path, out_dir: Path) -> None:
+    """Extract `archive` into `out_dir` with a path-traversal guard.
+
+    Refuses any member whose canonicalized destination is not contained
+    inside `out_dir` (zip slip / tar slip — audit §6.3).  Also refuses
+    members declared as absolute paths or containing '..' segments,
+    catching attacks that exploit case-folding or symlinks created
+    during extraction.
+    """
+    extract_root = out_dir.resolve()
+
+    def _safe_target(member_name: str) -> Path:
+        if not member_name:
+            raise RuntimeError(f"refusing empty archive member name in {archive.name}")
+        # Reject absolute paths and parent-dir traversal eagerly so the
+        # error message is precise; the resolve() check below is the
+        # final authority.
+        candidate = Path(member_name)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise RuntimeError(
+                f"refusing to extract {member_name!r} from {archive.name}: absolute or traversal path"
+            )
+        target = (out_dir / member_name).resolve()
+        try:
+            target.relative_to(extract_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"refusing to extract {member_name!r} from {archive.name}: outside extract root"
+            ) from exc
+        return target
+
     if archive.name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
+            for info in zf.infolist():
+                _safe_target(info.filename)
             zf.extractall(out_dir)
         return
     if archive.name.endswith(".tar.gz") or archive.name.endswith(".tgz"):
         with tarfile.open(archive, "r:gz") as tf:
+            for member in tf.getmembers():
+                _safe_target(member.name)
+                # Tar can also carry symlinks/hardlinks whose targets
+                # escape the root even if `member.name` itself is safe.
+                link = member.linkname or ""
+                if link:
+                    link_path = (out_dir / member.name).parent / link
+                    try:
+                        link_resolved = link_path.resolve()
+                        link_resolved.relative_to(extract_root)
+                    except (OSError, ValueError) as exc:
+                        raise RuntimeError(
+                            f"refusing tar member {member.name!r} with link target outside extract root"
+                        ) from exc
             tf.extractall(out_dir)
         return
     raise RuntimeError(f"Unsupported archive format: {archive.name}")
@@ -333,7 +521,11 @@ def download_and_install_llama_server(
         )
 
     with tempfile.TemporaryDirectory(prefix="ida-pro-mcp-llama-") as td:
-        archive_path = Path(td) / best_asset["name"]
+        # Stage downloads inside the temp dir.  We use a NamedTemporaryFile
+        # (delete=False) so a half-written archive cannot collide with a
+        # concurrent installer run (audit §6.3 TOCTOU concern), then
+        # os.replace into the canonical archive_path.
+        canonical_archive = Path(td) / best_asset["name"]
         extract_dir = Path(td) / "extract"
         extract_dir.mkdir(parents=True, exist_ok=True)
         req_asset = urllib.request.Request(
@@ -341,7 +533,42 @@ def download_and_install_llama_server(
             headers={"User-Agent": "ida-pro-mcp-installer"},
         )
         with urllib.request.urlopen(req_asset, timeout=120) as resp:
-            archive_path.write_bytes(resp.read())
+            # Honor Content-Length when present; reject before reading
+            # the body if the server promises more than we'll accept.
+            declared_len_raw = resp.headers.get("Content-Length")
+            if declared_len_raw:
+                try:
+                    declared_len = int(declared_len_raw)
+                except ValueError:
+                    declared_len = -1
+                if declared_len > MAX_DOWNLOAD_SIZE:
+                    raise RuntimeError(
+                        f"Refusing download: Content-Length={declared_len} exceeds "
+                        f"MAX_DOWNLOAD_SIZE={MAX_DOWNLOAD_SIZE} bytes"
+                    )
+            tmp = tempfile.NamedTemporaryFile(
+                delete=False, dir=str(td), prefix=".dl-", suffix=".part"
+            )
+            tmp_path = Path(tmp.name)
+            total = 0
+            try:
+                while True:
+                    chunk = resp.read(_DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_DOWNLOAD_SIZE:
+                        raise RuntimeError(
+                            f"Refusing download: stream exceeded MAX_DOWNLOAD_SIZE="
+                            f"{MAX_DOWNLOAD_SIZE} bytes (read {total} so far)"
+                        )
+                    tmp.write(chunk)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            finally:
+                tmp.close()
+            os.replace(tmp_path, canonical_archive)
+        archive_path = canonical_archive
         _extract_archive(archive_path, extract_dir)
         found = list(extract_dir.rglob(binary_name))
         if not found:
