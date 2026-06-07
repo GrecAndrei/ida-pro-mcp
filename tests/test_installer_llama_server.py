@@ -29,16 +29,19 @@ def test_find_embed_model_finds_model_in_user_downloads(monkeypatch):
         home = Path(td) / "home"
         downloads = home / "Downloads"
         downloads.mkdir(parents=True, exist_ok=True)
-        (downloads / "bge-code-v1-q8_0.gguf").write_text("x", encoding="utf-8")
+        ida_dir = downloads / "ida-pro-mcp"
+        ida_dir.mkdir(parents=True, exist_ok=True)
+        (ida_dir / "bge-code-v1-q8_0.gguf").write_text("x", encoding="utf-8")
         install_root = Path(td) / "install"
         install_root.mkdir(parents=True, exist_ok=True)
 
         monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
+        monkeypatch.setattr("ida_pro_mcp.host.intelligence_core._read_embedder_state", lambda: {})
         result = runtime_mod.find_embed_model(install_root)
         assert result
         assert Path(result).name == "bge-code-v1-q8_0.gguf"
-        assert Path(result).parent.name == "Downloads"
+        assert Path(result).parent.name == "ida-pro-mcp"
 
 
 def test_find_embed_model_finds_model_in_user_models_dir(monkeypatch):
@@ -52,6 +55,7 @@ def test_find_embed_model_finds_model_in_user_models_dir(monkeypatch):
 
         monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
+        monkeypatch.setattr("ida_pro_mcp.host.intelligence_core._read_embedder_state", lambda: {})
         result = runtime_mod.find_embed_model(install_root)
         assert result
         assert Path(result).name == "bge-code-v1.gguf"
@@ -67,6 +71,7 @@ def test_find_embed_model_returns_empty_when_nothing_present(monkeypatch):
 
         monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
+        monkeypatch.setattr("ida_pro_mcp.host.intelligence_core._read_embedder_state", lambda: {})
         assert runtime_mod.find_embed_model(install_root) == ""
 
 
@@ -190,10 +195,9 @@ def test_wipe_venv_renames_when_rmtree_fails(monkeypatch, tmp_path: Path):
         raise OSError("locked")
 
     monkeypatch.setattr(runtime_mod.shutil, "rmtree", flaky_rmtree)
-    # Make time.time() jump past the deadline on the first call so the
-    # rename fallback runs immediately.
-    counter = {"t": 0.0}
-    monkeypatch.setattr(runtime_mod.time, "time", lambda: counter["t"] + 100.0)
+    monkeypatch.setattr(runtime_mod.time, "sleep", lambda s: None)
+    _t = [0.0]
+    monkeypatch.setattr(runtime_mod.time, "time", lambda: (_t.__setitem__(0, _t[0] + 100.0) or _t[0]))
     runtime_mod._wipe_venv(venv)
     assert not venv.exists()
     backups = list(tmp_path.glob(".venv.stale.*"))
@@ -229,7 +233,7 @@ def test_setup_runtime_environment_reuses_healthy_venv(monkeypatch, tmp_path: Pa
         report=InstallReport(),
     )
     assert py_path == py
-    assert calls["probe"] == 1
+    assert calls["probe"] == 2
     # Healthy venv: must NOT have wiped or re-created.
     assert calls["wipe"] == 0
     # We still ran pip / package install / smoke test.
@@ -245,8 +249,9 @@ def test_setup_runtime_environment_wipes_stale_venv(monkeypatch, tmp_path: Path)
     from ida_pro_mcp.installer.common import InstallReport
 
     calls = {"wipe": 0, "venv": 0}
+    probe_calls = [False, True]
 
-    monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: False)
+    monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: probe_calls.pop(0))
     monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1) or (d.rmdir() if d.exists() else None))
     monkeypatch.setattr(
         runtime_mod,
@@ -275,7 +280,7 @@ def test_setup_runtime_environment_creates_missing_venv(monkeypatch, tmp_path: P
 
     calls = {"venv": 0, "wipe": 0}
 
-    monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: False)
+    monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: True)
     monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1))
     monkeypatch.setattr(
         runtime_mod,

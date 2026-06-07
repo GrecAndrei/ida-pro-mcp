@@ -49,9 +49,10 @@ class TestLinuxIdaDetection(unittest.TestCase):
             server = IDAMCPServer.__new__(IDAMCPServer)
             server.ida_dir = ""
             with patch.object(sys, "platform", "linux"):
-                with patch.dict(os.environ, {}, clear=False):
+                with patch.dict(os.environ, {}, clear=True):
                     with patch("shutil.which", return_value=str(idat)):
-                        found = server._find_idat()
+                        with patch.object(server, "_detect_ida_dir", return_value=""):
+                            found = server._find_idat()
             self.assertEqual(Path(found), idat)
 
 
