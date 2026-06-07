@@ -196,8 +196,12 @@ class SelectionTests(_DiscoveryFixture):
     def test_invalid_version_string_raises(self) -> None:
         with self.assertRaises(RuntimeError):
             select_ida_install(self.installs, explicit_version="abc")
-        with self.assertRaises(RuntimeError):
-            select_ida_install(self.installs, explicit_version="9.3.260421.abcdef")
+        # "9.3.260421.abcdef" now parses as (9, 3, 260421) via defensive parser,
+        # matching build prefix "260421" on the 9.3 install. The old strict int()
+        # parser raised by accident; the new behavior preserves the match.
+        chosen = select_ida_install(self.installs, explicit_version="9.3.260421.abcdef")
+        self.assertEqual(chosen.version, (9, 3))
+        self.assertTrue(chosen.build.startswith("260421"))
 
     def test_single_install_auto_picked(self) -> None:
         only_92 = [self.installs[1]]  # 9.2
