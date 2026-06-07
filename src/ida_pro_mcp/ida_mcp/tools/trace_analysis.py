@@ -10,6 +10,19 @@ _TRACE_STATE_SNAPSHOTS: dict[str, dict] = {}
 _TRACE_RUNS_MAX = 32
 _TRACE_SNAPSHOTS_MAX = 64
 
+# Emulator architecture width. 32-bit x86/ARM/MIPS targets need 32-bit masks.
+EMU_ARCH_WIDTH = 64
+EMU_ARCH_MASK = (1 << EMU_ARCH_WIDTH) - 1
+
+# Hardcoded address windows used by the emulator. Extracted from the
+# TinyEmulator implementation so the collision risk is visible at module level.
+EMU_DUMMY_ARG_BASE = 0x10000000
+EMU_DUMMY_ARG_STRIDE = 0x10000000
+EMU_DUMMY_ARG_TOP = 0x70000000
+EMU_STACK_BASE = 0x7f000000
+EMU_STACK_TOP = 0x80000000
+EMU_STACK_INIT_RSP = 0x7ffffff0
+
 
 # ============================================================================
 # 36. TRACE_ANALYSIS - Post-mortem execution trace analysis
@@ -1956,8 +1969,10 @@ def get_branch_constraints(mnem, flags_sym):
 
 
 class TinyEmulator:
-    def __init__(self, start_ea):
+    def __init__(self, start_ea, arch_width: int = 64):
         import ida_funcs
+        self.arch_width = arch_width
+        self.arch_mask = (1 << arch_width) - 1
         self.regs = {
             'rax': 0, 'rbx': 0, 'rcx': 0, 'rdx': 0,
             'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': 0x7ffffff0,
@@ -2100,7 +2115,7 @@ class TinyEmulator:
 
     def set_reg(self, name, val):
         name = name.lower()
-        val = val & 0xffffffffffffffff
+        val = val & self.arch_mask
         if name in self.regs:
             self.regs[name] = val
             return
@@ -2307,7 +2322,7 @@ class TinyEmulator:
                 val += tok_val
             else:
                 val -= tok_val
-        return val & 0xffffffffffffffff
+        return val & self.arch_mask
 
     def get_op_width(self, insn, op_idx):
         import ida_ua
@@ -2708,8 +2723,8 @@ class TinyEmulator:
             elif mnem == "shr":
                 res = val0 >> val1
             else:
-                if val0 & (1 << 63):
-                    res = (val0 >> val1) | (~(0xffffffffffffffff >> val1))
+                if val0 & (1 << (self.arch_width - 1)):
+                    res = (val0 >> val1) | (~((self.arch_mask) >> val1))
                 else:
                     res = val0 >> val1
             t0 = self.parse_op_taint(insn, 0)
