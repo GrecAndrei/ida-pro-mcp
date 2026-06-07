@@ -29,11 +29,11 @@ EMU_STACK_INIT_RSP = 0x7ffffff0
 # moves (movzx, movsx, movsxd), byte-swapped moves (movbe) and the
 # aligned/unaligned SIMD/FP moves. Local set used by anti_analysis_detect.
 PEB_RELEVANT_MOV_MNEMONICS = {
-    "mov", "movabs",
-    "movzx", "movsx", "movsxd", "movbe",
-    "movups", "movupd", "movaps", "movapd",
-    "movdqa", "movdqu", "movnti", "movntps",
-    "xchg", "cmovz", "cmove", "cmovnz", "cmovne",
+    "MOV", "MOVABS",
+    "MOVZX", "MOVSX", "MOVSXD", "MOVBE",
+    "MOVUPS", "MOVUPD", "MOVAPS", "MOVAPD",
+    "MOVDQA", "MOVDQU", "MOVNTI", "MOVNTPS",
+    "XCHG", "CMOVZ", "CMOVE", "CMOVNZ", "CMOVNE",
 }
 
 
