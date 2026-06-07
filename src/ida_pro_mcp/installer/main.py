@@ -6,6 +6,8 @@ import json
 import os
 import shutil
 import sys
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .clients import configure_clients, rollback_from_backups
@@ -696,9 +698,28 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         ui.ok(f"Install complete. Report: {report_path}")
         return 0
     except Exception as exc:
+        tb_text = traceback.format_exc()
         msg = f"Installation failed: {exc}"
         report.add_error(msg)
+        # Keep a tail of the traceback in the report so post-mortem
+        # tooling does not have to grep the log file separately.
+        tb_tail = "\n".join(tb_text.splitlines()[-25:])
+        report.add_error(f"traceback (tail):\n{tb_tail}")
         ui.err(msg)
+        # Spill the full traceback to a logfile next to install-report.json
+        # so a real crash is recoverable; a bare `return 1` would swallow it.
+        log_root = opts.install_root or get_install_root()
+        log_path = log_root / "install-error.log"
+        try:
+            log_root.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).isoformat()
+            with open(log_path, "a", encoding="utf-8") as logf:
+                logf.write(
+                    f"\n=== {timestamp} run_install crashed ===\n{tb_text}\n"
+                )
+            ui.err(f"Full traceback: {log_path}")
+        except OSError as log_exc:
+            ui.err(f"Could not write {log_path}: {log_exc}")
         if opts.rollback_on_fail:
             try:
                 rollback_from_backups(report)
