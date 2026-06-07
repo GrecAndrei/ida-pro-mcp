@@ -3093,19 +3093,21 @@ class TinyEmulator:
     def speculative_explore(self, max_depth=100, max_paths=32):
         import idc
         import ida_ua
-        
+
         paths = [self]
         completed_paths = []
         reachable_eas = set()
-        
+        truncated = False
+        _STEP_CAP = 5000
+
         step_count = 0
         while paths and len(completed_paths) + len(paths) <= max_paths:
             current_emu = paths.pop(0)
-            
+
             for _ in range(max_depth):
                 ea = current_emu.ip
                 reachable_eas.add(ea)
-                
+
                 insn = ida_ua.insn_t()
                 if ida_ua.decode_insn(insn, ea) <= 0:
                     completed_paths.append(current_emu)
@@ -3199,7 +3201,9 @@ class TinyEmulator:
                         break
                 
                 step_count += 1
-                if step_count > 5000:
+                if step_count > _STEP_CAP:
+                    truncated = True
+                    completed_paths.append(current_emu)
                     break
             else:
                 completed_paths.append(current_emu)
@@ -3254,6 +3258,7 @@ class TinyEmulator:
             "virtual_calls": merged_virtual_calls,
             "argument_dereferences": merged_arg_derefs,
             "paths": path_details,
+            "truncated": truncated,
         }
 
 
