@@ -23,6 +23,19 @@ EMU_STACK_BASE = 0x7f000000
 EMU_STACK_TOP = 0x80000000
 EMU_STACK_INIT_RSP = 0x7ffffff0
 
+# x86 move-like mnemonics that anti-analysis PEB/TEB checks rely on.
+# The shared MOV_MNEMONICS set from arch_utils.py only lists 'mov' and
+# 'movabs' for x86, but PEB access patterns also use zero/sign-extend
+# moves (movzx, movsx, movsxd), byte-swapped moves (movbe) and the
+# aligned/unaligned SIMD/FP moves. Local set used by anti_analysis_detect.
+PEB_RELEVANT_MOV_MNEMONICS = {
+    "mov", "movabs",
+    "movzx", "movsx", "movsxd", "movbe",
+    "movups", "movupd", "movaps", "movapd",
+    "movdqa", "movdqu", "movnti", "movntps",
+    "xchg", "cmovz", "cmove", "cmovnz", "cmovne",
+}
+
 
 def safe_get_byte(ea: int):
     """Read one byte from the IDB, returning None for unmapped addresses.
@@ -813,7 +826,7 @@ def trace_analysis(
                     if mnem == "CPUID":
                         vm_insns.append({"addr": hex(ea), "mnem": mnem, "type": "cpuid", "note": "check for hypervisor leaf 0x40000000"})
                     # PEB checks (common anti-debug: mov eax, fs:[30h]; cmp byte ptr [eax+2], 0)
-                    if mnem in MOV_MNEMONICS:
+                    if mnem in PEB_RELEVANT_MOV_MNEMONICS:
                         disasm = idc.generate_disasm_line(ea, 0) or ""
                         if "fs:[0x30]" in disasm or "gs:[0x60]" in disasm or "PEB" in disasm.upper():
                             peb_checks.append({"addr": hex(ea), "mnem": mnem, "disasm": disasm, "type": "peb_access"})
