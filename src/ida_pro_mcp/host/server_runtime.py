@@ -48,6 +48,17 @@ from .session import BookmarkManager, Session, SessionManager
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _resolve_max_rpc_bytes() -> int:
+    try:
+        cap = int(os.environ.get("IDA_MCP_MAX_RPC_BYTES", str(64 * 1024 * 1024)))
+    except (TypeError, ValueError):
+        cap = 64 * 1024 * 1024
+    return max(4096, min(cap, 256 * 1024 * 1024))
+
+
+MAX_RPC_REQUEST_SIZE = _resolve_max_rpc_bytes()
+
+
 def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> None:
     """Kill a subprocess and all of its descendants.
 
@@ -1171,6 +1182,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if token and isinstance(payload, dict):
                     payload["session_token"] = token
                 data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                if len(data) > MAX_RPC_REQUEST_SIZE:
+                    raise ValueError(
+                        f"RPC request exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
+                    )
                 s.sendall(len(data).to_bytes(4, "big") + data)
                 s.settimeout(60)
                 lb = b""
@@ -1180,6 +1195,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         raise EOFError()
                     lb += c
                 rl = int.from_bytes(lb, "big")
+                if rl > MAX_RPC_REQUEST_SIZE:
+                    raise ValueError(
+                        f"RPC response exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
+                    )
                 rd = b""
                 while len(rd) < rl:
                     c = s.recv(min(4096, rl - len(rd)))
