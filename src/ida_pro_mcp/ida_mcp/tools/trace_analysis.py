@@ -1721,7 +1721,13 @@ def _prefetch_function_context(ea):
         argument_dereferences = res.get("argument_dereferences", {})
         
         # Resolve dynamic pointer dereferences from emulation
-        for ip_val, ptr_ea, access_type in res.get("dereferenced_pointers", []):
+        for entry in res.get("dereferenced_pointers", []):
+            if isinstance(entry, dict):
+                ip_val = int(entry.get("ip", "0"), 0)
+                ptr_ea = int(entry.get("addr", "0"), 0)
+                access_type = entry.get("access", "")
+            else:
+                ip_val, ptr_ea, access_type = entry
             if ptr_ea != idaapi.BADADDR:
                 name = idc.get_name(ptr_ea)
                 demangled_name = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) if name else ""
@@ -1737,7 +1743,7 @@ def _prefetch_function_context(ea):
                     val = ida_bytes.get_qword(ptr_ea)
                     if val == idaapi.BADADDR or val == 0:
                         val = ida_bytes.get_dword(ptr_ea)
-                
+
                 resolved_pointers[hex(ptr_ea)] = {
                     "dereferenced_at": hex(ip_val),
                     "access": access_type,
@@ -3231,7 +3237,8 @@ class TinyEmulator:
                         "new": verdict,
                     })
                 merged_opaque_predicates[ea] = verdict
-            merged_dereferenced_pointers.update(emu.dereferenced_pointers)
+            for ip_val, ptr_ea, access in emu.dereferenced_pointers:
+                merged_dereferenced_pointers.add((ip_val, ptr_ea, access))
             for vc in emu.virtual_calls:
                 call_key = (vc["vtable_name"], vc["vtable_offset"])
                 if call_key not in seen_calls:
@@ -3256,6 +3263,11 @@ class TinyEmulator:
                 "solved_inputs": {k: hex(v) if isinstance(v, int) else v for k, v in solutions.items()}
             })
             
+        deref_records = [
+            {"ip": hex(ip_val), "addr": hex(ptr_ea), "access": access}
+            for ip_val, ptr_ea, access in sorted(merged_dereferenced_pointers)
+        ]
+
         return {
             "reachable_eas": sorted([hex(x) for x in reachable_eas]),
             "opaque_predicates": {hex(k): v for k, v in merged_opaque_predicates.items()},
@@ -3263,7 +3275,7 @@ class TinyEmulator:
             "extracted_strings": sorted(list(all_strings)),
             "stack_strings": sorted(list(all_stack_strings)),
             "taint_log": all_taint_logs,
-            "dereferenced_pointers": sorted(list(merged_dereferenced_pointers)),
+            "dereferenced_pointers": deref_records,
             "virtual_calls": merged_virtual_calls,
             "argument_dereferences": merged_arg_derefs,
             "paths": path_details,
