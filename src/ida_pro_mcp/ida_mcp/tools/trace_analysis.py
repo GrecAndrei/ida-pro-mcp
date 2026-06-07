@@ -2724,15 +2724,17 @@ class TinyEmulator:
             op0_str = idc.print_operand(self.ip, 0)
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1) & 63
+            op_width = self.get_op_width(insn, 0)
+            op_mask = (1 << op_width) - 1
             if mnem == "shl":
-                res = val0 << val1
+                res = (val0 << val1) & op_mask
             elif mnem == "shr":
-                res = val0 >> val1
+                res = (val0 & op_mask) >> val1
             else:
-                if val0 & (1 << (self.arch_width - 1)):
-                    res = (val0 >> val1) | (~((self.arch_mask) >> val1))
+                if val0 & (1 << (op_width - 1)):
+                    res = ((val0 & op_mask) >> val1) | (~((op_mask) >> val1) & op_mask)
                 else:
-                    res = val0 >> val1
+                    res = (val0 & op_mask) >> val1
             t0 = self.parse_op_taint(insn, 0)
             t1 = self.parse_op_taint(insn, 1)
             t_res = t0 or t1
@@ -2749,7 +2751,7 @@ class TinyEmulator:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
                 self.set_op_sym(insn, 0, sym_res, t_res)
-            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.regs['zf'] = 1 if (res & op_mask) == 0 else 0
             self.flags_tainted = t_res
             self.flags_sym = sym_res if t_res else None
 
