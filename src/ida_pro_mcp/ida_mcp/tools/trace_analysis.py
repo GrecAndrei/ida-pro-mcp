@@ -2305,14 +2305,18 @@ class TinyEmulator:
             return self.is_mem_tainted(op.addr, size)
         return False
 
-    def parse_address_expr(self, expr_str):
+    def parse_address_expr(self, expr_str, radix: int = 16):
         expr_str = expr_str.lower()
         if '[' in expr_str:
             expr_str = expr_str.split('[')[1].split(']')[0]
         else:
             return 0
-        
+
         import re
+        if radix == 16:
+            digit_re = re.compile(r'^[0-9a-f]+$')
+        else:
+            digit_re = re.compile(r'^[0-9]+$')
         tokens = re.split(r'(\+|\-)', expr_str)
         val = 0
         current_op = '+'
@@ -2323,7 +2327,7 @@ class TinyEmulator:
             if tok in ('+', '-'):
                 current_op = tok
                 continue
-            
+
             tok_val = 0
             if '*' in tok:
                 parts = tok.split('*')
@@ -2333,14 +2337,14 @@ class TinyEmulator:
                 except ValueError:
                     scale = 1
                 tok_val = self.get_reg(reg_name) * scale
-            elif tok.endswith('h'):
+            elif tok.endswith('h') and radix == 16:
                 try:
                     tok_val = int(tok[:-1], 16)
                 except ValueError:
                     tok_val = 0
-            elif re.match(r'^[0-9a-f]+$', tok):
+            elif digit_re.match(tok):
                 try:
-                    tok_val = int(tok, 16)
+                    tok_val = int(tok, radix)
                 except ValueError:
                     tok_val = 0
             elif tok in self.regs or tok in ('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'r8d', 'r9d', 'r10d', 'r11d', 'r12d', 'r13d', 'r14d', 'r15d', 'ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'al', 'bl', 'cl', 'dl'):
@@ -2350,7 +2354,7 @@ class TinyEmulator:
                     tok_val = int(tok, 0)
                 except ValueError:
                     tok_val = 0
-            
+
             if current_op == '+':
                 val += tok_val
             else:
@@ -2374,14 +2378,18 @@ class TinyEmulator:
         size = self.dtype_size(op.dtype)
         return size * 8
 
-    def get_address_sym(self, expr_str):
+    def get_address_sym(self, expr_str, radix: int = 16):
         expr_str = expr_str.lower()
         if '[' in expr_str:
             expr_str = expr_str.split('[')[1].split(']')[0]
         else:
             return ("val", 0)
-        
+
         import re
+        if radix == 16:
+            digit_re = re.compile(r'^[0-9a-f]+$')
+        else:
+            digit_re = re.compile(r'^[0-9]+$')
         tokens = re.split(r'(\+|\-)', expr_str)
         sym_expr = ("val", 0)
         current_op = '+'
@@ -2392,7 +2400,7 @@ class TinyEmulator:
             if tok in ('+', '-'):
                 current_op = tok
                 continue
-            
+
             tok_sym = None
             if '*' in tok:
                 parts = tok.split('*')
@@ -2407,15 +2415,15 @@ class TinyEmulator:
                     tok_sym = ("mul", reg_sym, ("val", scale))
                 else:
                     tok_sym = ("val", self.get_reg(reg_name) * scale)
-            elif tok.endswith('h'):
+            elif tok.endswith('h') and radix == 16:
                 try:
                     tok_val = int(tok[:-1], 16)
                 except ValueError:
                     tok_val = 0
                 tok_sym = ("val", tok_val)
-            elif re.match(r'^[0-9a-f]+$', tok):
+            elif digit_re.match(tok):
                 try:
-                    tok_val = int(tok, 16)
+                    tok_val = int(tok, radix)
                 except ValueError:
                     tok_val = 0
                 tok_sym = ("val", tok_val)
