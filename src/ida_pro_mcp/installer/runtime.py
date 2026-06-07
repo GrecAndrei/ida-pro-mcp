@@ -69,8 +69,34 @@ def detect_ida_install_dir() -> Path | None:
     return None
 
 
-def run_checked(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-    result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
+def run_checked(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float | None = 300.0,
+) -> None:
+    """Run `cmd` and raise RuntimeError on non-zero exit or hang.
+
+    `timeout` defaults to 300 s (5 minutes). Pass `None` to disable
+    the timeout for legitimately long operations (the installer never
+    does this today; the only call sites are pip install / venv
+    creation / smoke import, all of which finish in well under 5
+    minutes on a healthy machine).
+
+    Audit §6.9: previously subprocess.run was called without a
+    timeout, so a hung external command (pip stalled on a slow PyPI
+    mirror, venv creation deadlocked by file lock) would hang the
+    installer forever with no recovery.
+    """
+    try:
+        result = subprocess.run(
+            cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{' '.join(cmd)} timed out after {timeout}s"
+        ) from exc
     if result.returncode == 0:
         return
     details = (result.stderr or result.stdout or "").strip()
