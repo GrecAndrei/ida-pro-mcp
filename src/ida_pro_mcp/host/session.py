@@ -387,6 +387,8 @@ class SessionManager(SessionSkillsMixin):
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(session.to_dict(), f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save session metadata: {e}")
@@ -905,6 +907,8 @@ class SessionManager(SessionSkillsMixin):
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(snapshots, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save snapshots for {sid}: {e}")
@@ -932,6 +936,8 @@ class SessionManager(SessionSkillsMixin):
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save notebook for {sid}: {e}")
