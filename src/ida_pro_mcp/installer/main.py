@@ -435,6 +435,12 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--interactive", action="store_true", help="force interactive wizard mode")
     parser.add_argument("--no-interactive", action="store_true", help="disable interactive wizard mode")
     parser.add_argument("--kill-ida", action="store_true", help="terminate running ida/idat processes before install")
+    parser.add_argument(
+        "--ida-binary-path",
+        default="",
+        help="when used with --kill-ida, only terminate processes running this binary path "
+        "(default: scope to the chosen IDA install's idat binary)",
+    )
     parser.add_argument("--install-cli-shim", action="store_true", help="opt-in bashrc PATH shim installation")
     parser.add_argument("--rollback-on-fail", action="store_true", help="restore backed up config files if install fails")
     parser.add_argument("--runtime-source", choices=["auto", "local", "pypi"], default="auto", help="choose runtime package source")
@@ -496,6 +502,9 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     opts.ida_dir = args.ida_dir
     opts.ida_version = args.ida_version
     opts.no_ida_prompt = args.no_ida_prompt
+    # Dynamic attr (audit §6.2): scopes --kill-ida to a binary path so
+    # we don't terminate a user's unrelated IDA on a different binary.
+    opts.ida_binary_path = args.ida_binary_path  # type: ignore[attr-defined]
     return opts
 
 
@@ -544,10 +553,23 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.warn("Running in dry-run mode")
 
         if opts.kill_ida:
-            ui.info("Stopping IDA processes (--kill-ida enabled)")
+            # Prefer the explicit --ida-binary-path, fall back to the
+            # selected install's idat binary, otherwise unscoped (legacy).
+            kill_target: str | None = (
+                getattr(opts, "ida_binary_path", "") or None
+            )
+            if not kill_target and chosen_install is not None and chosen_install.idat_binary:
+                kill_target = str(chosen_install.idat_binary)
+            if kill_target:
+                ui.info(f"Stopping IDA processes for {kill_target} (--kill-ida enabled)")
+            else:
+                ui.warn(
+                    "Stopping ALL IDA processes (--kill-ida without a binary "
+                    "scope; pass --ida-binary-path or --ida-dir to narrow this)"
+                )
             if not opts.dry_run:
-                kill_ida_processes()
-            report.add_step("kill_ida", "ok", "requested")
+                kill_ida_processes(binary_path=kill_target)
+            report.add_step("kill_ida", "ok", kill_target or "unscoped")
         else:
             report.add_step("kill_ida", "skipped", "not requested")
 

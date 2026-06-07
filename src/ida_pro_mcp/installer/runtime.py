@@ -70,11 +70,101 @@ def run_checked(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] 
     raise RuntimeError(f"{' '.join(cmd)} failed ({result.returncode}): {tail}")
 
 
-def kill_ida_processes() -> None:
+def kill_ida_processes(binary_path: str | Path | None = None) -> None:
+    """Terminate running ida/idat processes.
+
+    If `binary_path` is provided, only kill processes whose executable path
+    (the first token of the command line) matches the canonicalized form of
+    that path.  Without a filter the installer would happily SIGKILL a
+    user's unrelated long-running IDA on a different binary — see §6.2.
+
+    On failure to enumerate processes (missing pgrep/tasklist, permission
+    error) this function silently returns; the installer prints its own
+    warning when ida_processes_running() still reports True afterwards.
+    """
+    target_resolved: str | None = None
+    if binary_path:
+        try:
+            target_resolved = str(Path(binary_path).expanduser().resolve())
+        except OSError:
+            target_resolved = str(binary_path)
+
     if sys.platform == "win32":
+        if target_resolved:
+            # Use WMIC to enumerate processes with their ExecutablePath and
+            # filter to the canonicalized target before taskkill.  Fall back
+            # to the legacy unfiltered behavior only if WMIC is missing.
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "get", "ProcessId,ExecutablePath", "/FORMAT:CSV"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                result = None
+            pids: list[str] = []
+            if result is not None and result.returncode == 0:
+                wanted = target_resolved.lower()
+                for line in (result.stdout or "").splitlines():
+                    cols = line.strip().split(",")
+                    if len(cols) < 3:
+                        continue
+                    exe = cols[1].strip()
+                    pid = cols[2].strip()
+                    if not exe or not pid.isdigit():
+                        continue
+                    try:
+                        exe_resolved = str(Path(exe).resolve()).lower()
+                    except OSError:
+                        exe_resolved = exe.lower()
+                    if exe_resolved == wanted:
+                        pids.append(pid)
+                for pid in pids:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", pid], capture_output=True
+                    )
+                return
+            # WMIC unavailable — fall through to unfiltered behavior with a
+            # narrower image-name match (still scoped to ida*/idat* only).
         for name in ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]:
             subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
         return
+
+    if target_resolved:
+        # pgrep -af lists "<pid> <cmdline>"; we match on the first token
+        # being our canonicalized target.  This avoids killing IDAs whose
+        # binary path differs even though the basename matches.
+        try:
+            result = subprocess.run(
+                ["pgrep", "-af", "(ida|idat)64?"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode in (0, 1):
+            pids: list[str] = []
+            for line in (result.stdout or "").splitlines():
+                parts = line.strip().split(None, 1)
+                if len(parts) < 2 or not parts[0].isdigit():
+                    continue
+                cmd_tokens = parts[1].split()
+                if not cmd_tokens:
+                    continue
+                exe = cmd_tokens[0]
+                try:
+                    exe_resolved = str(Path(exe).resolve())
+                except OSError:
+                    exe_resolved = exe
+                if exe_resolved == target_resolved:
+                    pids.append(parts[0])
+            for pid in pids:
+                subprocess.run(["kill", "-KILL", pid], capture_output=True)
+            return
+        # pgrep -af missing — fall through to image-name-only kill.
+
     for name in ["idat", "idat64", "ida", "ida64"]:
         subprocess.run(["pkill", "-x", name], capture_output=True)
 
