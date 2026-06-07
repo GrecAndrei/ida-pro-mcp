@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import sqlite3
 import struct
 import threading
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .helpers import dot_product as _cosine
+
+logger = logging.getLogger(__name__)
 
 
 _SEARCH_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}|0x[0-9a-fA-F]+|\b\d+\b")
@@ -128,8 +132,10 @@ class FunctionEmbeddingIndex:
         self._init_meta()
         try:
             if self.needs_rebuild(self._embedder):
-                with self._conn() as conn:
-                    conn.execute("DELETE FROM func_embeddings")
+                with closing(sqlite3.connect(self._db_path)) as rebuild_conn:
+                    rebuild_conn.execute("PRAGMA journal_mode=WAL")
+                    rebuild_conn.execute("BEGIN")
+                    rebuild_conn.execute("DELETE FROM func_embeddings")
                     now = _now_iso()
                     base = {
                         "index_schema_version": str(self.INDEX_SCHEMA_VERSION),
@@ -143,11 +149,12 @@ class FunctionEmbeddingIndex:
                     }
                     base.update(self._embedder_meta_snapshot())
                     for k, v in base.items():
-                        self._meta_set(conn, k, v)
-                    conn.commit()
+                        self._meta_set(rebuild_conn, k, v)
+                    rebuild_conn.commit()
                 self._cache.clear()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("needs_rebuild transaction failed: %s", e)
+            raise
         self._load_cache()
 
     def _conn(self) -> sqlite3.Connection:
