@@ -10,6 +10,54 @@ _TRACE_STATE_SNAPSHOTS: dict[str, dict] = {}
 _TRACE_RUNS_MAX = 32
 _TRACE_SNAPSHOTS_MAX = 64
 
+# Emulator architecture width. 32-bit x86/ARM/MIPS targets need 32-bit masks.
+EMU_ARCH_WIDTH = 64
+EMU_ARCH_MASK = (1 << EMU_ARCH_WIDTH) - 1
+
+# Hardcoded address windows used by the emulator. Extracted from the
+# TinyEmulator implementation so the collision risk is visible at module level.
+EMU_DUMMY_ARG_BASE = 0x10000000
+EMU_DUMMY_ARG_STRIDE = 0x10000000
+EMU_DUMMY_ARG_TOP = 0x70000000
+EMU_STACK_BASE = 0x7f000000
+EMU_STACK_TOP = 0x80000000
+EMU_STACK_INIT_RSP = 0x7ffffff0
+
+# x86 move-like mnemonics that anti-analysis PEB/TEB checks rely on.
+# The shared MOV_MNEMONICS set from arch_utils.py only lists 'mov' and
+# 'movabs' for x86, but PEB access patterns also use zero/sign-extend
+# moves (movzx, movsx, movsxd), byte-swapped moves (movbe) and the
+# aligned/unaligned SIMD/FP moves. Local set used by anti_analysis_detect.
+PEB_RELEVANT_MOV_MNEMONICS = {
+    "MOV", "MOVABS",
+    "MOVZX", "MOVSX", "MOVSXD", "MOVBE",
+    "MOVUPS", "MOVUPD", "MOVAPS", "MOVAPD",
+    "MOVDQA", "MOVDQU", "MOVNTI", "MOVNTPS",
+    "XCHG", "CMOVZ", "CMOVE", "CMOVNZ", "CMOVNE",
+}
+
+
+def safe_get_byte(ea: int):
+    """Read one byte from the IDB, returning None for unmapped addresses.
+
+    ida_bytes.get_byte() returns 0xff for unmapped addresses which the
+    emulator previously consumed as data. Returning None lets the read
+    path distinguish "no data" from "byte happens to be 0xff".
+    """
+    try:
+        import ida_bytes
+    except Exception:
+        return None
+    try:
+        if not ida_bytes.is_loaded(ea):
+            return None
+    except Exception:
+        return None
+    try:
+        return ida_bytes.get_byte(ea)
+    except Exception:
+        return None
+
 
 # ============================================================================
 # 36. TRACE_ANALYSIS - Post-mortem execution trace analysis
@@ -778,7 +826,7 @@ def trace_analysis(
                     if mnem == "CPUID":
                         vm_insns.append({"addr": hex(ea), "mnem": mnem, "type": "cpuid", "note": "check for hypervisor leaf 0x40000000"})
                     # PEB checks (common anti-debug: mov eax, fs:[30h]; cmp byte ptr [eax+2], 0)
-                    if mnem in MOV_MNEMONICS:
+                    if mnem in PEB_RELEVANT_MOV_MNEMONICS:
                         disasm = idc.generate_disasm_line(ea, 0) or ""
                         if "fs:[0x30]" in disasm or "gs:[0x60]" in disasm or "PEB" in disasm.upper():
                             peb_checks.append({"addr": hex(ea), "mnem": mnem, "disasm": disasm, "type": "peb_access"})
@@ -1686,7 +1734,13 @@ def _prefetch_function_context(ea):
         argument_dereferences = res.get("argument_dereferences", {})
         
         # Resolve dynamic pointer dereferences from emulation
-        for ip_val, ptr_ea, access_type in res.get("dereferenced_pointers", []):
+        for entry in res.get("dereferenced_pointers", []):
+            if isinstance(entry, dict):
+                ip_val = int(entry.get("ip", "0"), 0)
+                ptr_ea = int(entry.get("addr", "0"), 0)
+                access_type = entry.get("access", "")
+            else:
+                ip_val, ptr_ea, access_type = entry
             if ptr_ea != idaapi.BADADDR:
                 name = idc.get_name(ptr_ea)
                 demangled_name = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN)) if name else ""
@@ -1702,7 +1756,7 @@ def _prefetch_function_context(ea):
                     val = ida_bytes.get_qword(ptr_ea)
                     if val == idaapi.BADADDR or val == 0:
                         val = ida_bytes.get_dword(ptr_ea)
-                
+
                 resolved_pointers[hex(ptr_ea)] = {
                     "dereferenced_at": hex(ip_val),
                     "access": access_type,
@@ -1956,13 +2010,15 @@ def get_branch_constraints(mnem, flags_sym):
 
 
 class TinyEmulator:
-    def __init__(self, start_ea):
+    def __init__(self, start_ea, arch_width: int = 64):
         import ida_funcs
+        self.arch_width = arch_width
+        self.arch_mask = (1 << arch_width) - 1
         self.regs = {
             'rax': 0, 'rbx': 0, 'rcx': 0, 'rdx': 0,
-            'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': 0x7ffffff0,
+            'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': EMU_STACK_INIT_RSP,
             'r8': 0, 'r9': 0, 'r10': 0, 'r11': 0, 'r12': 0, 'r13': 0, 'r14': 0, 'r15': 0,
-            'zf': 0, 'sf': 0
+            'zf': 0, 'sf': 0, 'cf': 0, 'of': 0, 'pf': 0
         }
         self.mem = {}  # address -> byte
         self.written_addrs = set()
@@ -1987,14 +2043,14 @@ class TinyEmulator:
         self.path_constraints = []
 
     def setup_argument_pointers(self):
-        # We assign dummy pointers in the range 0x10000000 - 0x60000000
+        # We assign dummy pointers in the range EMU_DUMMY_ARG_BASE..EMU_DUMMY_ARG_TOP
         # for standard x64 argument registers
-        self.regs['rdi'] = 0x10000000
-        self.regs['rsi'] = 0x20000000
-        self.regs['rdx'] = 0x30000000
-        self.regs['rcx'] = 0x40000000
-        self.regs['r8']  = 0x50000000
-        self.regs['r9']  = 0x60000000
+        self.regs['rdi'] = EMU_DUMMY_ARG_BASE + 0 * EMU_DUMMY_ARG_STRIDE
+        self.regs['rsi'] = EMU_DUMMY_ARG_BASE + 1 * EMU_DUMMY_ARG_STRIDE
+        self.regs['rdx'] = EMU_DUMMY_ARG_BASE + 2 * EMU_DUMMY_ARG_STRIDE
+        self.regs['rcx'] = EMU_DUMMY_ARG_BASE + 3 * EMU_DUMMY_ARG_STRIDE
+        self.regs['r8']  = EMU_DUMMY_ARG_BASE + 4 * EMU_DUMMY_ARG_STRIDE
+        self.regs['r9']  = EMU_DUMMY_ARG_BASE + 5 * EMU_DUMMY_ARG_STRIDE
 
     def clone(self):
         other = TinyEmulator(self.ip)
@@ -2100,7 +2156,7 @@ class TinyEmulator:
 
     def set_reg(self, name, val):
         name = name.lower()
-        val = val & 0xffffffffffffffff
+        val = val & self.arch_mask
         if name in self.regs:
             self.regs[name] = val
             return
@@ -2131,16 +2187,17 @@ class TinyEmulator:
             return
 
     def read_mem(self, addr, size=1):
-        import ida_bytes
         import idc
         out = 0
-        
+        all_unmapped = True
+        any_unmapped = False
+
         # Check if this is a read from one of our dummy argument pointers
-        if 0x10000000 <= addr < 0x70000000:
-            reg_idx = addr // 0x10000000
+        if EMU_DUMMY_ARG_BASE <= addr < EMU_DUMMY_ARG_TOP:
+            reg_idx = (addr - EMU_DUMMY_ARG_BASE) // EMU_DUMMY_ARG_STRIDE + 1
             reg_names = {1: "rdi", 2: "rsi", 3: "rdx", 4: "rcx", 5: "r8", 6: "r9"}
             reg_name = reg_names.get(reg_idx, "unknown")
-            offset = addr % 0x10000000
+            offset = addr - EMU_DUMMY_ARG_BASE
             self.arg_derefs.setdefault(reg_name, []).append({
                 "offset": offset,
                 "offset_hex": hex(offset),
@@ -2148,21 +2205,31 @@ class TinyEmulator:
                 "access": "read"
             })
             return 0
-            
+
         for i in range(size):
-            b = 0
             if (addr + i) in self.mem:
                 b = self.mem[addr + i]
+                all_unmapped = False
             else:
-                b = ida_bytes.get_byte(addr + i)
+                b = safe_get_byte(addr + i)
+                if b is None:
+                    any_unmapped = True
+                    b = 0
+                else:
+                    all_unmapped = False
             out |= (b << (i * 8))
 
+        # Skip deref-pointer tracking for unmapped reads; don't synthesize
+        # deref entries that are actually just placeholder 0xff/0 returns.
+        if all_unmapped or any_unmapped:
+            return out
+
         # Track dereferenced pointers (non-stack, non-zero)
-        if not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+        if not (EMU_STACK_BASE <= addr <= EMU_STACK_TOP) and addr != 0:
             self.dereferenced_pointers.add((self.ip, addr, "read"))
 
         # Track C++ virtual calls (if reading a pointer from a vtable)
-        if size == 8 and not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+        if size == 8 and not (EMU_STACK_BASE <= addr <= EMU_STACK_TOP) and addr != 0:
             vtable_base = None
             vtable_name = None
             for offset_check in range(0, 512, 8):
@@ -2189,11 +2256,11 @@ class TinyEmulator:
 
     def write_mem(self, addr, val, size=1):
         # Check if this is a write to one of our dummy argument pointers
-        if 0x10000000 <= addr < 0x70000000:
-            reg_idx = addr // 0x10000000
+        if EMU_DUMMY_ARG_BASE <= addr < EMU_DUMMY_ARG_TOP:
+            reg_idx = (addr - EMU_DUMMY_ARG_BASE) // EMU_DUMMY_ARG_STRIDE + 1
             reg_names = {1: "rdi", 2: "rsi", 3: "rdx", 4: "rcx", 5: "r8", 6: "r9"}
             reg_name = reg_names.get(reg_idx, "unknown")
-            offset = addr % 0x10000000
+            offset = addr - EMU_DUMMY_ARG_BASE
             self.arg_derefs.setdefault(reg_name, []).append({
                 "offset": offset,
                 "offset_hex": hex(offset),
@@ -2207,12 +2274,12 @@ class TinyEmulator:
             self.mem[addr + i] = b
             self.written_addrs.add(addr + i)
             # Track stack writes
-            if 0x7f000000 <= addr <= 0x80000000:
-                offset = addr - 0x7ffffff0
+            if EMU_STACK_BASE <= addr <= EMU_STACK_TOP:
+                offset = addr - EMU_STACK_INIT_RSP
                 self.stack_writes[offset + i] = (self.ip, b)
 
         # Track dereferenced pointers (non-stack, non-zero)
-        if not (0x7f000000 <= addr <= 0x80000000) and addr != 0:
+        if not (EMU_STACK_BASE <= addr <= EMU_STACK_TOP) and addr != 0:
             self.dereferenced_pointers.add((self.ip, addr, "write"))
 
     def parse_op(self, insn, op_idx):
@@ -2257,14 +2324,18 @@ class TinyEmulator:
             return self.is_mem_tainted(op.addr, size)
         return False
 
-    def parse_address_expr(self, expr_str):
+    def parse_address_expr(self, expr_str, radix: int = 16):
         expr_str = expr_str.lower()
         if '[' in expr_str:
             expr_str = expr_str.split('[')[1].split(']')[0]
         else:
             return 0
-        
+
         import re
+        if radix == 16:
+            digit_re = re.compile(r'^[0-9a-f]+$')
+        else:
+            digit_re = re.compile(r'^[0-9]+$')
         tokens = re.split(r'(\+|\-)', expr_str)
         val = 0
         current_op = '+'
@@ -2275,7 +2346,7 @@ class TinyEmulator:
             if tok in ('+', '-'):
                 current_op = tok
                 continue
-            
+
             tok_val = 0
             if '*' in tok:
                 parts = tok.split('*')
@@ -2285,14 +2356,14 @@ class TinyEmulator:
                 except ValueError:
                     scale = 1
                 tok_val = self.get_reg(reg_name) * scale
-            elif tok.endswith('h'):
+            elif tok.endswith('h') and radix == 16:
                 try:
                     tok_val = int(tok[:-1], 16)
                 except ValueError:
                     tok_val = 0
-            elif re.match(r'^[0-9a-f]+$', tok):
+            elif digit_re.match(tok):
                 try:
-                    tok_val = int(tok, 16)
+                    tok_val = int(tok, radix)
                 except ValueError:
                     tok_val = 0
             elif tok in self.regs or tok in ('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'r8d', 'r9d', 'r10d', 'r11d', 'r12d', 'r13d', 'r14d', 'r15d', 'ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'al', 'bl', 'cl', 'dl'):
@@ -2302,12 +2373,12 @@ class TinyEmulator:
                     tok_val = int(tok, 0)
                 except ValueError:
                     tok_val = 0
-            
+
             if current_op == '+':
                 val += tok_val
             else:
                 val -= tok_val
-        return val & 0xffffffffffffffff
+        return val & self.arch_mask
 
     def get_op_width(self, insn, op_idx):
         import ida_ua
@@ -2326,14 +2397,18 @@ class TinyEmulator:
         size = self.dtype_size(op.dtype)
         return size * 8
 
-    def get_address_sym(self, expr_str):
+    def get_address_sym(self, expr_str, radix: int = 16):
         expr_str = expr_str.lower()
         if '[' in expr_str:
             expr_str = expr_str.split('[')[1].split(']')[0]
         else:
             return ("val", 0)
-        
+
         import re
+        if radix == 16:
+            digit_re = re.compile(r'^[0-9a-f]+$')
+        else:
+            digit_re = re.compile(r'^[0-9]+$')
         tokens = re.split(r'(\+|\-)', expr_str)
         sym_expr = ("val", 0)
         current_op = '+'
@@ -2344,7 +2419,7 @@ class TinyEmulator:
             if tok in ('+', '-'):
                 current_op = tok
                 continue
-            
+
             tok_sym = None
             if '*' in tok:
                 parts = tok.split('*')
@@ -2359,15 +2434,15 @@ class TinyEmulator:
                     tok_sym = ("mul", reg_sym, ("val", scale))
                 else:
                     tok_sym = ("val", self.get_reg(reg_name) * scale)
-            elif tok.endswith('h'):
+            elif tok.endswith('h') and radix == 16:
                 try:
                     tok_val = int(tok[:-1], 16)
                 except ValueError:
                     tok_val = 0
                 tok_sym = ("val", tok_val)
-            elif re.match(r'^[0-9a-f]+$', tok):
+            elif digit_re.match(tok):
                 try:
-                    tok_val = int(tok, 16)
+                    tok_val = int(tok, radix)
                 except ValueError:
                     tok_val = 0
                 tok_sym = ("val", tok_val)
@@ -2545,15 +2620,15 @@ class TinyEmulator:
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1)
             res = (val0 + val1) if mnem == "add" else (val0 - val1)
-            
+
             t0 = self.parse_op_taint(insn, 0)
             t1 = self.parse_op_taint(insn, 1)
             t_res = t0 or t1
-            
+
             sym0 = self.get_op_sym(insn, 0)
             sym1 = self.get_op_sym(insn, 1)
             sym_res = (mnem, sym0, sym1)
-            
+
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
@@ -2564,7 +2639,11 @@ class TinyEmulator:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
                 self.set_op_sym(insn, 0, sym_res, t_res)
-            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.regs['zf'] = 1 if (res & self.arch_mask) == 0 else 0
+            if mnem == "add":
+                self.regs['cf'] = 1 if (val0 + val1) > self.arch_mask else 0
+            else:
+                self.regs['cf'] = 1 if val0 < val1 else 0
             self.flags_tainted = t_res
             self.flags_sym = sym_res if t_res else None
             
@@ -2597,16 +2676,18 @@ class TinyEmulator:
             diff = val0 - val1
             self.regs['zf'] = 1 if diff == 0 else 0
             self.regs['sf'] = 1 if diff < 0 else 0
+            self.regs['cf'] = 1 if val0 < val1 else 0
             self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
             sym0 = self.get_op_sym(insn, 0)
             sym1 = self.get_op_sym(insn, 1)
             self.flags_sym = ("cmp", sym0, sym1) if self.flags_tainted else None
-            
+
         elif mnem == "test":
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1)
             res = val0 & val1
             self.regs['zf'] = 1 if res == 0 else 0
+            self.regs['cf'] = 0
             self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
             sym0 = self.get_op_sym(insn, 0)
             sym1 = self.get_op_sym(insn, 1)
@@ -2660,6 +2741,8 @@ class TinyEmulator:
             any_tainted = any(self.is_reg_tainted(r) for r in arg_regs)
             self.set_reg("rax", 0)
             self.set_reg_taint("rax", any_tainted)
+            rsp = self.get_reg("rsp") - 8
+            self.set_reg("rsp", rsp)
             if any_tainted:
                 func_op = idc.print_operand(self.ip, 0)
                 args_sym = []
@@ -2702,16 +2785,19 @@ class TinyEmulator:
         elif mnem in ("shl", "shr", "sar"):
             op0_str = idc.print_operand(self.ip, 0)
             val0 = self.parse_op(insn, 0)
-            val1 = self.parse_op(insn, 1) & 63
+            op_width = self.get_op_width(insn, 0)
+            op_mask = (1 << op_width) - 1
+            shift_count_mask = 0x3f if op_width == 64 else 0x1f
+            val1 = self.parse_op(insn, 1) & shift_count_mask
             if mnem == "shl":
-                res = val0 << val1
+                res = (val0 << val1) & op_mask
             elif mnem == "shr":
-                res = val0 >> val1
+                res = (val0 & op_mask) >> val1
             else:
-                if val0 & (1 << 63):
-                    res = (val0 >> val1) | (~(0xffffffffffffffff >> val1))
+                if val0 & (1 << (op_width - 1)):
+                    res = ((val0 & op_mask) >> val1) | (~((op_mask) >> val1) & op_mask)
                 else:
-                    res = val0 >> val1
+                    res = (val0 & op_mask) >> val1
             t0 = self.parse_op_taint(insn, 0)
             t1 = self.parse_op_taint(insn, 1)
             t_res = t0 or t1
@@ -2728,7 +2814,7 @@ class TinyEmulator:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
                 self.set_op_sym(insn, 0, sym_res, t_res)
-            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.regs['zf'] = 1 if (res & op_mask) == 0 else 0
             self.flags_tainted = t_res
             self.flags_sym = sym_res if t_res else None
 
@@ -2907,20 +2993,55 @@ class TinyEmulator:
             self.flags_tainted = t_res
             self.flags_sym = sym_res if t_res else None
             
-        elif mnem in ("jmp", "je", "jne", "jz", "jnz", "jb", "jae"):
+        elif mnem in (
+            "jmp", "je", "jne", "jz", "jnz", "jb", "jae",
+            "ja", "jbe", "jg", "jl", "jge", "jle",
+            "jo", "jno", "js", "jns", "jp", "jnp", "jcxz",
+        ):
             target = self.parse_op(insn, 0)
             jump = False
+            zf = self.regs['zf']
+            sf = self.regs['sf']
+            cf = self.regs['cf']
+            of = self.regs['of']
+            pf = self.regs['pf']
             if mnem == "jmp":
                 jump = True
             elif mnem in ("je", "jz"):
-                jump = (self.regs['zf'] == 1)
+                jump = (zf == 1)
             elif mnem in ("jne", "jnz"):
-                jump = (self.regs['zf'] == 0)
+                jump = (zf == 0)
             elif mnem == "jb":
-                jump = (self.regs['sf'] != 0)
-            elif mnem == "jae":
-                jump = (self.regs['sf'] == 0)
-            
+                jump = (cf != 0)
+            elif mnem in ("jae", "jnb", "jnc"):
+                jump = (cf == 0)
+            elif mnem == "ja":
+                jump = (cf == 0 and zf == 0)
+            elif mnem == "jbe":
+                jump = (cf != 0 or zf == 1)
+            elif mnem == "js":
+                jump = (sf != 0)
+            elif mnem == "jns":
+                jump = (sf == 0)
+            elif mnem == "jo":
+                jump = (of != 0)
+            elif mnem == "jno":
+                jump = (of == 0)
+            elif mnem == "jp":
+                jump = (pf != 0)
+            elif mnem == "jnp":
+                jump = (pf == 0)
+            elif mnem == "jl":
+                jump = (sf != of)
+            elif mnem == "jge":
+                jump = (sf == of)
+            elif mnem == "jg":
+                jump = (zf == 0 and sf == of)
+            elif mnem == "jle":
+                jump = (zf != 0 or sf != of)
+            elif mnem == "jcxz":
+                jump = (self.regs['rcx'] == 0)
+
             if self.flags_tainted:
                 taken_c, fallthrough_c = get_branch_constraints(mnem, self.flags_sym)
                 if jump:
@@ -2929,11 +3050,13 @@ class TinyEmulator:
                 else:
                     if fallthrough_c:
                         self.path_constraints.append((self.ip, fallthrough_c))
-            
+
             if jump and self.func_start <= target < self.func_end:
                 next_ip = target
 
         elif mnem in ("ret", "retn"):
+            rsp = self.get_reg("rsp") + 8
+            self.set_reg("rsp", rsp)
             return False
 
         self.ip = next_ip
@@ -2989,19 +3112,21 @@ class TinyEmulator:
     def speculative_explore(self, max_depth=100, max_paths=32):
         import idc
         import ida_ua
-        
+
         paths = [self]
         completed_paths = []
         reachable_eas = set()
-        
+        truncated = False
+        _STEP_CAP = 5000
+
         step_count = 0
         while paths and len(completed_paths) + len(paths) <= max_paths:
             current_emu = paths.pop(0)
-            
+
             for _ in range(max_depth):
                 ea = current_emu.ip
                 reachable_eas.add(ea)
-                
+
                 insn = ida_ua.insn_t()
                 if ida_ua.decode_insn(insn, ea) <= 0:
                     completed_paths.append(current_emu)
@@ -3009,13 +3134,17 @@ class TinyEmulator:
                 
                 mnem = idc.print_insn_mnem(ea).lower()
                 
-                if mnem in ("je", "jne", "jz", "jnz", "jb", "jae", "js", "jns", "jg", "jge", "jl", "jle"):
+                if mnem in (
+                    "je", "jne", "jz", "jnz", "jb", "jae",
+                    "ja", "jbe", "jg", "jl", "jge", "jle",
+                    "jo", "jno", "js", "jns", "jp", "jnp", "jcxz",
+                ):
                     target = current_emu.parse_op(insn, 0)
                     next_ip = ea + insn.size
-                    
+
                     if current_emu.flags_tainted:
                         taken_constraint, fallthrough_constraint = get_branch_constraints(mnem, current_emu.flags_sym)
-                        
+
                         if current_emu.func_start <= target < current_emu.func_end:
                             emu_taken = current_emu.clone()
                             emu_taken.ip = target
@@ -3023,28 +3152,58 @@ class TinyEmulator:
                             if taken_constraint:
                                 emu_taken.path_constraints.append((ea, taken_constraint))
                             paths.append(emu_taken)
-                        
+
                         emu_fallthrough = current_emu.clone()
                         emu_fallthrough.ip = next_ip
                         emu_fallthrough.flags_tainted = False
                         if fallthrough_constraint:
                             emu_fallthrough.path_constraints.append((ea, fallthrough_constraint))
                         paths.append(emu_fallthrough)
-                        
+
                         current_emu.opaque_predicates[ea] = "symbolic_branch"
                         break
                     else:
-                        jump = False
+                        zf = current_emu.regs['zf']
+                        sf = current_emu.regs['sf']
+                        cf = current_emu.regs['cf']
+                        of = current_emu.regs['of']
+                        pf = current_emu.regs['pf']
                         if mnem in ("je", "jz"):
-                            jump = (current_emu.regs['zf'] == 1)
+                            jump = (zf == 1)
                         elif mnem in ("jne", "jnz"):
-                            jump = (current_emu.regs['zf'] == 0)
+                            jump = (zf == 0)
                         elif mnem == "jb":
-                            jump = (current_emu.regs['sf'] != 0)
-                        elif mnem == "jae":
-                            jump = (current_emu.regs['sf'] == 0)
+                            jump = (cf != 0)
+                        elif mnem in ("jae", "jnb", "jnc"):
+                            jump = (cf == 0)
+                        elif mnem == "ja":
+                            jump = (cf == 0 and zf == 0)
+                        elif mnem == "jbe":
+                            jump = (cf != 0 or zf == 1)
+                        elif mnem == "js":
+                            jump = (sf != 0)
+                        elif mnem == "jns":
+                            jump = (sf == 0)
+                        elif mnem == "jo":
+                            jump = (of != 0)
+                        elif mnem == "jno":
+                            jump = (of == 0)
+                        elif mnem == "jp":
+                            jump = (pf != 0)
+                        elif mnem == "jnp":
+                            jump = (pf == 0)
+                        elif mnem == "jl":
+                            jump = (sf != of)
+                        elif mnem == "jge":
+                            jump = (sf == of)
+                        elif mnem == "jg":
+                            jump = (zf == 0 and sf == of)
+                        elif mnem == "jle":
+                            jump = (zf != 0 or sf != of)
+                        elif mnem == "jcxz":
+                            jump = (current_emu.regs['rcx'] == 0)
                         else:
-                            jump = (current_emu.regs['zf'] == 1)
+                            jump = (zf == 1)
                             
                         current_emu.opaque_predicates[ea] = "always_taken" if jump else "always_fallthrough"
                         
@@ -3061,7 +3220,9 @@ class TinyEmulator:
                         break
                 
                 step_count += 1
-                if step_count > 5000:
+                if step_count > _STEP_CAP:
+                    truncated = True
+                    completed_paths.append(current_emu)
                     break
             else:
                 completed_paths.append(current_emu)
@@ -3070,18 +3231,27 @@ class TinyEmulator:
         all_stack_strings = set()
         all_taint_logs = []
         merged_opaque_predicates = {}
+        opaque_predicate_conflicts = []
         merged_dereferenced_pointers = set()
         merged_virtual_calls = []
         seen_calls = set()
         merged_arg_derefs = {}
-        
+
         for emu in completed_paths + paths:
             all_strings.update(emu.get_memory_strings())
             all_stack_strings.update(emu.get_stack_strings())
             for ea, desc in emu.taint_log:
                 all_taint_logs.append({"addr": hex(ea), "description": desc})
-            merged_opaque_predicates.update(emu.opaque_predicates)
-            merged_dereferenced_pointers.update(emu.dereferenced_pointers)
+            for ea, verdict in emu.opaque_predicates.items():
+                if ea in merged_opaque_predicates and merged_opaque_predicates[ea] != verdict:
+                    opaque_predicate_conflicts.append({
+                        "ea": hex(ea),
+                        "previous": merged_opaque_predicates[ea],
+                        "new": verdict,
+                    })
+                merged_opaque_predicates[ea] = verdict
+            for ip_val, ptr_ea, access in emu.dereferenced_pointers:
+                merged_dereferenced_pointers.add((ip_val, ptr_ea, access))
             for vc in emu.virtual_calls:
                 call_key = (vc["vtable_name"], vc["vtable_offset"])
                 if call_key not in seen_calls:
@@ -3106,16 +3276,23 @@ class TinyEmulator:
                 "solved_inputs": {k: hex(v) if isinstance(v, int) else v for k, v in solutions.items()}
             })
             
+        deref_records = [
+            {"ip": hex(ip_val), "addr": hex(ptr_ea), "access": access}
+            for ip_val, ptr_ea, access in sorted(merged_dereferenced_pointers)
+        ]
+
         return {
             "reachable_eas": sorted([hex(x) for x in reachable_eas]),
             "opaque_predicates": {hex(k): v for k, v in merged_opaque_predicates.items()},
+            "opaque_predicate_conflicts": opaque_predicate_conflicts,
             "extracted_strings": sorted(list(all_strings)),
             "stack_strings": sorted(list(all_stack_strings)),
             "taint_log": all_taint_logs,
-            "dereferenced_pointers": sorted(list(merged_dereferenced_pointers)),
+            "dereferenced_pointers": deref_records,
             "virtual_calls": merged_virtual_calls,
             "argument_dereferences": merged_arg_derefs,
             "paths": path_details,
+            "truncated": truncated,
         }
 
 
