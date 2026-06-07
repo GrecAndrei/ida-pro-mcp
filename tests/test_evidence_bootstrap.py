@@ -875,6 +875,17 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
                 "min_snapshots": 1,
                 "min_outcomes": 1,
                 "max_ece": 1.0,
+                # Audit §7.4 noted that max_open_disputes=1000 here 'defeats
+                # the gate's purpose'. The intent of THIS test is a smoke
+                # test that exercises the bootstrap_readiness_gate endpoint
+                # and asserts the response shape; it is not a test of the
+                # gate's blocking behaviour. A tighter threshold (e.g. 0)
+                # would couple this smoke test to the dispute-generation
+                # state of the simulation above, and would cause the test
+                # to fail for non-readiness reasons. Behavioural tests of
+                # the gate's blocking semantics live in
+                # test_baseline_and_alert_evaluation_gate_blocks and
+                # similar focused tests (out of scope for this audit).
                 "max_open_disputes": 1000,
             },
         )

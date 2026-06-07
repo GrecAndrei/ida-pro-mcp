@@ -22,15 +22,15 @@ def mock_ida_context():
     """
     original_modules = {}
     ida_modules = [
-        "idaapi", "idc", "idautils", "ida_bytes", "ida_funcs", "ida_ua", 
-        "ida_segment", "ida_kernwin", "ida_diskio", "ida_loader", 
+        "idaapi", "idc", "idautils", "ida_bytes", "ida_funcs", "ida_ua",
+        "ida_segment", "ida_kernwin", "ida_diskio", "ida_loader",
         "ida_name", "ida_netnode", "ida_entry", "ida_hexrays", "ida_nalt",
-        "ida_strlist", "ida_typeinf", "ida_struct", "ida_enum", "ida_gdl", 
-        "ida_frame", "ida_moves", "ida_xref", "ida_search", "ida_expr", 
-        "ida_offset", "ida_range", "ida_lines", "ida_problems", "ida_regfind", 
+        "ida_strlist", "ida_typeinf", "ida_struct", "ida_enum", "ida_gdl",
+        "ida_frame", "ida_moves", "ida_xref", "ida_search", "ida_expr",
+        "ida_offset", "ida_range", "ida_lines", "ida_problems", "ida_regfind",
         "ida_allins", "ida_dbg"
     ]
-    
+
     for m in ida_modules:
         if m in sys.modules:
             original_modules[m] = sys.modules[m]
@@ -43,7 +43,7 @@ def mock_ida_context():
             mock_mod.get_path.return_value = ""
             mock_mod.PATH_TYPE_IDB = 0
         sys.modules[m] = mock_mod
-        
+
     try:
         yield
     finally:
@@ -52,6 +52,37 @@ def mock_ida_context():
                 sys.modules[m] = original_modules[m]
             else:
                 sys.modules.pop(m, None)
+
+
+# Fixture-style equivalent of mock_ida_context() that uses pytest's
+# monkeypatch fixture (audit §7.2) so teardown is handled by pytest rather
+# than the user-managed try/finally in the context manager above.
+# Only used by the two tests whose sys.modules mutations were called out
+# in the audit; the rest of the file keeps using mock_ida_context().
+@pytest.fixture
+def mock_ida(monkeypatch):
+    ida_modules = [
+        "idaapi", "idc", "idautils", "ida_bytes", "ida_funcs", "ida_ua",
+        "ida_segment", "ida_kernwin", "ida_diskio", "ida_loader",
+        "ida_name", "ida_netnode", "ida_entry", "ida_hexrays", "ida_nalt",
+        "ida_strlist", "ida_typeinf", "ida_struct", "ida_enum", "ida_gdl",
+        "ida_frame", "ida_moves", "ida_xref", "ida_search", "ida_expr",
+        "ida_offset", "ida_range", "ida_lines", "ida_problems", "ida_regfind",
+        "ida_allins", "ida_dbg",
+    ]
+    mocks = {}
+    for m in ida_modules:
+        mock_mod = MagicMock()
+        if m == "idaapi":
+            mock_mod.get_kernel_version.return_value = "9.3"
+        elif m == "idc":
+            mock_mod.get_idb_path.return_value = ""
+        elif m == "ida_loader":
+            mock_mod.get_path.return_value = ""
+            mock_mod.PATH_TYPE_IDB = 0
+        monkeypatch.setitem(sys.modules, m, mock_mod)
+        mocks[m] = mock_mod
+    yield mocks
 
 
 def test_parse_register_offset():
@@ -526,139 +557,146 @@ def test_symbolic_expression_solving_and_formatting():
     assert solutions["rax"] == 0xff
 
 
-def test_tiny_emulator_symbolic_execution_branch_split():
-    with mock_ida_context():
-        import sys
-        from unittest.mock import MagicMock
-        trace_mod = load_tool_module("trace_analysis")
-        TinyEmulator = trace_mod.TinyEmulator
-        _trace_analysis_merged_dispatch = trace_mod._trace_analysis_merged_dispatch
-        
-        import ida_ua
-        ida_ua.o_reg = 1
-        ida_ua.o_mem = 2
-        ida_ua.o_phrase = 3
-        ida_ua.o_displ = 4
-        ida_ua.o_imm = 5
-        ida_ua.o_near = 7
-        
-        # Set up a dictionary to hold our mocked instruction sequence
-        mock_instructions = {}
-        
-        def mock_decode_insn(insn, ip):
-            if ip in mock_instructions:
-                inst_info = mock_instructions[ip]
-                insn.size = inst_info.get("size", 4)
-                insn.ea = ip
-                ops = []
-                for op_data in inst_info.get("ops", []):
-                    op = MagicMock()
-                    op.type = op_data.get("type", 0)
-                    op.dtype = op_data.get("dtype", 0)
-                    op.value = op_data.get("value", 0)
-                    op.addr = op_data.get("addr", 0)
-                    ops.append(op)
-                while len(ops) < 6:
-                    ops.append(MagicMock(type=0, dtype=0, value=0, addr=0))
-                insn.ops = ops
-                return 1
-            return 0
-            
-        sys.modules["ida_ua"].decode_insn.side_effect = mock_decode_insn
-        
-        def mock_print_insn_mnem(ip):
-            if ip in mock_instructions:
-                return mock_instructions[ip]["mnem"]
-            return ""
-            
-        sys.modules["idc"].print_insn_mnem.side_effect = mock_print_insn_mnem
-        
-        def mock_print_operand(ip, op_idx):
-            if ip in mock_instructions:
-                op_strs = mock_instructions[ip].get("op_strs", [])
-                if op_idx < len(op_strs):
-                    return op_strs[op_idx]
-            return ""
-            
-        sys.modules["idc"].print_operand.side_effect = mock_print_operand
-        sys.modules["ida_funcs"].get_func.return_value = None
-        
-        # Set up instructions:
-        # 0x1000: add rdi, 0x10
-        # 0x1004: cmp rdi, 0x1337
-        # 0x1008: je 0x1020
-        # 0x100c: ret
-        # 0x1020: ret
-        mock_instructions[0x1000] = {
-            "mnem": "add",
-            "op_strs": ["rdi", "0x10"],
-            "ops": [{"type": 1, "dtype": 7}, {"type": 5, "value": 0x10}],
-            "size": 4
+def test_tiny_emulator_symbolic_execution_branch_split(mock_ida):
+    # Audit §7.2: converted from `with mock_ida_context():` to a pytest
+    # fixture (`mock_ida`) that uses `monkeypatch.setitem` for sys.modules
+    # mocking. Pytest handles teardown via monkeypatch.undo() automatically.
+    trace_mod = load_tool_module("trace_analysis")
+    TinyEmulator = trace_mod.TinyEmulator
+    _trace_analysis_merged_dispatch = trace_mod._trace_analysis_merged_dispatch
+
+    import ida_ua
+    ida_ua.o_reg = 1
+    ida_ua.o_mem = 2
+    ida_ua.o_phrase = 3
+    ida_ua.o_displ = 4
+    ida_ua.o_imm = 5
+    ida_ua.o_near = 7
+
+    # Set up a dictionary to hold our mocked instruction sequence
+    mock_instructions = {}
+
+    def mock_decode_insn(insn, ip):
+        if ip in mock_instructions:
+            inst_info = mock_instructions[ip]
+            insn.size = inst_info.get("size", 4)
+            insn.ea = ip
+            ops = []
+            for op_data in inst_info.get("ops", []):
+                op = MagicMock()
+                op.type = op_data.get("type", 0)
+                op.dtype = op_data.get("dtype", 0)
+                op.value = op_data.get("value", 0)
+                op.addr = op_data.get("addr", 0)
+                ops.append(op)
+            while len(ops) < 6:
+                ops.append(MagicMock(type=0, dtype=0, value=0, addr=0))
+            insn.ops = ops
+            return 1
+        return 0
+
+    mock_ida["ida_ua"].decode_insn.side_effect = mock_decode_insn
+
+    def mock_print_insn_mnem(ip):
+        if ip in mock_instructions:
+            return mock_instructions[ip]["mnem"]
+        return ""
+
+    mock_ida["idc"].print_insn_mnem.side_effect = mock_print_insn_mnem
+
+    def mock_print_operand(ip, op_idx):
+        if ip in mock_instructions:
+            op_strs = mock_instructions[ip].get("op_strs", [])
+            if op_idx < len(op_strs):
+                return op_strs[op_idx]
+        return ""
+
+    mock_ida["idc"].print_operand.side_effect = mock_print_operand
+    mock_ida["ida_funcs"].get_func.return_value = None
+
+    # Set up instructions:
+    # 0x1000: add rdi, 0x10
+    # 0x1004: cmp rdi, 0x1337
+    # 0x1008: je 0x1020
+    # 0x100c: ret
+    # 0x1020: ret
+    mock_instructions[0x1000] = {
+        "mnem": "add",
+        "op_strs": ["rdi", "0x10"],
+        "ops": [{"type": 1, "dtype": 7}, {"type": 5, "value": 0x10}],
+        "size": 4
+    }
+    mock_instructions[0x1004] = {
+        "mnem": "cmp",
+        "op_strs": ["rdi", "0x1337"],
+        "ops": [{"type": 1, "dtype": 7}, {"type": 5, "value": 0x1337}],
+        "size": 4
+    }
+    mock_instructions[0x1008] = {
+        "mnem": "je",
+        "op_strs": ["0x1020"],
+        "ops": [{"type": 7, "addr": 0x1020}],
+        "size": 4
+    }
+    mock_instructions[0x100c] = {
+        "mnem": "ret",
+        "op_strs": [],
+        "ops": [],
+        "size": 1
+    }
+    mock_instructions[0x1020] = {
+        "mnem": "ret",
+        "op_strs": [],
+        "ops": [],
+        "size": 1
+    }
+
+    # Run speculative emulation via merged dispatch dispatcher
+    res = _trace_analysis_merged_dispatch(
+        action="deobfuscate_emulate",
+        kwargs={
+            "addr": "0x1000",
+            "taint_regs": ["rdi"],
+            "speculative": True,
+            "max_depth": 10
         }
-        mock_instructions[0x1004] = {
-            "mnem": "cmp",
-            "op_strs": ["rdi", "0x1337"],
-            "ops": [{"type": 1, "dtype": 7}, {"type": 5, "value": 0x1337}],
-            "size": 4
-        }
-        mock_instructions[0x1008] = {
-            "mnem": "je",
-            "op_strs": ["0x1020"],
-            "ops": [{"type": 7, "addr": 0x1020}],
-            "size": 4
-        }
-        mock_instructions[0x100c] = {
-            "mnem": "ret",
-            "op_strs": [],
-            "ops": [],
-            "size": 1
-        }
-        mock_instructions[0x1020] = {
-            "mnem": "ret",
-            "op_strs": [],
-            "ops": [],
-            "size": 1
-        }
-        
-        # Run speculative emulation via merged dispatch dispatcher
-        res = _trace_analysis_merged_dispatch(
-            action="deobfuscate_emulate",
-            kwargs={
-                "addr": "0x1000",
-                "taint_regs": ["rdi"],
-                "speculative": True,
-                "max_depth": 10
-            }
-        )
-        
-        assert res["ok"] is True
-        assert "paths" in res
-        paths = res["paths"]
-        assert len(paths) == 2
-        
-        # Check path properties
-        p0 = paths[0]
-        assert p0["last_address"] == "0x1020"
-        assert "(rdi + 0x10) == 0x1337" in p0["constraints"]
-        assert p0["solved_inputs"]["rdi"] == hex(0x1337 - 0x10)
-        
-        p1 = paths[1]
-        assert p1["last_address"] == "0x100c"
-        assert "(rdi + 0x10) != 0x1337" in p1["constraints"]
+    )
+
+    assert res["ok"] is True
+    assert "paths" in res
+    paths = res["paths"]
+    assert len(paths) == 2
+
+    # Check path properties
+    p0 = paths[0]
+    assert p0["last_address"] == "0x1020"
+    assert "(rdi + 0x10) == 0x1337" in p0["constraints"]
+    assert p0["solved_inputs"]["rdi"] == hex(0x1337 - 0x10)
+
+    p1 = paths[1]
+    assert p1["last_address"] == "0x100c"
+    assert "(rdi + 0x10) != 0x1337" in p1["constraints"]
 
 
-def test_survey_system_and_differential_decomp(tmp_path):
+def test_survey_system_and_differential_decomp(tmp_path, mock_ida):
+    # Audit §7.2: the first sys.modules-mutating block (the 'delay then submit'
+    # block, originally lines 705-781) was converted from
+    # `with mock_ida_context():` to the `mock_ida` pytest fixture (uses
+    # `monkeypatch.setitem` for sys.modules). Pytest handles teardown.
+    # The second sys.modules-mutating block (the 'dormant' block) was
+    # *not* in the audit's cited line range, so it still uses the context
+    # manager.
     # Set up clean DB path inside tmp_path
     db_file = os.path.join(tmp_path, "test_re_experience.db")
     survey_store_mod = load_host_module("survey_store")
     with patch.object(survey_store_mod, "_resolve_survey_db_path", return_value=db_file):
         SurveyStore = survey_store_mod.SurveyStore
         store = SurveyStore()
-        
+
         # Assert tables are empty initially
         assert len(store.list_surveys()) == 0
         assert len(store.get_visited_addresses()) == 0
-        
+
         # Register a dormant survey for 0x1000 with dependencies [0x2000]
         store.save_survey(
             addr="0x1000",
@@ -668,12 +706,12 @@ def test_survey_system_and_differential_decomp(tmp_path):
             deferred_until=[],
             reason="Generic variables found"
         )
-        
+
         s = store.get_survey("0x1000")
         assert s is not None
         assert s["status"] == "DORMANT"
         assert s["dependencies"] == ["0x2000"]
-        
+
         # Simulate visitor logging on dispatcher
         server_dispatch_mod = load_host_module("server_dispatch")
         ServerDispatchMixin = server_dispatch_mod.ServerDispatchMixin
@@ -681,73 +719,72 @@ def test_survey_system_and_differential_decomp(tmp_path):
             def __init__(self):
                 self.current_session = MagicMock()
                 self.current_session.idb_path = "test.idb"
-        
+
         dispatcher = MockDispatcher()
-        
+
         # Test visited address extraction
         addrs = dispatcher._extract_addresses_from_args({"addr": "0x2000", "some_other": "val"})
         assert "0x2000" in addrs
-        
+
         # Visited address logging
         store.add_visited_address("0x2000")
         assert store.get_visited_addresses() == ["0x2000"]
-        
+
         # Promote surveys
         dispatcher._promote_eligible_surveys(store)
-        
+
         # Verify state transition: DORMANT -> ACTIVE
         s = store.get_survey("0x1000")
         assert s["status"] == "ACTIVE"
-        
-        # Test survey postponement (delay action)
-        with mock_ida_context():
-            sys.modules["idc"].get_idb_path.return_value = ""
-            survey_mod = load_tool_module("survey")
-            survey = survey_mod.survey
-            res = survey(action="delay", addr="0x1000", delay_until_any=["0x3000"], reason="Need context")
-            assert res["ok"] is True
-            
-            # Verify status is DEFERRED
-            s = store.get_survey("0x1000")
-            assert s["status"] == "DEFERRED"
-            assert s["deferred_until"] == ["0x3000"]
-            
-            # Visited logging of deferred address reactivation
-            store.add_visited_address("0x3000")
-            dispatcher._promote_eligible_surveys(store)
-            
-            # Verify it reactivated to ACTIVE
-            s = store.get_survey("0x1000")
-            assert s["status"] == "ACTIVE"
-            
-            # Test submit action
-            mock_cfunc = MagicMock()
-            mock_lvar = MagicMock()
-            mock_lvar.name = "v1"
-            mock_cfunc.lvars = [mock_lvar]
-            mock_cfunc.rename_lvar.return_value = True
-            
-            sys.modules["ida_funcs"].get_func.return_value = MagicMock(start_ea=0x1000)
-            sys.modules["ida_hexrays"].decompile.return_value = mock_cfunc
-            
-            res = survey(action="submit", addr="0x1000", renames={"v1": "data_ptr"})
-            assert res["ok"] is True
-            
-            # Verify it is deleted from active surveys list
-            assert store.get_survey("0x1000") is None
-            
-            # Check experience table has entry
-            with store._conn() as conn:
-                row = conn.execute("SELECT address, applied_changes FROM re_experience").fetchone()
-                assert row is not None
-                import json
-                assert row[0] == 0x1000
-                changes = json.loads(row[1])
-                assert changes["renames"] == {"v1": "data_ptr"}
 
-            missing_submit = survey(action="submit", addr="0x1000", renames={"v1": "late_name"})
-            assert missing_submit["ok"] is False
-            assert missing_submit["code"] in {"NOT_FOUND", "INVALID_ARGS"}
+        # Test survey postponement (delay action) — uses mock_ida fixture
+        mock_ida["idc"].get_idb_path.return_value = ""
+        survey_mod = load_tool_module("survey")
+        survey = survey_mod.survey
+        res = survey(action="delay", addr="0x1000", delay_until_any=["0x3000"], reason="Need context")
+        assert res["ok"] is True
+
+        # Verify status is DEFERRED
+        s = store.get_survey("0x1000")
+        assert s["status"] == "DEFERRED"
+        assert s["deferred_until"] == ["0x3000"]
+
+        # Visited logging of deferred address reactivation
+        store.add_visited_address("0x3000")
+        dispatcher._promote_eligible_surveys(store)
+
+        # Verify it reactivated to ACTIVE
+        s = store.get_survey("0x1000")
+        assert s["status"] == "ACTIVE"
+
+        # Test submit action
+        mock_cfunc = MagicMock()
+        mock_lvar = MagicMock()
+        mock_lvar.name = "v1"
+        mock_cfunc.lvars = [mock_lvar]
+        mock_cfunc.rename_lvar.return_value = True
+
+        mock_ida["ida_funcs"].get_func.return_value = MagicMock(start_ea=0x1000)
+        mock_ida["ida_hexrays"].decompile.return_value = mock_cfunc
+
+        res = survey(action="submit", addr="0x1000", renames={"v1": "data_ptr"})
+        assert res["ok"] is True
+
+        # Verify it is deleted from active surveys list
+        assert store.get_survey("0x1000") is None
+
+        # Check experience table has entry
+        with store._conn() as conn:
+            row = conn.execute("SELECT address, applied_changes FROM re_experience").fetchone()
+            assert row is not None
+            import json
+            assert row[0] == 0x1000
+            changes = json.loads(row[1])
+            assert changes["renames"] == {"v1": "data_ptr"}
+
+        missing_submit = survey(action="submit", addr="0x1000", renames={"v1": "late_name"})
+        assert missing_submit["ok"] is False
+        assert missing_submit["code"] in {"NOT_FOUND", "INVALID_ARGS"}
 
         # Re-create dormant survey to ensure non-active transitions are rejected.
         store.save_survey(
@@ -770,7 +807,7 @@ def test_survey_system_and_differential_decomp(tmp_path):
             dormant_submit = survey(action="submit", addr="0x4000", renames={"v9": "real_name"})
             assert dormant_submit["ok"] is False
             assert dormant_submit["code"] == "INVALID_ARGS"
-                
+
     # Test Ghidra simulation logic in code.py
     code_mod = load_tool_module("code")
     _simulate_ghidra_decomp = code_mod._simulate_ghidra_decomp

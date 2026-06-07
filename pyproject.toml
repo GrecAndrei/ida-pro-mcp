@@ -27,6 +27,18 @@ dependencies = [
     "numpy>=1.26.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.3.0",
+]
+
 [project.urls]
 Repository = "https://github.com/GrecAndrei/ida-pro-mcp"
 Issues = "https://github.com/GrecAndrei/ida-pro-mcp/issues"
@@ -48,6 +60,7 @@ include = ["src/ida_pro_mcp"]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 timeout = 30
 timeout_method = "thread"
-addopts = "--ignore=tests/test_mcp_comprehensive.py --ignore=tests/integration --ignore=tests/probes --ignore=tests/benchmarks"
+addopts = "--ignore=tests/integration --ignore=tests/probes --ignore=tests/benchmarks"
