@@ -559,22 +559,24 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                     sid_hint = getattr(self.current_session, "session_id", None)
                 sid_hint_text = str(sid_hint) if sid_hint else ""
                 if sid_hint_text:
-                    self._session_last_activity[sid_hint_text] = time.time()
-                    self._session_inflight_calls[sid_hint_text] = int(
-                        self._session_inflight_calls.get(sid_hint_text, 0) or 0
-                    ) + 1
+                    with self._runtime_lock:
+                        self._session_last_activity[sid_hint_text] = time.time()
+                        self._session_inflight_calls[sid_hint_text] = int(
+                            self._session_inflight_calls.get(sid_hint_text, 0) or 0
+                        ) + 1
                 try:
                     res = self._execute_tool(tn, call_args)
                 finally:
                     if sid_hint_text:
-                        remaining = int(
-                            self._session_inflight_calls.get(sid_hint_text, 0) or 0
-                        ) - 1
-                        if remaining > 0:
-                            self._session_inflight_calls[sid_hint_text] = remaining
-                        else:
-                            self._session_inflight_calls.pop(sid_hint_text, None)
-                        self._session_last_activity[sid_hint_text] = time.time()
+                        with self._runtime_lock:
+                            remaining = int(
+                                self._session_inflight_calls.get(sid_hint_text, 0) or 0
+                            ) - 1
+                            if remaining > 0:
+                                self._session_inflight_calls[sid_hint_text] = remaining
+                            else:
+                                self._session_inflight_calls.pop(sid_hint_text, None)
+                            self._session_last_activity[sid_hint_text] = time.time()
                 # Preference observation: compare next call bridges with injected entries
                 if isinstance(call_args, dict):
                     self._observe_preference(
