@@ -293,42 +293,106 @@ class ServerDispatchMixin:
                 payload["tools"]["action_counts_by_tool"] = action_counts
             return payload
 
+    _MEMORY_MAX_BYTES = 64 * 1024 * 1024
+
+    def _memory_allow_root(self) -> Optional[str]:
+            env_root = os.environ.get("IDA_MCP_MEMORY_ROOT")
+            if env_root:
+                try:
+                    return os.path.realpath(os.path.expanduser(env_root))
+                except Exception:
+                    return None
+            session = getattr(self, "current_session", None)
+            idb_path = getattr(session, "idb_path", None) if session else None
+            if idb_path:
+                try:
+                    return os.path.realpath(os.path.dirname(idb_path))
+                except Exception:
+                    return None
+            return None
+
+    @staticmethod
+    def _memory_path_has_symlink(abs_path: str, allowed_root: str) -> bool:
+            if not abs_path or not allowed_root:
+                return True
+            try:
+                rel = os.path.relpath(abs_path, allowed_root)
+            except ValueError:
+                return True
+            if rel.startswith("..") or os.path.isabs(rel):
+                return True
+            parts = rel.split(os.sep)
+            current = allowed_root
+            for part in parts:
+                if not part:
+                    continue
+                current = os.path.join(current, part)
+                if os.path.islink(current):
+                    return True
+            return False
+
     def _handle_memory_filesystem(self, args: dict) -> dict:
             import os as _os
-            import traceback as _tb
             action = str(args.get("action") or "").strip().lower()
             path = args.get("path")
             if not isinstance(path, str) or not path.strip():
                 return make_error(MCPError.INVALID_ARGS, "path required")
+            allowed_root = self._memory_allow_root()
+            if not allowed_root:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "memory tool: no allowed root configured (set IDA_MCP_MEMORY_ROOT or open a session).",
+                )
+            try:
+                canonical = _os.path.realpath(_os.path.join(allowed_root, path))
+            except Exception:
+                return make_error(MCPError.INVALID_ARGS, "memory tool: invalid path")
+            common = _os.path.commonpath([allowed_root, canonical])
+            if common != allowed_root:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "memory tool: path escapes allowed root",
+                )
+            if self._memory_path_has_symlink(canonical, allowed_root):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "memory tool: symbolic links are not allowed in path",
+                )
             encoding = args.get("encoding") or "utf-8"
             try:
                 if action == "read_file":
-                    if not _os.path.exists(path):
-                        return {"error": True, "message": f"File not found: {path}"}
-                    if not _os.path.isfile(path):
-                        return {"error": True, "message": f"Not a file: {path}"}
+                    if not _os.path.exists(canonical):
+                        return {"error": True, "message": "File not found"}
+                    if not _os.path.isfile(canonical):
+                        return {"error": True, "message": "Not a file"}
+                    file_size = _os.path.getsize(canonical)
+                    if file_size > self._MEMORY_MAX_BYTES:
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            f"memory tool: read exceeds {self._MEMORY_MAX_BYTES} byte cap",
+                        )
                     enc = str(encoding).strip().lower()
                     if enc == "binary":
-                        with open(path, "rb") as f:
+                        with open(canonical, "rb") as f:
                             data = f.read()
                         return {
                             "ok": True,
-                            "path": _os.path.abspath(path),
+                            "path": canonical,
                             "size": len(data),
                             "content": data.hex(),
                             "encoding": "binary",
                         }
-                    with open(path, "r", encoding=enc, errors="replace") as f:
+                    with open(canonical, "r", encoding=enc, errors="replace") as f:
                         text = f.read()
                     return {
                         "ok": True,
-                        "path": _os.path.abspath(path),
+                        "path": canonical,
                         "size": len(text),
                         "content": text,
                         "encoding": enc,
                     }
                 if action == "write_file":
-                    parent = _os.path.dirname(_os.path.abspath(path))
+                    parent = _os.path.dirname(canonical)
                     if parent and not _os.path.exists(parent):
                         _os.makedirs(parent, exist_ok=True)
                     content = args.get("content")
@@ -338,26 +402,39 @@ class ServerDispatchMixin:
                     if enc == "binary":
                         try:
                             raw = bytes.fromhex(str(content))
-                        except ValueError as exc:
-                            return {"error": True, "message": f"Invalid hex content: {exc}"}
-                        with open(path, "wb") as f:
+                        except ValueError:
+                            return {"error": True, "message": "Invalid hex content"}
+                        if len(raw) > self._MEMORY_MAX_BYTES:
+                            return make_error(
+                                MCPError.INVALID_ARGS,
+                                f"memory tool: write exceeds {self._MEMORY_MAX_BYTES} byte cap",
+                            )
+                        with open(canonical, "wb") as f:
                             f.write(raw)
                         return {
                             "ok": True,
-                            "path": _os.path.abspath(path),
+                            "path": canonical,
                             "size": len(raw),
                             "encoding": "binary",
                         }
-                    with open(path, "w", encoding=enc, errors="replace") as f:
-                        f.write(str(content))
+                    text_content = str(content)
+                    if len(text_content.encode(enc, errors="replace")) > self._MEMORY_MAX_BYTES:
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            f"memory tool: write exceeds {self._MEMORY_MAX_BYTES} byte cap",
+                        )
+                    with open(canonical, "w", encoding=enc, errors="replace") as f:
+                        f.write(text_content)
                     return {
                         "ok": True,
-                        "path": _os.path.abspath(path),
-                        "size": len(str(content)),
+                        "path": canonical,
+                        "size": len(text_content),
                         "encoding": enc,
                     }
+            except (OSError, ValueError) as exc:
+                return {"error": True, "message": f"memory tool: {type(exc).__name__}"}
             except Exception:
-                return {"error": True, "message": _tb.format_exc()}
+                return {"error": True, "message": "memory tool: operation failed"}
             return make_error(
                 MCPError.ACTION_NOT_FOUND,
                 f"Unsupported memory filesystem action: '{action}'",
