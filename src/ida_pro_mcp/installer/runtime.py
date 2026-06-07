@@ -14,6 +14,14 @@ from pathlib import Path
 from .common import InstallReport
 
 
+# Hard cap on llama.cpp release asset size. Anything larger is refused
+# before we exhaust memory or fill /tmp (audit §6.3). The largest
+# llama.cpp release asset historically clocks in under 600 MB; 2 GiB
+# leaves comfortable headroom while still bounding worst-case damage.
+MAX_DOWNLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
+_DOWNLOAD_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB
+
+
 def get_install_root() -> Path:
     override = os.environ.get("IDA_PRO_MCP_HOME")
     if override:
@@ -365,12 +373,58 @@ def _score_release_asset(name: str, os_hints: list[str], arch_hints: list[str]) 
 
 
 def _extract_archive(archive: Path, out_dir: Path) -> None:
+    """Extract `archive` into `out_dir` with a path-traversal guard.
+
+    Refuses any member whose canonicalized destination is not contained
+    inside `out_dir` (zip slip / tar slip — audit §6.3).  Also refuses
+    members declared as absolute paths or containing '..' segments,
+    catching attacks that exploit case-folding or symlinks created
+    during extraction.
+    """
+    extract_root = out_dir.resolve()
+
+    def _safe_target(member_name: str) -> Path:
+        if not member_name:
+            raise RuntimeError(f"refusing empty archive member name in {archive.name}")
+        # Reject absolute paths and parent-dir traversal eagerly so the
+        # error message is precise; the resolve() check below is the
+        # final authority.
+        candidate = Path(member_name)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise RuntimeError(
+                f"refusing to extract {member_name!r} from {archive.name}: absolute or traversal path"
+            )
+        target = (out_dir / member_name).resolve()
+        try:
+            target.relative_to(extract_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"refusing to extract {member_name!r} from {archive.name}: outside extract root"
+            ) from exc
+        return target
+
     if archive.name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
+            for info in zf.infolist():
+                _safe_target(info.filename)
             zf.extractall(out_dir)
         return
     if archive.name.endswith(".tar.gz") or archive.name.endswith(".tgz"):
         with tarfile.open(archive, "r:gz") as tf:
+            for member in tf.getmembers():
+                _safe_target(member.name)
+                # Tar can also carry symlinks/hardlinks whose targets
+                # escape the root even if `member.name` itself is safe.
+                link = member.linkname or ""
+                if link:
+                    link_path = (out_dir / member.name).parent / link
+                    try:
+                        link_resolved = link_path.resolve()
+                        link_resolved.relative_to(extract_root)
+                    except (OSError, ValueError) as exc:
+                        raise RuntimeError(
+                            f"refusing tar member {member.name!r} with link target outside extract root"
+                        ) from exc
             tf.extractall(out_dir)
         return
     raise RuntimeError(f"Unsupported archive format: {archive.name}")
@@ -423,7 +477,11 @@ def download_and_install_llama_server(
         )
 
     with tempfile.TemporaryDirectory(prefix="ida-pro-mcp-llama-") as td:
-        archive_path = Path(td) / best_asset["name"]
+        # Stage downloads inside the temp dir.  We use a NamedTemporaryFile
+        # (delete=False) so a half-written archive cannot collide with a
+        # concurrent installer run (audit §6.3 TOCTOU concern), then
+        # os.replace into the canonical archive_path.
+        canonical_archive = Path(td) / best_asset["name"]
         extract_dir = Path(td) / "extract"
         extract_dir.mkdir(parents=True, exist_ok=True)
         req_asset = urllib.request.Request(
@@ -431,7 +489,42 @@ def download_and_install_llama_server(
             headers={"User-Agent": "ida-pro-mcp-installer"},
         )
         with urllib.request.urlopen(req_asset, timeout=120) as resp:
-            archive_path.write_bytes(resp.read())
+            # Honor Content-Length when present; reject before reading
+            # the body if the server promises more than we'll accept.
+            declared_len_raw = resp.headers.get("Content-Length")
+            if declared_len_raw:
+                try:
+                    declared_len = int(declared_len_raw)
+                except ValueError:
+                    declared_len = -1
+                if declared_len > MAX_DOWNLOAD_SIZE:
+                    raise RuntimeError(
+                        f"Refusing download: Content-Length={declared_len} exceeds "
+                        f"MAX_DOWNLOAD_SIZE={MAX_DOWNLOAD_SIZE} bytes"
+                    )
+            tmp = tempfile.NamedTemporaryFile(
+                delete=False, dir=str(td), prefix=".dl-", suffix=".part"
+            )
+            tmp_path = Path(tmp.name)
+            total = 0
+            try:
+                while True:
+                    chunk = resp.read(_DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_DOWNLOAD_SIZE:
+                        raise RuntimeError(
+                            f"Refusing download: stream exceeded MAX_DOWNLOAD_SIZE="
+                            f"{MAX_DOWNLOAD_SIZE} bytes (read {total} so far)"
+                        )
+                    tmp.write(chunk)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            finally:
+                tmp.close()
+            os.replace(tmp_path, canonical_archive)
+        archive_path = canonical_archive
         _extract_archive(archive_path, extract_dir)
         found = list(extract_dir.rglob(binary_name))
         if not found:
