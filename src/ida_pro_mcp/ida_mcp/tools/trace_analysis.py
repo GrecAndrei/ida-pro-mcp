@@ -2722,6 +2722,8 @@ class TinyEmulator:
             any_tainted = any(self.is_reg_tainted(r) for r in arg_regs)
             self.set_reg("rax", 0)
             self.set_reg_taint("rax", any_tainted)
+            rsp = self.get_reg("rsp") - 8
+            self.set_reg("rsp", rsp)
             if any_tainted:
                 func_op = idc.print_operand(self.ip, 0)
                 args_sym = []
@@ -2999,6 +3001,8 @@ class TinyEmulator:
                 next_ip = target
 
         elif mnem in ("ret", "retn"):
+            rsp = self.get_reg("rsp") + 8
+            self.set_reg("rsp", rsp)
             return False
 
         self.ip = next_ip
