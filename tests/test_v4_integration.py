@@ -35,7 +35,7 @@ import sys, os, tempfile, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__) if "__file__" in dir() else ".", "..", "src"))
 from blackboard import blackboard
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 
 # Add a system
 r1 = blackboard(action="add_system", title="Crypto subsystem",
@@ -67,7 +67,7 @@ with open(RESULT_PATH, "w") as f:
 import sys, os, tempfile, json
 from blackboard import blackboard
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 
 r1 = blackboard(action="add_gap", title="WPA key derivation",
                 content="All WPA2 firmware must derive PTK/GTK",
@@ -99,7 +99,7 @@ with open(RESULT_PATH, "w") as f:
 import sys, os, tempfile, json
 from blackboard import blackboard
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 
 r1 = blackboard(action="add_peripheral", title="AES accelerator",
                 addr="0xA0010000", periph_type="crypto",
@@ -126,7 +126,7 @@ with open(RESULT_PATH, "w") as f:
 import sys, os, tempfile, json
 from blackboard import blackboard
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 
 blackboard(action="add_system", title="Crypto", db_path=db)
 blackboard(action="add_gap", title="WPA", confidence=0.9, db_path=db)
@@ -164,7 +164,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__) if "__file__" in dir()
 from ida_pro_mcp.host.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.gap_engine import GapEngine
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 kg = KnowledgeGraph(db_path=db)
 ge = GapEngine(kg)
 
@@ -195,7 +195,7 @@ from blackboard import BlackboardStore
 from ida_pro_mcp.host.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.gap_engine import GapEngine
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 store = BlackboardStore(db_path=db)
 store.write("WPA2 handshake handler", category="hypothesis",
             tags=["wpa", "802.11"], embed=False)
@@ -221,7 +221,7 @@ from blackboard import BlackboardStore
 from ida_pro_mcp.host.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.gap_engine import GapEngine
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 store = BlackboardStore(db_path=db)
 kg = KnowledgeGraph(db_path=db)
 ge = GapEngine(kg)
@@ -264,7 +264,7 @@ from ida_pro_mcp.host.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.narrative_engine import NarrativeEngine
 from ida_pro_mcp.host.gap_engine import GapEngine
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 store = BlackboardStore(db_path=db)
 kg = KnowledgeGraph(db_path=db)
 
@@ -308,7 +308,7 @@ from blackboard import BlackboardStore
 from ida_pro_mcp.host.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.narrative_engine import NarrativeEngine
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 store = BlackboardStore(db_path=db)
 kg = KnowledgeGraph(db_path=db)
 
@@ -349,8 +349,8 @@ from blackboard import BlackboardStore
 from ida_pro_mcp.host.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.analysis_engine import AnalysisEngine
 
-db = tempfile.mktemp(suffix=".db")
-props = tempfile.mktemp(suffix=".props.db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+props = tempfile.NamedTemporaryFile(suffix=".props.db", delete=False).name
 store = BlackboardStore(db_path=db)
 
 # Write 4 functions with same behavior tag (threshold for system discovery is 3)
@@ -393,8 +393,8 @@ import idaapi, idc, idautils
 from blackboard import BlackboardStore
 from ida_pro_mcp.host.analysis_engine import AnalysisEngine
 
-db = tempfile.mktemp(suffix=".db")
-props = tempfile.mktemp(suffix=".props.db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+props = tempfile.NamedTemporaryFile(suffix=".props.db", delete=False).name
 store = BlackboardStore(db_path=db)
 
 # Mock RPC that returns real segment data
@@ -694,7 +694,7 @@ import idautils
 from blackboard import BlackboardStore
 
 # Write some blackboard entries
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 store = BlackboardStore(db_path=db)
 funcs = list(idautils.Functions())[:5]
 for ea in funcs[:3]:
@@ -803,7 +803,7 @@ import sys, os, json, tempfile
 from firmware_view import firmware_view
 from blackboard import BlackboardStore
 
-db = tempfile.mktemp(suffix=".db")
+db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 # Run detect_vector_table — it should write entry points to blackboard
 r = firmware_view(action="detect_vector_table")
 vectors = r.get("vectors", [])
