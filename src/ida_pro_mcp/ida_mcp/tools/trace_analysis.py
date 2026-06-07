@@ -3212,17 +3212,25 @@ class TinyEmulator:
         all_stack_strings = set()
         all_taint_logs = []
         merged_opaque_predicates = {}
+        opaque_predicate_conflicts = []
         merged_dereferenced_pointers = set()
         merged_virtual_calls = []
         seen_calls = set()
         merged_arg_derefs = {}
-        
+
         for emu in completed_paths + paths:
             all_strings.update(emu.get_memory_strings())
             all_stack_strings.update(emu.get_stack_strings())
             for ea, desc in emu.taint_log:
                 all_taint_logs.append({"addr": hex(ea), "description": desc})
-            merged_opaque_predicates.update(emu.opaque_predicates)
+            for ea, verdict in emu.opaque_predicates.items():
+                if ea in merged_opaque_predicates and merged_opaque_predicates[ea] != verdict:
+                    opaque_predicate_conflicts.append({
+                        "ea": hex(ea),
+                        "previous": merged_opaque_predicates[ea],
+                        "new": verdict,
+                    })
+                merged_opaque_predicates[ea] = verdict
             merged_dereferenced_pointers.update(emu.dereferenced_pointers)
             for vc in emu.virtual_calls:
                 call_key = (vc["vtable_name"], vc["vtable_offset"])
@@ -3251,6 +3259,7 @@ class TinyEmulator:
         return {
             "reachable_eas": sorted([hex(x) for x in reachable_eas]),
             "opaque_predicates": {hex(k): v for k, v in merged_opaque_predicates.items()},
+            "opaque_predicate_conflicts": opaque_predicate_conflicts,
             "extracted_strings": sorted(list(all_strings)),
             "stack_strings": sorted(list(all_stack_strings)),
             "taint_log": all_taint_logs,
