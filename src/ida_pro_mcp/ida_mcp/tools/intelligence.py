@@ -37,6 +37,40 @@ import re
 from collections import Counter
 from typing import Any
 
+class _FederationPathError(Exception):
+    """Raised when a federation peer path fails the allowlist check."""
+    pass
+
+
+def _validate_federation_path(p: str) -> str:
+    """Reject any peer path not contained in IDA_MCP_FEDERATION_ALLOWED_ROOTS.
+
+    The env var is a `os.pathsep`-separated list of directory roots. Each
+    entry is realpath'd; the candidate path is also realpath'd and must
+    either equal one of the roots exactly or sit beneath it. If the env
+    var is unset or empty, federation is refused (default: disabled).
+
+    Returns the canonical (realpath'd) form on success; raises
+    :class:`_FederationPathError` on rejection. See audit §2.2.
+    """
+    raw = os.environ.get("IDA_MCP_FEDERATION_ALLOWED_ROOTS", "")
+    allowed = [os.path.realpath(a) for a in raw.split(os.pathsep) if a]
+    if not allowed:
+        raise _FederationPathError(
+            "federation refused: IDA_MCP_FEDERATION_ALLOWED_ROOTS is unset; "
+            "set it to a colon-separated list of allowed root directories to opt in"
+        )
+    if not isinstance(p, str) or not p:
+        raise _FederationPathError("federation peer path must be a non-empty string")
+    real = os.path.realpath(p)
+    for root in allowed:
+        if real == root or real.startswith(root + os.sep):
+            return real
+    raise _FederationPathError(
+        f"federation peer path {p!r} is not contained in IDA_MCP_FEDERATION_ALLOWED_ROOTS"
+    )
+
+
 # Known crypto constant values (subset)
 _CRYPTO_CONSTS: dict[int, str] = {
     0x67452301: "MD5_A", 0xEFCDAB89: "MD5_B", 0x98BADCFE: "MD5_C", 0x10325476: "MD5_D",
@@ -763,6 +797,7 @@ def intelligence(
             "structural_stats",
             "structural_delete",
             "structural_refresh",
+            "blackboard_federate",
         ):
             import sqlite3
             import sys
@@ -841,9 +876,19 @@ def intelligence(
                 if isinstance(remote_capsule_paths, str):
                     remote_capsule_paths = [r.strip() for r in remote_capsule_paths.split(",") if r.strip()]
 
+                # Audit §2.2: validate every peer path against the
+                # IDA_MCP_FEDERATION_ALLOWED_ROOTS allowlist before handing
+                # them to FederationBridge (which calls sqlite3.connect on
+                # each path). Empty allowlist → federation refused.
+                try:
+                    validated_remote = [_validate_federation_path(p) for p in remote_paths]
+                    validated_capsule = [_validate_federation_path(p) for p in remote_capsule_paths]
+                except _FederationPathError as exc:
+                    return make_error(MCPError.INVALID_ARGS, str(exc))
+
                 bridge = FederationBridge(local_bb)
-                bb_stats = bridge.federate_blackboards(remote_paths)
-                pref_stats = bridge.federate_preferences(remote_capsule_paths)
+                bb_stats = bridge.federate_blackboards(validated_remote)
+                pref_stats = bridge.federate_preferences(validated_capsule)
 
                 return {
                     "ok": True,
