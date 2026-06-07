@@ -37,6 +37,40 @@ import re
 from collections import Counter
 from typing import Any
 
+class _FederationPathError(Exception):
+    """Raised when a federation peer path fails the allowlist check."""
+    pass
+
+
+def _validate_federation_path(p: str) -> str:
+    """Reject any peer path not contained in IDA_MCP_FEDERATION_ALLOWED_ROOTS.
+
+    The env var is a `os.pathsep`-separated list of directory roots. Each
+    entry is realpath'd; the candidate path is also realpath'd and must
+    either equal one of the roots exactly or sit beneath it. If the env
+    var is unset or empty, federation is refused (default: disabled).
+
+    Returns the canonical (realpath'd) form on success; raises
+    :class:`_FederationPathError` on rejection. See audit §2.2.
+    """
+    raw = os.environ.get("IDA_MCP_FEDERATION_ALLOWED_ROOTS", "")
+    allowed = [os.path.realpath(a) for a in raw.split(os.pathsep) if a]
+    if not allowed:
+        raise _FederationPathError(
+            "federation refused: IDA_MCP_FEDERATION_ALLOWED_ROOTS is unset; "
+            "set it to a colon-separated list of allowed root directories to opt in"
+        )
+    if not isinstance(p, str) or not p:
+        raise _FederationPathError("federation peer path must be a non-empty string")
+    real = os.path.realpath(p)
+    for root in allowed:
+        if real == root or real.startswith(root + os.sep):
+            return real
+    raise _FederationPathError(
+        f"federation peer path {p!r} is not contained in IDA_MCP_FEDERATION_ALLOWED_ROOTS"
+    )
+
+
 # Known crypto constant values (subset)
 _CRYPTO_CONSTS: dict[int, str] = {
     0x67452301: "MD5_A", 0xEFCDAB89: "MD5_B", 0x98BADCFE: "MD5_C", 0x10325476: "MD5_D",
@@ -294,6 +328,22 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
     }
 
 
+def _safe_decompile(ea, **kwargs):
+    """Wrap ``ida_hexrays.decompile`` with an explicit plugin check.
+
+    Audit §5.2 (decompile): the bare ``ida_hexrays.decompile(...)`` call
+    sites in this file did not first call ``init_hexrays_plugin()``. On
+    IDA configurations without Hex-Rays loaded (IDA Free, missing
+    licence, headless idat without ``-Ohexrays``), ``decompile`` returns
+    ``None`` or raises a Hex-Rays-internal error that surfaces as an
+    opaque empty ``pseudo`` string downstream. This helper raises
+    ``RuntimeError`` instead so the surrounding ``except Exception``
+    blocks land in the existing "failed to decompile function" path.
+    """
+    if not ida_hexrays.init_hexrays_plugin():
+        raise RuntimeError("hexrays decompiler is not available in this IDA")
+    return ida_hexrays.decompile(ea, **kwargs)
+
 
 @tool
 @idaread
@@ -368,7 +418,22 @@ def intelligence(
         classifier = BehaviorClassifier.instance(embedder)
 
         def _index_for_current_idb():
+            # Audit §5.2 (idb path): previously this returned
+            # FunctionEmbeddingIndex(".embeddings.db", ...) when the IDB
+            # path was empty (no open database, headless probe). That
+            # writes the per-binary embedding index to CWD and silently
+            # cross-pollutes any other session that lands in the same
+            # directory. Fail loudly instead — `intelligence_status`
+            # already wraps this call in try/except so its index-count
+            # field gracefully shows zero; explicit indexing actions
+            # (index_function / index_batch / similar_functions /
+            # semantic_search / export_index_summary / evidence_card)
+            # surface the error to the caller via handle_error().
             idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB) or ""
+            if not idb_path:
+                raise RuntimeError(
+                    "no active IDB path; embedding index requires an open database"
+                )
             db_path = idb_path + ".embeddings.db"
             return FunctionEmbeddingIndex(db_path, embedder), db_path
 
@@ -477,7 +542,7 @@ def intelligence(
             if err:
                 return err
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
@@ -502,7 +567,7 @@ def intelligence(
             if err:
                 return err
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
@@ -529,7 +594,7 @@ def intelligence(
                 if count >= limit:
                     break
                 try:
-                    cfunc = ida_hexrays.decompile(fea)
+                    cfunc = _safe_decompile(fea)
                     pseudo = str(cfunc) if cfunc else ""
                     if not pseudo:
                         failures += 1
@@ -557,7 +622,7 @@ def intelligence(
             threshold = float(kwargs.get("threshold", 0.55))
             top_k = max(1, int(kwargs.get("top_k", max_items)))
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
@@ -654,7 +719,7 @@ def intelligence(
             if err:
                 return err
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
@@ -763,6 +828,7 @@ def intelligence(
             "structural_stats",
             "structural_delete",
             "structural_refresh",
+            "blackboard_federate",
         ):
             import sqlite3
             import sys
@@ -790,7 +856,15 @@ def intelligence(
 
             db_path = get_db_path(idb_path)
 
-            if action == "structural_extract":
+            # Audit §5.2: the previous code re-entered `intelligence(action=...)`
+            # from inside `structural_ingest` and `structural_refresh`. The
+            # outer call already holds the `@idaread` LifoQueue lock, so a
+            # recursive dispatch through the public wrapper risks deadlock /
+            # lost-update reentrancy on the shared sync queue. The action
+            # bodies are extracted into nested helpers so the dispatch ladder
+            # and the internal call sites share the same path without going
+            # through the decorator again.
+            def _do_structural_extract():
                 funcs = list(idautils.Functions())
                 results = []
                 for func_ea in funcs:
@@ -799,16 +873,59 @@ def intelligence(
                         results.append(attrs)
                 return {"ok": True, "functions": results}
 
-            if action == "structural_extract_single":
-                if not addr:
+            def _do_structural_extract_single(_addr):
+                if not _addr:
                     return {"error": True, "message": "addr required"}
-                ea, err = validate_addr(addr, require_func=True)
+                ea, err = validate_addr(_addr, require_func=True)
                 if err:
                     return err
                 attrs = _extract_function_attributes(ea)
                 if not attrs:
                     return {"error": True, "message": "Extraction failed"}
                 return {"ok": True, "function": attrs}
+
+            def _do_structural_ingest():
+                t0 = time.time()
+                extract_res = _do_structural_extract()
+                if extract_res.get("error") or not extract_res.get("ok"):
+                    return extract_res
+                funcs_data = extract_res.get("functions") or []
+
+                try:
+                    conn = sqlite3.connect(db_path)
+                    ensure_tables(conn)
+                    ingested = upsert_functions_batch(conn, funcs_data)
+                    conn.close()
+                except Exception as e:
+                    return {"error": True, "message": f"Database error during ingest: {e}"}
+
+                try:
+                    write_insight_index(funcs_data)
+                    all_facts = []
+                    for f in funcs_data:
+                        all_facts.extend(_detect_global_facts(f))
+                    add_global_facts(all_facts)
+                    facts_count = len(all_facts)
+                except Exception:
+                    facts_count = 0
+
+                elapsed = time.time() - t0
+                return {
+                    "ok": True,
+                    "action": "structural_ingest",
+                    "total_functions": len(funcs_data),
+                    "ingested": ingested,
+                    "db_path": db_path,
+                    "l1_indexed": len(funcs_data),
+                    "l2_facts_added": facts_count,
+                    "elapsed_seconds": elapsed,
+                }
+
+            if action == "structural_extract":
+                return _do_structural_extract()
+
+            if action == "structural_extract_single":
+                return _do_structural_extract_single(addr)
 
             if action == "structural_delete":
                 if os.path.exists(db_path):
@@ -841,9 +958,19 @@ def intelligence(
                 if isinstance(remote_capsule_paths, str):
                     remote_capsule_paths = [r.strip() for r in remote_capsule_paths.split(",") if r.strip()]
 
+                # Audit §2.2: validate every peer path against the
+                # IDA_MCP_FEDERATION_ALLOWED_ROOTS allowlist before handing
+                # them to FederationBridge (which calls sqlite3.connect on
+                # each path). Empty allowlist → federation refused.
+                try:
+                    validated_remote = [_validate_federation_path(p) for p in remote_paths]
+                    validated_capsule = [_validate_federation_path(p) for p in remote_capsule_paths]
+                except _FederationPathError as exc:
+                    return make_error(MCPError.INVALID_ARGS, str(exc))
+
                 bridge = FederationBridge(local_bb)
-                bb_stats = bridge.federate_blackboards(remote_paths)
-                pref_stats = bridge.federate_preferences(remote_capsule_paths)
+                bb_stats = bridge.federate_blackboards(validated_remote)
+                pref_stats = bridge.federate_preferences(validated_capsule)
 
                 return {
                     "ok": True,
@@ -931,45 +1058,11 @@ def intelligence(
                 )
 
             if action == "structural_ingest":
-                t0 = time.time()
-                extract_res = intelligence(action="structural_extract")
-                if extract_res.get("error") or not extract_res.get("ok"):
-                    return extract_res
-                funcs_data = extract_res.get("functions") or []
-
-                try:
-                    conn = sqlite3.connect(db_path)
-                    ensure_tables(conn)
-                    ingested = upsert_functions_batch(conn, funcs_data)
-                    conn.close()
-                except Exception as e:
-                    return {"error": True, "message": f"Database error during ingest: {e}"}
-
-                try:
-                    write_insight_index(funcs_data)
-                    all_facts = []
-                    for f in funcs_data:
-                        all_facts.extend(_detect_global_facts(f))
-                    add_global_facts(all_facts)
-                    facts_count = len(all_facts)
-                except Exception:
-                    facts_count = 0
-
-                elapsed = time.time() - t0
-                return {
-                    "ok": True,
-                    "action": "structural_ingest",
-                    "total_functions": len(funcs_data),
-                    "ingested": ingested,
-                    "db_path": db_path,
-                    "l1_indexed": len(funcs_data),
-                    "l2_facts_added": facts_count,
-                    "elapsed_seconds": elapsed,
-                }
+                return _do_structural_ingest()
 
             if action == "structural_refresh":
                 if addr:
-                    extract_res = intelligence(action="structural_extract_single", addr=addr)
+                    extract_res = _do_structural_extract_single(addr)
                     if extract_res.get("error") or not extract_res.get("ok"):
                         return extract_res
                     func_data = extract_res.get("function")
@@ -992,7 +1085,7 @@ def intelligence(
 
                     return {"ok": True, "refreshed": 1, "ea": addr}
                 else:
-                    return intelligence(action="structural_ingest")
+                    return _do_structural_ingest()
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
