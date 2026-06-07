@@ -1999,7 +1999,7 @@ class TinyEmulator:
             'rax': 0, 'rbx': 0, 'rcx': 0, 'rdx': 0,
             'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': EMU_STACK_INIT_RSP,
             'r8': 0, 'r9': 0, 'r10': 0, 'r11': 0, 'r12': 0, 'r13': 0, 'r14': 0, 'r15': 0,
-            'zf': 0, 'sf': 0, 'cf': 0
+            'zf': 0, 'sf': 0, 'cf': 0, 'of': 0, 'pf': 0
         }
         self.mem = {}  # address -> byte
         self.written_addrs = set()
@@ -2974,20 +2974,55 @@ class TinyEmulator:
             self.flags_tainted = t_res
             self.flags_sym = sym_res if t_res else None
             
-        elif mnem in ("jmp", "je", "jne", "jz", "jnz", "jb", "jae"):
+        elif mnem in (
+            "jmp", "je", "jne", "jz", "jnz", "jb", "jae",
+            "ja", "jbe", "jg", "jl", "jge", "jle",
+            "jo", "jno", "js", "jns", "jp", "jnp", "jcxz",
+        ):
             target = self.parse_op(insn, 0)
             jump = False
+            zf = self.regs['zf']
+            sf = self.regs['sf']
+            cf = self.regs['cf']
+            of = self.regs['of']
+            pf = self.regs['pf']
             if mnem == "jmp":
                 jump = True
             elif mnem in ("je", "jz"):
-                jump = (self.regs['zf'] == 1)
+                jump = (zf == 1)
             elif mnem in ("jne", "jnz"):
-                jump = (self.regs['zf'] == 0)
+                jump = (zf == 0)
             elif mnem == "jb":
-                jump = (self.regs['cf'] != 0)
-            elif mnem == "jae":
-                jump = (self.regs['cf'] == 0)
-            
+                jump = (cf != 0)
+            elif mnem in ("jae", "jnb", "jnc"):
+                jump = (cf == 0)
+            elif mnem == "ja":
+                jump = (cf == 0 and zf == 0)
+            elif mnem == "jbe":
+                jump = (cf != 0 or zf == 1)
+            elif mnem == "js":
+                jump = (sf != 0)
+            elif mnem == "jns":
+                jump = (sf == 0)
+            elif mnem == "jo":
+                jump = (of != 0)
+            elif mnem == "jno":
+                jump = (of == 0)
+            elif mnem == "jp":
+                jump = (pf != 0)
+            elif mnem == "jnp":
+                jump = (pf == 0)
+            elif mnem == "jl":
+                jump = (sf != of)
+            elif mnem == "jge":
+                jump = (sf == of)
+            elif mnem == "jg":
+                jump = (zf == 0 and sf == of)
+            elif mnem == "jle":
+                jump = (zf != 0 or sf != of)
+            elif mnem == "jcxz":
+                jump = (self.regs['rcx'] == 0)
+
             if self.flags_tainted:
                 taken_c, fallthrough_c = get_branch_constraints(mnem, self.flags_sym)
                 if jump:
@@ -2996,7 +3031,7 @@ class TinyEmulator:
                 else:
                     if fallthrough_c:
                         self.path_constraints.append((self.ip, fallthrough_c))
-            
+
             if jump and self.func_start <= target < self.func_end:
                 next_ip = target
 
@@ -3078,13 +3113,17 @@ class TinyEmulator:
                 
                 mnem = idc.print_insn_mnem(ea).lower()
                 
-                if mnem in ("je", "jne", "jz", "jnz", "jb", "jae", "js", "jns", "jg", "jge", "jl", "jle"):
+                if mnem in (
+                    "je", "jne", "jz", "jnz", "jb", "jae",
+                    "ja", "jbe", "jg", "jl", "jge", "jle",
+                    "jo", "jno", "js", "jns", "jp", "jnp", "jcxz",
+                ):
                     target = current_emu.parse_op(insn, 0)
                     next_ip = ea + insn.size
-                    
+
                     if current_emu.flags_tainted:
                         taken_constraint, fallthrough_constraint = get_branch_constraints(mnem, current_emu.flags_sym)
-                        
+
                         if current_emu.func_start <= target < current_emu.func_end:
                             emu_taken = current_emu.clone()
                             emu_taken.ip = target
@@ -3092,28 +3131,58 @@ class TinyEmulator:
                             if taken_constraint:
                                 emu_taken.path_constraints.append((ea, taken_constraint))
                             paths.append(emu_taken)
-                        
+
                         emu_fallthrough = current_emu.clone()
                         emu_fallthrough.ip = next_ip
                         emu_fallthrough.flags_tainted = False
                         if fallthrough_constraint:
                             emu_fallthrough.path_constraints.append((ea, fallthrough_constraint))
                         paths.append(emu_fallthrough)
-                        
+
                         current_emu.opaque_predicates[ea] = "symbolic_branch"
                         break
                     else:
-                        jump = False
+                        zf = current_emu.regs['zf']
+                        sf = current_emu.regs['sf']
+                        cf = current_emu.regs['cf']
+                        of = current_emu.regs['of']
+                        pf = current_emu.regs['pf']
                         if mnem in ("je", "jz"):
-                            jump = (current_emu.regs['zf'] == 1)
+                            jump = (zf == 1)
                         elif mnem in ("jne", "jnz"):
-                            jump = (current_emu.regs['zf'] == 0)
+                            jump = (zf == 0)
                         elif mnem == "jb":
-                            jump = (current_emu.regs['cf'] != 0)
-                        elif mnem == "jae":
-                            jump = (current_emu.regs['cf'] == 0)
+                            jump = (cf != 0)
+                        elif mnem in ("jae", "jnb", "jnc"):
+                            jump = (cf == 0)
+                        elif mnem == "ja":
+                            jump = (cf == 0 and zf == 0)
+                        elif mnem == "jbe":
+                            jump = (cf != 0 or zf == 1)
+                        elif mnem == "js":
+                            jump = (sf != 0)
+                        elif mnem == "jns":
+                            jump = (sf == 0)
+                        elif mnem == "jo":
+                            jump = (of != 0)
+                        elif mnem == "jno":
+                            jump = (of == 0)
+                        elif mnem == "jp":
+                            jump = (pf != 0)
+                        elif mnem == "jnp":
+                            jump = (pf == 0)
+                        elif mnem == "jl":
+                            jump = (sf != of)
+                        elif mnem == "jge":
+                            jump = (sf == of)
+                        elif mnem == "jg":
+                            jump = (zf == 0 and sf == of)
+                        elif mnem == "jle":
+                            jump = (zf != 0 or sf != of)
+                        elif mnem == "jcxz":
+                            jump = (current_emu.regs['rcx'] == 0)
                         else:
-                            jump = (current_emu.regs['zf'] == 1)
+                            jump = (zf == 1)
                             
                         current_emu.opaque_predicates[ea] = "always_taken" if jump else "always_fallthrough"
                         
