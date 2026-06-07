@@ -1977,7 +1977,7 @@ class TinyEmulator:
             'rax': 0, 'rbx': 0, 'rcx': 0, 'rdx': 0,
             'rsi': 0, 'rdi': 0, 'rbp': 0, 'rsp': 0x7ffffff0,
             'r8': 0, 'r9': 0, 'r10': 0, 'r11': 0, 'r12': 0, 'r13': 0, 'r14': 0, 'r15': 0,
-            'zf': 0, 'sf': 0
+            'zf': 0, 'sf': 0, 'cf': 0
         }
         self.mem = {}  # address -> byte
         self.written_addrs = set()
@@ -2560,15 +2560,15 @@ class TinyEmulator:
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1)
             res = (val0 + val1) if mnem == "add" else (val0 - val1)
-            
+
             t0 = self.parse_op_taint(insn, 0)
             t1 = self.parse_op_taint(insn, 1)
             t_res = t0 or t1
-            
+
             sym0 = self.get_op_sym(insn, 0)
             sym1 = self.get_op_sym(insn, 1)
             sym_res = (mnem, sym0, sym1)
-            
+
             if insn.ops[0].type in (ida_ua.o_phrase, ida_ua.o_displ, ida_ua.o_mem):
                 addr = self.parse_op(insn, 0)
                 size = self.dtype_size(insn.ops[0].dtype)
@@ -2579,7 +2579,11 @@ class TinyEmulator:
                 self.set_reg(op0_str, res)
                 self.set_reg_taint(op0_str, t_res)
                 self.set_op_sym(insn, 0, sym_res, t_res)
-            self.regs['zf'] = 1 if (res & 0xffffffff) == 0 else 0
+            self.regs['zf'] = 1 if (res & self.arch_mask) == 0 else 0
+            if mnem == "add":
+                self.regs['cf'] = 1 if (val0 + val1) > self.arch_mask else 0
+            else:
+                self.regs['cf'] = 1 if val0 < val1 else 0
             self.flags_tainted = t_res
             self.flags_sym = sym_res if t_res else None
             
@@ -2612,16 +2616,18 @@ class TinyEmulator:
             diff = val0 - val1
             self.regs['zf'] = 1 if diff == 0 else 0
             self.regs['sf'] = 1 if diff < 0 else 0
+            self.regs['cf'] = 1 if val0 < val1 else 0
             self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
             sym0 = self.get_op_sym(insn, 0)
             sym1 = self.get_op_sym(insn, 1)
             self.flags_sym = ("cmp", sym0, sym1) if self.flags_tainted else None
-            
+
         elif mnem == "test":
             val0 = self.parse_op(insn, 0)
             val1 = self.parse_op(insn, 1)
             res = val0 & val1
             self.regs['zf'] = 1 if res == 0 else 0
+            self.regs['cf'] = 0
             self.flags_tainted = self.parse_op_taint(insn, 0) or self.parse_op_taint(insn, 1)
             sym0 = self.get_op_sym(insn, 0)
             sym1 = self.get_op_sym(insn, 1)
@@ -2932,9 +2938,9 @@ class TinyEmulator:
             elif mnem in ("jne", "jnz"):
                 jump = (self.regs['zf'] == 0)
             elif mnem == "jb":
-                jump = (self.regs['sf'] != 0)
+                jump = (self.regs['cf'] != 0)
             elif mnem == "jae":
-                jump = (self.regs['sf'] == 0)
+                jump = (self.regs['cf'] == 0)
             
             if self.flags_tainted:
                 taken_c, fallthrough_c = get_branch_constraints(mnem, self.flags_sym)
@@ -3055,9 +3061,9 @@ class TinyEmulator:
                         elif mnem in ("jne", "jnz"):
                             jump = (current_emu.regs['zf'] == 0)
                         elif mnem == "jb":
-                            jump = (current_emu.regs['sf'] != 0)
+                            jump = (current_emu.regs['cf'] != 0)
                         elif mnem == "jae":
-                            jump = (current_emu.regs['sf'] == 0)
+                            jump = (current_emu.regs['cf'] == 0)
                         else:
                             jump = (current_emu.regs['zf'] == 1)
                             
