@@ -23,11 +23,92 @@ VERSION_TUPLE = tuple[int, int, int]
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 # IDA build version: e.g. 9.3.260421.be7de18d  (major.minor.YYMMDD.shorthash)
 _BUILD_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d{6})\.([0-9a-f]{6,8})")
+_VERSION_DIGITS_RE = re.compile(r"\d+")
+
+
+def parse_version(s: str) -> tuple[int, ...]:
+    """Extract every run of digits in `s` as an int tuple.
+
+    Tolerates oddball IDA version strings — `9.0.20240812`, `9.0sp1`,
+    `9.3rc2`, plain `9` — without raising IndexError (audit §6.5).
+    Returns (0,) for any string with no digits at all so callers can
+    still compare without a None guard.
+    """
+    parts = _VERSION_DIGITS_RE.findall(s)
+    return tuple(int(p) for p in parts) if parts else (0,)
+
 
 # State file written into install_root so subsequent installer runs (or
 # any process that needs to know which IDA is wired) can find the choice
 # without re-prompting.
 STATE_FILE = "ida-install.json"
+
+
+def _safe_roots() -> list[Path]:
+    """Filesystem roots a discovered IDA install is allowed to resolve into.
+
+    A symlink under ~/Applications or Program Files that points outside
+    these roots is treated as adversarial — the installer refuses to
+    wire it as IDADIR.  Audit §6.5.
+    """
+    roots: list[Path] = []
+    try:
+        roots.append(Path.home().resolve())
+    except OSError:
+        pass
+    if sys.platform == "darwin":
+        roots.append(Path("/Applications"))
+    elif sys.platform.startswith("linux"):
+        roots.append(Path("/opt"))
+        roots.append(Path("/usr/local"))
+        roots.append(Path("/usr"))
+    else:
+        for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "LOCALAPPDATA"):
+            v = os.environ.get(env)
+            if v:
+                roots.append(Path(v))
+    # Always allow the temp / staging dirs used by tests.  These do not
+    # widen the production attack surface because production never
+    # resolves a candidate to /tmp during a real install.
+    for env in ("TMPDIR", "TEMP", "TMP"):
+        v = os.environ.get(env)
+        if v:
+            roots.append(Path(v))
+    cleaned: list[Path] = []
+    for r in roots:
+        try:
+            cleaned.append(r.resolve())
+        except OSError:
+            continue
+    return cleaned
+
+
+def _resolves_under_safe_root(candidate: Path) -> bool:
+    """Return True iff `candidate` (or its realpath) lives under a safe root.
+
+    Resolves symlinks with both os.path.realpath() and Path.resolve()
+    so we catch (a) basic symlink redirection and (b) `..` traversal in
+    the candidate's literal path that would otherwise re-anchor it
+    elsewhere after resolve().
+    """
+    try:
+        realpath = Path(os.path.realpath(str(candidate)))
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    safe_roots = _safe_roots()
+    if not safe_roots:
+        # No allow-list configured — fail open with a defensive log
+        # rather than refusing every install.
+        return True
+    for check in (realpath, resolved):
+        for root in safe_roots:
+            try:
+                check.relative_to(root)
+                return True
+            except ValueError:
+                continue
+    return False
 
 
 @dataclass(frozen=True)
@@ -245,7 +326,7 @@ def _scan_home() -> Iterable[Path]:
     for p in sorted(home.glob("ida-*")):
         if p.is_dir() and p.name.count(".") >= 1:
             candidates.append(p)
-    # Quarantine duplicates
+    # Quarantine duplicates and reject symlink-redirected dirs.
     seen: set[Path] = set()
     for p in candidates:
         try:
@@ -253,6 +334,8 @@ def _scan_home() -> Iterable[Path]:
         except OSError:
             continue
         if rp in seen:
+            continue
+        if not _resolves_under_safe_root(p):
             continue
         seen.add(rp)
         yield rp
@@ -293,6 +376,8 @@ def _scan_system_dirs() -> Iterable[Path]:
         except OSError:
             continue
         if rp in seen:
+            continue
+        if not _resolves_under_safe_root(p):
             continue
         seen.add(rp)
         yield rp
@@ -417,16 +502,19 @@ def select_ida_install(
         return install
 
     if explicit_version:
-        parts = explicit_version.split(".")
-        try:
-            want = tuple(int(p) for p in parts)
-        except ValueError as exc:
-            raise RuntimeError(f"Invalid --ida-version {explicit_version!r}: {exc}") from exc
+        # parse_version tolerates odd inputs (`9.0sp1`, trailing chars)
+        # by extracting digit runs; an empty result becomes (0,) so we
+        # can still compare without raising IndexError (audit §6.5).
+        want = parse_version(explicit_version)
+        if want == (0,):
+            raise RuntimeError(
+                f"Invalid --ida-version {explicit_version!r}: no version digits found"
+            )
         if len(want) == 1:
             matches = [i for i in installs if i.version[0] == want[0]]
         elif len(want) == 2:
             matches = [i for i in installs if i.version == want]
-        elif len(want) == 3:
+        elif len(want) >= 3:
             # Third component matches the start of the build date (e.g. "9.3.260421")
             target_build_prefix = str(want[2])
             matches = [
