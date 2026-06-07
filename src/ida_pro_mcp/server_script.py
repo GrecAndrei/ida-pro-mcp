@@ -33,7 +33,11 @@ _tools_root = os.path.join(_mcp_root, "tools")
 for p in [_src_root, _pkg_root, _mcp_root, _tools_root]:
     if p not in sys.path: sys.path.insert(0, p)
 
-os.environ["IDA_MCP_BYPASS_SYNC"] = "1"
+# IDA_MCP_BYPASS_SYNC is set by the host runtime (server_runtime.py) when
+# launching IDA. Do not force it here at module import: the env var
+# disables the @idaread/@idawrite safety wrapper globally, so it should
+# only be active for code paths that opt in via the bypass_sync()
+# context manager in ida_mcp.sync.
 
 TOOLS = {}
 TOOL_ALIASES = {

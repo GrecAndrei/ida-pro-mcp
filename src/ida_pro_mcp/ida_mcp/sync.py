@@ -1,7 +1,9 @@
 import logging
+import os
 import queue
 import functools
 import threading
+from contextlib import contextmanager
 from enum import IntEnum
 import idaapi
 import ida_kernwin
@@ -18,7 +20,17 @@ except ImportError:
 # IDA Synchronization & Error Handling
 # ============================================================================
 
-ida_major, ida_minor = map(int, idaapi.get_kernel_version().split("."))
+def _parse_kernel_version():
+    parts = idaapi.get_kernel_version().split(".")
+    nums = []
+    for p in parts[:2]:
+        digits = "".join(c for c in p if c.isdigit())
+        nums.append(int(digits) if digits else 0)
+    while len(nums) < 2:
+        nums.append(0)
+    return nums[0], nums[1]
+
+ida_major, ida_minor = _parse_kernel_version()
 
 
 class IDAError(McpToolError):
@@ -46,17 +58,49 @@ class IDASafety(IntEnum):
 call_stack = queue.LifoQueue()
 
 
-import os
+# Bypass-synchronization knob. Originally a module-level constant, but a
+# constant is load-order-sensitive and defeats the @idaread/@idawrite safety
+# net for every tool call. We now check the env var at call time and expose
+# ``bypass_sync()`` so callers can scope the bypass to a specific block.
+BYPASS_SYNC_ENV = "IDA_MCP_BYPASS_SYNC"
 
-# Global flag to force-bypass synchronization (set via env var)
-# This handles the "split brain" module import issue where ida_mcp.sync != sync
-BYPASS_SYNC = os.environ.get("IDA_MCP_BYPASS_SYNC") == "1"
+
+def is_bypass_sync() -> bool:
+    return os.environ.get(BYPASS_SYNC_ENV) == "1"
+
+
+# Backwards-compat alias. Existing code that does ``from sync import
+# BYPASS_SYNC`` still gets a truthy value at import time, matching the old
+# behavior. The runtime check is what matters for the safety wrapper.
+BYPASS_SYNC = is_bypass_sync()
+
+
+@contextmanager
+def bypass_sync(reason: str = ""):
+    """Temporarily set IDA_MCP_BYPASS_SYNC=1 for the duration of the block.
+
+    Use this only for code paths that must call into the IDA SDK from a
+    non-main thread (e.g. a background crawler) and therefore cannot use
+    the @idaread/@idawrite safety wrapper.
+    """
+    prev = os.environ.get(BYPASS_SYNC_ENV)
+    os.environ[BYPASS_SYNC_ENV] = "1"
+    try:
+        if reason:
+            logger.debug("bypass_sync entered: %s", reason)
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop(BYPASS_SYNC_ENV, None)
+        else:
+            os.environ[BYPASS_SYNC_ENV] = prev
+
 
 def _sync_wrapper(ff, safety_mode: IDASafety):
     """Call a function ff with a specific IDA safety_mode."""
     # DEADLOCK PROTECTION: Nuclear Option
     # If the server script says we are in the main thread, WE ARE.
-    if BYPASS_SYNC:
+    if is_bypass_sync():
         logger.info(f"Bypassing sync for {ff.__name__}")
         return ff()
 
