@@ -59,6 +59,18 @@ def _resolve_max_rpc_bytes() -> int:
 MAX_RPC_REQUEST_SIZE = _resolve_max_rpc_bytes()
 
 
+def _popen_new_session_kwargs() -> dict:
+    """Return the kwargs that put a Popen child in its own process group.
+
+    Without this, os.killpg() on POSIX will signal the MCP server's own
+    group (taking out the parent) and taskkill /T on Windows will walk
+    siblings instead of just the IDA tree.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
 def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> None:
     """Kill a subprocess and all of its descendants.
 
@@ -90,20 +102,33 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
         except Exception:
             pass
         return
-    # POSIX: assume the child was placed in its own process group.
+    # POSIX: child must be in its own process group (set via
+    # _popen_new_session_kwargs in the matching Popen call). If the group
+    # is gone (ProcessLookupError) the child already exited; do not try
+    # to kill the parent's group.
     try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except Exception:
-        pass
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        log_rpc(f"Process group already gone for pid {pid}; nothing to kill")
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        log_rpc(f"Process group vanished after getpgid for pid {pid}")
+        return
+    except Exception as exc:
+        log_rpc(f"killpg(SIGTERM) failed for pid {pid}: {exc}")
     try:
         proc.wait(timeout=grace_seconds)
         return
     except Exception:
         pass
     try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
-    except Exception:
-        pass
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        log_rpc(f"Process group vanished before SIGKILL for pid {pid}")
+    except Exception as exc:
+        log_rpc(f"killpg(SIGKILL) failed for pid {pid}: {exc}")
 
 
 class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
@@ -1308,7 +1333,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")
             server_process = subprocess.Popen(
-                cmd, stdout=stdout_fh, stderr=stderr_fh, env=env
+                cmd,
+                stdout=stdout_fh,
+                stderr=stderr_fh,
+                env=env,
+                **_popen_new_session_kwargs(),
             )
 
             # WAIT FOR STARTUP using ping
@@ -1431,7 +1460,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")
             server_process = subprocess.Popen(
-                cmd, stdout=stdout_fh, stderr=stderr_fh, env=env
+                cmd,
+                stdout=stdout_fh,
+                stderr=stderr_fh,
+                env=env,
+                **_popen_new_session_kwargs(),
             )
 
             startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
