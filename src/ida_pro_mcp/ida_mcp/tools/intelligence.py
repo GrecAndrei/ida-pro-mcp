@@ -418,7 +418,22 @@ def intelligence(
         classifier = BehaviorClassifier.instance(embedder)
 
         def _index_for_current_idb():
+            # Audit §5.2 (idb path): previously this returned
+            # FunctionEmbeddingIndex(".embeddings.db", ...) when the IDB
+            # path was empty (no open database, headless probe). That
+            # writes the per-binary embedding index to CWD and silently
+            # cross-pollutes any other session that lands in the same
+            # directory. Fail loudly instead — `intelligence_status`
+            # already wraps this call in try/except so its index-count
+            # field gracefully shows zero; explicit indexing actions
+            # (index_function / index_batch / similar_functions /
+            # semantic_search / export_index_summary / evidence_card)
+            # surface the error to the caller via handle_error().
             idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB) or ""
+            if not idb_path:
+                raise RuntimeError(
+                    "no active IDB path; embedding index requires an open database"
+                )
             db_path = idb_path + ".embeddings.db"
             return FunctionEmbeddingIndex(db_path, embedder), db_path
 
