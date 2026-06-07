@@ -436,6 +436,15 @@ Every tool call is logged as JSONL to `<cache_dir>/audit/YYYY-MM/audit_YYYY-MM-D
 
 Logs rotate daily and are pruned when total size exceeds a configurable cap.
 
+### Security controls
+
+- **Memory tool path validation:** `/memory` tool enforces an allowlist root (`IDA_MCP_MEMORY_ROOT`, default IDB dir) — no arbitrary file read/write.
+- **RPC size caps:** Both IDA-side (`IDA_MCP_MAX_RPC_REQUEST_BYTES`) and host-side (`IDA_MCP_MAX_RPC_BYTES`) enforce 64 MB request/response limits.
+- **BYPASS_SYNC scoped:** The `@idaread`/`@idawrite` safety net is active by default — bypass is scoped to specific threads via a `bypass_sync()` context manager.
+- **Federation path allowlist:** `blackboard_federate` requires `IDA_MCP_FEDERATION_ALLOWED_ROOTS` — disabled by default.
+- **Atomic config writes:** MCP client config patching uses tmp/fsync/replace to avoid corruption on crash.
+- **Concurrency controls:** Shared session state (`_session_inflight_calls`) is lock-protected against lost-update races.
+
 ### Token-bucket rate limiting
 
 A token-bucket rate limiter (`host/rate_limit.py`) prevents runaway call volumes. Per-tool and aggregate rate limits with configurable refill rates. Rate-limited calls return structured errors with retry hints.

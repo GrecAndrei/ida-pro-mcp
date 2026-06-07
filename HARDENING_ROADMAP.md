@@ -33,6 +33,24 @@ This roadmap captures a stability-first, tool-surface-cleanup-first program for 
 4. Updated stale docs counts to current schema values:
    - `docs/TOOLS_REFERENCE.md`.
    - `docs/TECHNICAL_REFERENCE.md`.
+5. **Codebase audit (2026-06-07):** 748-line review found ~120 issues (6 Critical, ~30 High, ~50 Medium, ~30 Low). See `CODEBASE_AUDIT.md`.
+6. **Quick-win fixes (Phase 1):** 6 parallel workstreams fixed ~40 findings:
+   - Memory tool path validation (allowlist + 64 MB cap)
+   - RPC size cap (IDA_MCP_MAX_RPC_BYTES)
+   - Process-group isolation for IDA subprocesses
+   - BYPASS_SYNC scoped to context manager (no longer global)
+   - fsync + atomic-rename on all session metadata writes
+   - Consistent BlackboardStore connection closing
+   - idb.py ELF min_ea=0 bug fix
+   - trace_analysis.py emulator: 13 bug fixes
+   - intelligence.py: federation path validation, dispatch refactor
+   - Installer: zip-slip guard, download size cap, atomic config writes
+   - Test infra: pytest-timeout, conftest fixtures, cleaned test bodies
+7. **Architectural refactors (Phase 2):**
+   - `_handle_session` decomposed from 1489-line if/elif into 14-line dispatch table
+   - `proposal_accept` order fix (verify before execute)
+   - Concurrency: `_session_inflight_calls` lock to prevent lost-update races
+   - Dead code removal, classifiers downgraded from Production/Stable to Beta
 
 ## Phase Plan
 

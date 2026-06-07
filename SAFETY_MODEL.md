@@ -51,26 +51,65 @@ Outcome: reduces risk of unauthorized local request injection.
 
 Outcome: reduces memory abuse and malformed payload handling risk.
 
-### 3) Schema and metadata integrity checks
+### 3) Tools/filesystem access control
+
+- Memory tool validates paths against an allow root (`IDA_MCP_MEMORY_ROOT`, defaults to IDB dir).
+- All paths are canonicalised via `os.path.realpath`; symlinks outside the root are rejected.
+- Read/write operations are capped at 64 MB per request.
+- Error paths return sanitised messages (no `traceback.format_exc()`).
+
+Outcome: prevents arbitrary file read/write via the `/memory` tool surface. (`[FIXED: 1A.1]`)
+
+### 4) Federation / blackboard path control
+
+- `intelligence(action="blackboard_federate")` validates all peer paths against `IDA_MCP_FEDERATION_ALLOWED_ROOTS`.
+- Default is empty (federation disabled); users must explicitly opt in.
+
+Outcome: prevents SQLite `ATTACH`-based path traversal via the federation surface. (`[FIXED: 1D.1]`)
+
+### 5) RPC request size limits (host side)
+
+- Host-side `_send_rpc_raw` enforces a maximum RPC request/response size (`IDA_MCP_MAX_RPC_BYTES`, default 64 MB).
+- Complements the existing IDA-side `IDA_MCP_MAX_RPC_REQUEST_BYTES` check for defence in depth.
+
+Outcome: reduces OOM risk from oversized payloads on the host. (`[FIXED: 1A.2]`)
+
+### 6) BYPASS_SYNC scoping
+
+- `BYPASS_SYNC` is no longer set unconditionally at module import (`server_script.py:36`).
+- A `bypass_sync()` context manager in `sync.py` scopes the bypass to the specific thread/call site.
+
+Outcome: the `@idaread`/`@idawrite` safety net is active by default. (`[FIXED: 1A.4]`)
+
+### 7) Concurrency controls
+
+- `_session_inflight_calls` increment/decrement is protected by `_runtime_lock` to prevent lost-update races.
+- The idle-index worker always sees an accurate in-flight counter.
+
+Outcome: eliminates false idle detection during concurrent tool calls. (`[FIXED: 2C]`)
+
+### 8) Schema and metadata integrity checks
 
 - Tool actions/descriptions are centralized in `schemas_data.py`.
 - CI runs schema integrity validation and generated-doc drift checks.
 
 Outcome: reduces contract mismatch and unsafe dispatch behavior from stale metadata.
 
-### 4) Regression testing
+### 9) Regression testing
 
 - Static and AST regression tests enforce critical tool contract expectations.
 - CI test matrix validates behavior on multiple Python versions.
+- Concurrency stress tests (`test_concurrency.py`) verify lock-protected shared state.
 
 Outcome: catches safety regressions before release.
 
-### 5) Repository hygiene
+### 10) Repository hygiene
 
 - Local-only artifacts and private path leaks are removed/ignored.
 - Release metadata and license policy are explicitly maintained.
+- Classifier downgraded from `Production/Stable` to `Beta`.
 
-Outcome: lowers accidental disclosure risk.
+Outcome: lowers accidental disclosure risk; honest about maturity.
 
 ## Operational Safety Guidance
 

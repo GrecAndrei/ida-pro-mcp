@@ -24,6 +24,7 @@ This project has two primary runtime layers:
 - `src/ida_pro_mcp/host/server_*.py`
   - Host-side handlers by concern (session/workflow/dispatch/semantic/etc.).
   - Prefer adding behavior in a dedicated mixin file over enlarging one giant handler.
+  - `server_session.py` uses a `_SESSION_ACTIONS` dispatch table (refactored from a 1489-line if/elif ladder in Phase 2A).
 
 - `src/ida_pro_mcp/host/schemas*.py`
   - Tool registry metadata (names, actions, argument schemas, aliases).
@@ -43,7 +44,6 @@ The largest orchestration surfaces are currently:
 
 - `src/ida_pro_mcp/ida_mcp/tools/firmware_view.py`
 - `src/ida_pro_mcp/ida_mcp/tools/llm_helpers.py`
-- `src/ida_pro_mcp/host/server_session.py`
 - `src/ida_pro_mcp/host/server_workflow.py`
 - `src/ida_pro_mcp/ida_mcp/tools/code.py`
 
