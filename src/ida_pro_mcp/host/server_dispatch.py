@@ -191,13 +191,6 @@ class ServerDispatchMixin:
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}
                 res = truncate_response(res, max_tokens=self.default_truncate_tokens)
-                # Preference observation for IDA-side tools
-                if isinstance(res, dict):
-                    self._observe_preference(
-                        tool_name,
-                        str(kwargs.get("action") or ""),
-                        res,
-                    )
                 return res
             except Exception as e:
                 proc = runtime.get("process")
@@ -1104,38 +1097,8 @@ class ServerDispatchMixin:
             except Exception:
                 pass
 
-            # ---- Active Blackboard Kernel (preflight) ----
-            pre = {"decision": "allow"}
 
-            high_impact_tools = {
-                "modify",
-                "funcs",
-                "segments",
-                "bulk",
-                "annotation",
-                "memory",
-                "patch",
-                "edit",
-            }
-            # Never block state-persistence helpers; they are the mechanism to satisfy obligations.
-            if tool_name in {"blackboard", "session", "bookmarks", "batch", "predictor", "workflow"}:
-                pre = {"decision": "allow"}
-            if pre.get("decision") == "block_high_impact":
-                # Guardrail should only hard-block high-impact write surfaces.
-                if tool_name not in high_impact_tools:
-                    pre = {"decision": "allow"}
-            if pre.get("decision") == "block_high_impact":
-                hint = pre.get("hint", "Resolve required receipts via supporting read/exploration actions before high-impact writes.")
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "Action blocked by active blackboard obligations (session state contract)",
-                    hint=hint,
-                    details={
-                        "blocked_by": pre.get("blocked_by", []),
-                        "required_receipts": pre.get("required_receipts", []),
-                        "attention_debt": pre.get("debt", 0.0),
-                    },
-                )
+
 
             # ---- Silent Tool Rerouting ----
             action = args.get("action", "")

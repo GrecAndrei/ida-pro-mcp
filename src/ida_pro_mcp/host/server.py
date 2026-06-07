@@ -577,13 +577,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                             else:
                                 self._session_inflight_calls.pop(sid_hint_text, None)
                             self._session_last_activity[sid_hint_text] = time.time()
-                # Preference observation: compare next call bridges with injected entries
                 if isinstance(call_args, dict):
-                    self._observe_preference(
-                        resolved_tn or str(tn or ""),
-                        str(call_args.get("action") or ""),
-                        res if isinstance(res, dict) else {},
-                    )
                     res = self._cache_next_page(resolved_tn or "", call_args, res)
                     self._record_activity(resolved_tn or "", call_args, res)
             raw_res = res

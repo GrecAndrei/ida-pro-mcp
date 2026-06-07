@@ -277,10 +277,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         except Exception:
             pass
 
-    def _observe_preference(self, tool_name: str, action: str, payload: dict) -> None:
-        """No-op stub — preference feedback now runs via auto_reward_for_addr in _record_activity."""
-        pass
-
     def _collect_hex_addresses(self, value: Any, max_items: int = 8) -> list[str]:
         found: list[str] = []
 
