@@ -2723,9 +2723,10 @@ class TinyEmulator:
         elif mnem in ("shl", "shr", "sar"):
             op0_str = idc.print_operand(self.ip, 0)
             val0 = self.parse_op(insn, 0)
-            val1 = self.parse_op(insn, 1) & 63
             op_width = self.get_op_width(insn, 0)
             op_mask = (1 << op_width) - 1
+            shift_count_mask = 0x3f if op_width == 64 else 0x1f
+            val1 = self.parse_op(insn, 1) & shift_count_mask
             if mnem == "shl":
                 res = (val0 << val1) & op_mask
             elif mnem == "shr":
