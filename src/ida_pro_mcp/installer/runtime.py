@@ -218,30 +218,48 @@ def find_embed_model(install_root: Path) -> str:
 
     home = Path.home()
     model_filenames = ("bge-code-v1-q8_0.gguf", "bge-code-v1.gguf")
-    # Keep discovery deterministic and workspace-scoped by default, but also
-    # check common user-level locations so the install wizard can auto-detect
-    # an existing bge-code-v1 on Windows / macOS / Linux.
-    bases = [
+    # Scope the discovery walk to project-specific directories and an
+    # opt-in env var (audit §6.8). The previous version scanned the
+    # user's entire ~/Downloads and ~/Documents, which is slow on
+    # network shares and follows arbitrary symlinks.
+    #
+    # IDA_MCP_EMBED_SEARCH_PATHS is a PATH-style list (':' on POSIX,
+    # ';' on Windows). Each entry is a directory; we check it at the
+    # top level only (no recursion) for the candidate filenames.
+    bases: list[Path] = [
         install_root,
         install_root / "models",
         install_root.parent,
         home / "models",
-        home / "Downloads",
-        home / "Documents",
+        home / "Downloads" / "ida-pro-mcp",
+        home / "Documents" / "ida-pro-mcp",
     ]
+    extra = os.environ.get("IDA_MCP_EMBED_SEARCH_PATHS", "").strip()
+    if extra:
+        sep = ";" if sys.platform == "win32" else ":"
+        for entry in extra.split(sep):
+            entry = entry.strip()
+            if entry:
+                bases.append(Path(entry).expanduser())
     seen: set[Path] = set()
     for base in bases:
         if not base:
             continue
+        # Reject symlinks that escape the install or home tree before
+        # touching the filesystem.
+        try:
+            base_resolved = base.resolve()
+        except OSError:
+            continue
+        if base_resolved in seen:
+            continue
+        seen.add(base_resolved)
         for fn in model_filenames:
             c = base / fn
             try:
                 rp = c.resolve()
             except OSError:
                 continue
-            if rp in seen:
-                continue
-            seen.add(rp)
             if c.is_file():
                 return str(c)
 
