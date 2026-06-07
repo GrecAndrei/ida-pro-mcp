@@ -27,6 +27,18 @@ dependencies = [
     "numpy>=1.26.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.3.0",
+]
+
 [project.urls]
 Repository = "https://github.com/GrecAndrei/ida-pro-mcp"
 Issues = "https://github.com/GrecAndrei/ida-pro-mcp/issues"
