@@ -821,7 +821,8 @@ class TestIDAIntegration:
 
     def test_code_decompile(self, ida_client):
         result = ida_client.call_tool("code", action="decompile", addr="0x401000")
-        assert isinstance(result, dict)
+        assert isinstance(result, dict), f"Expected dict, got {result!r}"
+        assert result.get("ok") is True, f"Expected ok=True, got {result!r}"
 
     def test_search_bytes(self, ida_client):
         result = ida_client.call_tool("search", action="bytes", pattern="48 89 5C 24")
@@ -908,10 +909,14 @@ class TestProductionHardening:
         # Prune with a low max
         result = mcp_client.call_tool("blackboard", action="prune", max_entries=3)
         # "ok" is dropped by default for context efficiency; check pruned count
-        assert result.get("pruned", 0) >= 2
-        # Verify only 3 remain
+        assert result.get("pruned", 0) == 2, f"Expected 2 pruned, got {result.get('pruned', 0)!r} (full: {result!r})"
+        # Verify only 3 remain. The list response uses 'entries' (a list) and a
+        # 'summary.categories' map; the legacy 'count' key is not populated.
         list_result = mcp_client.call_tool("blackboard", action="list", category="test")
-        assert list_result.get("count", 0) <= 3
+        remaining = list_result.get("summary", {}).get("categories", {}).get("test", 0)
+        if not remaining:
+            remaining = len(list_result.get("entries", []))
+        assert remaining == 3, f"Expected 3 remaining, got {remaining!r} (full: {list_result!r})"
         # Clean up
         mcp_client.call_tool("blackboard", action="clear", category="test")
 
@@ -922,6 +927,7 @@ class TestProductionHardening:
         )
         # session discover doesn't include pointer notes, but verify mode is parsed
         assert "Rate limit exceeded" not in str(result)
+        assert result.get("ok") is True, f"Expected ok=True with guardrail_mode=off, got {result!r}"
 
     def test_guardrail_strict_blocks_writes(self, mcp_client):
         # Disable auto-transition and reset phase to scout to bypass blackboard phase gates
@@ -936,6 +942,8 @@ class TestProductionHardening:
             _risk_ack=True,  # Bypass policy preflight block to hit guardrail check
         )
         assert "guardrail" in str(result).lower() or "session" in str(result).lower()
+        # Strengthen: a blocked write must NOT claim ok=True, and must carry a failure code
+        assert result.get("ok") is not True, f"Expected guardrail to block the write (ok!=True), got {result!r}"
 
     def test_blackboard_merge(self, mcp_client):
         # Write duplicate entries
@@ -950,4 +958,4 @@ class TestProductionHardening:
         result = mcp_client.call_tool("blackboard", action="merge", category="dup")
         # merge returns {"merged": N, "remaining": M} wrapped with ok by host handler
         assert "merged" in result
-        assert result.get("merged", 0) >= 1
+        assert result.get("merged", 0) == 1, f"Expected exactly 1 merge, got {result.get('merged', 0)!r} (full: {result!r})"
