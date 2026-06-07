@@ -328,6 +328,22 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
     }
 
 
+def _safe_decompile(ea, **kwargs):
+    """Wrap ``ida_hexrays.decompile`` with an explicit plugin check.
+
+    Audit §5.2 (decompile): the bare ``ida_hexrays.decompile(...)`` call
+    sites in this file did not first call ``init_hexrays_plugin()``. On
+    IDA configurations without Hex-Rays loaded (IDA Free, missing
+    licence, headless idat without ``-Ohexrays``), ``decompile`` returns
+    ``None`` or raises a Hex-Rays-internal error that surfaces as an
+    opaque empty ``pseudo`` string downstream. This helper raises
+    ``RuntimeError`` instead so the surrounding ``except Exception``
+    blocks land in the existing "failed to decompile function" path.
+    """
+    if not ida_hexrays.init_hexrays_plugin():
+        raise RuntimeError("hexrays decompiler is not available in this IDA")
+    return ida_hexrays.decompile(ea, **kwargs)
+
 
 @tool
 @idaread
@@ -511,7 +527,7 @@ def intelligence(
             if err:
                 return err
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
@@ -536,7 +552,7 @@ def intelligence(
             if err:
                 return err
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
@@ -563,7 +579,7 @@ def intelligence(
                 if count >= limit:
                     break
                 try:
-                    cfunc = ida_hexrays.decompile(fea)
+                    cfunc = _safe_decompile(fea)
                     pseudo = str(cfunc) if cfunc else ""
                     if not pseudo:
                         failures += 1
@@ -591,7 +607,7 @@ def intelligence(
             threshold = float(kwargs.get("threshold", 0.55))
             top_k = max(1, int(kwargs.get("top_k", max_items)))
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
@@ -688,7 +704,7 @@ def intelligence(
             if err:
                 return err
             try:
-                cfunc = ida_hexrays.decompile(ea)
+                cfunc = _safe_decompile(ea)
                 pseudo = str(cfunc) if cfunc else ""
             except Exception:
                 pseudo = ""
