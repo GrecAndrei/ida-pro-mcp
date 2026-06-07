@@ -198,7 +198,7 @@ def idb_meta():
         "image_base": hex(_safe_inf_get("baseaddr", 0)),
         "min_ea": hex(min_ea) if min_ea else None,
         "max_ea": hex(max_ea) if max_ea else None,
-        "image_size": hex(max_ea - min_ea) if min_ea and max_ea else None,
+        "image_size": hex(max_ea - min_ea) if (min_ea is not None and max_ea is not None and max_ea > min_ea) else None,
         "md5": md5.hex() if md5 else None,
         "sha256": sha256.hex() if sha256 else None,
         "crc32": hex(crc32) if crc32 else None,

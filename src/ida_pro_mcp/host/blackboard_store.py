@@ -89,8 +89,8 @@ class BlackboardStore:
             parent = os.path.dirname(self.db_path) or "."
             os.makedirs(parent, exist_ok=True)
             # Verify writability by connecting to the primary path
-            conn = self._conn()
-            conn.close()
+            with closing(self._conn()) as conn:
+                pass
             self._init_db()
         except (sqlite3.OperationalError, OSError, PermissionError):
             try:
