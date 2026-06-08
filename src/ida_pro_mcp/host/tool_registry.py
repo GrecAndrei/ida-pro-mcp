@@ -47,6 +47,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "propagate_names", "cleanup", "validate", "get_context",
         "set_structured", "bulk_set", "export_md", "import_md", "summary",
     ],
+    "background": ["submit", "status", "cancel", "result", "list", "wait"],
     "batch": ["(pass calls array)"],
     "binary_info": [
         "headers", "sections", "relocations", "resources",

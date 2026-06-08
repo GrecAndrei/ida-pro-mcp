@@ -19,6 +19,7 @@ TOOLS = [
     "session",
     "truncation",
     "bookmarks",
+    "background",
     "batch",
     # Analysis configuration
     "analysis",
@@ -311,6 +312,7 @@ TOOL_DESCRIPTIONS = {
     "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and CFG similarity. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, cfg_encode, cfg_similar, cfg_stats. NOTE: similar and cluster overlap functionally with intelligence.similar_functions (embedding-based nearest neighbors); for embedding-indexed similarity prefer intelligence.*, for the older 'structured context pack' workflow use agent.*. cfg_encode/cfg_similar/cfg_stats are agent-specific structural CFG features not present in graph.*.",
     "analysis": "Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait, plugin_run.",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.",
+    "background": "Background batch execution for long-running analysis tasks and IDAPython scripts. Submit scripts or tool calls to run in background threads without interrupting IDA. Actions: submit, status, cancel, result, list, wait.",
     "batch": "Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.",
     "binary_info": "Retrieves binary metadata including PE/ELF headers, sections, and build info. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
     "blackboard": "Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and knowledge graph. write/read/list/search/update/delete/clear/prune/stats/merge: CRUD. semantic_index/semantic_rebuild: persistent semantic vector lifecycle for entries. related_by_behavior: behavior-centric semantic retrieval over stored notes. frontier: ranked unvisited functions by embedding proximity + xref + entropy (read when choosing what to analyze next). coverage: analyzed vs unvisited per embedding cluster (read to understand progress). propagate_labels: spread LLM labels to embedding-similar neighbors via FrontierEngine. next_target: priority queue (confidence × time_decay × xref_boost). contradict/resolve/add_evidence/calibrate: evidence lifecycle. campaign_summary/auto_tag_propagate: batch operations. start_crawler/stop_crawler/crawler_status/accept/reject: background xref crawler. KG actions: kg_add_system/kg_add_struct/kg_add_gap/kg_add_state_machine/kg_add_attack_surface/kg_add_peripheral + read variants.",
@@ -923,6 +925,22 @@ TOOL_ARG_SCHEMAS = {
         "items": {"type": "array", "items": {"type": "object"}},
         "path": {"type": "string"},
         "continue_on_error": {"type": "boolean"},
+    },
+    "background": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["background"]},
+        "task_id": {"type": "string", "description": "Batch task identifier returned by submit"},
+        "script": {"type": "string", "description": "IDAPython script source to run in background"},
+        "tool_call": {
+            "type": "object",
+            "description": "Tool call to execute: {'tool': 'session', 'action': 'status', 'args': {...}}",
+            "properties": {
+                "tool": {"type": "string"},
+                "action": {"type": "string"},
+                "args": {"type": "object"},
+            },
+        },
+        "state": {"type": "string", "description": "Filter tasks by state (pending/running/done/failed/cancelled)"},
+        "timeout": {"type": "number", "description": "Max seconds to wait for task completion"},
     },
     "batch": {
         "calls": {

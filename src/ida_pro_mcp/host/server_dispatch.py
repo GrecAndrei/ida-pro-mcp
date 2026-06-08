@@ -1277,6 +1277,9 @@ class ServerDispatchMixin:
             if tool_name == "bookmarks":
                 return self._handle_bookmarks(args)
 
+            if tool_name == "background":
+                return self._handle_background(args)
+
             if tool_name == "truncation":
                 return self._handle_truncation(args)
 

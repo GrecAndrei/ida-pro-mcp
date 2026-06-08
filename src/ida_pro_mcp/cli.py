@@ -154,6 +154,33 @@ def _normalize_tool_result(response: dict) -> Any:
     return {"content": normalized_items, "isError": bool(result.get("isError"))}
 
 
+def _handle_background_mode(client, args, payload):
+    action = str(args.name or "list").strip().lower()
+    tool_args: dict = payload if isinstance(payload, dict) else {}
+    if tool_args:
+        tool_args = dict(tool_args)
+    tool_args["action"] = action
+
+    if action == "submit":
+        if not tool_args.get("script") and not tool_args.get("tool_call"):
+            raise SystemExit("background submit requires '--stdin-json' or payload with 'script' or 'tool_call'")
+
+    if action in ("status", "list"):
+        pass
+    elif action in ("result", "cancel", "wait"):
+        task_id = tool_args.get("task_id")
+        if not task_id:
+            raise SystemExit(f"background {action} requires 'task_id' in payload")
+
+    response = client.call(
+        "tools/call",
+        {"name": "background", "arguments": tool_args},
+        request_id=args.request_id,
+    )
+    _print_json(_normalize_tool_result(response), pretty=args.pretty)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Ephemeral JSON-safe CLI for ida-pro-mcp",
@@ -165,11 +192,14 @@ def main() -> int:
             "  ida-pro-mcp-cli raw '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'\n"
             "  ida-pro-mcp-cli intelligence status\n"
             "  ida-pro-mcp-cli capsule semantic-summary project.sideband --json\n"
+            "  ida-pro-mcp-cli background submit '{\"script\":\"print(idc.get_idb_path())\"}'\n"
+            "  ida-pro-mcp-cli background status\n"
+            "  ida-pro-mcp-cli background result '{\"task_id\":\"abc123\"}'\n"
         ),
     )
     parser.add_argument(
         "mode",
-        choices=("rpc", "tool", "raw", "tools-list", "intelligence", "capsule"),
+        choices=("rpc", "tool", "raw", "tools-list", "intelligence", "capsule", "background"),
         help="Request type to execute",
     )
     parser.add_argument("name", nargs="?", help="RPC method or MCP tool name")
@@ -305,6 +335,9 @@ def main() -> int:
             )
             _print_json(_normalize_tool_result(response), pretty=args.pretty)
             return 0
+
+        if args.mode == "background":
+            return _handle_background_mode(client, args, payload)
 
         raise SystemExit(f"unsupported mode: {args.mode}")
     finally:
