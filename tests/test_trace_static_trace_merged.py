@@ -52,14 +52,16 @@ def test_trace_analysis_dispatcher_routes_merged_actions():
 def test_schemas_data_drops_trace_and_static_trace():
     """schemas_data TOOL_ACTIONS no longer has trace or static_trace
     entries."""
-    text = _read("src/ida_pro_mcp/host/schemas_data.py")
-    assert '"trace": [' not in text
-    assert '"static_trace": [' not in text
-    # And trace_analysis picked up the merged actions plus the newer helpers.
-    assert '"get",' in text
-    assert '"static_trace",' in text
-    assert '"deobfuscate_emulate",' in text
-    assert '"prefetch_context",' in text
+    sdata = _read("src/ida_pro_mcp/host/schemas_data.py")
+    assert '"trace": [' not in sdata
+    assert '"static_trace": [' not in sdata
+    # And trace_analysis picked up the merged actions plus the newer helpers
+    # (in tool_registry.py — TOOL_ACTIONS moved there).
+    treg = _read("src/ida_pro_mcp/host/tool_registry.py")
+    assert '"get",' in treg
+    assert '"static_trace",' in treg
+    assert '"deobfuscate_emulate",' in treg
+    assert '"prefetch_context",' in treg
 
 
 def test_trace_analysis_description_mentions_new_actions():

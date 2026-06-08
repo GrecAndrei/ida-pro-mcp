@@ -25,6 +25,11 @@ from typing import Iterable, Tuple
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 
+# Ensure the package is importable when run as a script or subprocess.
+_SRC = ROOT / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 
 def _live_counts() -> Tuple[int, int, int]:
     """Return (TOOLS, ADVERTISED, HIDDEN) from the live schema."""

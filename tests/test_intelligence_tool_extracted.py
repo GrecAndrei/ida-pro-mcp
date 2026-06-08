@@ -141,8 +141,8 @@ def test_schemas_py_knows_about_intelligence_tool():
     assert "intelligence" in TOOL_ACTIONS
     assert "intelligence" in ADVERTISED_TOOLS
     # The wrapper actions (grep/pick/head/tail/next/stats) extend the
-    # enum at schema-build time; the raw TOOL_ACTIONS has 21.
-    assert len(TOOL_ACTIONS["intelligence"]) == 21
+    # enum at schema-build time; the raw TOOL_ACTIONS has 13.
+    assert len(TOOL_ACTIONS["intelligence"]) == 13
 
 
 def test_intelligence_arg_schema_includes_intelligence_specific_args():

@@ -85,7 +85,7 @@ def test_schemas_data_removed_arg_schema_block():
 
 def test_schemas_data_firmware_view_action_block_has_bootstrap():
     """The firmware_view TOOL_ACTIONS list still includes `bootstrap`."""
-    text = _read(os.path.join(HOST_DIR, "schemas_data.py"))
+    text = _read(os.path.join(HOST_DIR, "tool_registry.py"))
     idx = text.find("\"firmware_view\": [")
     assert idx != -1
     end = text.find("]", idx)

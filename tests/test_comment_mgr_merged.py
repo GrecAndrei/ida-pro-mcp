@@ -88,7 +88,7 @@ def test_schemas_data_annotation_description_lists_new_actions():
 
 def test_schemas_data_annotation_actions_enum_has_new_actions():
     """TOOL_ACTIONS[\"annotation\"] includes the 6 new actions."""
-    text = _read(os.path.join(HOST_DIR, "schemas_data.py"))
+    text = _read(os.path.join(HOST_DIR, "tool_registry.py"))
     # Locate the annotation: [ list
     idx = text.find("\"annotation\": [")
     assert idx != -1

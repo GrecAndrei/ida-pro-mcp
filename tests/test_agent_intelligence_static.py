@@ -72,7 +72,7 @@ def test_agent_tool_no_longer_exposes_intelligence_actions():
 
 
 def test_agent_schemas_drop_intelligence_actions():
-    src = _read("src/ida_pro_mcp/host/schemas_data.py")
+    src = _read("src/ida_pro_mcp/host/tool_registry.py")
     # agent section in TOOL_ACTIONS no longer contains these.
     agent_start = src.index('"agent": [')
     agent_end = src.index('],', agent_start)
@@ -88,12 +88,12 @@ def test_agent_schemas_drop_intelligence_actions():
 
 
 def test_intelligence_schemas_added_to_schemas_data():
-    src = _read("src/ida_pro_mcp/host/schemas_data.py")
-    assert '"intelligence":' in src
-    # All 13 actions present in the new TOOL_ACTIONS["intelligence"] block.
-    int_start = src.index('"intelligence": [')
-    int_end = src.index('],', int_start)
-    int_block = src[int_start:int_end]
+    # TOOL_ACTIONS block now lives in tool_registry.py; TOOL_DESCRIPTIONS
+    # and aliases remain in schemas_data.py.
+    treg = _read("src/ida_pro_mcp/host/tool_registry.py")
+    int_start = treg.index('"intelligence": [')
+    int_end = treg.index('],', int_start)
+    int_block = treg[int_start:int_end]
     for action in (
         "intelligence_status", "embedder_status", "anchor_status",
         "refresh_anchors", "classify_text", "classify_function",
@@ -102,8 +102,9 @@ def test_intelligence_schemas_added_to_schemas_data():
         "evidence_card",
     ):
         assert f'"{action}"' in int_block, f"intelligence schema missing {action}"
-    # Description in TOOL_DESCRIPTIONS.
-    assert "intelligence_status, embedder_status" in src
+    # Description in TOOL_DESCRIPTIONS (still in schemas_data.py).
+    sdata = _read("src/ida_pro_mcp/host/schemas_data.py")
+    assert "intelligence_status, embedder_status" in sdata
 
 
 def test_intelligence_added_to_tools_list():
