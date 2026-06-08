@@ -880,6 +880,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     delay_seconds=0,
                 )
                 if is_error_result(out):
+                    self._save_skills(sid, data)
                     return out
                 brier_sum += float(out.get("brier", 0.0))
             self._save_skills(sid, data)
