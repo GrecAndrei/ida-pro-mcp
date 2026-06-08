@@ -59,13 +59,12 @@ def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
         if not path or not os.path.exists(path):
             continue
         try:
-            conn = sqlite3.connect(path)
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='function_attrs'"
-            )
-            ok = cur.fetchone() is not None
-            conn.close()
+            with sqlite3.connect(path) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='function_attrs'"
+                )
+                ok = cur.fetchone() is not None
             if ok:
                 return path
         except Exception:
@@ -148,34 +147,32 @@ class MultiHopBridgeIndex:
             return bridges
 
         try:
-            conn = self._conn()
-            cur = conn.cursor()
+            with self._conn() as conn:
+                cur = conn.cursor()
 
-            if "apis" in bridge_types:
-                cur.execute(
-                    f"""
-                    SELECT api_name FROM function_apis fa
-                    JOIN function_attrs attrs ON fa.func_ea = attrs.ea
-                    WHERE {where}
-                    ORDER BY fa.func_ea
-                    """,
-                    param,
-                )
-                bridges["apis"] = [r[0] for r in cur.fetchall()]
+                if "apis" in bridge_types:
+                    cur.execute(
+                        f"""
+                        SELECT api_name FROM function_apis fa
+                        JOIN function_attrs attrs ON fa.func_ea = attrs.ea
+                        WHERE {where}
+                        ORDER BY fa.func_ea
+                        """,
+                        param,
+                    )
+                    bridges["apis"] = [r[0] for r in cur.fetchall()]
 
-            if "strings" in bridge_types:
-                cur.execute(
-                    f"""
-                    SELECT string_text FROM function_strings fs
-                    JOIN function_attrs attrs ON fs.func_ea = attrs.ea
-                    WHERE {where}
-                    ORDER BY fs.func_ea
-                    """,
-                    param,
-                )
-                bridges["strings"] = [r[0] for r in cur.fetchall()]
-
-            conn.close()
+                if "strings" in bridge_types:
+                    cur.execute(
+                        f"""
+                        SELECT string_text FROM function_strings fs
+                        JOIN function_attrs attrs ON fs.func_ea = attrs.ea
+                        WHERE {where}
+                        ORDER BY fs.func_ea
+                        """,
+                        param,
+                    )
+                    bridges["strings"] = [r[0] for r in cur.fetchall()]
         except sqlite3.OperationalError:
             # SchemaBoot DB missing or tables don't exist
             return bridges
@@ -211,31 +208,29 @@ class MultiHopBridgeIndex:
         """
         idf: Dict[str, float] = {}
         try:
-            conn = self._conn()
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM function_attrs")
-            row = cur.fetchone()
-            N = row[0] if row else 1
+            with self._conn() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM function_attrs")
+                row = cur.fetchone()
+                N = row[0] if row else 1
 
-            for api in bridge_apis:
-                cur.execute(
-                    "SELECT COUNT(DISTINCT func_ea) FROM function_apis WHERE api_name = ?",
-                    (api,),
-                )
-                r = cur.fetchone()
-                df = r[0] if r else 1
-                idf[api] = math.log(N / max(df, 1) + 1)
+                for api in bridge_apis:
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT func_ea) FROM function_apis WHERE api_name = ?",
+                        (api,),
+                    )
+                    r = cur.fetchone()
+                    df = r[0] if r else 1
+                    idf[api] = math.log(N / max(df, 1) + 1)
 
-            for s in bridge_strings:
-                cur.execute(
-                    "SELECT COUNT(DISTINCT func_ea) FROM function_strings WHERE string_text = ?",
-                    (s,),
-                )
-                r = cur.fetchone()
-                df = r[0] if r else 1
-                idf[s] = math.log(N / max(df, 1) + 1)
-
-            conn.close()
+                for s in bridge_strings:
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT func_ea) FROM function_strings WHERE string_text = ?",
+                        (s,),
+                    )
+                    r = cur.fetchone()
+                    df = r[0] if r else 1
+                    idf[s] = math.log(N / max(df, 1) + 1)
         except Exception:
             # Fall back to uniform weight
             for k in bridge_apis + bridge_strings:
@@ -341,110 +336,107 @@ class MultiHopBridgeIndex:
         if not bridges or not any(bridges.values()):
             return []
 
-        conn = self._conn()
-        cur = conn.cursor()
-
         # Precompute IDF weights for all bridge entities once
         idf_weights = self._compute_bridge_idf(
             bridge_apis=bridges.get("apis", []),
             bridge_strings=bridges.get("strings", []),
         )
 
-        # Get seed attributes for tripartite judging
-        seed_attrs = {}
-        if seed_ea is not None:
+        with self._conn() as conn:
+            cur = conn.cursor()
+
+            # Get seed attributes for tripartite judging
+            seed_attrs = {}
+            if seed_ea is not None:
+                cur.execute(
+                    "SELECT name, segment, size, entropy, cyclomatic_complexity, api_count, string_count FROM function_attrs WHERE ea = ?",
+                    (seed_ea,)
+                )
+                row = cur.fetchone()
+                if row:
+                    seed_attrs = {
+                        "name": row[0], "segment": row[1], "size": row[2],
+                        "entropy": row[3], "cyclomatic_complexity": row[4],
+                        "api_count": row[5], "string_count": row[6],
+                        "apis": bridges.get("apis", []),
+                        "strings": bridges.get("strings", []),
+                    }
+
+            # Collect all candidate EAs that match any bridge
+            candidate_eas: Set[int] = set()
+            bridge_scores: Dict[int, float] = {}
+
+            api_bridges = bridges.get("apis", [])
+            string_bridges = bridges.get("strings", [])
+
+            if api_bridges:
+                placeholders = ",".join("?" * len(api_bridges))
+                cur.execute(
+                    f"SELECT func_ea FROM function_apis WHERE api_name IN ({placeholders})",
+                    tuple(api_bridges),
+                )
+                for row in cur.fetchall():
+                    ea = row[0]
+                    if exclude_ea is not None and ea == exclude_ea:
+                        continue
+                    candidate_eas.add(ea)
+                    bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 2.0
+
+            if string_bridges:
+                placeholders = ",".join("?" * len(string_bridges))
+                cur.execute(
+                    f"SELECT func_ea FROM function_strings WHERE string_text IN ({placeholders})",
+                    tuple(string_bridges),
+                )
+                for row in cur.fetchall():
+                    ea = row[0]
+                    if exclude_ea is not None and ea == exclude_ea:
+                        continue
+                    candidate_eas.add(ea)
+                    bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 1.0
+
+            if not candidate_eas:
+                return []
+
+            # Fetch candidate details
+            placeholders = ",".join("?" * len(candidate_eas))
             cur.execute(
-                "SELECT name, segment, size, entropy, cyclomatic_complexity, api_count, string_count FROM function_attrs WHERE ea = ?",
-                (seed_ea,)
+                f"""
+                SELECT ea, name, segment, size, entropy, bb_count, call_count,
+                       cyclomatic_complexity, api_count, string_count, xref_count,
+                       has_loops, is_thunk, is_library
+                FROM function_attrs
+                WHERE ea IN ({placeholders})
+                """,
+                tuple(candidate_eas),
             )
-            row = cur.fetchone()
-            if row:
-                seed_attrs = {
-                    "name": row[0], "segment": row[1], "size": row[2],
-                    "entropy": row[3], "cyclomatic_complexity": row[4],
-                    "api_count": row[5], "string_count": row[6],
-                    "apis": bridges.get("apis", []),
-                    "strings": bridges.get("strings", []),
+
+            candidates = []
+            for row in cur.fetchall():
+                ea = row[0]
+                cand_attrs = {
+                    "name": row[1], "segment": row[2], "size": row[3],
+                    "entropy": row[4], "bb_count": row[5], "call_count": row[6],
+                    "cyclomatic_complexity": row[7], "api_count": row[8],
+                    "string_count": row[9], "xref_count": row[10],
+                    "has_loops": bool(row[11]), "is_thunk": bool(row[12]),
+                    "is_library": bool(row[13]),
                 }
 
-        # Collect all candidate EAs that match any bridge
-        candidate_eas: Set[int] = set()
-        bridge_scores: Dict[int, float] = {}
+                # IDF-weighted tripartite scoring (core of the multi-hop bridge algorithm)
+                judge_score = self._tripartite_score(
+                    seed_attrs, seed_attrs, cand_attrs, idf_weights=idf_weights
+                ) if seed_attrs else 0.5
 
-        api_bridges = bridges.get("apis", [])
-        string_bridges = bridges.get("strings", [])
+                # Bridge overlap count for observability (not used for ranking).
+                bscore = bridge_scores.get(ea, 0.0)
 
-        if api_bridges:
-            placeholders = ",".join("?" * len(api_bridges))
-            cur.execute(
-                f"SELECT func_ea FROM function_apis WHERE api_name IN ({placeholders})",
-                tuple(api_bridges),
-            )
-            for row in cur.fetchall():
-                ea = row[0]
-                if exclude_ea is not None and ea == exclude_ea:
-                    continue
-                candidate_eas.add(ea)
-                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 2.0
-
-        if string_bridges:
-            placeholders = ",".join("?" * len(string_bridges))
-            cur.execute(
-                f"SELECT func_ea FROM function_strings WHERE string_text IN ({placeholders})",
-                tuple(string_bridges),
-            )
-            for row in cur.fetchall():
-                ea = row[0]
-                if exclude_ea is not None and ea == exclude_ea:
-                    continue
-                candidate_eas.add(ea)
-                bridge_scores[ea] = bridge_scores.get(ea, 0.0) + 1.0
-
-        if not candidate_eas:
-            conn.close()
-            return []
-
-        # Fetch candidate details
-        placeholders = ",".join("?" * len(candidate_eas))
-        cur.execute(
-            f"""
-            SELECT ea, name, segment, size, entropy, bb_count, call_count,
-                   cyclomatic_complexity, api_count, string_count, xref_count,
-                   has_loops, is_thunk, is_library
-            FROM function_attrs
-            WHERE ea IN ({placeholders})
-            """,
-            tuple(candidate_eas),
-        )
-
-        candidates = []
-        for row in cur.fetchall():
-            ea = row[0]
-            cand_attrs = {
-                "name": row[1], "segment": row[2], "size": row[3],
-                "entropy": row[4], "bb_count": row[5], "call_count": row[6],
-                "cyclomatic_complexity": row[7], "api_count": row[8],
-                "string_count": row[9], "xref_count": row[10],
-                "has_loops": bool(row[11]), "is_thunk": bool(row[12]),
-                "is_library": bool(row[13]),
-            }
-
-            # IDF-weighted tripartite scoring (core of the multi-hop bridge algorithm)
-            judge_score = self._tripartite_score(
-                seed_attrs, seed_attrs, cand_attrs, idf_weights=idf_weights
-            ) if seed_attrs else 0.5
-
-            # Bridge overlap count for observability (not used for ranking).
-            bscore = bridge_scores.get(ea, 0.0)
-
-            candidates.append({
-                "ea": hex(ea),
-                "attrs": cand_attrs,
-                "judge_score": judge_score,
-                "bridge_score": bscore,
-            })
-
-        conn.close()
+                candidates.append({
+                    "ea": hex(ea),
+                    "attrs": cand_attrs,
+                    "judge_score": judge_score,
+                    "bridge_score": bscore,
+                })
 
         # PIT fusion
         judge_scores = [c["judge_score"] for c in candidates]
@@ -482,9 +474,6 @@ class MultiHopBridgeIndex:
         3. Retrieve candidates that share those bridges.
         4. (Optional) For hops > 2, extract bridges from top candidates and repeat.
         """
-        conn = self._conn()
-        cur = conn.cursor()
-
         # Step 1: Find seed functions
         where, params = _build_where_clause(query_constraints or {})
         sql = (
@@ -493,28 +482,29 @@ class MultiHopBridgeIndex:
             "has_loops, is_thunk, is_library FROM function_attrs "
             f"{where} LIMIT 5"
         )
-        cur.execute(sql, params)
         seeds = []
-        for row in cur.fetchall():
-            seeds.append(
-                {
-                    "ea": row[0],
-                    "name": row[1],
-                    "segment": row[2],
-                    "size": row[3],
-                    "entropy": row[4],
-                    "bb_count": row[5],
-                    "call_count": row[6],
-                    "cyclomatic_complexity": row[7],
-                    "api_count": row[8],
-                    "string_count": row[9],
-                    "xref_count": row[10],
-                    "has_loops": bool(row[11]),
-                    "is_thunk": bool(row[12]),
-                    "is_library": bool(row[13]),
-                }
-            )
-        conn.close()
+        with self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(sql, params)
+            for row in cur.fetchall():
+                seeds.append(
+                    {
+                        "ea": row[0],
+                        "name": row[1],
+                        "segment": row[2],
+                        "size": row[3],
+                        "entropy": row[4],
+                        "bb_count": row[5],
+                        "call_count": row[6],
+                        "cyclomatic_complexity": row[7],
+                        "api_count": row[8],
+                        "string_count": row[9],
+                        "xref_count": row[10],
+                        "has_loops": bool(row[11]),
+                        "is_thunk": bool(row[12]),
+                        "is_library": bool(row[13]),
+                    }
+                )
 
         if not seeds:
             return {"ok": True, "seeds": [], "bridges": {}, "candidates": [], "total_candidates": 0}
