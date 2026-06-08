@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.helpers directly)
 import sys
 try:
     from .intelligence import helpers as _target

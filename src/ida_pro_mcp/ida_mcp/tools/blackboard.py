@@ -190,11 +190,28 @@ class _BackgroundCrawler:
 
     def _crawl_loop(self) -> None:
         """Main crawler loop: frontier -> agent quick -> hypothesis proposal every 0.5s."""
-        while not self._stop_event.wait(0.5):
+        # Lazy-import to keep the module importable without IDA SDK (sync.py
+        # calls idaapi.get_kernel_version() at the top level).
+        try:
+            from ida_pro_mcp.ida_mcp.sync import bypass_sync
+        except ImportError:
             try:
-                self._crawl_step()
-            except Exception:
-                pass
+                from ida_mcp.sync import bypass_sync  # type: ignore
+            except ImportError:
+                try:
+                    from sync import bypass_sync  # type: ignore[import-not-found]
+                except ImportError:
+                    from contextlib import nullcontext
+                    bypass_sync = nullcontext  # type: ignore[assignment]
+        while not self._stop_event.wait(0.5):
+            # Bypass the @idaread/@idawrite safety wrapper because the crawler
+            # runs on a background thread that cannot use execute_sync. The
+            # tools it calls (agent, blackboard) already handle their own locking.
+            with bypass_sync(reason="background crawler"):
+                try:
+                    self._crawl_step()
+                except Exception:
+                    pass
 
     def _crawl_step(self) -> None:
         store = BlackboardStore(self._db_path)

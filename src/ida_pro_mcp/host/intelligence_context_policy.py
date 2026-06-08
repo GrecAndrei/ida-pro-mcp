@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.context_policy directly)
 import sys
 try:
     from .intelligence import context_policy as _target
