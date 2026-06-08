@@ -103,6 +103,7 @@ class FunctionEmbeddingIndex:
     def __init__(self, db_path: str, embedder: Any):
         self._embedder = embedder
         self._cache: Dict[str, List[float]] = {}  # ea_hex -> embedding
+        self._cache_lock = threading.Lock()
 
         try:
             from ..config import CACHE_DIR
@@ -391,7 +392,8 @@ class FunctionEmbeddingIndex:
             with self._conn() as conn:
                 for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
                     ea, blob = row
-                    self._cache[ea] = unpack_floats(blob)
+                    with self._cache_lock:
+                        self._cache[ea] = unpack_floats(blob)
         except Exception:
             pass
 
@@ -454,7 +456,8 @@ class FunctionEmbeddingIndex:
 
         vec = self._embedder.embed(pseudocode)
         blob = self._pack(vec)
-        self._cache[func_ea] = vec
+        with self._cache_lock:
+            self._cache[func_ea] = vec
         src_hash = hashlib.sha256(f"{func_ea}:{ph}".encode("utf-8")).hexdigest()[:24]
         try:
             with self._conn() as conn:
@@ -501,7 +504,9 @@ class FunctionEmbeddingIndex:
         ph = self._phash(pseudocode)
         signature_text = _extract_signature_text(pseudocode)
         signature_hash = self._phash(signature_text or pseudocode)
-        if self._cache.get(func_ea) is not None:
+        with self._cache_lock:
+            cached_vec = self._cache.get(func_ea)
+        if cached_vec is not None:
             # Check if we already have this exact pseudocode
             try:
                 with self._conn() as conn:
@@ -524,13 +529,10 @@ class FunctionEmbeddingIndex:
         threshold: float = 0.6,
     ) -> List[Dict[str, Any]]:
         """Return top-k most similar functions given a pre-computed query vector."""
-        if not self._cache:
-            return []
-        # Snapshot to avoid RuntimeError if background thread writes to _cache while we iterate.
-        try:
+        with self._cache_lock:
+            if not self._cache:
+                return []
             snapshot = list(self._cache.items())
-        except RuntimeError:
-            return []
         scored: List[Tuple[float, str]] = []
         for ea, vec in snapshot:
             if ea == exclude_ea:
@@ -561,11 +563,13 @@ class FunctionEmbeddingIndex:
         threshold: float = 0.6,
     ) -> List[Dict[str, Any]]:
         """Return top-k most similar functions by cosine similarity."""
-        if not self._cache:
-            return []
+        with self._cache_lock:
+            if not self._cache:
+                return []
+            cache_items = list(self._cache.items())
         q = self._embedder.embed(pseudocode)
         scored: List[Tuple[float, str]] = []
-        for ea, vec in self._cache.items():
+        for ea, vec in cache_items:
             if ea == exclude_ea:
                 continue
             sim = _cosine(q, vec)
@@ -753,9 +757,22 @@ class FunctionEmbeddingIndex:
             return self.similar_vec(vec, top_k=top_k, exclude_ea=exclude_ea, threshold=threshold)
         return self.hybrid_search(str(query_or_vec or ""), top_k=top_k, threshold=threshold, exclude_ea=exclude_ea)
 
+    def cache_store(self, ea: str, vec: List[float]) -> None:
+        with self._cache_lock:
+            self._cache[ea] = vec
+
+    def cache_snapshot(self) -> List[Tuple[str, List[float]]]:
+        with self._cache_lock:
+            return list(self._cache.items())
+
+    def cache_keys(self) -> set:
+        with self._cache_lock:
+            return set(self._cache.keys())
+
     @property
     def size(self) -> int:
-        return len(self._cache)
+        with self._cache_lock:
+            return len(self._cache)
 
 
 @dataclass

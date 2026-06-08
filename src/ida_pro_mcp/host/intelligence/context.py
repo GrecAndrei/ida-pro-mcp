@@ -1501,7 +1501,7 @@ class ContextAssembler(
                 query_vec = self._embedder.embed(pseudocode[:3000])
                 idx = self._get_index(idb_path)
                 # Update cache + persist async
-                idx._cache[addr] = query_vec
+                idx.cache_store(addr, query_vec)
                 blob = idx._pack(query_vec)
                 ph   = idx._phash(pseudocode)
                 sig  = _extract_signature(pseudocode, max_idents=64) or ""
@@ -1527,7 +1527,7 @@ class ContextAssembler(
                 threading.Thread(target=_persist, daemon=True).start()
 
                 # Similarity search over in-memory cache (instant)
-                cache_snap = list(idx._cache.items())
+                cache_snap = idx.cache_snapshot()
                 if len(cache_snap) > 1:
                     scored = sorted(
                         [(BgeCodeEmbedder.cosine(query_vec, v), ea)
@@ -1744,7 +1744,7 @@ class ContextAssembler(
         # Functions already indexed (= already decompiled this session)
         try:
             idx = self._get_index(idb_path)
-            analyzed = set(idx._cache.keys())
+            analyzed = idx.cache_keys()
         except Exception:
             analyzed = set()
 
