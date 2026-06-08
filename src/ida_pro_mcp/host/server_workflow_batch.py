@@ -141,9 +141,6 @@ class ServerWorkflowBatchMixin:
                     f"Unknown tool {name} in batch call at index {idx}",
                     hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.",
                 )
-            elif call_args is None:
-                call_args = {}
-                res = self._execute_tool(name, call_args)
             elif not isinstance(call_args, dict):
                 res = make_error(
                     MCPError.INVALID_ARGS,
