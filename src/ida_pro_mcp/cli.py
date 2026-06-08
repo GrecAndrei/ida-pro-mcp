@@ -174,11 +174,14 @@ def _daemon_is_running() -> bool:
 
 
 def _start_daemon() -> None:
+    if os.path.exists(_DAEMON_SOCKET):
+        os.unlink(_DAEMON_SOCKET)
     subprocess.Popen(
         [sys.executable, "-m", "ida_pro_mcp.host.server", "--daemon"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
+        close_fds=True,
     )
     deadline = time.time() + 10.0
     while not _daemon_is_running():
