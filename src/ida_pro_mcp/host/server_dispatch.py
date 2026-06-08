@@ -981,8 +981,11 @@ class ServerDispatchMixin:
             args = self._normalize_tool_call_args(tool_name, args)
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
 
+            # Background calls bypass ALL gates.
+            _bg = tool_name == "background" or getattr(self, "_bg_running", False)
+
             # ---- Active Survey Lock Check ----
-            if not self._survey_gate_exempt(tool_name, args):
+            if not _bg and not self._survey_gate_exempt(tool_name, args):
                 s = self._get_active_survey()
                 if s:
                     addr = s.get("addr", "unknown")

@@ -15,6 +15,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 _MAX_TASK_HISTORY = 1000
 _DEFAULT_MAX_WORKERS = int(os.environ.get("IDA_MCP_BATCH_MAX_WORKERS", "4"))
+_PERSIST_PATH = os.path.join(
+    os.environ.get("IDA_MCP_BATCH_STATE_DIR", os.path.join(os.path.expanduser("~"), ".ida-mcp-batch")),
+    "tasks.json",
+)
+_MAX_PERSIST_RESULT_BYTES = 10_000
+_MAX_PERSIST_FIELDS = {"task_id", "action", "args", "state", "created_at", "started_at", "finished_at", "result", "error"}
 
 
 @dataclass
@@ -59,6 +65,7 @@ class BatchManager:
         self._lock = threading.Lock()
         self._tasks: Dict[str, BatchTask] = {}
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="batch-")
+        self._load_persisted()
 
     def submit(
         self,
@@ -99,6 +106,7 @@ class BatchManager:
             task.state = "failed"
         finally:
             task.finished_at = time.time()
+            self._save_persisted()
 
     def status(self, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._lock:
@@ -166,3 +174,52 @@ class BatchManager:
 
     def shutdown(self, wait: bool = True) -> None:
         self._executor.shutdown(wait=wait)
+
+    def _persist_path(self) -> str:
+        os.makedirs(os.path.dirname(_PERSIST_PATH), exist_ok=True)
+        return _PERSIST_PATH
+
+    def _save_persisted(self) -> None:
+        try:
+            data = []
+            with self._lock:
+                for t in list(self._tasks.values()):
+                    if t.state in ("done", "failed", "cancelled"):
+                        d = t.to_dict()
+                        r = d.get("result")
+                        if r is not None:
+                            try:
+                                raw = json.dumps(r, default=str)
+                                if len(raw) > _MAX_PERSIST_RESULT_BYTES:
+                                    d["result"] = {"_truncated": True, "preview": str(r)[:_MAX_PERSIST_RESULT_BYTES]}
+                            except Exception:
+                                d["result"] = str(r)[:_MAX_PERSIST_RESULT_BYTES]
+                        data.append({k: v for k, v in d.items() if k in _MAX_PERSIST_FIELDS})
+            if data:
+                with open(self._persist_path(), "w") as f:
+                    json.dump(data[-_MAX_TASK_HISTORY:], f, default=str)
+        except Exception:
+            pass
+
+    def _load_persisted(self) -> None:
+        if not os.path.exists(_PERSIST_PATH):
+            return
+        try:
+            with open(_PERSIST_PATH) as f:
+                data = json.load(f)
+            for d in data:
+                t = BatchTask(
+                    task_id=d.get("task_id", uuid.uuid4().hex[:12]),
+                    action=d.get("action", "script"),
+                    args=d.get("args", {}),
+                )
+                t.state = d.get("state", "done")
+                t.created_at = d.get("created_at", time.time())
+                t.started_at = d.get("started_at")
+                t.finished_at = d.get("finished_at")
+                t.result = d.get("result")
+                t.error = d.get("error")
+                with self._lock:
+                    self._tasks[t.task_id] = t
+        except Exception:
+            pass

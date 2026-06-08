@@ -9,9 +9,10 @@ def test_submit_and_status():
     mgr = BatchManager(max_workers=1)
     task_id = mgr.submit("script", {"x": 1})
     tasks = mgr.status()
-    assert len(tasks) == 1
-    assert tasks[0]["task_id"] == task_id
-    assert tasks[0]["state"] in ("pending", "running", "done")
+    found = any(t["task_id"] == task_id for t in tasks)
+    assert found, f"task {task_id} not found in {tasks}"
+    matching = [t for t in tasks if t["task_id"] == task_id]
+    assert matching[0]["state"] in ("pending", "running", "done")
 
 
 def test_submit_with_run_fn():
