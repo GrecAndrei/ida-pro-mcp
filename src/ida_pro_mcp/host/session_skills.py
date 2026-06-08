@@ -979,20 +979,21 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
     def cross_reference_sessions(self, sid: str) -> dict:
         """Find shared functions/strings across linked sessions."""
-        session = self.sessions.get(sid)
-        if not session:
-            return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-        linked = session.linked_sessions
-        if not linked:
-            return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to federate."}
-        # Collect function names from all linked sessions' skills data
-        shared_funcs: Dict[str, List[str]] = {}
-        for lsid in [sid] + linked:
-            data = self._load_skills(lsid)
-            for entry in data.get("activity_log", []):
-                func = entry.get("result", "")
-                if func:
-                    shared_funcs.setdefault(func, []).append(lsid)
-        # Only keep functions appearing in multiple sessions
-        cross = {k: v for k, v in shared_funcs.items() if len(set(v)) > 1}
-        return {"ok": True, "shared_functions": list(cross.keys()), "details": cross}
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            linked = session.linked_sessions
+            if not linked:
+                return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to federate."}
+            # Collect function names from all linked sessions' skills data
+            shared_funcs: Dict[str, List[str]] = {}
+            for lsid in [sid] + linked:
+                data = self._load_skills(lsid)
+                for entry in data.get("activity_log", []):
+                    func = entry.get("result", "")
+                    if func:
+                        shared_funcs.setdefault(func, []).append(lsid)
+            # Only keep functions appearing in multiple sessions
+            cross = {k: v for k, v in shared_funcs.items() if len(set(v)) > 1}
+            return {"ok": True, "shared_functions": list(cross.keys()), "details": cross}
