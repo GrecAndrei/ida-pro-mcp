@@ -932,12 +932,13 @@ class SessionSkillsMixin(SessionBootstrapMixin):
     # ====================================================================
 
     def get_phase(self, sid: str) -> dict:
-        session = self.sessions.get(sid)
-        if not session:
-            return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-        phase_info = _ANALYSIS_PHASES.get(session.phase, {})
-        return {"ok": True, "phase": session.phase, "description": phase_info.get("description", ""),
-                "suggested_tools": phase_info.get("suggested_tools", [])}
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            phase_info = _ANALYSIS_PHASES.get(session.phase, {})
+            return {"ok": True, "phase": session.phase, "description": phase_info.get("description", ""),
+                    "suggested_tools": phase_info.get("suggested_tools", [])}
 
     def advance_phase(self, sid: str) -> dict:
         with self._lock:
