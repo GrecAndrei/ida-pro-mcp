@@ -1302,24 +1302,23 @@ class ContextAssembler(
             return None
         try:
             ea = _helpers.coerce_int(addr)
-            conn = sqlite3.connect(db)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT ea, name, size, entropy, bb_count, cyclomatic_complexity,
-                       incoming_xrefs, outgoing_xrefs, call_count, xor_count,
-                       api_count, string_count, has_loops
-                FROM function_attrs WHERE ea = ?
-            """, (ea,))
-            row = cur.fetchone()
-            # Also fetch API list from junction table
-            apis: List[str] = []
-            if row:
-                cur.execute(
-                    "SELECT api_name FROM function_apis WHERE func_ea = ? LIMIT 60",
-                    (ea,),
-                )
-                apis = [r[0] for r in cur.fetchall()]
-            conn.close()
+            with sqlite3.connect(db) as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT ea, name, size, entropy, bb_count, cyclomatic_complexity,
+                           incoming_xrefs, outgoing_xrefs, call_count, xor_count,
+                           api_count, string_count, has_loops
+                    FROM function_attrs WHERE ea = ?
+                """, (ea,))
+                row = cur.fetchone()
+                # Also fetch API list from junction table
+                apis: List[str] = []
+                if row:
+                    cur.execute(
+                        "SELECT api_name FROM function_apis WHERE func_ea = ? LIMIT 60",
+                        (ea,),
+                    )
+                    apis = [r[0] for r in cur.fetchall()]
             if not row:
                 return None
             return {
@@ -1671,24 +1670,23 @@ class ContextAssembler(
                     pass
             if not eas:
                 return []
-            conn = sqlite3.connect(db)
-            cur = conn.cursor()
-            ph = ",".join("?" * len(eas))
-            cur.execute(f"""
-                SELECT ea, name, size, entropy, cyclomatic_complexity,
-                       xor_count, incoming_xrefs, api_count, has_loops
-                FROM function_attrs WHERE ea IN ({ph})
-            """, eas)
-            rows = {row[0]: row for row in cur.fetchall()}
-            # Fetch APIs for these functions
-            cur.execute(f"""
-                SELECT func_ea, api_name FROM function_apis
-                WHERE func_ea IN ({ph}) LIMIT 200
-            """, eas)
-            apis_by_ea: Dict[int, List[str]] = {}
-            for func_ea, api_name in cur.fetchall():
-                apis_by_ea.setdefault(func_ea, []).append(api_name)
-            conn.close()
+            with sqlite3.connect(db) as conn:
+                cur = conn.cursor()
+                ph = ",".join("?" * len(eas))
+                cur.execute(f"""
+                    SELECT ea, name, size, entropy, cyclomatic_complexity,
+                           xor_count, incoming_xrefs, api_count, has_loops
+                    FROM function_attrs WHERE ea IN ({ph})
+                """, eas)
+                rows = {row[0]: row for row in cur.fetchall()}
+                # Fetch APIs for these functions
+                cur.execute(f"""
+                    SELECT func_ea, api_name FROM function_apis
+                    WHERE func_ea IN ({ph}) LIMIT 200
+                """, eas)
+                apis_by_ea: Dict[int, List[str]] = {}
+                for func_ea, api_name in cur.fetchall():
+                    apis_by_ea.setdefault(func_ea, []).append(api_name)
 
             enriched = []
             for a_str in addresses[:limit]:
@@ -1751,35 +1749,34 @@ class ContextAssembler(
             analyzed = set()
 
         try:
-            conn = sqlite3.connect(db)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT ea, name,
-                       xor_count, entropy, cyclomatic_complexity,
-                       api_count, incoming_xrefs, string_count, has_loops
-                FROM function_attrs
-                WHERE size > 64
-                LIMIT 200
-            """)
-            rows = cur.fetchall()
+            with sqlite3.connect(db) as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT ea, name,
+                           xor_count, entropy, cyclomatic_complexity,
+                           api_count, incoming_xrefs, string_count, has_loops
+                    FROM function_attrs
+                    WHERE size > 64
+                    LIMIT 200
+                """)
+                rows = cur.fetchall()
 
-            # Fetch top dangerous-API functions separately
-            cur.execute("""
-                SELECT DISTINCT fa.ea, fa.name, fa.xor_count, fa.entropy,
-                       fa.cyclomatic_complexity, fa.api_count, fa.incoming_xrefs,
-                       fa.string_count, fa.has_loops
-                FROM function_attrs fa
-                JOIN function_apis fapi ON fapi.func_ea = fa.ea
-                WHERE fapi.api_name IN (
-                    'VirtualAllocEx','WriteProcessMemory','CreateRemoteThread',
-                    'IsDebuggerPresent','AdjustTokenPrivileges',
-                    'RegSetValueEx','CreateService',
-                    'WSASocket','InternetOpen','WinHttpOpen'
-                )
-                LIMIT 50
-            """)
-            danger_rows = cur.fetchall()
-            conn.close()
+                # Fetch top dangerous-API functions separately
+                cur.execute("""
+                    SELECT DISTINCT fa.ea, fa.name, fa.xor_count, fa.entropy,
+                           fa.cyclomatic_complexity, fa.api_count, fa.incoming_xrefs,
+                           fa.string_count, fa.has_loops
+                    FROM function_attrs fa
+                    JOIN function_apis fapi ON fapi.func_ea = fa.ea
+                    WHERE fapi.api_name IN (
+                        'VirtualAllocEx','WriteProcessMemory','CreateRemoteThread',
+                        'IsDebuggerPresent','AdjustTokenPrivileges',
+                        'RegSetValueEx','CreateService',
+                        'WSASocket','InternetOpen','WinHttpOpen'
+                    )
+                    LIMIT 50
+                """)
+                danger_rows = cur.fetchall()
         except Exception:
             return []
 
