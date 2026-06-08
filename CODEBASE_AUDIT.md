@@ -98,6 +98,13 @@ A summary of what changed, organized by workstream.
 | §1.11 [High] idle-index worker racing with in-flight counter | Same fix — lock prevents the counter from being transiently 0 during active calls | `31b6c89` |
 | §1.3 [Critical] missing concurrency test coverage | `tests/test_concurrency.py` with 4 deterministic tests (stress, dict R/W, session R/W, non-negative counter) | `31b6c89` |
 
+#### 2B — Data-driven tool registry (foundation)
+| Finding | Fix | Commit |
+|---|---|---|
+| §1.5 [Critical] action surface hand-maintained (2014-line `schemas_data.py`) | Created `tool_registry.py` with 67 tools' action lists; `schemas_data.py` derives `TOOL_ACTIONS` from registry; `server_session.py` registers actions via `register_tool_actions()`; -983 LOC | `36aaa18` |
+| §1.4 [Critical] 1489-line if/elif | Already decomposed in Phase 2A | `21407fa` |
+| Remaining: `TOOL_ARG_SCHEMAS` and alias migration | Deferred — foundation is in place for incremental per-tool migration | — |
+
 #### Cleanup items
 | Finding | Fix | Commit |
 |---|---|---|
