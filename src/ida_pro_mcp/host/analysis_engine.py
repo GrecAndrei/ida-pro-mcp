@@ -482,7 +482,9 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
                             continue
                         caller_name = caller.get("name", "")
                         # Check if this caller is a dangerous sink
-                        if any(sink in caller_name for sink in self.DANGEROUS_SINKS):
+                        import re as _re
+                        _clean = _re.split(r"[@.]", caller_name.lstrip("_"))[0]
+                        if _clean in self.DANGEROUS_SINKS:
                             self._report_taint_sink(source, caller, store, depth + 1)
                         else:
                             next_queue.append(
