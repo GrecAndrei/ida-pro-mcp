@@ -73,3 +73,7 @@ tests/artifacts/
 # OS junk
 .DS_Store
 Thumbs.db
+.agents/
+embedder.json
+ida-install.json
+ORIGINAL_REQUEST.md
