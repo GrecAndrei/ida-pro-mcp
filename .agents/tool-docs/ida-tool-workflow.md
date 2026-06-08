@@ -17,10 +17,10 @@ Executes predefined multi-step analysis workflows for common RE tasks. audit_pla
 - `explain` (tool-specific)
 - `plan` (tool-specific)
 - `catalog` (tool-specific)
-- `recon_sweep` (tool-specific)
 - `triage_fast` (tool-specific)
 - `malware_deep` (tool-specific)
 - `vuln_audit` (tool-specific)
+- `recon_sweep` (tool-specific)
 - `patch_review` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)

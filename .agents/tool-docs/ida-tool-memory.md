@@ -9,8 +9,6 @@
 Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram, read_file, write_file.
 
 ## Actions
-- `read_file` (tool-specific)
-- `write_file` (tool-specific)
 - `read` (read/discovery)
 - `write` (write/mutate)
 - `hexdump` (tool-specific)
@@ -22,6 +20,8 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
 - `strings` (tool-specific)
 - `struct_walk` (tool-specific)
 - `histogram` (tool-specific)
+- `read_file` (tool-specific)
+- `write_file` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -52,7 +52,7 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
 {
   "name": "memory",
   "arguments": {
-    "action": "read_file"
+    "action": "read"
   }
 }
 ```
@@ -61,7 +61,7 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
   "name": "memory",
   "arguments": {
     "action": "grep",
-    "source_action": "read_file",
+    "source_action": "read",
     "pattern": "<needle>"
   }
 }

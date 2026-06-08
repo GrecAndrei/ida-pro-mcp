@@ -20,6 +20,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_FILE = REPO_ROOT / "src" / "ida_pro_mcp" / "host" / "schemas_data.py"
+TOOL_REGISTRY_FILE = REPO_ROOT / "src" / "ida_pro_mcp" / "host" / "tool_registry.py"
 SKILLS_ROOT = REPO_ROOT / ".agents" / "skills"
 TOOL_DOCS_ROOT = REPO_ROOT / ".agents" / "tool-docs"
 GEN_MARKER = "<!-- GENERATED: scripts/generate_tool_skills.py -->"
@@ -298,8 +299,16 @@ def main() -> None:
     source_text = SOURCE_FILE.read_text(encoding="utf-8")
     module = ast.parse(source_text, filename=str(SOURCE_FILE))
 
+    # TOOL_ACTIONS moved from schemas_data.py to tool_registry.py (Phase 2B).
+    # Read the literal dict from the registry instead of trying to eval the
+    # function call in schemas_data.py.
+    registry_text = TOOL_REGISTRY_FILE.read_text(encoding="utf-8")
+    registry_module = ast.parse(registry_text, filename=str(TOOL_REGISTRY_FILE))
+    tool_actions: dict[str, list[str]] = _extract_assignment_eval(
+        registry_module, "_TOOL_ACTIONS", {}
+    )
+
     tool_descriptions: dict[str, str] = _extract_literal_assignment(module, "TOOL_DESCRIPTIONS")
-    tool_actions: dict[str, list[str]] = _extract_literal_assignment(module, "TOOL_ACTIONS")
     tool_arg_schemas: dict[str, dict[str, dict[str, Any]]] = _extract_assignment_eval(
         module, "TOOL_ARG_SCHEMAS", {"TOOL_ACTIONS": tool_actions}
     )

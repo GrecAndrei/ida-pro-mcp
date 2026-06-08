@@ -9,8 +9,9 @@
 Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy/suggest_triage/suggest_analogy/apply_analogy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).
 
 ## Actions
-- `discover` (tool-specific)
+- `health` (tool-specific)
 - `create` (write/mutate)
+- `discover` (tool-specific)
 - `get` (read/discovery)
 - `list` (read/discovery)
 - `switch` (tool-specific)
@@ -40,12 +41,6 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `snapshot` (tool-specific)
 - `restore_snapshot` (tool-specific)
 - `merge` (tool-specific)
-- `macro_set` (tool-specific)
-- `macro_get` (tool-specific)
-- `macro_list` (tool-specific)
-- `macro_delete` (tool-specific)
-- `macro_run` (tool-specific)
-- `recent_workset` (tool-specific)
 - `crystallize_skill` (tool-specific)
 - `crystallize_mined_macros` (tool-specific)
 - `rate_skill` (tool-specific)
@@ -63,13 +58,18 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `confirm_hypothesis` (tool-specific)
 - `refute_hypothesis` (tool-specific)
 - `list_hypotheses` (tool-specific)
+- `dashboard` (tool-specific)
 - `get_phase` (tool-specific)
 - `advance_phase` (tool-specific)
-- `dashboard` (tool-specific)
-- `link` (tool-specific)
-- `cross_reference` (tool-specific)
+- `link_session` (tool-specific)
+- `cross_reference_sessions` (tool-specific)
 - `list_snapshots` (tool-specific)
-- `health` (tool-specific)
+- `macro_set` (tool-specific)
+- `macro_get` (tool-specific)
+- `macro_list` (tool-specific)
+- `macro_delete` (tool-specific)
+- `macro_run` (tool-specific)
+- `recent_workset` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -139,7 +139,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 {
   "name": "session",
   "arguments": {
-    "action": "discover"
+    "action": "health"
   }
 }
 ```
@@ -148,7 +148,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
   "name": "session",
   "arguments": {
     "action": "grep",
-    "source_action": "discover",
+    "source_action": "health",
     "pattern": "<needle>"
   }
 }

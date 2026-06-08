@@ -12,8 +12,8 @@ Data flow taint analysis from user-controlled sources to dangerous sinks. Action
 - `sources` (tool-specific)
 - `sinks` (tool-specific)
 - `trace` (tool-specific)
-- `report` (tool-specific)
 - `paths` (tool-specific)
+- `report` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.

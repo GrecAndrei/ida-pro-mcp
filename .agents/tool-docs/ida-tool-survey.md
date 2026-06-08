@@ -10,9 +10,9 @@ Context-aware reverse-engineering survey queue for variable-renaming follow-up a
 
 ## Actions
 - `list` (read/discovery)
-- `submit` (tool-specific)
-- `delay` (tool-specific)
 - `status` (read/discovery)
+- `delay` (tool-specific)
+- `submit` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -28,7 +28,7 @@ Context-aware reverse-engineering survey queue for variable-renaming follow-up a
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `list, submit, delay, status`
+- `action`: `string` - allowed: `list, status, delay, submit`
 - `addr`: `string` - Address of the function or offset related to the survey
 - `blackboard_publish`: `array` - List of findings to publish to blackboard (action=submit)
 - `bookmark`: `string` - Bookmark tag name to apply to the function (action=submit)

@@ -982,7 +982,11 @@ class ServerDispatchMixin:
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
 
             # Background calls bypass ALL gates.
-            _bg = tool_name == "background" or getattr(self, "_bg_running", False)
+            _bg = (
+                tool_name == "background"
+                or getattr(self, "_bg_running", False)
+                or getattr(self, "_daemon_mode", False)
+            )
 
             # ---- Active Survey Lock Check ----
             if not _bg and not self._survey_gate_exempt(tool_name, args):

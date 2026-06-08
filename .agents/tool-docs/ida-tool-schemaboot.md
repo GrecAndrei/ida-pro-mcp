@@ -6,17 +6,15 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Structured semantic indexing with induced attribute-value schemas for function-level retrieval. Actions: ingest, query, refresh, stats, delete, get.
+Legacy alias for the structural function-attribute indexer now implemented by intelligence.structural_*. Builds and queries a per-function SQLite index (size, CFG shape, APIs, strings, entropy, etc.), not a separate semantic engine. Actions: ingest, query, refresh, stats, delete, get.
 
 ## Actions
-- `extract` (tool-specific)
-- `extract_single` (tool-specific)
 - `ingest` (tool-specific)
 - `query` (tool-specific)
-- `get` (read/discovery)
+- `refresh` (tool-specific)
 - `stats` (tool-specific)
 - `delete` (destructive)
-- `refresh` (tool-specific)
+- `get` (read/discovery)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -32,7 +30,7 @@ Structured semantic indexing with induced attribute-value schemas for function-l
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `extract, extract_single, ingest, query, get, stats, delete, refresh`
+- `action`: `string` - allowed: `ingest, query, refresh, stats, delete, get`
 - `addr`: `string` - Function address for get/refresh
 - `constraints`: `object` - Structured query constraints
 - `include_apis`: `boolean` - Include API list in results
@@ -47,7 +45,7 @@ Structured semantic indexing with induced attribute-value schemas for function-l
 {
   "name": "schemaboot",
   "arguments": {
-    "action": "extract"
+    "action": "ingest"
   }
 }
 ```
@@ -56,7 +54,7 @@ Structured semantic indexing with induced attribute-value schemas for function-l
   "name": "schemaboot",
   "arguments": {
     "action": "grep",
-    "source_action": "extract",
+    "source_action": "ingest",
     "pattern": "<needle>"
   }
 }

@@ -9,39 +9,36 @@
 Pattern, reference, and semantic search across the binary. nl: natural language search using bge-code-v1 embeddings (most accurate for RE queries). behavior: find all functions matching a behavior tag (crypto_symmetric, network_http, etc.) via BehaviorClassifier. find: smart unified search (names/strings/imports/instructions, auto-ranked). semantic: NL search with embedding-aware ranking. smart_bundle: fused find+semantic with deduplicated structured items. api: find all usages of an imported API. decompiled: search pseudocode across all functions (auto-writes blackboard entries for matches). structured: schema-based pre-filtered search with behavior_tags constraints. vulnerable: scan for dangerous API patterns. constants: find crypto/magic constants. callers/callees, bytes/string/immediate/name/insns/mnemonic/instruction/text/operand/comment/data_ref/code_ref/regex/func_by_sig/type/export/summary/query_lang. Composition actions: bool (composite boolean query: '(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)'), hunt (named workflow recipes: backdoor, anti_debug, c2, crypto, parser, etc. - pass recipe='list' to enumerate), neighborhood (360-degree context card around a function: callers, callees, similar, tags, blackboard), outlier (find structurally anomalous functions by metric: size, complexity, orphan, leaf, hub, deep, tiny, huge), fingerprint (structural callgraph similarity - distinct from embedding-based nl), path (shortest call-graph path between two symbols), reach (functions reachable from a root within N hops), noreach (functions NOT reachable from any entrypoint). NOTE: search.nl and query.nl both expose natural-language search. search.nl uses the bge-code-v1 embedding ranker directly; query.nl routes through the unified query dispatcher. Use search.nl for behaviorally-precise RE queries; use query.nl when you want the unified dispatcher to pick a target domain.
 
 ## Actions
-- `text` (tool-specific)
-- `bytes` (tool-specific)
-- `regex` (tool-specific)
-- `immediate` (tool-specific)
-- `code_pattern` (tool-specific)
-- `next` (tool-specific)
-- `all` (tool-specific)
-- `structured` (tool-specific)
-- `string` (tool-specific)
-- `name` (tool-specific)
-- `comment` (tool-specific)
-- `mnemonic` (tool-specific)
-- `operand` (tool-specific)
-- `insns` (tool-specific)
-- `instruction` (tool-specific)
-- `decompiled` (tool-specific)
-- `constants` (tool-specific)
-- `semantic` (tool-specific)
-- `smart_bundle` (tool-specific)
-- `func_by_sig` (tool-specific)
-- `vulnerable` (tool-specific)
-- `api` (tool-specific)
-- `callees` (tool-specific)
-- `callers` (tool-specific)
-- `code_ref` (tool-specific)
-- `data_ref` (tool-specific)
-- `export` (tool-specific)
-- `find` (tool-specific)
 - `nl` (tool-specific)
 - `behavior` (tool-specific)
-- `query_lang` (tool-specific)
-- `summary` (read/discovery)
+- `find` (tool-specific)
+- `semantic` (tool-specific)
+- `smart_bundle` (tool-specific)
+- `api` (tool-specific)
+- `decompiled` (tool-specific)
+- `structured` (tool-specific)
+- `vulnerable` (tool-specific)
+- `constants` (tool-specific)
+- `callers` (tool-specific)
+- `callees` (tool-specific)
+- `bytes` (tool-specific)
+- `string` (tool-specific)
+- `immediate` (tool-specific)
+- `name` (tool-specific)
+- `insns` (tool-specific)
+- `mnemonic` (tool-specific)
+- `instruction` (tool-specific)
+- `text` (tool-specific)
+- `operand` (tool-specific)
+- `comment` (tool-specific)
+- `data_ref` (tool-specific)
+- `code_ref` (tool-specific)
+- `regex` (tool-specific)
+- `func_by_sig` (tool-specific)
 - `type` (tool-specific)
+- `export` (tool-specific)
+- `summary` (read/discovery)
+- `query_lang` (tool-specific)
 - `bool` (tool-specific)
 - `hunt` (tool-specific)
 - `neighborhood` (tool-specific)
@@ -65,7 +62,7 @@ Pattern, reference, and semantic search across the binary. nl: natural language 
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `41`
+- `action`: `string` - allowed_count: `38`
 - `addr`: `string`
 - `case_sensitive`: `boolean`
 - `depth`: `integer` - reach/noreach BFS depth
@@ -96,7 +93,7 @@ Pattern, reference, and semantic search across the binary. nl: natural language 
 {
   "name": "search",
   "arguments": {
-    "action": "text"
+    "action": "nl"
   }
 }
 ```
@@ -105,7 +102,7 @@ Pattern, reference, and semantic search across the binary. nl: natural language 
   "name": "search",
   "arguments": {
     "action": "grep",
-    "source_action": "text",
+    "source_action": "nl",
     "pattern": "<needle>"
   }
 }

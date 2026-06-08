@@ -15,8 +15,6 @@ Deterministic prediction of next useful tool, focus address, or stuck-state dete
 - `suggest_next_address` (tool-specific)
 - `risk_of_stall` (tool-specific)
 - `recommend_bundle` (tool-specific)
-- `explain_decision` (tool-specific)
-- `feedback` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -32,7 +30,7 @@ Deterministic prediction of next useful tool, focus address, or stuck-state dete
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed: `suggest_next_tool, detect_stuck, suggest_focus, suggest_next_address, risk_of_stall, recommend_bundle, explain_decision, feedback`
+- `action`: `string` - allowed: `suggest_next_tool, detect_stuck, suggest_focus, suggest_next_address, risk_of_stall, recommend_bundle`
 - `context`: `string` - Optional context text to bias suggestions.
 - `limit`: `integer` - Maximum suggestions to return.
 - `outcome`: `string` - allowed: `helpful, not_helpful` - Feedback outcome for predictor(action='feedback').
