@@ -67,7 +67,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 pass
         return {"skills": {}, "q_table": {}, "activity_log": [], "hypotheses": []}
 
