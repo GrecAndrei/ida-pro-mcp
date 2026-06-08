@@ -818,29 +818,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             except Exception:
                 continue
 
-            # Adaptive high-entropy gate from observed segment entropies.
-            # Collect all segment entropies once per sweep.
-            # We compute lazily and cache on first iteration.
-            if "_entropy_vals" not in locals():
-                _entropy_vals = []  # type: ignore[var-annotated]
-                try:
-                    for _s in segs:
-                        _st = int(_s.start_ea)
-                        _en = int(_s.end_ea)
-                        _blob = ida_bytes.get_bytes(_st, max(0, _en - _st))
-                        if _blob:
-                            _entropy_vals.append(self._byte_entropy(_blob))
-                except Exception:
-                    _entropy_vals = []
-                _entropy_vals = sorted(float(v) for v in _entropy_vals)
-                if _entropy_vals:
-                    _mq = len(_entropy_vals) // 2
-                    _iq = min(len(_entropy_vals) - 1, int(round((len(_entropy_vals) - 1) * 0.75)))
-                    _eq50 = _entropy_vals[_mq]
-                    _eq75 = _entropy_vals[_iq]
-                    _entropy_gate = _eq75 + max(0.0, _eq75 - _eq50)
-                else:
-                    _entropy_gate = 6.5
+            _entropy_gate = 6.5
             if entropy < _entropy_gate:
                 continue
 
