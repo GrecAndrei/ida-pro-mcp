@@ -98,7 +98,34 @@ A summary of what changed, organized by workstream.
 | §1.11 [High] idle-index worker racing with in-flight counter | Same fix — lock prevents the counter from being transiently 0 during active calls | `31b6c89` |
 | §1.3 [Critical] missing concurrency test coverage | `tests/test_concurrency.py` with 4 deterministic tests (stress, dict R/W, session R/W, non-negative counter) | `31b6c89` |
 
-#### 2B — Data-driven tool registry (foundation)
+#### 3 — Deep audit of Appendix C untouched files (2026-06-08, 6 parallel agents)
+
+26 files audited end-to-end (~25K LOC), 17 bugs found (4 HIGH, 8 MEDIUM, 5 LOW), 20 commits. 1670 passed, 0 failed.
+
+<!-- Phase 3A — Analysis Engines + Intelligence Utilities -->
+<!-- Phase 3B — Session Skills -->
+<!-- Phase 3C — Intelligence Core -->
+<!-- Phase 3D — Server Modules -->
+<!-- Phase 3E — Infrastructure -->
+<!-- Phase 3F — Misc Sweep -->
+| Severity | Count | Workstream | Description |
+|----------|-------|-----------|-------------|
+| HIGH | 1 | 3B | Path traversal via `sid` in `_get_skills_path` — no sanitization of `../` | `69d5fa6` |
+| HIGH | 2 | 3C | SQLite connection leaks on exception paths in `bridge_retrieval.py` + `context.py` (8 functions) | `a81fb56` |
+| HIGH | 1 | 3C | Unprotected concurrent `dict` mutation on `FunctionEmbeddingIndex._cache` | `46165bb` |
+| HIGH | 1 | 3E | Race condition: token-bucket `tokens` modified without lock in `rate_limit.py` | `e1a6897` |
+| MEDIUM | 2 | 3A | Substring-matching false positives in taint sink detection; lock never acquired in `AnalysisProposalStore` | `3a8c4b9` |
+| MEDIUM | 4 | 3B | Missing locks in `get_phase`/`cross_reference_sessions`, bare except, missing session validation in `bootstrap_compute_blend` | `5495873`–`2fc68fd` |
+| MEDIUM | 1 | 3F | Background crawler thread adopted `bypass_sync()` context manager | `ae1c366` |
+| MEDIUM | 1 | 3E | Unprotected concurrent access to `AutoNudge` singleton state | `20caf53` |
+| LOW | 2 | 3A | Broken adaptive entropy gate (dead code removed) | `3A.3` |
+| LOW | 1 | 3B | Mid-batch error in `bootstrap_simulate_batch` returns without saving | `e9ccee2` |
+| LOW | 2 | 3D | Dead imports (`json`, `os`) and unreachable `elif` branch in server_workflow*/batch.py | `af3f17c`, `03a76f0` |
+| LOW | 2 | 3E | Dead code in `config._parse_str_list`, SQLite connection leak in `SymbolDB._init_db` | `79953de`, `2dfc45f` |
+| — | — | 3F | Noise-word lists consolidated into `NOISE_WORDS` in `embeddings.py`; deprecation TODOs on 9 intelligence wrapper shims | `ff5798d`, `2fd8f18` |
+| — | — | — | 8 static grep tests updated to point at `tool_registry.py` instead of removed `schemas_data.py` literal | `ece665b` |
+
+### 2B — Data-driven tool registry (foundation)
 | Finding | Fix | Commit |
 |---|---|---|
 | §1.5 [Critical] action surface hand-maintained (2014-line `schemas_data.py`) | Created `tool_registry.py` with 67 tools' action lists; `schemas_data.py` derives `TOOL_ACTIONS` from registry; `server_session.py` registers actions via `register_tool_actions()`; -983 LOC | `36aaa18` |
@@ -695,26 +722,26 @@ The `ida-pro-mcp` project has 78 advertised tools, 22 intelligence files, a side
 
 ### 10.1 Recommended next moves (ordered by leverage)
 
-1. **(Critical) Decompose the host server.** Pull `_handle_session` apart into per-action dispatch tables. Extract `_handle_batch`. Move `current_session`/`session_runtimes` into a `SessionContext` object with proper lock semantics. Estimated -4K LOC, no behavior change. `[PENDING — Phase 2A]`
-2. **(Critical) Make the tool registry data-driven.** Replace the 50-action if/elif chain with a per-tool `{action: handler}` table. The schemas in `host/schemas_data.py` become derived. Estimated -3K LOC, no behavior change. `[PENDING — Phase 2B]`
-3. **(Critical) Add concurrency tests.** A `pytest-asyncio` + `threading` integration test that hammers `IDAMCPServer` from N threads would surface 5+ bugs immediately (idle-index race, session_runtimes lost-update, `_trigger_session_diff` cache iteration). `[PENDING]`
+1. **(Critical) Decompose the host server.** Pull `_handle_session` apart into per-action dispatch tables. Extract `_handle_batch`. Move `current_session`/`session_runtimes` into a `SessionContext` object with proper lock semantics. Estimated -4K LOC, no behavior change. `[FIXED — Phase 2A]`
+2. **(Critical) Make the tool registry data-driven.** Replace the 50-action if/elif chain with a per-tool `{action: handler}` table. The schemas in `host/schemas_data.py` become derived. Estimated -3K LOC, no behavior change. `[FIXED — Phase 2B]`
+3. **(Critical) Add concurrency tests.** A `pytest-asyncio` + `threading` integration test that hammers `IDAMCPServer` from N threads would surface 5+ bugs immediately (idle-index race, session_runtimes lost-update, `_trigger_session_diff` cache iteration). `[FIXED — Phase 2C]`
 4. **(Critical) Audit and fix `trace_analysis.py` emulator.** §5.1 lists 12+ correctness bugs in a 3241-line file that no unit test exercises. This is the highest-density bug cluster in the project. `[FIXED — 1C, 13 commits]`
-5. **(Critical) Fix `proposal_accept` order.** Swap `_proposal_execute` and `_proposal_verify` (or wrap in a snapshot/rollback). `[PENDING — Phase 2D]`
+5. **(Critical) Fix `proposal_accept` order.** Swap `_proposal_execute` and `_proposal_verify` (or wrap in a snapshot/rollback). `[FIXED — Phase 2D]`
 6. **(Critical) Remove unconditional `BYPASS_SYNC=1` in `server_script.py:36`.** This silently disables the `@idaread`/`@idawrite` safety net for every tool call. `[FIXED — 1A.4, replaced with `bypass_sync()` context manager]`
 7. **(High) Add path validation to `memory` tool** (`server_dispatch.py:296-365`). `[FIXED — 1A.1]`
 8. **(High) Add path validation to `intelligence(action="blackboard_federate")`** (`ida_mcp/tools/intelligence.py:836-846`). `[FIXED — 1D.1]`
 9. **(High) Add size cap to `_send_rpc_raw`** (`server_runtime.py:1156-1191`). `[FIXED — 1A.2]`
 10. **(High) Fix `idb.py:201` `min_ea=0` bug** for ELF images. `[FIXED — 1B.3]`
 11. **(High) Atomic-rename writes + fsync** in `session.py:384-396, 902-910, 929-937`. `[FIXED — 1B.1]`
-12. **(High) Audit `host/intelligence/ppaa.py`, `crystallizer.py`, `reasoner.py`, `entropy.py`, `federation.py`, `analogy.py`, `structural_index.py`, `api_patterns.py`, `usage.py`, `bridge_retrieval.py`, `preference_store.py`, `helpers.py`** — these files are unopened in this pass but cited by the architecture as core. `[PENDING]`
-13. **(High) Audit `host/symbol_db.py`, `host/analysis_proposal_store.py`, `host/insight_index.py`, `host/capsule/store.py`** — also unopened. `[PENDING]`
+12. **(High) Audit `host/intelligence/ppaa.py`, `crystallizer.py`, `reasoner.py`, `entropy.py`, `federation.py`, `analogy.py`, `structural_index.py`, `api_patterns.py`, `usage.py`, `bridge_retrieval.py`, `preference_store.py`, `helpers.py`** — these files are unopened in this pass but cited by the architecture as core. `[FIXED — Phase 3A+3C]`
+13. **(High) Audit `host/symbol_db.py`, `host/analysis_proposal_store.py`, `host/insight_index.py`, `host/capsule/store.py`** — also unopened. `[FIXED — Phase 3A]` (capsule/store.py: deferred)
 14. **(High) Test suite cleanup:** replace `>=` with `==`, remove `try/except: pass` in test bodies, add `conftest.py` shared fixtures, restore `_FakeEmbedder`/`mock_ida_context` to a single source. `[FIXED — 1E, 8 commits; see §0.1 for per-commit mapping]`
 15. **(Medium) Add `pytest-timeout` dependency** to make the declared `timeout = 30` actually work. `[FIXED — 1E.1]`
 16. **(Medium) Stop ignoring `tests/test_mcp_comprehensive.py` by default** — it's 1394 lines and the most comprehensive integration test in the suite. `[FIXED — 1E.2]`
-17. **(Medium) Drop the `Production/Stable` classifier** from `pyproject.toml` until the issue density is reduced. `[PENDING]`
-18. **(Medium) Mark `BYPASS_SYNC` for the `_BackgroundCrawler` thread** explicitly, with a comment explaining why the thread can bypass the safety wrapper, instead of relying on the global knob. `[PENDING — the `bypass_sync()` context manager exists but the crawler hasn't adopted it yet]`
-19. **(Low) Consolidate noise-word lists** in `intelligence/embeddings.py:19-27` and `intelligence/core.py:512-522`. `[PENDING]`
-20. **(Low) Remove dead code** at `server_dispatch.py:1031-1061`, the legacy comment anchors at `server.py:140-141, 804-806`, and the no-op `_observe_preference` (`server_response.py:280-282`). `[PENDING]`
+17. **(Medium) Drop the `Production/Stable` classifier** from `pyproject.toml` until the issue density is reduced. `[FIXED — cleanup phase]`
+18. **(Medium) Mark `BYPASS_SYNC` for the `_BackgroundCrawler` thread** explicitly, with a comment explaining why the thread can bypass the safety wrapper, instead of relying on the global knob. `[FIXED — Phase 3F]`
+19. **(Low) Consolidate noise-word lists** in `intelligence/embeddings.py:19-27` and `intelligence/core.py:512-522`. `[FIXED — Phase 3F]`
+20. **(Low) Remove dead code** at `server_dispatch.py:1031-1061`, the legacy comment anchors at `server.py:140-141, 804-806`, and the no-op `_observe_preference` (`server_response.py:280-282`). `[FIXED — cleanup phase]`
 
 ---
 
