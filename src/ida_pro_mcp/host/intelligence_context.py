@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.context directly)
 import sys
 try:
     from .intelligence import context as _target

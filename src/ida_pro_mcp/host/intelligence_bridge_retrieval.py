@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.bridge_retrieval directly)
 import sys
 try:
     from .intelligence import bridge_retrieval as _target

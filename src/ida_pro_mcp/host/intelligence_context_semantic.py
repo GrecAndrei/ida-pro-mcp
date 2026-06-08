@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.context_semantic directly)
 import sys
 try:
     from .intelligence import context_semantic as _target

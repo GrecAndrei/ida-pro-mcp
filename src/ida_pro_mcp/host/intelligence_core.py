@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.core directly)
 import sys
 try:
     from .intelligence import core as _target

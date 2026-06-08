@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.preference_store directly)
 import sys
 try:
     from .intelligence import preference_store as _target

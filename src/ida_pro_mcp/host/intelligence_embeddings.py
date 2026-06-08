@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.embeddings directly)
 import sys
 try:
     from .intelligence import embeddings as _target

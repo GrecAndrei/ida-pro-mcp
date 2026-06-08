@@ -1,4 +1,4 @@
-# Compatibility shim
+# Compatibility shim (TODO: deprecate — import from .intelligence.api_patterns directly)
 import sys
 try:
     from .intelligence import api_patterns as _target
