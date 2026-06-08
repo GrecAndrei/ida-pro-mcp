@@ -276,7 +276,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
 def _parse_str_list(value: Any) -> List[str]:
     from .intelligence_helpers import parse_str_list
     return parse_str_list(value)
-    return [str(value)]
 
 
 def _parse_line_range(value: Any) -> tuple[Optional[int], Optional[int]]:

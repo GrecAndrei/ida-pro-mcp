@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import json
+import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
@@ -89,6 +90,7 @@ class AutoNudge:
     """
 
     def __init__(self):
+        self._lock = threading.Lock()
         # Per-session call history: sid -> {tool:action -> count}
         self._call_history: Dict[str, Dict[str, int]] = {}
         # Per-session decompile cache: sid -> [addresses]
@@ -106,22 +108,23 @@ class AutoNudge:
         """Record a tool call for history tracking."""
         key = self._session_key(idb)
         call_key = f"{tool}:{action}"
-        self._call_history.setdefault(key, {})
-        self._call_history[key][call_key] = self._call_history[key].get(call_key, 0) + 1
+        with self._lock:
+            self._call_history.setdefault(key, {})
+            self._call_history[key][call_key] = self._call_history[key].get(call_key, 0) + 1
 
-        if addr and action in ("decompile", "semantic_decompile", "disasm", "blocks"):
-            self._decompile_cache.setdefault(key, [])
-            if addr not in self._decompile_cache[key]:
-                self._decompile_cache[key].append(addr)
-                if len(self._decompile_cache[key]) > self._max_cache:
-                    self._decompile_cache[key] = self._decompile_cache[key][-self._max_cache:]
+            if addr and action in ("decompile", "semantic_decompile", "disasm", "blocks"):
+                self._decompile_cache.setdefault(key, [])
+                if addr not in self._decompile_cache[key]:
+                    self._decompile_cache[key].append(addr)
+                    if len(self._decompile_cache[key]) > self._max_cache:
+                        self._decompile_cache[key] = self._decompile_cache[key][-self._max_cache:]
 
-        if query and action in ("find", "search", "text", "string", "bytes", "name"):
-            self._search_cache.setdefault(key, [])
-            if query not in self._search_cache[key]:
-                self._search_cache[key].append(query)
-                if len(self._search_cache[key]) > self._max_cache:
-                    self._search_cache[key] = self._search_cache[key][-self._max_cache:]
+            if query and action in ("find", "search", "text", "string", "bytes", "name"):
+                self._search_cache.setdefault(key, [])
+                if query not in self._search_cache[key]:
+                    self._search_cache[key].append(query)
+                    if len(self._search_cache[key]) > self._max_cache:
+                        self._search_cache[key] = self._search_cache[key][-self._max_cache:]
 
     def compute_nudge(self, idb: str, tool: str, action: str, response: dict,
                       request_args: Optional[dict] = None, execute_tool_fn: Any = None) -> Optional[dict]:
@@ -432,10 +435,11 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
     """
     if os.environ.get("IDA_MCP_DISABLE_STUCK_DETECTION") == "1":
         return None
-    key = _auto_nudge._session_key(idb)
-    dc_cache = _auto_nudge._decompile_cache.get(key, [])
-    search_cache = _auto_nudge._search_cache.get(key, [])
-    call_history = _auto_nudge._call_history.get(key, {})
+    with _auto_nudge._lock:
+        key = _auto_nudge._session_key(idb)
+        dc_cache = list(_auto_nudge._decompile_cache.get(key, []))
+        search_cache = list(_auto_nudge._search_cache.get(key, []))
+        call_history = dict(_auto_nudge._call_history.get(key, {}))
     total_events = sum(int(v or 0) for v in call_history.values())
     thresholds = _dynamic_stuck_thresholds(total_events)
     
@@ -483,26 +487,29 @@ def check_stuck_blocking(idb: str, tool: str, action: str, args: dict) -> Option
             }
     
     # Pattern 3: Looping between two tools
-    if hasattr(_auto_nudge, '_recent_tools'):
-        recent = list(_auto_nudge._recent_tools.get(key, []))[-8:]
-        recent.append((tool, action))
-        _auto_nudge._recent_tools.setdefault(key, [])
-        _auto_nudge._recent_tools[key] = recent[-10:]
-        
-        pairs = [(recent[i], recent[i + 1]) for i in range(len(recent) - 1)]
-        for pair in set(pairs):
-            if pairs.count(pair) >= thresholds["tool_loop"]:
-                return {
-                    "STUCK": True,
-                    "blocking": True,
-                    "reason": f"Looping between {pair[0][0]}.{pair[0][1]} <-> {pair[1][0]}.{pair[1][1]}",
-                    "redirect": [
-                        "Take a step back. Check session.dashboard() for progress.",
-                        "Try pivoting: search for a different pattern, or look at a different part of the binary.",
-                        "Use bridge_search.search to find related functions from a different starting point.",
-                    ],
-                }
-    else:
-        _auto_nudge._recent_tools = {key: [(tool, action)]}
+    with _auto_nudge._lock:
+        if hasattr(_auto_nudge, '_recent_tools'):
+            recent = list(_auto_nudge._recent_tools.get(key, []))[-8:]
+            recent.append((tool, action))
+            _auto_nudge._recent_tools.setdefault(key, [])
+            _auto_nudge._recent_tools[key] = recent[-10:]
+            _recent = list(_auto_nudge._recent_tools.get(key, []))
+        else:
+            _auto_nudge._recent_tools = {key: [(tool, action)]}
+            _recent = [(tool, action)]
+
+    pairs = [(_recent[i], _recent[i + 1]) for i in range(len(_recent) - 1)]
+    for pair in set(pairs):
+        if pairs.count(pair) >= thresholds["tool_loop"]:
+            return {
+                "STUCK": True,
+                "blocking": True,
+                "reason": f"Looping between {pair[0][0]}.{pair[0][1]} <-> {pair[1][0]}.{pair[1][1]}",
+                "redirect": [
+                    "Take a step back. Check session.dashboard() for progress.",
+                    "Try pivoting: search for a different pattern, or look at a different part of the binary.",
+                    "Use bridge_search.search to find related functions from a different starting point.",
+                ],
+            }
     
     return None

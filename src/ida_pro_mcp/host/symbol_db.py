@@ -36,7 +36,8 @@ class SymbolDB:
         return conn
 
     def _init_db(self) -> None:
-        with self._conn() as conn:
+        conn = self._conn()
+        try:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS symbols (
@@ -77,6 +78,8 @@ class SymbolDB:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_hyp_hash ON hypotheses(binary_hash)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_hyp_chip ON hypotheses(chip_family)")
             conn.commit()
+        finally:
+            conn.close()
 
     def upsert_symbol(self, row: Dict[str, Any]) -> int:
         now = time.time()
