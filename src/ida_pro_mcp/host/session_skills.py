@@ -58,7 +58,8 @@ _ANALYSIS_PHASES = {
 
 class SessionSkillsMixin(SessionBootstrapMixin):
     def _get_skills_path(self, sid: str) -> str:
-        return os.path.join(self.session_dir, f"SID_{sid}_skills.json")
+        safe_sid = str(sid).replace("/", "_").replace("\\", "_")
+        return os.path.join(self.session_dir, f"SID_{safe_sid}_skills.json")
 
     def _load_skills(self, sid: str) -> dict:
         path = self._get_skills_path(sid)
@@ -66,7 +67,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 pass
         return {"skills": {}, "q_table": {}, "activity_log": [], "hypotheses": []}
 
@@ -931,12 +932,13 @@ class SessionSkillsMixin(SessionBootstrapMixin):
     # ====================================================================
 
     def get_phase(self, sid: str) -> dict:
-        session = self.sessions.get(sid)
-        if not session:
-            return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-        phase_info = _ANALYSIS_PHASES.get(session.phase, {})
-        return {"ok": True, "phase": session.phase, "description": phase_info.get("description", ""),
-                "suggested_tools": phase_info.get("suggested_tools", [])}
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            phase_info = _ANALYSIS_PHASES.get(session.phase, {})
+            return {"ok": True, "phase": session.phase, "description": phase_info.get("description", ""),
+                    "suggested_tools": phase_info.get("suggested_tools", [])}
 
     def advance_phase(self, sid: str) -> dict:
         with self._lock:
@@ -977,20 +979,21 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
     def cross_reference_sessions(self, sid: str) -> dict:
         """Find shared functions/strings across linked sessions."""
-        session = self.sessions.get(sid)
-        if not session:
-            return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-        linked = session.linked_sessions
-        if not linked:
-            return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to federate."}
-        # Collect function names from all linked sessions' skills data
-        shared_funcs: Dict[str, List[str]] = {}
-        for lsid in [sid] + linked:
-            data = self._load_skills(lsid)
-            for entry in data.get("activity_log", []):
-                func = entry.get("result", "")
-                if func:
-                    shared_funcs.setdefault(func, []).append(lsid)
-        # Only keep functions appearing in multiple sessions
-        cross = {k: v for k, v in shared_funcs.items() if len(set(v)) > 1}
-        return {"ok": True, "shared_functions": list(cross.keys()), "details": cross}
+        with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
+            linked = session.linked_sessions
+            if not linked:
+                return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to federate."}
+            # Collect function names from all linked sessions' skills data
+            shared_funcs: Dict[str, List[str]] = {}
+            for lsid in [sid] + linked:
+                data = self._load_skills(lsid)
+                for entry in data.get("activity_log", []):
+                    func = entry.get("result", "")
+                    if func:
+                        shared_funcs.setdefault(func, []).append(lsid)
+            # Only keep functions appearing in multiple sessions
+            cross = {k: v for k, v in shared_funcs.items() if len(set(v)) > 1}
+            return {"ok": True, "shared_functions": list(cross.keys()), "details": cross}

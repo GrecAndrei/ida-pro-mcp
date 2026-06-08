@@ -203,6 +203,9 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
     def bootstrap_compute_blend(self, sid: str, session_samples: int) -> dict:
         """Compute bootstrap/session blend weights with exponential bootstrap decay."""
         with self._lock:
+            session = self.sessions.get(sid)
+            if not session:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
             decay_lambda = float(bootstrap.get("decay_lambda", 0.03))
@@ -877,6 +880,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     delay_seconds=0,
                 )
                 if is_error_result(out):
+                    self._save_skills(sid, data)
                     return out
                 brier_sum += float(out.get("brier", 0.0))
             self._save_skills(sid, data)
