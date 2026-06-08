@@ -55,7 +55,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .embeddings import FunctionEmbeddingIndex, SemanticObject, SemanticObjectIndex
+from .embeddings import FunctionEmbeddingIndex, NOISE_WORDS, SemanticObject, SemanticObjectIndex
 from .helpers import compact_policy_blob, derive_focus_candidates, prune_policy_store
 from .preference_store import (
     DEFAULT_ALPHA,
@@ -509,18 +509,6 @@ EMBED_DISABLED = os.environ.get("IDA_MCP_EMBED_DISABLED", "") in ("1", "true", "
 INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "yes")
 
 
-_NOISE_IDENTS = frozenset({
-    "int", "char", "void", "uint", "size", "len", "buf", "ptr", "tmp", "ret",
-    "var", "idx", "for", "while", "return", "NULL", "sizeof", "unsigned",
-    "signed", "long", "short", "struct", "else", "true", "false", "bool",
-    "this", "auto", "const", "static", "inline", "extern", "typedef",
-    "goto", "break", "continue", "switch", "case", "default",
-    "result", "value", "data", "type", "flag", "mode", "count", "num",
-    "out", "res", "src", "dst", "key", "val", "arg", "msg", "str",
-    "memcpy", "memset", "memcmp", "memmove", "malloc", "calloc", "free",
-    "printf", "sprintf", "strcpy", "strlen", "strcat", "strcmp",
-})
-
 _IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b')
 
 
@@ -541,7 +529,7 @@ def _extract_signature(pseudocode: str, max_idents: int = 40) -> str:
     out: list = []
     for ident in idents:
         lo = ident.lower()
-        if lo in _NOISE_IDENTS:
+        if lo in NOISE_WORDS:
             continue
         if ident not in seen:
             seen.add(ident)

@@ -21,14 +21,24 @@ logger = logging.getLogger(__name__)
 
 
 _SEARCH_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}|0x[0-9a-fA-F]+|\b\d+\b")
-_SEARCH_NOISE_TOKENS = frozenset({
+
+# Consolidated noise-word set used by both text-search tokenisation and
+# signature extraction.  Kept in one place to avoid drift between the two
+# subsystems.  Imported by ``intelligence/core.py``.
+NOISE_WORDS = frozenset({
     "the", "and", "for", "with", "this", "that", "from", "into", "while",
     "void", "char", "int", "uint", "long", "short", "bool", "true", "false",
     "const", "struct", "class", "return", "case", "break", "default", "null",
     "auto", "static", "extern", "signed", "unsigned", "size", "len", "buf",
     "ptr", "tmp", "ret", "arg", "args", "result", "value", "values", "data",
     "var", "vars", "out", "dst", "src", "count", "index", "idx",
+    "NULL", "sizeof", "else", "inline", "typedef", "goto", "continue",
+    "switch", "type", "flag", "mode", "num", "res", "key", "val", "msg",
+    "str", "memcpy", "memset", "memcmp", "memmove", "malloc", "calloc",
+    "free", "printf", "sprintf", "strcpy", "strlen", "strcat", "strcmp",
 })
+
+_SEARCH_NOISE_TOKENS = NOISE_WORDS
 
 
 def _now_iso() -> str:
