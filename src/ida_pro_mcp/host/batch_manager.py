@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import threading
@@ -8,10 +7,7 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-
 
 _MAX_TASK_HISTORY = 1000
 _DEFAULT_MAX_WORKERS = int(os.environ.get("IDA_MCP_BATCH_MAX_WORKERS", "4"))
@@ -20,12 +16,13 @@ _PERSIST_PATH = os.path.join(
     "tasks.json",
 )
 _MAX_PERSIST_RESULT_BYTES = 10_000
-_MAX_PERSIST_FIELDS = {"task_id", "action", "args", "state", "created_at", "started_at", "finished_at", "result", "error"}
+_MAX_PERSIST_FIELDS = {"task_id", "session_id", "action", "args", "state", "created_at", "started_at", "finished_at", "result", "error"}
 
 
 @dataclass
 class BatchTask:
     task_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    session_id: Optional[str] = None
     action: str = "script"
     args: Dict[str, Any] = field(default_factory=dict)
     state: str = "pending"
@@ -48,6 +45,7 @@ class BatchTask:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "task_id": self.task_id,
+            "session_id": self.session_id,
             "action": self.action,
             "state": self.state,
             "created_at": self.created_at,
@@ -72,9 +70,10 @@ class BatchManager:
         action: str,
         args: Dict[str, Any],
         *,
+        session_id: Optional[str] = None,
         run_fn: Optional[Callable[[BatchTask], Any]] = None,
     ) -> str:
-        task = BatchTask(action=action, args=args)
+        task = BatchTask(action=action, args=args, session_id=session_id)
         with self._lock:
             self._tasks[task.task_id] = task
             self._trim_history()
@@ -139,6 +138,7 @@ class BatchManager:
             task._future.cancel()
         task.state = "cancelled"
         task.finished_at = time.time()
+        self._save_persisted()
         return task.to_dict()
 
     def wait(self, task_id: str, timeout: Optional[float] = None) -> Dict[str, Any]:
@@ -210,6 +210,7 @@ class BatchManager:
             for d in data:
                 t = BatchTask(
                     task_id=d.get("task_id", uuid.uuid4().hex[:12]),
+                    session_id=d.get("session_id"),
                     action=d.get("action", "script"),
                     args=d.get("args", {}),
                 )

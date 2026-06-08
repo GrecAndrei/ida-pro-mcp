@@ -38,6 +38,7 @@ class BackgroundMixin:
     def _bg_submit(self, args: dict) -> dict:
         script = args.get("script")
         tool_call = args.get("tool_call")
+        session_id = args.get("session_id")
         if not script and not tool_call:
             return make_error(
                 MCPError.INVALID_ARGS,
@@ -48,7 +49,15 @@ class BackgroundMixin:
 
         def _run(task):
             self._bg_running = True
+            prev_session = getattr(self, "current_session", None)
             try:
+                if task.session_id and hasattr(self, "session_mgr"):
+                    try:
+                        target = self.session_mgr.get_session(task.session_id)
+                        if target:
+                            self.current_session = target
+                    except Exception:
+                        pass
                 if task.args.get("script"):
                     namespace: dict[str, Any] = {"__builtins__": __builtins__}
                     exec(
@@ -63,11 +72,13 @@ class BackgroundMixin:
                     return {"status": "ok", "tool_call": tc}
                 return {"status": "unknown"}
             finally:
+                self.current_session = prev_session
                 self._bg_running = False
 
         task_id = self._batch_manager.submit(
             action=action,
             args={"script": script, "tool_call": tool_call},
+            session_id=session_id,
             run_fn=_run,
         )
         return {"task_id": task_id, "state": "pending"}
@@ -91,7 +102,10 @@ class BackgroundMixin:
 
     def _bg_list(self, args: dict) -> dict:
         state = args.get("state")
+        session_id = args.get("session_id")
         tasks = self._batch_manager.list_tasks(state)
+        if session_id:
+            tasks = [t for t in tasks if t.get("session_id") == session_id]
         return {"tasks": tasks}
 
     def _bg_wait(self, args: dict) -> dict:

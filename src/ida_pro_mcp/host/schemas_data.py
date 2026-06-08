@@ -940,6 +940,7 @@ TOOL_ARG_SCHEMAS = {
             },
         },
         "state": {"type": "string", "description": "Filter tasks by state (pending/running/done/failed/cancelled)"},
+        "session_id": {"type": "string", "description": "IDA session ID to run tool calls within. Task persists with this session."},
         "timeout": {"type": "number", "description": "Max seconds to wait for task completion"},
     },
     "batch": {

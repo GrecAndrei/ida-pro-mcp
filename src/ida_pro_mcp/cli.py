@@ -235,21 +235,34 @@ def _daemon_call(tool_name: str, args: dict[str, Any]) -> dict:
 
 def _handle_background_mode(args):
     action = str(args.name or "list").strip().lower()
-    payload = None
-    if args.stdin_json:
-        payload = _read_stdin_json(label="background")
-    elif args.payload is not None:
-        payload = _load_json_arg(args.payload, label="payload")
-    tool_args: dict = payload if isinstance(payload, dict) else {}
-    if tool_args:
-        tool_args = dict(tool_args)
+    script_file = getattr(args, "file", None)
+
+    if action == "submit" and script_file:
+        try:
+            with open(script_file) as f:
+                script = f.read()
+        except Exception as e:
+            raise SystemExit(f"Cannot read file {script_file}: {e}")
+        tool_args = {"action": action, "script": script}
     else:
-        tool_args = {}
-    tool_args["action"] = action
+        payload = None
+        if args.stdin_json:
+            payload = _read_stdin_json(label="background")
+        elif args.payload is not None:
+            payload = _load_json_arg(args.payload, label="payload")
+        tool_args: dict = payload if isinstance(payload, dict) else {}
+        if tool_args:
+            tool_args = dict(tool_args)
+        else:
+            tool_args = {}
+        tool_args["action"] = action
+
+    if args.session_id:
+        tool_args["session_id"] = args.session_id
 
     if action == "submit":
         if not tool_args.get("script") and not tool_args.get("tool_call"):
-            raise SystemExit("background submit requires payload with 'script' or 'tool_call'")
+            raise SystemExit("background submit requires --file, or payload with 'script' or 'tool_call'")
 
     if action in ("result", "cancel", "wait"):
         task_id = tool_args.get("task_id")
@@ -306,6 +319,19 @@ def main() -> int:
         type=int,
         default=None,
         help="Override JSON-RPC request id",
+    )
+    parser.add_argument(
+        "--file",
+        type=str,
+        default=None,
+        help="Read script content from file (background submit mode)",
+    )
+    parser.add_argument(
+        "--session",
+        type=str,
+        default=None,
+        dest="session_id",
+        help="IDA session ID for background tasks",
     )
     parser.add_argument(
         "extra",
