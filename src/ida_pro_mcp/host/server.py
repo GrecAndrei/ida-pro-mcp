@@ -20,6 +20,7 @@ import atexit
 import signal
 import glob
 import difflib
+import socket as _socket_mod
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime, timedelta
@@ -727,6 +728,64 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         finally:
             self.shutdown()
 
+    def run_daemon(self):
+        _write_pidfile()
+        sock = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
+        sock.bind(DAEMON_SOCKET)
+        sock.listen(5)
+        sock.settimeout(1.0)
+        atexit.register(self._cleanup_daemon)
+        try:
+            while True:
+                if self._shutdown_requested:
+                    break
+                try:
+                    conn, _ = sock.accept()
+                except _socket_mod.timeout:
+                    continue
+                threading.Thread(target=self._handle_daemon_conn, args=(conn,), daemon=True).start()
+        finally:
+            self.shutdown()
+
+    def _handle_daemon_conn(self, conn) -> None:
+        try:
+            conn.settimeout(30.0)
+            buf = b""
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    if line.strip():
+                        try:
+                            req_obj = json.loads(line.decode("utf-8"))
+                            resp = self.handle_request(req_obj)
+                            if resp:
+                                out = json.dumps(resp, ensure_ascii=False, separators=(",", ":")) + "\n"
+                                try:
+                                    conn.sendall(out.encode("utf-8"))
+                                except Exception:
+                                    return
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _cleanup_daemon() -> None:
+        _remove_pidfile()
+        try:
+            os.unlink(DAEMON_SOCKET)
+        except OSError:
+            pass
+
     def _send_notification(self, notification: dict) -> None:
         """Send an unsolicited MCP notification to the client (no id field = notification)."""
         try:
@@ -782,14 +841,50 @@ def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
 _real_stdout = sys.stdout  # overwritten by ida_mcp_stdio shim; binary mode on Windows
 
 
+DAEMON_SOCKET = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.sock")
+DAEMON_PIDFILE = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.pid")
+
+
+def _daemon_running() -> bool:
+    if not os.path.exists(DAEMON_SOCKET):
+        return False
+    try:
+        s = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
+        s.settimeout(0.5)
+        s.connect(DAEMON_SOCKET)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def _write_pidfile() -> None:
+    with open(DAEMON_PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _remove_pidfile() -> None:
+    try:
+        os.unlink(DAEMON_PIDFILE)
+    except OSError:
+        pass
+
+
 def main():
     """Console-script entry point: ``python -m ida_pro_mcp.host.server``."""
     global _real_stdout
     if _real_stdout is sys.stdout:
         _real_stdout = sys.stdout
+
+    daemon_mode = "--daemon" in sys.argv
     try:
         server = IDAMCPServer()
-        server.run()
+        if daemon_mode:
+            if os.path.exists(DAEMON_SOCKET):
+                os.unlink(DAEMON_SOCKET)
+            server.run_daemon()
+        else:
+            server.run()
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)

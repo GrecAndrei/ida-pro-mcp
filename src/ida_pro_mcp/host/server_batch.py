@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import os
-import json
-import tempfile
-from typing import Any, Dict
+from typing import Any
 
 from .batch_manager import BatchManager
 from .errors import MCPError, make_error
@@ -20,8 +17,12 @@ _BACKGROUND_ACTIONS = {
 
 
 class BackgroundMixin:
-    def __init__(self) -> None:
-        self._batch_manager = BatchManager()
+
+    @property
+    def _batch_manager(self) -> BatchManager:
+        if not hasattr(self, "_batch_mgr"):
+            self._batch_mgr = BatchManager()
+        return self._batch_mgr
 
     def _handle_background(self, args: dict) -> dict:
         action = str(args.get("action") or "list").strip()
@@ -46,15 +47,23 @@ class BackgroundMixin:
         action = "script" if script else "tool_call"
 
         def _run(task):
-            if task.args.get("script"):
-                exec(compile(task.args["script"], "<batch>", "exec"), {"__builtins__": __builtins__})
-                return {"status": "executed"}
-            elif task.args.get("tool_call"):
-                tc = task.args["tool_call"]
-                if hasattr(self, "_execute_tool"):
-                    return self._execute_tool(tc.get("tool", ""), tc.get("args", {}))
-                return {"status": "ok", "tool_call": tc}
-            return {"status": "unknown"}
+            self._bg_running = True
+            try:
+                if task.args.get("script"):
+                    namespace: dict[str, Any] = {"__builtins__": __builtins__}
+                    exec(
+                        compile(task.args["script"], "<batch>", "exec"),
+                        namespace,
+                    )
+                    return {"status": "executed"}
+                elif task.args.get("tool_call"):
+                    tc = task.args["tool_call"]
+                    if hasattr(self, "_execute_tool"):
+                        return self._execute_tool(tc.get("tool", ""), tc.get("args", {}))
+                    return {"status": "ok", "tool_call": tc}
+                return {"status": "unknown"}
+            finally:
+                self._bg_running = False
 
         task_id = self._batch_manager.submit(
             action=action,

@@ -10,13 +10,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import socket as _socket_mod
 import subprocess
 import sys
+import tempfile
+import time
 
 from ida_pro_mcp import __version__
 import threading
 from dataclasses import dataclass
 from typing import Any, Optional
+
+_DAEMON_SOCKET = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.sock")
 
 
 def _load_json_arg(value: Optional[str], *, label: str) -> Any:
@@ -154,29 +160,103 @@ def _normalize_tool_result(response: dict) -> Any:
     return {"content": normalized_items, "isError": bool(result.get("isError"))}
 
 
-def _handle_background_mode(client, args, payload):
+def _daemon_is_running() -> bool:
+    if not os.path.exists(_DAEMON_SOCKET):
+        return False
+    try:
+        s = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
+        s.settimeout(0.3)
+        s.connect(_DAEMON_SOCKET)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def _start_daemon() -> None:
+    subprocess.Popen(
+        [sys.executable, "-m", "ida_pro_mcp.host.server", "--daemon"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+    )
+    deadline = time.time() + 10.0
+    while not _daemon_is_running():
+        if time.time() > deadline:
+            raise SystemExit("Daemon did not start within 10 seconds")
+        time.sleep(0.1)
+
+
+def _daemon_call(tool_name: str, args: dict[str, Any]) -> dict:
+    request = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": args},
+    }
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "ida-pro-mcp-cli", "version": __version__},
+        },
+    }
+    s = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
+    s.settimeout(15.0)
+    try:
+        s.connect(_DAEMON_SOCKET)
+        payload = (
+            json.dumps(initialize, separators=(",", ":")) + "\n" +
+            json.dumps(request, separators=(",", ":")) + "\n"
+        )
+        s.sendall(payload.encode("utf-8"))
+        s.shutdown(_socket_mod.SHUT_WR)
+        data = b""
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        if not data:
+            raise SystemExit("Daemon returned empty response")
+        lines = [l.strip() for l in data.decode("utf-8").split("\n") if l.strip()]
+        if not lines:
+            raise SystemExit("Daemon returned no valid JSON lines")
+        return json.loads(lines[-1])
+    finally:
+        s.close()
+
+
+def _handle_background_mode(args):
     action = str(args.name or "list").strip().lower()
+    payload = None
+    if args.stdin_json:
+        payload = _read_stdin_json(label="background")
+    elif args.payload is not None:
+        payload = _load_json_arg(args.payload, label="payload")
     tool_args: dict = payload if isinstance(payload, dict) else {}
     if tool_args:
         tool_args = dict(tool_args)
+    else:
+        tool_args = {}
     tool_args["action"] = action
 
     if action == "submit":
         if not tool_args.get("script") and not tool_args.get("tool_call"):
-            raise SystemExit("background submit requires '--stdin-json' or payload with 'script' or 'tool_call'")
+            raise SystemExit("background submit requires payload with 'script' or 'tool_call'")
 
-    if action in ("status", "list"):
-        pass
-    elif action in ("result", "cancel", "wait"):
+    if action in ("result", "cancel", "wait"):
         task_id = tool_args.get("task_id")
         if not task_id:
             raise SystemExit(f"background {action} requires 'task_id' in payload")
 
-    response = client.call(
-        "tools/call",
-        {"name": "background", "arguments": tool_args},
-        request_id=args.request_id,
-    )
+    if not _daemon_is_running():
+        _start_daemon()
+
+    response = _daemon_call("background", tool_args)
     _print_json(_normalize_tool_result(response), pretty=args.pretty)
     return 0
 
@@ -337,7 +417,7 @@ def main() -> int:
             return 0
 
         if args.mode == "background":
-            return _handle_background_mode(client, args, payload)
+            return _handle_background_mode(args)
 
         raise SystemExit(f"unsupported mode: {args.mode}")
     finally:
