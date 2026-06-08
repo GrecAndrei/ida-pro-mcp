@@ -36,6 +36,11 @@ class TokenBucket:
             wait = (tokens - self.tokens) / self.rate
             return False, wait
 
+    def return_tokens(self, tokens: float = 1.0) -> None:
+        """Return unconsumed tokens (thread-safe)."""
+        with self._lock:
+            self.tokens = min(self.burst, self.tokens + tokens)
+
 
 class RateLimiter:
     """
@@ -83,20 +88,16 @@ class RateLimiter:
         Check if call is allowed. Returns (allowed, reason).
         If not allowed, reason explains which limit was hit.
         """
-        # Check global first
-        ok, wait = self._global_bucket.acquire()
-        if not ok:
-            return False, f"global rate limit ({self.global_rate}/s); wait {wait:.1f}s"
-        # Check per-tool
+        # Check per-tool first (avoids returning tokens to global bucket)
         bucket = self._get_tool_bucket(tool)
         ok, wait = bucket.acquire()
         if not ok:
-            # Return global token since we're rejecting
-            self._global_bucket.tokens = min(
-                self._global_bucket.burst,
-                self._global_bucket.tokens + 1.0
-            )
             return False, f"rate limit for tool '{tool}' ({self.per_tool_rate}/s); wait {wait:.1f}s"
+        # Check global
+        ok, wait = self._global_bucket.acquire()
+        if not ok:
+            bucket.return_tokens()
+            return False, f"global rate limit ({self.global_rate}/s); wait {wait:.1f}s"
         return True, ""
 
     def stats(self) -> Dict[str, any]:
