@@ -25,6 +25,7 @@ from .config import (
 )
 from .errors import MCPError, is_error_result, make_error
 from .schemas import TOOL_ACTIONS
+from .tool_registry import register_tool_actions
 from .server_session_bootstrap import ServerSessionBootstrapMixin
 from .symbol_db import SymbolDB
 from .intelligence_helpers import parse_str_list
@@ -1773,3 +1774,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             include_bookmarks=include_bookmarks,
             include_items=include_items,
         )
+
+
+# Register session actions so the tool registry can derive TOOL_ACTIONS
+# without duplicating the literal in schemas_data.py.
+register_tool_actions("session", list(ServerSessionMixin._SESSION_ACTIONS.keys()))
