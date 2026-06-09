@@ -167,7 +167,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         if qol_mode not in {"tiny", "balanced", "debug"}:
             qol_mode = "balanced"
         tools_list_mode = (
-            str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "full")).strip().lower()
+            str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "ultra")).strip().lower()
         )
         if tools_list_mode not in {"ultra", "lean", "full"}:
             tools_list_mode = "full"
@@ -183,7 +183,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         self.default_batch_compact = _env_bool("IDA_MCP_BATCH_COMPACT", True)
         # Heavy response enrichments are useful but can inflate context usage.
         # Keep disabled by default; callers can opt in via env.
-        self.enable_response_enrichment = _env_bool("IDA_MCP_RESPONSE_ENRICH", True)
+        self.enable_response_enrichment = _env_bool("IDA_MCP_RESPONSE_ENRICH", False)
         self.default_table_mode = _env_bool("IDA_MCP_TABLE_COMPACT", False)
         self.default_compact_max_items = _bounded_int(
             os.environ.get("IDA_MCP_COMPACT_MAX_ITEMS", 48),
@@ -463,6 +463,11 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
             return None
         if m == "tools/list":
             mode = self.default_tools_list_mode
+            requested_mode = str(
+                p.get("mode") or p.get("schema_mode") or p.get("tools_list_mode") or ""
+            ).strip().lower()
+            if requested_mode in {"ultra", "lean", "full"}:
+                mode = requested_mode
             if self.monolithic_tool_descriptions:
                 mode = "full"
             tool_name_prefix = str(p.get("prefix", "") or "").strip().lower()

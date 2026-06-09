@@ -236,7 +236,9 @@ class TestHostHardening(unittest.TestCase):
         self.assertNotIn("batch", project_actions)
 
     def test_tools_list_full_provides_direct_docs_and_full_schema(self):
-        res = self.server.handle_request({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})
+        res = self.server.handle_request(
+            {"jsonrpc": "2.0", "id": 10, "method": "tools/list", "params": {"mode": "full"}}
+        )
         self.assertEqual(res["result"]["mode"], "full")
         tools_payload = res["result"]["tools"]
 
@@ -276,6 +278,7 @@ class TestHostHardening(unittest.TestCase):
                 "id": 13,
                 "method": "tools/list",
                 "params": {
+                    "mode": "full",
                     "prefix": "c",
                     "contains": "o",
                     "category": "security",
@@ -307,6 +310,16 @@ class TestHostHardening(unittest.TestCase):
         )
         names = [t["name"] for t in res["result"]["tools"]]
         self.assertEqual(names, sorted(names))
+
+    def test_tools_list_defaults_to_ultra_and_trims_llm_helper_actions(self):
+        res = self.server.handle_request({"jsonrpc": "2.0", "id": 150, "method": "tools/list"})
+        self.assertEqual(res["result"]["mode"], "ultra")
+        helper = next(t for t in res["result"]["tools"] if t["name"] == "llm_helpers")
+        actions = helper["inputSchema"]["properties"]["action"]["enum"]
+        self.assertIn("bootstrap", actions)
+        self.assertIn("next_best_action_recommender", actions)
+        self.assertNotIn("learning_feedback_loop", actions)
+        self.assertLess(len(actions), 30)
 
     def test_tools_list_catalog_is_cached(self):
         first = self.server._build_tools_list_catalog("full")

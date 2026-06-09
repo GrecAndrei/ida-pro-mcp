@@ -36,6 +36,25 @@ TOOL_ACTIONS = _TOOL_ACTIONS_DATA
 # "anchor_coverage"
 
 WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
+LLM_HELPERS_DEFAULT_ACTIONS = (
+    "bootstrap",
+    "cheatsheet",
+    "binary_digest",
+    "function_digest",
+    "context_window",
+    "explain_address",
+    "suggest_next",
+    "progress_report",
+    "focus_area",
+    "question_answer",
+    "guided_analysis",
+    "compact",
+    "enrich",
+    "behavioral_signature_search",
+    "function_role_classifier",
+    "dangerous_pattern_explainer",
+    "next_best_action_recommender",
+)
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
 _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
@@ -439,8 +458,11 @@ GLOBAL_WRAPPER_ACTION_CONTROLS = {
     },
 }
 
-def _action_enum_with_grep(tool_name: str) -> list[str]:
+def _action_enum_with_grep(tool_name: str, *, compact_surface: bool = False) -> list[str]:
     actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
+    if compact_surface and tool_name == "llm_helpers":
+        keep = set(LLM_HELPERS_DEFAULT_ACTIONS)
+        actions = [a for a in actions if a in keep]
     for wrapper_action in WRAPPER_ACTIONS:
         if wrapper_action not in actions:
             actions.append(wrapper_action)
@@ -525,7 +547,7 @@ def build_input_schema_lean(tool_name: str) -> dict:
         action_schema = props.get("action")
         if isinstance(action_schema, dict):
             action_schema = dict(action_schema)
-            action_schema["enum"] = _action_enum_with_grep(tool_name)
+            action_schema["enum"] = _action_enum_with_grep(tool_name, compact_surface=True)
             props["action"] = action_schema
         for key, schema in GLOBAL_WRAPPER_ACTION_CONTROLS.items():
             props.setdefault(key, _lean_prop_schema(key, schema))
@@ -560,7 +582,7 @@ def build_input_schema_ultra(tool_name: str) -> dict:
     required: List[str] = []
     action_enum = TOOL_ACTIONS.get(tool_name)
     if action_enum:
-        props["action"] = {"type": "string", "enum": _action_enum_with_grep(tool_name)}
+        props["action"] = {"type": "string", "enum": _action_enum_with_grep(tool_name, compact_surface=True)}
         required.append("action")
     if tool_name not in ("session", "bookmarks", "wiki", "batch", "truncation"):
         props["idb"] = {
@@ -577,6 +599,8 @@ def build_tool_description_ultra(tool_name: str) -> str:
         return "Session hub. IDB is optional after create/switch."
     if tool_name == "batch":
         return "Batch hub. Use calls as 'tool:action' or {name,action,...}."
+    if tool_name == "llm_helpers":
+        return "LLM orientation helpers. Start with bootstrap or cheatsheet."
     return f"Use wiki(topic='tools/{tool_name}') for usage."
 
 def build_tool_description_lean(tool_name: str) -> str:

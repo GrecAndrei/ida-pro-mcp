@@ -332,7 +332,7 @@ The `session` tool now includes a complete bootstrap evidence control loop desig
 
 The server keeps a **canonical** tool surface and preserves compatibility aliases for older clients.
 
-- Canonical tool names are listed in `src/ida_pro_mcp/host/schemas_data.py` under `TOOLS` (67 tools total), and re-exported by `schemas.py`.
+- Canonical tool names are listed in `src/ida_pro_mcp/host/schemas_data.py` under `TOOLS`, and re-exported by `schemas.py`.
 - Compatibility aliases are listed under `TOOL_ALIASES` and resolve before dispatch.
 - Alias names are not advertised in `tools/list` unless intentionally promoted.
 
@@ -341,7 +341,8 @@ Current aliases:
 - `plugins` -> `misc` (`misc(action="plugin_list"|"plugin_run")`)
 - `xfer_analysis` -> `xref_analysis`
 
-The advertised `tools/list` surface is intentionally compact (~36 core tools) for limited context windows.
+The advertised `tools/list` surface is intentionally wiki-first for limited context windows.
+Default mode is `ultra`: short routing hints plus action enums. Use `tools/list` with `mode="lean"` or `mode="full"` only when a client truly needs richer schemas.
 Additional specialized capabilities remain accessible via hub tools + wiki docs.
 
 - Core/session: `session`, `batch`, `bookmarks`, `wiki`, `truncation`
@@ -356,9 +357,9 @@ Additional specialized capabilities remain accessible via hub tools + wiki docs.
 
 For detailed per-tool docs, use the `wiki` tool or browse `docs/wiki/tools/`.
 
-### 700+ tool-action combinations
+### Large Deterministic Action Surface
 
-Each tool exposes multiple actions. The entire surface provides 700+ deterministic operations across all tools, covering everything from decompilation and cross-referencing to pattern matching, vulnerability scanning, and embedding-driven frontier analysis.
+Each tool exposes multiple actions. The whole surface provides hundreds of deterministic operations across decompilation, cross-referencing, pattern matching, vulnerability scanning, and embedding-driven frontier analysis. Agents should not ingest the whole surface into prompt context. Start with `llm_helpers(action="bootstrap")`, `wiki(action="index")`, or filtered `tools/list` calls, then load only the relevant tool docs.
 
 ## Local ML Components
 
@@ -778,7 +779,7 @@ Environment defaults:
 
 - `IDA_MCP_RESPONSE_MODE`
 - `IDA_MCP_QOL_MODE` (`balanced` default)
-- `IDA_MCP_TOOLS_LIST_MODE` (`full` default)
+- `IDA_MCP_TOOLS_LIST_MODE` (`ultra` default)
 - `IDA_MCP_ERROR_DETAIL_LEVEL`
 - `IDA_MCP_BATCH_COMPACT`
 - `IDA_MCP_TABLE_COMPACT`
@@ -787,7 +788,7 @@ Environment defaults:
 - `IDA_MCP_COMPACT_CHAR_BUDGET`
 - `IDA_MCP_TRUNCATE_TOKENS`
 - `IDA_MCP_WIKI_DEFAULT_LIMIT`
-- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`1` default full verbose tool metadata)
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` (`0` default; set `1` only for schema-rich clients)
 - `IDA_MCP_POINTER_NOTE_INTERVAL` (seconds; default `900`)
 - `IDA_MCP_POINTER_NOTE_MIN_SIGNAL` (usage signal threshold before showing note; default `3`)
 - `IDA_MCP_SMART_MATCH_MODE` (`balanced` default: `off|conservative|balanced|aggressive`)
@@ -797,18 +798,19 @@ Environment defaults:
 `tools/list` mode behavior:
 - `ultra`: tiny wiki-first descriptions + minimal schema (`action` enum and optional `idb` reference).
 - `lean`: shortened per-tool descriptions + compact parameter typing.
-- `full` (default): full descriptions and full input schema.
+- `full`: full descriptions and full input schema.
 
 `tools/list` also supports metadata shaping params:
 - `prefix`, `contains`, `category` filters
 - `sort` (`name` or `category`) and `descending`
 - `offset` + `limit` pagination (`next_offset` returned when more results exist)
 
-Installer defaults bias for direct schema-rich tool loading:
+Recommended compact defaults:
 - `IDA_MCP_RESPONSE_MODE=compact`
 - `IDA_MCP_QOL_MODE=balanced`
-- `IDA_MCP_TOOLS_LIST_MODE=full`
-- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1`
+- `IDA_MCP_TOOLS_LIST_MODE=ultra`
+- `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=0`
+- `IDA_MCP_RESPONSE_ENRICH=0`
 - `IDA_MCP_SMART_MATCH_MODE=balanced`
 - `IDA_MCP_BATCH_COMPACT=1`
 - `IDA_MCP_COMPACT_MAX_ITEMS=48`

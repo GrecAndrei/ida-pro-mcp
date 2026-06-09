@@ -15,6 +15,8 @@
 {"name":"data","arguments":{"action":"strings","count":50}}
 ```
 
+`tools/list` defaults to `ultra` mode so agents do not burn context on the full schema catalog. Ask for `mode="lean"` or `mode="full"` only when generating or validating exact argument shapes.
+
 ## 3. Understand the binary at a glance
 ```json
 {"name":"agent","arguments":{"action":"cluster","max_items":8,"func_limit":200}}
