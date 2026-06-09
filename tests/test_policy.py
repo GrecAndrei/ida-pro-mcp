@@ -27,6 +27,13 @@ def test_local_code_execution_requires_ack_in_assist_mode():
     assert result.reasons
 
 
+def test_background_script_is_local_code_execution():
+    result = evaluate_policy("background", "script", purpose="firmware_analysis")
+
+    assert result.decision == PolicyDecision.REQUIRE_ACK
+    assert result.risk == RiskTier.LOCAL_CODE_EXEC
+
+
 def test_local_code_execution_allowed_with_ack():
     result = evaluate_policy(
         "misc",

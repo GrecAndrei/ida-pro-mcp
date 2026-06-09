@@ -69,18 +69,9 @@ class TestHostToolActionsDynamicIntel(unittest.TestCase):
                 if tool_actions is not None:
                     break
         self.assertIsNotNone(tool_actions)
-        self.assertIsInstance(tool_actions, ast.Dict)
+        from ida_pro_mcp.host.schemas import TOOL_ACTIONS
 
-        keys = tool_actions.keys
-        values = tool_actions.values
-        trace_actions = None
-        for k, v in zip(keys, values):
-            if isinstance(k, ast.Constant) and k.value == "trace_analysis":
-                trace_actions = v
-                break
-        self.assertIsNotNone(trace_actions)
-        self.assertIsInstance(trace_actions, ast.List)
-        action_values = {elt.value for elt in trace_actions.elts if isinstance(elt, ast.Constant) and isinstance(elt.value, str)}
+        action_values = set(TOOL_ACTIONS.get("trace_analysis", []))
         for action in NEW_ACTIONS:
             self.assertIn(action, action_values)
 

@@ -67,16 +67,9 @@ class TestHostToolActionsProjectProvenance(unittest.TestCase):
                 if tool_actions is not None:
                     break
         self.assertIsNotNone(tool_actions)
-        self.assertIsInstance(tool_actions, ast.Dict)
+        from ida_pro_mcp.host.schemas import TOOL_ACTIONS
 
-        project_actions = None
-        for k, v in zip(tool_actions.keys, tool_actions.values):
-            if isinstance(k, ast.Constant) and k.value == "project":
-                project_actions = v
-                break
-        self.assertIsNotNone(project_actions)
-        self.assertIsInstance(project_actions, ast.List)
-        action_values = {elt.value for elt in project_actions.elts if isinstance(elt, ast.Constant) and isinstance(elt.value, str)}
+        action_values = set(TOOL_ACTIONS.get("project", []))
         for action in NEW_ACTIONS:
             self.assertIn(action, action_values)
 

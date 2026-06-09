@@ -24,11 +24,23 @@ env/
 *.id4
 *.nam
 *.til
+*.asm
+*.lst
+*.map
 *.mcp.lock
 *.drcov
 *.binexport
 *.$$$
-*.schemaboot.db
+
+# Runtime databases / SQLite sidecars
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+MagicMock/
+install-report.json
 
 # Backup files
 *.bak

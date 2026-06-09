@@ -510,6 +510,20 @@ INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "ye
 
 
 _IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b')
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _identifier_terms(ident: str) -> List[str]:
+    terms: List[str] = []
+    for chunk in re.split(r"[_\W]+", str(ident or "")):
+        if not chunk:
+            continue
+        split = [p for p in _CAMEL_BOUNDARY_RE.split(chunk) if p]
+        if len(split) == 1:
+            terms.append(chunk)
+        else:
+            terms.extend(split)
+    return terms
 
 
 def _extract_signature(pseudocode: str, max_idents: int = 40) -> str:
@@ -528,14 +542,14 @@ def _extract_signature(pseudocode: str, max_idents: int = 40) -> str:
     seen: set = set()
     out: list = []
     for ident in idents:
-        lo = ident.lower()
-        if lo in NOISE_WORDS:
-            continue
-        if ident not in seen:
-            seen.add(ident)
-            out.append(ident)
+        for term in _identifier_terms(ident):
+            lo = term.lower()
+            if lo in NOISE_WORDS or lo in seen:
+                continue
+            seen.add(lo)
+            out.append(term)
             if len(out) >= max_idents:
-                break
+                return " ".join(out)
     return " ".join(out)
 
 
@@ -558,7 +572,30 @@ class _TFIDFEmbedder:
         self._doc_count = 0
 
     def _tokens(self, text: str) -> List[str]:
-        return self._TOKENIZE.findall(text.lower())
+        out: List[str] = []
+        for raw in self._TOKENIZE.findall(str(text or "")):
+            for term in _identifier_terms(raw):
+                low = term.lower()
+                if low and low not in NOISE_WORDS and not (low.isdigit() and len(low) < 3):
+                    out.append(low)
+        # Expand common RE-domain synonyms so short natural-language queries can
+        # still land near decompiler identifiers in fallback mode.
+        synonyms = {
+            "aes": ("crypto", "cipher", "encrypt", "decrypt"),
+            "cipher": ("crypto", "encrypt", "decrypt"),
+            "http": ("network", "socket", "headers", "request", "response"),
+            "recv": ("receive", "socket", "network"),
+            "send": ("socket", "network"),
+            "socket": ("network", "connect", "recv", "send"),
+            "debugger": ("antidebug", "debug"),
+            "sandbox": ("vm", "evasion"),
+            "overflow": ("bounds", "memcpy", "strcpy"),
+            "uaf": ("use", "after", "free"),
+        }
+        expanded = list(out)
+        for tok in out:
+            expanded.extend(synonyms.get(tok, ()))
+        return expanded
 
     def fit_many(self, texts: List[str]) -> None:
         df: Counter = Counter()
@@ -726,6 +763,9 @@ class BgeCodeEmbedder:
                 "--embedding",
                 "--port",     str(self._port),
                 "--ctx-size", str(EMBED_CTX),
+                "--batch-size", str(max(EMBED_CTX, 2048)),
+                "--ubatch-size", str(max(EMBED_CTX, 2048)),
+                "--pooling", "mean",
                 "--threads",  str(EMBED_THREADS),
                 "--n-predict", "0",
                 "--log-disable",
@@ -808,6 +848,9 @@ class BgeCodeEmbedder:
     def _llama_embed_batch(self, texts: List[str]) -> Optional[List[List[float]]]:
         if not texts:
             return []
+        if len(texts) == 1:
+            vec = self._llama_embed(texts[0])
+            return [vec] if vec is not None else None
         if not self._ready and not self._start_server():
             return None
         try:
@@ -886,8 +929,8 @@ class BgeCodeEmbedder:
 
     @staticmethod
     def cosine(a: List[float], b: List[float]) -> float:
-        from .helpers import dot_product
-        return dot_product(a, b)
+        from .helpers import cosine_similarity
+        return cosine_similarity(a, b)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -963,6 +1006,31 @@ class BehaviorClassifier:
         "format_string_vuln": 0.35,
         "integer_overflow": 0.35,
         "path_traversal": 0.35,
+    }
+    _ANCHOR_TOKEN_BONUS_WEIGHT = 0.18
+    _ANCHOR_TOKEN_ALIASES: Dict[str, Tuple[str, ...]] = {
+        "crypto_symmetric": ("aes", "cipher", "encrypt", "decrypt", "round", "sbox", "sub_bytes", "mix_columns", "round_key", "key_schedule"),
+        "crypto_hash": ("hash", "digest", "sha", "md5", "hmac", "compress", "finalize"),
+        "network_http": ("http", "header", "headers", "request", "response", "user_agent", "chunked", "post", "get", "recv", "send"),
+        "network_raw": ("socket", "connect", "recv", "send", "tcp", "udp", "inet", "htons"),
+        "process_injection": ("openprocess", "virtualallocex", "writeprocessmemory", "createremotethread", "remote", "process"),
+        "file_operations": ("createfile", "readfile", "writefile", "fopen", "read", "write", "deletefile", "movefile"),
+        "anti_debug": ("isdebuggerpresent", "debugger", "rdtsc", "processdebugport", "checkremotedebuggerpresent"),
+        "anti_vm": ("cpuid", "hypervisor", "vmware", "vbox", "virtualbox", "sandbox"),
+        "persistence": ("regcreatekey", "run", "service", "autorun", "startup", "createservice"),
+        "evasion": ("sleep", "sandbox", "virtualprotect", "decrypt", "payload", "xor", "delay"),
+        "string_decrypt": ("xor", "rolling_key", "decrypt", "printable", "string", "rotl", "decode"),
+        "c2_communication": ("beacon", "c2", "command", "download", "http_post", "base64", "host_id"),
+        "privilege_escalation": ("sedebugprivilege", "adjusttokenprivileges", "token", "elevated", "system"),
+        "memory_manipulation": ("virtualalloc", "virtualprotect", "mmap", "memcpy", "execute", "page_execute"),
+        "rop_gadget": ("ret", "gadget", "pop", "pivot", "chain", "syscall", "rop"),
+        "heap_spray": ("malloc", "spray", "chunk", "nop", "shellcode", "trigger"),
+        "use_after_free": ("free", "dangling", "vtable", "uaf", "temporal", "after_free"),
+        "buffer_overflow": ("overflow", "memcpy", "strcpy", "strcat", "bounds", "stack", "fixed", "corruption"),
+        "format_string_vuln": ("printf", "syslog", "snprintf", "format", "variadic", "%s", "%n"),
+        "race_condition": ("pthread", "thread", "lock", "shared", "race", "check_then_use", "rename"),
+        "integer_overflow": ("overflow", "wrap", "truncation", "malloc", "count", "size", "multiply"),
+        "path_traversal": ("..", "canonical", "path", "extract", "archive", "base_dir", "traversal"),
     }
 
     # Module-level singleton so anchors are loaded exactly once per process.
@@ -1075,7 +1143,9 @@ class BehaviorClassifier:
                 if anchor is None:
                     continue
             sim = BgeCodeEmbedder.cosine(query_vec, anchor)
-            min_thr = max(float(threshold or 0.0), float(self.ANCHOR_MIN_CONFIDENCE.get(behavior, 0.30)))
+            min_thr = float(threshold or 0.0) if threshold is not None else 0.0
+            if threshold >= 0.20:
+                min_thr = max(min_thr, float(self.ANCHOR_MIN_CONFIDENCE.get(behavior, 0.30)))
             if sim >= min_thr:
                 results.append({"behavior": behavior, "confidence": round(sim, 4)})
 
@@ -1100,6 +1170,35 @@ class BehaviorClassifier:
                     break
         return top[:3]
 
+    @staticmethod
+    def _text_tokens(text: str) -> set[str]:
+        out: set[str] = set()
+        for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(text or "")):
+            low_raw = raw.lower()
+            if low_raw and low_raw not in NOISE_WORDS:
+                out.add(low_raw)
+        for raw in _IDENT_RE.findall(str(text or "")):
+            for term in _identifier_terms(raw):
+                low = term.lower()
+                if low and low not in NOISE_WORDS:
+                    out.add(low)
+        for literal in re.findall(r"%[0-9.]*[a-zA-Z]|\.\.|0x[0-9a-fA-F]+", str(text or "")):
+            out.add(literal.lower())
+        return out
+
+    def _token_bonus(self, behavior: str, query_text: str) -> Tuple[float, List[str]]:
+        aliases = set(self._ANCHOR_TOKEN_ALIASES.get(behavior, ()))
+        if not aliases:
+            return 0.0, []
+        q_tokens = self._text_tokens(query_text)
+        anchor_tokens = self._text_tokens(self.ANCHORS.get(behavior, ""))
+        targets = aliases.union(anchor_tokens)
+        hits = sorted(q_tokens.intersection(targets))
+        if not hits:
+            return 0.0, []
+        denom = max(4, min(12, len(aliases) or len(targets)))
+        return min(1.0, len(hits) / denom), hits[:12]
+
     def classify(
         self,
         text: str,
@@ -1119,9 +1218,43 @@ class BehaviorClassifier:
         query = _extract_signature(text[:max_tokens]) or text[:max_tokens]
         q = self._embedder.embed(query)
         rows = self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
+        if not rows and not block:
+            # First-call correctness matters more than returning an empty set
+            # while the async anchor preload is still warming up.
+            rows = self.classify_vec(q, threshold=threshold, top_k=top_k, block=True)
+        existing = {str(row.get("behavior") or "") for row in rows}
+        for behavior in self.ANCHORS:
+            if behavior in existing:
+                continue
+            token_bonus, matched_tokens = self._token_bonus(behavior, query)
+            if token_bonus < 0.25:
+                continue
+            anchor = self._get_anchor(behavior)
+            sim = BgeCodeEmbedder.cosine(q, anchor) if anchor is not None else 0.0
+            adjusted = min(1.0, max(sim, token_bonus * self._ANCHOR_TOKEN_BONUS_WEIGHT))
+            min_thr = float(threshold or 0.0) if threshold is not None else 0.0
+            if min_thr >= 0.20:
+                min_thr = max(min_thr, float(self.ANCHOR_MIN_CONFIDENCE.get(behavior, 0.30)))
+            if adjusted >= min_thr:
+                rows.append(
+                    {
+                        "behavior": behavior,
+                        "confidence": round(adjusted, 4),
+                        "embedding_confidence": round(sim, 4),
+                        "matched_tokens": matched_tokens,
+                    }
+                )
         for row in rows:
             b = str(row.get("behavior") or "")
+            token_bonus, matched_tokens = self._token_bonus(b, query)
+            if token_bonus > 0:
+                original = float(row.get("confidence") or 0.0)
+                adjusted = min(1.0, max(original, token_bonus * self._ANCHOR_TOKEN_BONUS_WEIGHT) + (0.5 * self._ANCHOR_TOKEN_BONUS_WEIGHT * token_bonus))
+                row["confidence"] = round(adjusted, 4)
+                row["embedding_confidence"] = round(original, 4)
+                row["matched_tokens"] = matched_tokens
             row["explain"] = self._anchor_explain(self.ANCHORS.get(b, ""), query)
+        rows.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
         return rows
 
     def _classify_impl(

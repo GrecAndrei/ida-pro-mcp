@@ -87,19 +87,9 @@ class TestHostRegistrationExpansionAst(unittest.TestCase):
                 if tool_actions is not None:
                     break
         self.assertIsNotNone(tool_actions)
-        self.assertIsInstance(tool_actions, ast.Dict)
+        from ida_pro_mcp.host.schemas import TOOL_ACTIONS
 
-        llm_actions = None
-        for k, v in zip(tool_actions.keys, tool_actions.values):
-            if isinstance(k, ast.Constant) and k.value == "llm_helpers":
-                llm_actions = v
-                break
-        self.assertIsNotNone(llm_actions)
-        self.assertIsInstance(llm_actions, ast.List)
-        action_values = {
-            elt.value for elt in llm_actions.elts
-            if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-        }
+        action_values = set(TOOL_ACTIONS.get("llm_helpers", []))
         for action in {"context_window", "function_digest", "binary_digest",
                        "behavioral_signature_search", "function_role_classifier",
                        "dangerous_pattern_explainer", "api_contract_extractor"}:

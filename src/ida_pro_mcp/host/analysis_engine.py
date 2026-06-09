@@ -243,11 +243,26 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
                 pseudo = dec.get("pseudocode", "") if isinstance(dec, dict) else ""
                 if not pseudo:
                     continue
-                tags = classifier.classify(pseudo)
+                classified = classifier.classify(pseudo)
+                if not classified:
+                    continue
+                tags = [
+                    str(row.get("behavior") or row.get("label") or "").strip()
+                    if isinstance(row, dict)
+                    else str(row).strip()
+                    for row in classified
+                ]
+                tags = [tag for tag in tags if tag]
                 if not tags:
                     continue
                 top_tag = tags[0]
-                confidence = 0.55 + 0.1 * len(tags)  # more tags = more confident
+                top_conf = 0.0
+                if isinstance(classified[0], dict):
+                    try:
+                        top_conf = float(classified[0].get("confidence") or 0.0)
+                    except Exception:
+                        top_conf = 0.0
+                confidence = max(top_conf, 0.55 + 0.1 * len(tags))  # more tags = more confident
                 suggested_name = f"{top_tag}_{hex(addr)[2:]}"
                 batch.append({
                     "id": uuid.uuid4().hex[:8],

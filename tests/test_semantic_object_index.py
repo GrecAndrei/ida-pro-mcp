@@ -88,3 +88,62 @@ def test_semantic_object_index_vector_search_and_fallback(tmp_path):
     sem = idx.semantic_search("encrypt aes block", kind="function", top_k=2, threshold=0.0)
     assert sem
     assert sem[0]["kind"] == "function"
+
+
+def test_semantic_object_index_title_tokens_and_hybrid_rescue(tmp_path):
+    db = tmp_path / "semantic3.sqlite3"
+    idx = SemanticObjectIndex(str(db), _FakeEmbedder())
+    idx.upsert_object(
+        SemanticObject(
+            kind="function",
+            stable_ref="0x800000",
+            title="parse_http_headers",
+            text="generic state machine",
+            metadata={},
+        )
+    )
+    idx.upsert_object(
+        SemanticObject(
+            kind="function",
+            stable_ref="0x800100",
+            title="copy_file_buffer",
+            text="generic state machine",
+            metadata={},
+        )
+    )
+
+    rows = idx.semantic_search("http headers", kind="function", top_k=2, threshold=0.0)
+
+    assert rows
+    assert rows[0]["stable_ref"] == "0x800000"
+    assert rows[0].get("score", 0) > 0
+
+
+def test_semantic_object_index_camelcase_synonym_and_rank_reason(tmp_path):
+    db = tmp_path / "semantic4.sqlite3"
+    idx = SemanticObjectIndex(str(db), _FakeEmbedder())
+    idx.upsert_object(
+        SemanticObject(
+            kind="function",
+            stable_ref="0x900000",
+            title="AESDecryptRoundKey",
+            text="generic transform with lookup tables",
+            metadata={"source": "name"},
+        )
+    )
+    idx.upsert_object(
+        SemanticObject(
+            kind="function",
+            stable_ref="0x900100",
+            title="PlainCopyRoutine",
+            text="generic transform with lookup tables",
+            metadata={},
+        )
+    )
+
+    rows = idx.semantic_search("crypto cipher decrypt", kind="function", top_k=2, threshold=0.0)
+
+    assert rows
+    assert rows[0]["stable_ref"] == "0x900000"
+    assert "rank_reason" in rows[0]
+    assert set(rows[0].get("matched_tokens") or []).intersection({"aes", "decrypt", "cipher", "crypto"})

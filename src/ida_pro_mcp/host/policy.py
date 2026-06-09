@@ -150,6 +150,7 @@ LOCAL_CODE_EXEC_ACTIONS = {
     ("misc", "python"),
     ("misc", "idc"),
     ("analysis", "plugin_run"),
+    ("background", "script"),
 }
 
 FILESYSTEM_WRITE_ACTIONS = {

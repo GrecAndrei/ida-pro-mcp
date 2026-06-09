@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import logging
 import os
 import re
@@ -10,17 +11,19 @@ import sqlite3
 import struct
 import threading
 import time
+from collections import Counter
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from .helpers import dot_product as _cosine
+from .helpers import cosine_similarity as _cosine
 
 logger = logging.getLogger(__name__)
 
 
-_SEARCH_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}|0x[0-9a-fA-F]+|\b\d+\b")
+_SEARCH_TOKEN_RE = re.compile(r"0x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]{1,}|\b\d+\b")
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 # Consolidated noise-word set used by both text-search tokenisation and
 # signature extraction.  Kept in one place to avoid drift between the two
@@ -33,12 +36,36 @@ NOISE_WORDS = frozenset({
     "ptr", "tmp", "ret", "arg", "args", "result", "value", "values", "data",
     "var", "vars", "out", "dst", "src", "count", "index", "idx",
     "NULL", "sizeof", "else", "inline", "typedef", "goto", "continue",
-    "switch", "type", "flag", "mode", "num", "res", "key", "val", "msg",
+    "switch", "type", "flag", "mode", "num", "res", "val", "msg",
     "str", "memcpy", "memset", "memcmp", "memmove", "malloc", "calloc",
     "free", "printf", "sprintf", "strcpy", "strlen", "strcat", "strcmp",
 })
 
 _SEARCH_NOISE_TOKENS = NOISE_WORDS
+
+_TOKEN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
+    "aes": ("crypto", "cipher", "encrypt", "decrypt"),
+    "cipher": ("crypto", "encrypt", "decrypt"),
+    "encrypt": ("crypto", "cipher"),
+    "decrypt": ("crypto", "cipher", "xor"),
+    "hash": ("digest", "sha", "md5"),
+    "digest": ("hash", "sha", "md5"),
+    "http": ("network", "socket", "header", "headers", "request", "response"),
+    "https": ("http", "network", "socket"),
+    "recv": ("receive", "socket", "network"),
+    "send": ("socket", "network"),
+    "socket": ("network", "connect", "recv", "send"),
+    "connect": ("network", "socket"),
+    "file": ("open", "read", "write", "path"),
+    "registry": ("persistence", "autorun"),
+    "service": ("persistence", "autorun"),
+    "debugger": ("antidebug", "anti", "debug"),
+    "vm": ("virtual", "sandbox"),
+    "sandbox": ("vm", "evasion"),
+    "overflow": ("bounds", "memcpy", "strcpy"),
+    "uaf": ("use", "after", "free"),
+    "format": ("printf", "syslog", "snprintf"),
+}
 
 
 def _now_iso() -> str:
@@ -67,6 +94,55 @@ def _safe_stat(path: str) -> tuple[int, int]:
     return int(st.st_size), int(st.st_mtime_ns)
 
 
+def _split_identifier_token(token: str) -> List[str]:
+    """Split RE identifiers into searchable semantic pieces."""
+    raw = str(token or "").strip()
+    if not raw:
+        return []
+    if raw.lower().startswith("0x") or raw.isdigit():
+        return [raw.lower()]
+    parts: List[str] = []
+    for chunk in re.split(r"[_\W]+", raw):
+        if not chunk:
+            continue
+        split = [sub for sub in _CAMEL_BOUNDARY_RE.split(chunk) if sub]
+        if len(split) == 1:
+            parts.append(chunk.lower())
+        else:
+            parts.extend(sub.lower() for sub in split)
+    return parts
+
+
+def _expand_query_tokens(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for tok in list(tokens):
+        expanded.update(_TOKEN_SYNONYMS.get(tok, ()))
+    return expanded
+
+
+def _idf_scores(docs: List[set[str]]) -> Dict[str, float]:
+    df: Counter[str] = Counter()
+    for doc in docs:
+        df.update(doc)
+    total = max(1, len(docs))
+    return {tok: math.log((total + 1.0) / (cnt + 0.5)) + 1.0 for tok, cnt in df.items()}
+
+
+def _weighted_token_score(query_tokens: set[str], row_tokens: set[str], idf: Dict[str, float]) -> Tuple[float, List[str]]:
+    if not query_tokens or not row_tokens:
+        return 0.0, []
+    expanded = _expand_query_tokens(query_tokens)
+    direct = query_tokens.intersection(row_tokens)
+    indirect = (expanded - query_tokens).intersection(row_tokens)
+    numerator = sum(idf.get(tok, 1.0) for tok in direct)
+    numerator += 0.55 * sum(idf.get(tok, 1.0) for tok in indirect)
+    denominator = sum(idf.get(tok, 1.0) for tok in query_tokens) or 1.0
+    coverage = min(1.0, numerator / denominator)
+    precision = min(1.0, numerator / (sum(idf.get(tok, 1.0) for tok in row_tokens) or 1.0))
+    score = (0.82 * coverage) + (0.18 * precision)
+    return score, sorted(direct.union(indirect))[:16]
+
+
 def _normalize_search_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
@@ -74,16 +150,27 @@ def _normalize_search_text(text: str) -> str:
 def _tokenize_search_text(text: str, max_tokens: int = 96) -> List[str]:
     seen = set()
     out: List[str] = []
-    for tok in _SEARCH_TOKEN_RE.findall(str(text or "")):
-        low = tok.lower()
+    for raw in _SEARCH_TOKEN_RE.findall(str(text or "").replace("_", " ")):
+        for low in _split_identifier_token(raw):
+            if low in seen or low in _SEARCH_NOISE_TOKENS:
+                continue
+            if low.isdigit() and len(low) < 3:
+                continue
+            seen.add(low)
+            out.append(low)
+            if len(out) >= max_tokens:
+                return out
+    for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(text or "")):
+        low = raw.lower()
         if low in seen or low in _SEARCH_NOISE_TOKENS:
             continue
-        if low.isdigit() and len(low) < 3:
-            continue
-        seen.add(low)
-        out.append(low)
-        if len(out) >= max_tokens:
-            break
+        for part in [low] + _split_identifier_token(raw):
+            if part in seen or part in _SEARCH_NOISE_TOKENS:
+                continue
+            seen.add(part)
+            out.append(part)
+            if len(out) >= max_tokens:
+                return out
     return out
 
 
@@ -614,7 +701,7 @@ class FunctionEmbeddingIndex:
         if not q_norm and not q_tokens:
             return []
 
-        rows: List[Dict[str, Any]] = []
+        raw_rows: List[Tuple[str, str, str, Any, set[str], str]] = []
         try:
             with self._conn() as conn:
                 for row in conn.execute(
@@ -628,25 +715,36 @@ class FunctionEmbeddingIndex:
                     blob = f"{name} {signature_text}".strip()
                     if not blob:
                         continue
-                    blob_norm = _normalize_search_text(blob)
-                    row_tokens = set(_tokenize_search_text(blob, max_tokens=96))
-                    overlap = len(q_tokens.intersection(row_tokens)) / max(1, len(q_tokens)) if q_tokens else 0.0
-                    exact = 1.0 if q_norm and q_norm in blob_norm else 0.0
-                    prefix = 0.35 if q_norm and (name.lower().startswith(q_norm) or any(tok.startswith(q_norm) for tok in row_tokens)) else 0.0
-                    score = round((exact * 1.4) + overlap + prefix, 4)
-                    if score < float(threshold):
-                        continue
-                    rows.append(
-                        {
-                            "ea": ea,
-                            "name": name,
-                            "score": score,
-                            "exact_match": bool(exact),
-                            "matched_tokens": sorted(q_tokens.intersection(row_tokens))[:12],
-                            "signature": _clip_signature(signature_text),
-                            "indexed_at": row[3],
-                        }
-                    )
+                    raw_rows.append((ea, name, signature_text, row[3], set(_tokenize_search_text(blob, max_tokens=160)), blob))
+        except Exception:
+            return []
+
+        idf = _idf_scores([r[4] for r in raw_rows])
+        rows: List[Dict[str, Any]] = []
+        try:
+            for ea, name, signature_text, indexed_at, row_tokens, blob in raw_rows:
+                if not row_tokens:
+                    continue
+                blob_norm = _normalize_search_text(blob)
+                token_score, matched = _weighted_token_score(q_tokens, row_tokens, idf)
+                exact = 1.0 if q_norm and q_norm in blob_norm else 0.0
+                name_norm = name.lower()
+                prefix = 0.35 if q_norm and (name_norm.startswith(q_norm) or any(tok.startswith(q_norm) for tok in row_tokens)) else 0.0
+                name_bonus = 0.25 if q_tokens and q_tokens.issubset(row_tokens.intersection(set(_tokenize_search_text(name, max_tokens=64)))) else 0.0
+                score = round((exact * 1.25) + token_score + prefix + name_bonus, 4)
+                if score < float(threshold):
+                    continue
+                rows.append(
+                    {
+                        "ea": ea,
+                        "name": name,
+                        "score": score,
+                        "exact_match": bool(exact),
+                        "matched_tokens": matched,
+                        "signature": _clip_signature(signature_text),
+                        "indexed_at": indexed_at,
+                    }
+                )
         except Exception:
             return []
 
@@ -731,13 +829,22 @@ class FunctionEmbeddingIndex:
             if not row.get("signature"):
                 row["signature"] = hit.get("signature") or ""
 
+        q_tokens = set(_tokenize_search_text(query, max_tokens=48))
         ranked: List[Dict[str, Any]] = []
         for row in merged.values():
             sem_norm = float(row.get("similarity") or 0.0) / sem_max if sem_max > 0 else 0.0
             lex_norm = float(row.get("lexical_score") or 0.0) / lex_max if lex_max > 0 else 0.0
             exact_bonus = 0.12 if row.get("exact_match") else 0.0
-            score = (0.68 * sem_norm) + (0.32 * lex_norm) + exact_bonus
+            matched = set(row.get("matched_tokens") or [])
+            token_coverage = len(q_tokens.intersection(matched)) / max(1, len(q_tokens)) if q_tokens else 0.0
+            score = (0.54 * sem_norm) + (0.38 * lex_norm) + (0.08 * token_coverage) + exact_bonus
             row["score"] = round(score, 4)
+            row["rank_reason"] = {
+                "semantic": round(sem_norm, 4),
+                "lexical": round(lex_norm, 4),
+                "token_coverage": round(token_coverage, 4),
+                "exact": bool(row.get("exact_match")),
+            }
             if float(row.get("score") or 0.0) >= float(threshold):
                 ranked.append(row)
 
@@ -801,7 +908,7 @@ class SemanticObjectIndex:
     """
 
     INDEX_SCHEMA_VERSION = 1
-    _TOKEN_RE = re.compile(r"[a-z0-9_]{2,}")
+    _TOKEN_RE = re.compile(r"0x[0-9a-fA-F]+|[A-Za-z_][A-Za-z0-9_]{1,}|\b\d+\b")
 
     def __init__(self, db_path: str, embedder: Any):
         self._embedder = embedder
@@ -879,15 +986,23 @@ class SemanticObjectIndex:
             conn.commit()
 
     def _tokenize(self, text: str) -> List[str]:
-        return sorted(set(self._TOKEN_RE.findall((text or "").lower())))
+        tokens: set[str] = set()
+        raw_text = str(text or "")
+        for raw in self._TOKEN_RE.findall(raw_text):
+            for tok in _split_identifier_token(raw):
+                if tok and tok not in _SEARCH_NOISE_TOKENS and not (tok.isdigit() and len(tok) < 3):
+                    tokens.add(tok)
+        return sorted(tokens)
 
     def upsert_object(self, obj: SemanticObject) -> None:
         text = obj.text or ""
-        norm = re.sub(r"\s+", " ", text.lower()).strip()
-        tokens = ",".join(self._tokenize(text))
+        title = obj.title or obj.stable_ref
+        searchable = f"{title} {text}".strip()
+        norm = re.sub(r"\s+", " ", searchable.lower()).strip()
+        tokens = ",".join(self._tokenize(searchable))
         vec_blob = None
         try:
-            vec_blob = self._pack(self._embedder.embed(text))
+            vec_blob = self._pack(self._embedder.embed(searchable))
         except Exception:
             vec_blob = None
         with self._conn() as conn:
@@ -908,7 +1023,7 @@ class SemanticObjectIndex:
                 (
                     obj.kind,
                     obj.stable_ref,
-                    obj.title or obj.stable_ref,
+                    title,
                     text,
                     norm,
                     tokens,
@@ -926,6 +1041,7 @@ class SemanticObjectIndex:
         top_k: int = 10,
         threshold: float = 0.0,
     ) -> List[Dict[str, Any]]:
+        q_norm = _normalize_search_text(query)
         q_tokens = set(self._tokenize(query))
         if not q_tokens:
             return []
@@ -934,26 +1050,42 @@ class SemanticObjectIndex:
         if kind:
             sql += " WHERE kind=?"
             params.append(kind)
-        rows: List[Dict[str, Any]] = []
+        raw_rows: List[Tuple[Any, ...]] = []
         with self._conn() as conn:
             for row in conn.execute(sql, tuple(params)):
                 row_tokens = set(str(row[4] or "").split(",")) if row[4] else set()
                 if not row_tokens:
                     continue
-                overlap = len(q_tokens.intersection(row_tokens))
-                score = overlap / max(1, len(q_tokens))
-                if score < float(threshold):
-                    continue
-                rows.append(
-                    {
-                        "kind": str(row[0]),
-                        "stable_ref": str(row[1]),
-                        "title": str(row[2]),
-                        "score": round(score, 4),
-                        "metadata": json_loads_safe(str(row[5] or "{}")),
-                    }
-                )
-        rows.sort(key=lambda r: r["score"], reverse=True)
+                raw_rows.append((row, row_tokens))
+
+        idf = _idf_scores([tokens for _, tokens in raw_rows])
+        rows: List[Dict[str, Any]] = []
+        for row, row_tokens in raw_rows:
+            token_score, matched = _weighted_token_score(q_tokens, row_tokens, idf)
+            title = str(row[2])
+            title_tokens = set(self._tokenize(title))
+            norm_blob = _normalize_search_text(f"{title} {row[3] or ''}")
+            exact = 1.0 if q_norm and q_norm in norm_blob else 0.0
+            title_bonus = 0.25 if q_tokens and q_tokens.issubset(title_tokens) else 0.0
+            score = round(token_score + (0.35 * exact) + title_bonus, 4)
+            if score < float(threshold):
+                continue
+            rows.append(
+                {
+                    "kind": str(row[0]),
+                    "stable_ref": str(row[1]),
+                    "title": title,
+                    "score": score,
+                    "lexical_score": score,
+                    "exact_match": bool(exact),
+                    "matched_tokens": matched,
+                    "metadata": json_loads_safe(str(row[5] or "{}")),
+                }
+            )
+        rows.sort(
+            key=lambda r: (float(r.get("score") or 0.0), len(r.get("matched_tokens") or [])),
+            reverse=True,
+        )
         return rows[: max(1, int(top_k))]
 
     def search_vec(
@@ -997,14 +1129,65 @@ class SemanticObjectIndex:
         top_k: int = 10,
         threshold: float = 0.4,
     ) -> List[Dict[str, Any]]:
+        limit = max(1, int(top_k))
+        vector_rows: List[Dict[str, Any]] = []
+        lexical_rows: List[Dict[str, Any]] = []
         try:
             qvec = self._embedder.embed(query)
-            rows = self.search_vec(qvec, kind=kind, top_k=top_k, threshold=threshold)
-            if rows:
-                return rows
+            vector_rows = self.search_vec(qvec, kind=kind, top_k=max(limit * 4, 16), threshold=0.0)
         except Exception:
             pass
-        return self.search_text(query, kind=kind, top_k=top_k, threshold=max(0.0, threshold / 2.0))
+        lexical_rows = self.search_text(query, kind=kind, top_k=max(limit * 4, 16), threshold=0.0)
+        if not vector_rows:
+            return [r for r in lexical_rows if float(r.get("score") or 0.0) >= max(0.0, float(threshold) / 2.0)][:limit]
+
+        sem_max = max((float(r.get("similarity") or 0.0) for r in vector_rows), default=1.0) or 1.0
+        lex_max = max((float(r.get("score") or 0.0) for r in lexical_rows), default=1.0) or 1.0
+        merged: Dict[tuple[str, str], Dict[str, Any]] = {}
+        for row in vector_rows:
+            key = (str(row.get("kind") or ""), str(row.get("stable_ref") or ""))
+            if not key[1]:
+                continue
+            merged[key] = dict(row)
+            merged[key]["lexical_score"] = 0.0
+        for row in lexical_rows:
+            key = (str(row.get("kind") or ""), str(row.get("stable_ref") or ""))
+            if not key[1]:
+                continue
+            dst = merged.setdefault(key, dict(row))
+            dst.setdefault("similarity", 0.0)
+            dst["lexical_score"] = max(float(dst.get("lexical_score") or 0.0), float(row.get("score") or 0.0))
+            dst["exact_match"] = bool(dst.get("exact_match") or row.get("exact_match"))
+            dst["matched_tokens"] = sorted(set(list(dst.get("matched_tokens") or []) + list(row.get("matched_tokens") or [])))[:16]
+            dst.setdefault("metadata", row.get("metadata") or {})
+
+        q_tokens = set(self._tokenize(query))
+        ranked: List[Dict[str, Any]] = []
+        for row in merged.values():
+            sem_norm = float(row.get("similarity") or 0.0) / sem_max if sem_max else 0.0
+            lex_norm = float(row.get("lexical_score") or 0.0) / lex_max if lex_max else 0.0
+            matched = set(row.get("matched_tokens") or [])
+            token_coverage = len(q_tokens.intersection(matched)) / max(1, len(q_tokens)) if q_tokens else 0.0
+            exact_bonus = 0.08 if row.get("exact_match") else 0.0
+            score = round((0.50 * sem_norm) + (0.40 * lex_norm) + (0.10 * token_coverage) + exact_bonus, 4)
+            row["score"] = score
+            row["rank_reason"] = {
+                "semantic": round(sem_norm, 4),
+                "lexical": round(lex_norm, 4),
+                "token_coverage": round(token_coverage, 4),
+                "exact": bool(row.get("exact_match")),
+            }
+            if score >= float(threshold):
+                ranked.append(row)
+        ranked.sort(
+            key=lambda r: (
+                float(r.get("score") or 0.0),
+                float(r.get("lexical_score") or 0.0),
+                float(r.get("similarity") or 0.0),
+            ),
+            reverse=True,
+        )
+        return ranked[:limit]
 
     @property
     def size(self) -> int:

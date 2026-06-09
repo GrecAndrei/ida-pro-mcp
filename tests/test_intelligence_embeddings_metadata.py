@@ -93,3 +93,22 @@ def test_capsule_state_contains_embedder_and_index_snapshot(tmp_path):
     assert state["thresholds"]["classification_default"] == 0.25
     assert len(state["last_indexed_functions"]) == 1
     assert state["last_indexed_functions"][0]["ea"] in {"0x401000", "0x402000"}
+
+
+def test_function_embedding_hybrid_search_uses_true_cosine_and_lexical_reason(tmp_path):
+    db = tmp_path / "hybrid.i64.embeddings.db"
+    idx = FunctionEmbeddingIndex(str(db), _FakeEmbedder())
+    idx.index("0x401000", "AESDecryptRoundKey", "void f() { uint8_t sbox; round_key(); }")
+    idx.index("0x402000", "CopyBuffer", "void g() { memcpy(dst, src, len); }")
+
+    # Deliberately non-normalized query vector. Old dot-product scoring could
+    # produce similarities above 1.0; hybrid search should report true cosine.
+    rows = idx.search([10.0] + [0.0] * 1535, top_k=2, threshold=0.0)
+    assert rows
+    assert rows[0]["similarity"] <= 1.0
+
+    hits = idx.hybrid_search("crypto cipher decrypt round", top_k=2, threshold=0.0)
+    assert hits
+    assert hits[0]["ea"] == "0x401000"
+    assert hits[0]["rank_reason"]["lexical"] > 0
+    assert set(hits[0].get("matched_tokens") or []).intersection({"aes", "decrypt", "cipher", "crypto", "round"})

@@ -4,6 +4,7 @@ from typing import Any
 
 from .batch_manager import BatchManager
 from .errors import MCPError, make_error
+from .policy import PolicyDecision, evaluate_policy
 
 
 _BACKGROUND_ACTIONS = {
@@ -17,6 +18,47 @@ _BACKGROUND_ACTIONS = {
 
 
 class BackgroundMixin:
+
+    def _background_policy_preflight(self, *, script: Any, tool_call: Any) -> dict | None:
+        if script:
+            decision = evaluate_policy(
+                "background",
+                "script",
+                mode="assist",
+                purpose=None,
+                ack=False,
+            )
+            return make_error(
+                getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
+                "background script execution is not supported; submit a tool_call instead",
+                hint="Use background(action='submit', tool_call={'tool':'...', 'args': {...}}).",
+                details=decision.to_dict(),
+            )
+
+        if tool_call:
+            if not isinstance(tool_call, dict):
+                return make_error(MCPError.INVALID_ARGS, "tool_call must be an object")
+            tool = str(tool_call.get("tool") or tool_call.get("name") or "").strip()
+            call_args = tool_call.get("args") or tool_call.get("arguments") or {}
+            if not tool:
+                return make_error(MCPError.INVALID_ARGS, "tool_call.tool required")
+            if not isinstance(call_args, dict):
+                return make_error(MCPError.INVALID_ARGS, "tool_call.args must be an object")
+            decision = evaluate_policy(
+                tool,
+                call_args.get("action"),
+                mode="assist",
+                purpose=call_args.get("_purpose"),
+                ack=bool(call_args.get("_risk_ack") or call_args.get("_guardrail_ack")),
+            )
+            if decision.decision in {PolicyDecision.BLOCK, PolicyDecision.REQUIRE_ACK}:
+                return make_error(
+                    getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
+                    "Background tool call requires explicit acknowledgement before queueing",
+                    hint="Add _risk_ack=true to tool_call.args after verifying the action is authorized.",
+                    details=decision.to_dict(),
+                )
+        return None
 
     @property
     def _batch_manager(self) -> BatchManager:
@@ -45,6 +87,9 @@ class BackgroundMixin:
                 "background submit requires 'script' (Python source) or 'tool_call' "
                 "(dict with 'tool', 'action', 'args' keys)",
             )
+        policy_error = self._background_policy_preflight(script=script, tool_call=tool_call)
+        if policy_error:
+            return policy_error
         action = "script" if script else "tool_call"
 
         def _run(task):
@@ -59,16 +104,18 @@ class BackgroundMixin:
                     except Exception:
                         pass
                 if task.args.get("script"):
-                    namespace: dict[str, Any] = {"__builtins__": __builtins__}
-                    exec(
-                        compile(task.args["script"], "<batch>", "exec"),
-                        namespace,
+                    return make_error(
+                        getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
+                        "background script execution is disabled",
+                        hint="Use background tool_call for auditable work.",
                     )
-                    return {"status": "executed"}
                 elif task.args.get("tool_call"):
                     tc = task.args["tool_call"]
                     if hasattr(self, "_execute_tool"):
-                        return self._execute_tool(tc.get("tool", ""), tc.get("args", {}))
+                        return self._execute_tool(
+                            tc.get("tool", "") or tc.get("name", ""),
+                            tc.get("args", {}) or tc.get("arguments", {}),
+                        )
                     return {"status": "ok", "tool_call": tc}
                 return {"status": "unknown"}
             finally:

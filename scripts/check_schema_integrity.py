@@ -21,6 +21,8 @@ def main() -> int:
         TOOL_ARG_SCHEMAS,
         TOOLS,
     )
+    from ida_pro_mcp.host import schemas
+    from ida_pro_mcp.host.tool_registry import advertised_tools, tool_actions
 
     errors: list[str] = []
     tool_set = set(TOOLS)
@@ -34,6 +36,13 @@ def main() -> int:
     missing_descriptions = sorted(tool_set - set(TOOL_DESCRIPTIONS.keys()))
     if missing_descriptions:
         errors.append(f"missing TOOL_DESCRIPTIONS entries: {missing_descriptions}")
+
+    if TOOL_ACTIONS != tool_actions():
+        errors.append("schemas_data.TOOL_ACTIONS differs from tool_registry.tool_actions()")
+    if schemas.TOOL_ACTIONS != tool_actions():
+        errors.append("schemas.TOOL_ACTIONS differs from tool_registry.tool_actions()")
+    if list(schemas.ADVERTISED_TOOLS) != advertised_tools():
+        errors.append("schemas.ADVERTISED_TOOLS differs from tool_registry.advertised_tools()")
 
     # Not all tools need explicit arg schema, but if present it must be dict-like.
     for tool, schema in TOOL_ARG_SCHEMAS.items():

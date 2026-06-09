@@ -31,8 +31,7 @@ def test_session_persistence():
     print("\n[2] Creating new session...")
     test_binary = os.path.abspath("tests/data/test_binary.exe")
     if not os.path.exists(test_binary):
-        print(f"  ✗ Test binary not found: {test_binary}")
-        return False
+        raise AssertionError(f"Test binary not found: {test_binary}")
     
     session = mgr1.create_session(test_binary)
     print(f"  Created session: {session.session_id}")
@@ -41,8 +40,7 @@ def test_session_persistence():
     # Verify metadata file was created
     meta_path = mgr1._get_metadata_path(session.session_id)
     if not os.path.exists(meta_path):
-        print(f"  ✗ Metadata file not created: {meta_path}")
-        return False
+        raise AssertionError(f"Metadata file not created: {meta_path}")
     print(f"  ✓ Metadata file created: {meta_path}")
     
     # Destroy manager 1
@@ -57,8 +55,7 @@ def test_session_persistence():
     # Check if session was loaded
     loaded = mgr2.get_session(session_id)
     if not loaded:
-        print(f"  ✗ Session {session_id} was NOT loaded from metadata")
-        return False
+        raise AssertionError(f"Session {session_id} was NOT loaded from metadata")
     
     print(f"  ✓ Session {session_id} was loaded from metadata!")
     print(f"    Binary: {loaded.binary_path}")
@@ -81,12 +78,11 @@ def test_session_persistence():
     print("\n" + "=" * 60)
     print("✓ SESSION PERSISTENCE TEST PASSED")
     print("=" * 60)
-    return True
 
 if __name__ == "__main__":
     try:
-        success = test_session_persistence()
-        sys.exit(0 if success else 1)
+        test_session_persistence()
+        sys.exit(0)
     except Exception as e:
         print(f"\n✗ TEST FAILED WITH EXCEPTION:")
         print(f"  {type(e).__name__}: {e}")

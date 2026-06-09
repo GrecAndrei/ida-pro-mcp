@@ -981,7 +981,8 @@ class ServerDispatchMixin:
             args = self._normalize_tool_call_args(tool_name, args)
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
 
-            # Background calls bypass ALL gates.
+            # Background calls bypass interactive survey locks only; policy and
+            # guardrail checks still apply to the actual child tool call.
             _bg = (
                 tool_name == "background"
                 or getattr(self, "_bg_running", False)

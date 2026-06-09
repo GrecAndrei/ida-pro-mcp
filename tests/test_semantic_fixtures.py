@@ -50,9 +50,21 @@ def _fixture(name: str) -> str:
 def test_signature_extractor_removes_noise_tokens():
     pseudo = "int parse_user_input(char *buf, int len) { memcpy(buf, src, len); return 0; }"
     sig = _extract_signature(pseudo)
-    assert "parse_user_input" in sig
+    assert "parse" in sig
+    assert "user" in sig
+    assert "input" in sig
     assert "memcpy" not in sig
     assert "int" not in sig
+
+
+def test_signature_extractor_splits_camelcase_identifiers():
+    sig = _extract_signature("void AESDecryptRoundKeySchedule() { MixColumns(state); }")
+    low = sig.lower().split()
+    assert "decrypt" in low
+    assert "round" in low
+    assert "key" in low
+    assert "mix" in low
+    assert "columns" in low
 
 
 def test_semantic_object_index_mixed_kind_retrieval(tmp_path):
@@ -98,3 +110,4 @@ def test_behavior_classifier_fixture_triage_with_fake_embedder():
     assert rows_http[0]["behavior"] == "network_http"
     assert rows_crypto
     assert rows_crypto[0]["behavior"] == "crypto_symmetric"
+    assert rows_crypto[0].get("matched_tokens")

@@ -113,7 +113,36 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "evidence_card",
     ],
     "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
-    "llm_helpers": ["bootstrap", "cheatsheet", "context_window", "function_digest", "binary_digest", "explain_address", "suggest_next", "progress_report", "focus_area", "behavioral_signature_search", "function_role_classifier", "dangerous_pattern_explainer", "api_contract_extractor", "global_state_influence_mapper", "interprocedural_data_lineage_graph", "semantic_diff_explainer", "decompile_disasm_consistency_search", "argument_semantics_search", "path_constrained_search", "cross_artifact_correlation_search"],
+    "llm_helpers": [
+        "bootstrap", "context_window", "function_digest", "binary_digest",
+        "explain_address", "suggest_next", "progress_report", "focus_area",
+        "question_answer", "guided_analysis", "cheatsheet", "compact", "enrich",
+        "intent_tool_compiler", "adaptive_query_planner",
+        "token_aware_context_optimizer", "cross_call_variable_resolver",
+        "evidence_weighted_response_assembler", "uncertainty_propagation_engine",
+        "multi_granularity_retrieval_layer", "semantic_chunking_for_decompiled_code",
+        "question_type_router", "interactive_clarification_protocol",
+        "behavioral_signature_search", "cross_artifact_correlation_search",
+        "temporal_search_replay", "search_hypothesis_sandbox",
+        "path_constrained_search", "argument_semantics_search",
+        "decompile_disasm_consistency_search", "near_miss_search_ranking",
+        "persistent_search_collections", "auto_expansion_search_chains",
+        "function_role_classifier", "global_state_influence_mapper",
+        "api_contract_extractor", "interprocedural_data_lineage_graph",
+        "semantic_diff_explainer", "dangerous_pattern_explainer",
+        "binary_capability_matrix_builder", "execution_hypothesis_generator",
+        "patch_impact_forecaster", "safe_idapython_orchestration_runtime",
+        "script_template_marketplace_layer", "auto_script_synthesis_from_intent",
+        "script_output_schema_enforcer", "long_running_job_manager",
+        "cross_session_script_memory", "privilege_scope_guardrails_for_scripts",
+        "script_to_tool_promotion_pipeline", "experiment_harness_for_script_variants",
+        "idapython_provenance_recorder", "investigation_playbook_engine",
+        "next_best_action_recommender", "analysis_dead_end_detector",
+        "workset_intelligence_capsules", "contradiction_tracker",
+        "review_queue_for_ai_edits", "case_narrative_composer",
+        "cost_latency_optimizer", "trust_verification_layer",
+        "learning_feedback_loop",
+    ],
     "lumina": ["pull", "push", "status", "history", "search", "get_metadata"],
     "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "find_pointers", "entropy", "strings", "struct_walk", "histogram", "read_file", "write_file"],
     "microcode": ["get", "blocks", "instructions", "def_use_graph"],
@@ -208,13 +237,9 @@ def all_tools() -> list[str]:
 
 def advertised_tools() -> list[str]:
     """Return the advertised (user-facing) tool names."""
-    # Inverted: blacklist hidden tools instead of listing them separately.
-    _HIDDEN = {
-        "fixups", "schemaboot", "microcode", "imports_deep",
-        "bridge_search", "patterns", "data_ops", "colorize",
-        "governance", "filter",
-    }
-    return [t for t in all_tools() if t not in _HIDDEN]
+    from .schemas_data import ADVERTISED_TOOLS
+
+    return [t for t in ADVERTISED_TOOLS if t in _TOOL_ACTIONS]
 
 
 def tool_actions() -> dict[str, list[str]]:

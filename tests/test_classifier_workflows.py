@@ -68,6 +68,23 @@ class TestBehaviorClassifierManagement(unittest.TestCase):
         self.assertIsNone(anchor)
         self.assertNotIn("crypto_symmetric", clf._anchor_embs)
 
+    def test_token_evidence_can_rescue_low_vector_score(self):
+        class WeakEmbedder:
+            def embed(self, text):
+                return [0.0, 0.0]
+
+        clf = BehaviorClassifier(WeakEmbedder())
+        rows = clf.classify(
+            "void AESDecryptRoundKeySchedule() { sub_bytes(state); mix_columns(state); round_key(state); }",
+            threshold=0.05,
+            block=True,
+            top_k=4,
+        )
+
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]["behavior"], "crypto_symmetric")
+        self.assertIn("matched_tokens", rows[0])
+
 
 class TestClassifySchemaHelpers(unittest.TestCase):
     def setUp(self):

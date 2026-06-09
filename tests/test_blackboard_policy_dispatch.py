@@ -5,6 +5,7 @@ from tests._isolated_repo_loader import load_host_module
 ServerBlackboardMixin = load_host_module("server_blackboard").ServerBlackboardMixin
 ServerDispatchMixin = load_host_module("server_dispatch").ServerDispatchMixin
 ServerArgsMixin = load_host_module("server_args").ServerArgsMixin
+BackgroundMixin = load_host_module("server_batch").BackgroundMixin
 
 
 class _FakeStore:
@@ -93,7 +94,7 @@ class _FakeAudit:
         self.records.append(kwargs)
 
 
-class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin):
+class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin, BackgroundMixin):
     def __init__(self):
         self.cache_dir = "/tmp"
         self.current_session = types.SimpleNamespace(session_id="sid-test", idb_path="/tmp/fake.i64")
@@ -154,6 +155,37 @@ def test_dispatch_policy_requires_ack_for_misc_python(monkeypatch):
     assert "Policy requires explicit acknowledgement" in str(blocked.get("message") or "")
     assert not srv._tool_calls
     assert any(r.get("tool") == "misc" and r.get("action") == "python" for r in srv.audit.records)
+
+
+def test_background_submit_rejects_raw_script_execution(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
+    srv = _DummyDispatchServer()
+
+    blocked = srv._execute_tool_inner(
+        "background",
+        "background",
+        {"action": "submit", "script": "print('unsafe')"},
+    )
+
+    assert blocked.get("error") is True
+    assert "background script execution" in str(blocked.get("message") or "")
+
+
+def test_background_tool_call_requires_child_ack(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
+    srv = _DummyDispatchServer()
+
+    blocked = srv._execute_tool_inner(
+        "background",
+        "background",
+        {
+            "action": "submit",
+            "tool_call": {"tool": "misc", "args": {"action": "python"}},
+        },
+    )
+
+    assert blocked.get("error") is True
+    assert "Background tool call requires explicit acknowledgement" in str(blocked.get("message") or "")
 
 
 def test_dispatch_policy_ack_allows_misc_python_and_strips_internal_args(monkeypatch):
