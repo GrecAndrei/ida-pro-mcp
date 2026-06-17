@@ -718,77 +718,12 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 guardrail_mode = self._guardrail_mode_from_args(call_args)
                 compacted.setdefault("llm_guardrail_mode", guardrail_mode)
                 compacted.setdefault("llm_guardrail_reason_tags", reason_tags)
-            if self.enable_response_enrichment:
-                # ---- Auto-Nudge Injection ----
-                try:
-                    # Always run the base nudge generator to invoke the prefetching suite and extract expressions
-                    from .auto_nudge import get_nudge
-                    idb_key = (self.current_session.idb_path if self.current_session else "")
-                    nudge = get_nudge(
-                        idb_key,
-                        tool_name,
-                        action_name,
-                        compacted,
-                        call_args if isinstance(call_args, dict) else {},
-                        execute_tool_fn=getattr(self, "_execute_tool", None)
-                    ) or {}
 
-                    ui = getattr(self, "_usage_intel", None)
-                    if ui:
-                        # Primary: UsageIntelligence predictions (trained on real audit data)
-                        preds = ui.predict_next(tool_name, action_name, top_k=12)
-                        if preds:
-                            from .schemas import TOOLS
-                            # Filter out legacy/unregistered tools from predictions
-                            preds = [p for p in preds if p.get("tool") in TOOLS][:4]
-                        if preds:
-                            from .auto_nudge import suggest_smart_tools
-                            behavior_tags = (compacted.get("behavior_tags") or
-                                             compacted.get("tags") or [])
-                            static = suggest_smart_tools(tool_name, action_name,
-                                                         compacted, behavior_tags)
-                            # Merge: UI predictions first, then static suggestions not already covered
-                            ui_set = {f"{p['tool']}:{p['action']}" for p in preds}
-                            merged = [f"{p['tool']}:{p['action']}  p={p['probability']:.2f}  eff={p['effectiveness']:.2f}"
-                                      for p in preds]
-                            for s in static[:3]:
-                                ta = s.split("=")[0] if "=" in s else s
-                                if ta not in ui_set:
-                                    merged.append(s)
-                            nudge["suggested_next"] = merged[:5]
-                            nudge["source"] = "usage_intelligence"
-                    if not nudge:
-                        nudge = None
-                    if nudge:
-                        compacted["_nudge"] = nudge
-                except Exception:
-                    pass
-
-            # ---- Signal-Specific Directives ----
-            # Precise, copy-pasteable tool calls based on what was found in this response.
-            try:
-                from .response_enrichment import build_signal_directives
-                func_addr = ""
-                if isinstance(call_args, dict):
-                    func_addr = str(call_args.get("addr") or call_args.get("addrs") or "")
-                    if isinstance(func_addr, list):
-                        func_addr = func_addr[0] if func_addr else ""
-                directives = build_signal_directives(
-                    tool_name, action_name, compacted, func_addr=func_addr
-                )
-                if directives:
-                    # High-priority directives become the execution directive
-                    high = [d for d in directives if d["priority"] == "high"]
-                    if high:
-                        top = high[0]
-                        compacted["llm_execution_directive"] = (
-                            f"REQUIRED: {top['call']}  ← {top['reason']}"
-                        )
-                    compacted["_next_calls"] = directives
-            except Exception:
-                pass
-
-            # ---- Explicit tool-first directive ----
+            # ---- Real gating: blackboard policy + phase + must_call ----
+            # (Only fires when the blackboard has a strict policy or a phase
+            # gate. The shotgun _next_calls / suggested / prefetch / 7-phase
+            # ghost chain have all been removed; see HACKING for the
+            # history of those features.)
             try:
                 self._inject_blackboard_policy_followup(compacted, tool_name, call_args)
                 self._inject_blackboard_phase_followup(compacted, tool_name)
@@ -797,8 +732,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     compacted.setdefault("llm_execution_directive", directive)
             except Exception:
                 pass
-            
-            # ---- Address Patching ----
+
+            # ---- Address Patching: annotate rip-relative in disasm/pseudo ----
             try:
                 if tool_name == "code" and action_name in ("decompile", "semantic_decompile", "disasm"):
                     from .response_enrichment import patch_addresses
@@ -812,9 +747,9 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         compacted[pseudo_key] = patch_addresses(compacted[pseudo_key])
             except Exception:
                 pass
-            
+
+            # ---- Auto-Digest: API calls, patterns, behavior tags ----
             if self.enable_response_enrichment:
-                # ---- Auto-Digest ----
                 try:
                     if tool_name == "code" and action_name in ("decompile", "semantic_decompile"):
                         from .response_enrichment import digest_decompiled
@@ -826,7 +761,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                             pseudo_key = "output"
                         if pseudo_key in compacted and isinstance(compacted[pseudo_key], str):
                             addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                            # Try to get SchemaBoot attributes for richer classification
                             schema_attrs = None
                             try:
                                 if addr and hasattr(self, '_insight_index') and self._insight_index:
@@ -840,14 +774,13 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                 compacted["_digest"] = digest
                 except Exception:
                     pass
-            
+
+            # ---- Session Resume: first 2 calls only ----
             if self.enable_response_enrichment:
-                # ---- Session Resume ----
                 try:
                     if hasattr(self, 'session_mgr') and self.current_session:
                         from .response_enrichment import build_session_resume
                         sid = self.current_session.session_id
-                        # Only inject on first few calls
                         if call_args and isinstance(call_args, dict):
                             call_count = call_args.get("_call_seq", 0)
                             if not isinstance(call_count, int) or call_count <= 2:
@@ -856,257 +789,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                     compacted["_session_resume"] = resume
                 except Exception:
                     pass
-            
-            if self.enable_response_enrichment:
-                # ---- Ghost Chain Inlining ----
-                try:
-                    addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                    ghost_action = action_name
-                    from .response_enrichment import GHOST_CHAINS
-                    ghost_results = {}
-                    ghost_key = (tool_name, ghost_action)
-                    chain = GHOST_CHAINS.get(ghost_key, [])
-                    
-                    # Phase 1: Basic companions (callers, callees, strings)
-                    for ghost_tool, ghost_args_template in chain:
-                        ghost_args = dict(ghost_args_template)
-                        for k, v in ghost_args.items():
-                            if isinstance(v, str):
-                                v = v.replace("__ADDR__", str(addr))
-                                ghost_args[k] = v
-                        try:
-                            ghost_res = self._execute_tool(ghost_tool, ghost_args)
-                            if isinstance(ghost_res, dict) and ghost_res.get("ok"):
-                                key_name = ghost_args.get("action", ghost_tool)
-                                if "callers" in key_name:
-                                    items = ghost_res.get("callers", ghost_res.get("matches", ghost_res.get("results", [])))
-                                    ghost_results["callers"] = items[:5] if isinstance(items, list) else str(items)[:200]
-                                elif "callees" in key_name:
-                                    items = ghost_res.get("callees", ghost_res.get("matches", ghost_res.get("results", [])))
-                                    ghost_results["callees"] = items[:5] if isinstance(items, list) else str(items)[:200]
-                                elif "strings" in key_name:
-                                    items = ghost_res.get("strings", ghost_res.get("matches", ghost_res.get("results", [])))
-                                    ghost_results["strings"] = items[:5] if isinstance(items, list) else str(items)[:200]
-                                elif "calls" in key_name:
-                                    items = ghost_res.get("calls", ghost_res.get("results", []))
-                                    ghost_results["api_calls"] = items[:5] if isinstance(items, list) else str(items)[:200]
-                                else:
-                                    ghost_results[key_name] = str(ghost_res)[:200]
-                        except Exception:
-                            pass
-                    
-                    # Phase 2: multi-hop bridge-conditioned relation discovery
-                    if addr and tool_name in ("code", "data", "search"):
-                        try:
-                            bridge_res = self._execute_tool("bridge_search", {
-                                "action": "bridges",
-                                "func_ea": addr,
-                                "bridge_types": ["apis", "strings"],
-                            })
-                            if isinstance(bridge_res, dict) and bridge_res.get("ok"):
-                                bridges = bridge_res.get("bridges", {})
-                                if bridges:
-                                    ghost_results["bridge_entities"] = {
-                                        "apis": bridges.get("apis", [])[:5],
-                                        "strings": bridges.get("strings", [])[:5],
-                                        "note": "Shared APIs/strings with other functions. Use bridge_search.search for full discovery."
-                                    }
-                        except Exception:
-                            pass
-                    
-                    # Phase 3: spectral-CFG structural similarity (agent.cfg_similar)
-                    if addr and tool_name in ("code", "data", "search"):
-                        try:
-                            mbagcn_res = self._execute_tool("agent", {
-                                "action": "cfg_similar",
-                                "addr": addr,
-                                "top_k": 3,
-                            })
-                            if isinstance(mbagcn_res, dict) and mbagcn_res.get("ok"):
-                                similar = mbagcn_res.get("results", [])
-                                if similar:
-                                    ghost_results["structurally_similar"] = [
-                                        {"addr": s.get("ea", ""), "name": s.get("name", ""),
-                                         "similarity": s.get("similarity", 0)}
-                                        for s in similar[:3]
-                                    ]
-                                    ghost_results["structurally_similar_note"] = (
-                                        "These functions have similar CFG structure. They may share behavior. "
-                                        "Use code.decompile on them to investigate."
-                                    )
-                        except Exception:
-                            pass
-                    
-                    # Phase 4: InsightIndex behavior-tag discovery
-                    if addr and tool_name in ("code", "data", "search"):
-                        try:
-                            idx = getattr(self, '_insight_index', None)
-                            if idx and hasattr(idx, 'query_by_tags'):
-                                # Try to get tags for this function
-                                func_attrs = idx.get_function(addr) if hasattr(idx, 'get_function') else None
-                                tags = func_attrs.get("behavior_tags", []) if func_attrs else []
-                                if not tags:
-                                    # Fall back to L2 global facts
-                                    if hasattr(self, '_global_facts'):
-                                        tags = []
-                                if tags:
-                                    related = idx.query_by_tags(tags[:3], mode="or") if hasattr(idx, 'query_by_tags') else []
-                                    if related:
-                                        ghost_results["same_behavior_tags"] = {
-                                            "tags": tags,
-                                            "functions": [str(r)[:80] for r in related[:5]],
-                                            "note": "Other functions with the same behavior tags. May be part of the same component."
-                                        }
-                        except Exception:
-                            pass
-                    
-                    # Phase 5: L2 GlobalFactsDatabase compiler/API pattern lookup
-                    try:
-                        gf = getattr(self, '_global_facts', None)
-                        if gf and hasattr(gf, 'query_facts'):
-                            # Query for compiler signatures
-                            compiler_facts = gf.query_facts(category="compiler_signature", limit=3)
-                            api_facts = gf.query_facts(category="common_api", limit=5)
-                            if compiler_facts:
-                                ghost_results["compiler_info"] = [f.get("fact_value", "")[:100] for f in compiler_facts]
-                            if api_facts:
-                                ghost_results["known_api_patterns"] = [f.get("fact_key", "")[:80] for f in api_facts]
-                    except Exception:
-                        pass
-                    
-                    # Phase 6: TurboQuant embedding similarity
-                    try:
-                        tq_res = self._execute_tool("turboquant", {
-                            "action": "query",
-                            "query_key": addr,
-                            "top_k": 3,
-                        })
-                        if isinstance(tq_res, dict) and tq_res.get("ok"):
-                            tq_similar = tq_res.get("results", [])
-                            if tq_similar:
-                                ghost_results["embedding_similar"] = [
-                                    {"key": s.get("key", ""), "score": s.get("score", 0)}
-                                    for s in tq_similar[:3]
-                                ]
-                    except Exception:
-                        pass
-                    
-                    # Phase 7: C2 risk scoring (ML-powered, deterministic)
-                    try:
-                        c2_res = self._execute_tool("string_ops", {
-                            "action": "score_c2",
-                            "addr": addr,
-                        })
-                        if isinstance(c2_res, dict) and c2_res.get("ok"):
-                            c2_risk = c2_res.get("c2_risk")
-                            if isinstance(c2_risk, dict) and c2_risk.get("overall_score", 0) > 0:
-                                ghost_results["c2_risk"] = c2_risk
-                    except Exception:
-                        pass
-                    
-                    if ghost_results:
-                        compacted["_inline"] = ghost_results
-                except Exception:
-                    pass
-            
-            # ---- Auto-Advance Phase ----
-            try:
-                if hasattr(self, 'session_mgr') and self.current_session:
-                    sid = self.current_session.session_id
-                    data = self.session_mgr._load_skills(sid)
-                    activity_log = data.get("activity_log", [])
-                    # Count decompiles, imports analyzed, xrefs traced
-                    decompile_count = sum(1 for e in activity_log if e.get("action") in ("decompile", "semantic_decompile"))
-                    import_count = sum(1 for e in activity_log if e.get("tool") == "imports_deep" or e.get("tool") == "data" and e.get("action") == "imports")
-                    # Check phase thresholds
-                    from .session import _ANALYSIS_PHASES
-                    session = self.session_mgr.sessions.get(sid)
-                    if session:
-                        current_phase = session.phase
-                        phases = sorted(_ANALYSIS_PHASES.keys(), key=lambda p: _ANALYSIS_PHASES[p]["order"])
-                        try:
-                            idx = phases.index(current_phase)
-                            if idx < len(phases) - 1:
-                                next_phase = phases[idx + 1]
-                                threshold = _ANALYSIS_PHASES[next_phase].get("threshold", {})
-                                if (decompile_count >= threshold.get("functions_decompiled", 999) and
-                                    import_count >= threshold.get("imports_analyzed", 999)):
-                                    session.phase = next_phase
-                                    self.session_mgr._save_metadata(session)
-                        except (ValueError, IndexError):
-                            pass
-            except Exception:
-                pass
-            
-            # ---- Auto-Blackboard ----
-            try:
-                from .response_enrichment import auto_blackboard_write
-                addr = (call_args or {}).get("addr", "") if isinstance(call_args, dict) else ""
-                bb_entries = auto_blackboard_write(tool_name, str(action_name or ""), compacted, addr)
-                bb_written = 0
-                if bb_entries:
-                    # Write to blackboard with dedup check: skip entries whose
-                    # addr+category+title already exist to avoid unbounded noise.
-                    try:
-                        bb_store = self._get_blackboard_store()
-                        for entry in bb_entries:
-                            e_addr = str(entry.get("addr", addr) or "")
-                            e_title = str(entry.get("name") or entry.get("title") or "")
-                            e_category = str(entry.get("category") or "general")
-                            if not e_title:
-                                continue
-                            # Skip if identical entry already exists
-                            if bb_store and bb_store.exists(e_addr, e_category, e_title):
-                                continue
-                            wr = self._execute_tool("blackboard", {
-                                "action": "write",
-                                "addr": e_addr,
-                                "title": e_title,
-                                "content": str(entry.get("notes") or entry.get("content") or ""),
-                                "category": e_category,
-                                "tags": entry.get("tags") or [],
-                                "confidence": float(entry.get("confidence", 0.6)),
-                            })
-                            if isinstance(wr, dict) and wr.get("ok"):
-                                bb_written += 1
-                    except Exception:
-                        pass
 
-                # LLM-visible state-sync guidance: make blackboard usage explicit.
-                if isinstance(compacted, dict):
-                    if bb_entries:
-                        compacted.setdefault(
-                            "llm_state_sync",
-                            {
-                                "blackboard_entries_suggested": len(bb_entries),
-                                "blackboard_entries_written": bb_written,
-                                "recommended_next": {
-                                    "tool": "blackboard",
-                                    "arguments": {"action": "list"},
-                                },
-                            },
-                        )
-                    else:
-                        # Periodic reminder for long analysis chains to externalize state.
-                        if tool_name in {"code", "search", "graph", "threat_hunt", "predictor"}:
-                            compacted.setdefault(
-                                "llm_state_sync_hint",
-                                {
-                                    "message": "Persist important findings to blackboard to avoid context-loss.",
-                                    "tool": "blackboard",
-                                    "arguments": {
-                                        "action": "write",
-                                        "name": "finding_summary",
-                                        "notes": "<concise finding>",
-                                        "category": "analysis",
-                                        "priority": 3,
-                                    },
-                                },
-                            )
-            except Exception:
-                pass
-
-            # ---- Confidence Gate ----
+            # ---- Confidence Gate: warn when result is below 0.5 ----
             try:
                 if isinstance(compacted, dict):
                     conf = compacted.get("confidence")
@@ -1120,10 +804,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                         "confidence": conf_val,
                                         "threshold": 0.5,
                                         "message": "Result confidence is below threshold. Verify before acting.",
-                                        "verification_actions": [
-                                            {"tool": "calc", "arguments": {"action": "eval", "expr": "1+1"}},
-                                            {"tool": "memory", "arguments": {"action": "read", "addr": "0x0", "size": 16}},
-                                        ],
                                     },
                                 )
                         except Exception:

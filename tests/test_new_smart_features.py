@@ -18,7 +18,6 @@ from tests._isolated_repo_loader import ROOT, load_support_module, load_tool_mod
 
 _bb_mod = load_tool_module("blackboard")
 BlackboardStore = _bb_mod.BlackboardStore
-auto_capture_memory = _bb_mod.auto_capture_memory
 auto_capture_calc = _bb_mod.auto_capture_calc
 
 
@@ -218,51 +217,20 @@ def test_auto_capture_memory_entropy():
     assert "7.9" in entries[0]["title"]
 
 
-def test_auto_capture_calc_resolved():
+def test_auto_capture_calc_is_now_noop():
+    """auto_capture_calc was the always-on side-effect that lost the
+    question, skipped eval, and used the wrong key for chain. It is
+    deprecated; the new path is opt-in via calc(persist=True)."""
     store = _make_store()
     result = {"ok": True, "_action": "resolve", "resolved": "0x401234", "name": "main"}
     orig_cls = _bb_mod.BlackboardStore
     _bb_mod.BlackboardStore = lambda **kw: store
     try:
-        auto_capture_calc(result)
+        auto_capture_calc(result)  # should NOT write
     finally:
         _bb_mod.BlackboardStore = orig_cls
-    entries = store.list(category="address")
-    assert len(entries) == 1
-    assert "0x401234" in entries[0]["title"]
-
-
-def test_auto_capture_calc_chain():
-    store = _make_store()
-    result = {
-        "ok": True,
-        "_action": "chain",
-        "chain": [{"addr": "0x401000"}, {"addr": "0x402000"}, {"addr": "0x403000"}]
-    }
-    orig_cls = _bb_mod.BlackboardStore
-    _bb_mod.BlackboardStore = lambda **kw: store
-    try:
-        auto_capture_calc(result)
-    finally:
-        _bb_mod.BlackboardStore = orig_cls
-    entries = store.list(category="pointer_chain")
-    assert len(entries) == 1
-    assert "3 hops" in entries[0]["title"]
-
-
-def test_auto_capture_dedup():
-    """auto_capture should not write duplicate entries."""
-    store = _make_store()
-    result = {"ok": True, "_action": "resolve", "resolved": "0x401234", "name": "main"}
-    orig_cls = _bb_mod.BlackboardStore
-    _bb_mod.BlackboardStore = lambda **kw: store
-    try:
-        auto_capture_calc(result)
-        auto_capture_calc(result)  # second call — should be deduped
-    finally:
-        _bb_mod.BlackboardStore = orig_cls
-    entries = store.list(category="address")
-    assert len(entries) == 1  # not 2
+    entries = store.list()
+    assert entries == [], "auto_capture_calc should be a no-op now"
 
 
 # ─── K-means clustering tests ─────────────────────────────────────────────────

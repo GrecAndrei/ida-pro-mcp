@@ -345,6 +345,216 @@ def _safe_decompile(ea, **kwargs):
     return ida_hexrays.decompile(ea, **kwargs)
 
 
+def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
+    """Return up to 3 concrete tool calls the LLM should fire next.
+
+    Opt-in replacement for the auto-nudge shotgun that used to inject 3-5
+    directives into every decompile response. Only runs when the LLM
+    explicitly calls `intelligence(action="suggest", ...)`.
+
+    Args:
+        kwargs:        caller-supplied kwargs. Recognized keys:
+            tool     — the tool the LLM just called (e.g. "code")
+            action   — the action it just took (e.g. "decompile")
+            payload  — optional result dict the LLM is reasoning about
+            addr     — function address (overrides default_addr)
+        default_addr:  the function address from the parent call.
+
+    Returns:
+        {"ok": True, "based_on": {...}, "suggestions": [up to 3 entries]} on
+        a meaningful context, or {"ok": True, "suggestions": [], "reason": "..."}
+        when there is no obvious next step.
+    """
+    last_tool = str(kwargs.get("tool") or "").strip()
+    last_action = str(kwargs.get("action") or "").strip()
+    raw_payload = kwargs.get("payload")
+    last_payload = raw_payload if isinstance(raw_payload, dict) else {}
+    addr_kw = kwargs.get("addr")
+    target_addr = (str(addr_kw or default_addr) if (addr_kw or default_addr) else "")
+
+    suggestions: list = []
+
+    # ---- code:decompile / smart_decompile / semantic_decompile ----
+    if last_tool == "code" and last_action in (
+        "decompile", "smart_decompile", "semantic_decompile"
+    ) and target_addr:
+        api_calls = last_payload.get("api_calls", []) or []
+        if isinstance(api_calls, str):
+            api_calls = [api_calls]
+        behavior_tags = last_payload.get("behavior_tags", []) or []
+
+        dangerous_sinks = {"strcpy", "strcat", "sprintf", "memcpy", "gets",
+                            "system", "popen", "execve"}
+        has_dangerous_sink = any(s in dangerous_sinks for s in api_calls)
+        has_network = "network" in behavior_tags
+        has_process_injection = "process_injection" in behavior_tags
+
+        # One taint suggestion covering the strongest signal we have. The
+        # old shotgun version emitted two (one for dangerous API, one for
+        # network + dangerous API) for the same payload — the LLM only
+        # needs one.
+        if has_dangerous_sink or has_process_injection:
+            # Pick the best source hint. If we have a network tag, prefer
+            # the first network-ish API (recv, recvfrom) since that's the
+            # actual taint source. Otherwise fall back to the first
+            # dangerous sink so the taint engine has a real entry point.
+            source = None
+            if has_network:
+                for candidate in ("recv", "recvfrom", "InternetReadFile",
+                                  "InternetOpenUrl", "ReadFile"):
+                    if candidate in api_calls:
+                        source = candidate
+                        break
+            if not source:
+                # Prefer the first dangerous sink we recognise; only as a
+                # last resort fall back to the first API we saw.
+                for s in api_calls:
+                    if s in dangerous_sinks:
+                        source = s
+                        break
+            if not source:
+                source = api_calls[0] if api_calls else "recv"
+            suggestions.append({
+                "tool": "taint",
+                "arguments": {"action": "trace", "addr": target_addr,
+                               "source": source},
+                "reason": (
+                    "process-injection capability"
+                    if has_process_injection
+                    else ("network input + dangerous sink"
+                          if has_network
+                          else "dangerous API in decompiled function")
+                ),
+            })
+
+        if any("crypto" in str(t).lower() for t in behavior_tags):
+            suggestions.append({
+                "tool": "crypto_id",
+                "arguments": {"action": "identify", "addr": target_addr},
+                "reason": "crypto pattern detected",
+            })
+
+        if not suggestions:
+            suggestions.append({
+                "tool": "code",
+                "arguments": {"action": "xrefs_to", "addr": target_addr},
+                "reason": "see what calls this function",
+            })
+
+    # ---- taint:trace / taint:report with vulns ----
+    elif last_tool == "taint" and last_action in ("trace", "report"):
+        vulns = last_payload.get("findings", last_payload.get("vulns", [])) or []
+        if vulns:
+            top = vulns[0] if isinstance(vulns[0], dict) else {}
+            sink = str(top.get("sink_addr") or (top.get("path", [""])[-1] if isinstance(top.get("path"), list) else "") or target_addr)
+            if sink:
+                suggestions.append({
+                    "tool": "llm_helpers",
+                    "arguments": {"action": "dangerous_pattern_explainer", "addr": sink},
+                    "reason": "explain the confirmed vulnerability",
+                })
+
+    # ---- search:find / nl / behavior with results ----
+    elif last_tool == "search" and last_action in ("find", "nl", "behavior"):
+        items = last_payload.get("items", []) or []
+        if items and isinstance(items[0], dict):
+            top_addr = str(items[0].get("addr") or items[0].get("address") or items[0].get("ea") or "")
+            if top_addr:
+                suggestions.append({
+                    "tool": "code",
+                    "arguments": {"action": "smart_decompile", "addrs": top_addr},
+                    "reason": "decompile the top result",
+                })
+
+    # ---- blackboard:frontier ----
+    elif last_tool == "blackboard" and last_action == "frontier":
+        items = last_payload.get("items", []) or []
+        if items and isinstance(items[0], dict):
+            top_addr = str(items[0].get("addr", ""))
+            if top_addr:
+                suggestions.append({
+                    "tool": "code",
+                    "arguments": {"action": "smart_decompile", "addrs": top_addr},
+                    "reason": "highest-priority frontier target",
+                })
+
+    # ---- blackboard:coverage with low coverage ----
+    elif last_tool == "blackboard" and last_action == "coverage":
+        pct = last_payload.get("coverage_pct", 100)
+        unvisited = last_payload.get("unvisited", 0)
+        if pct < 30 and unvisited > 0:
+            suggestions.append({
+                "tool": "blackboard",
+                "arguments": {"action": "frontier", "limit": 10},
+                "reason": "get ranked frontier targets",
+            })
+
+    # ---- idb:overview with firmware_detected ----
+    elif last_tool == "idb" and last_action == "overview":
+        if last_payload.get("firmware_detected"):
+            suggestions.append({
+                "tool": "firmware_view",
+                "arguments": {"action": "triage_snapshot"},
+                "reason": "firmware-like binary — start with one-shot orientation",
+            })
+
+    # ---- firmware_view:scan_region with regions found ----
+    elif last_tool == "firmware_view" and last_action == "scan_region":
+        regions = last_payload.get("regions", []) or []
+        if regions:
+            suggestions.append({
+                "tool": "firmware_view",
+                "arguments": {"action": "carve_plan"},
+                "reason": "plan retyping before applying changes",
+            })
+
+    # ---- firmware_view:carve_plan ----
+    elif last_tool == "firmware_view" and last_action == "carve_plan":
+        suggestions.append({
+            "tool": "firmware_view",
+            "arguments": {"action": "smart_carve", "apply": False},
+            "reason": "dry-run the carve plan first",
+        })
+
+    # ---- firmware_view:smart_carve / auto_retype ----
+    elif last_tool == "firmware_view" and last_action in ("smart_carve", "auto_retype"):
+        if last_payload.get("applied"):
+            suggestions.append({
+                "tool": "search",
+                "arguments": {"action": "func_by_sig", "pattern": "no_callers"},
+                "reason": "find interrupt handlers / entry points after retyping",
+            })
+
+    # ---- packer:detect with do_not_unpack recommendation ----
+    elif last_tool == "packer" and last_action == "detect":
+        if last_payload.get("recommendation") == "do_not_unpack":
+            suggestions.append({
+                "tool": "string_ops",
+                "arguments": {"action": "indicators"},
+                "reason": "confirm which anti-cheat strings are present",
+            })
+
+    if not suggestions:
+        return {
+            "ok": True,
+            "suggestions": [],
+            "reason": (
+                "no obvious next step from this tool+action. "
+                "try idb(action='state') or blackboard(action='frontier')"
+            ),
+        }
+
+    return {
+        "ok": True,
+        "based_on": {
+            "tool": last_tool or None,
+            "action": last_action or None,
+            "addr": target_addr or None,
+        },
+        "suggestions": suggestions[:3],
+    }
+
+
 @tool
 @idaread
 def intelligence(
@@ -372,8 +582,9 @@ def intelligence(
             "structural_extract",
             "structural_extract_single",
             "blackboard_federate",
+            "suggest",
         ],
-        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single|blackboard_federate",
+        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single|blackboard_federate|suggest",
     ],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Free-form text or comma-separated list"] = None,
@@ -921,12 +1132,6 @@ def intelligence(
                     "elapsed_seconds": elapsed,
                 }
 
-            if action == "structural_extract":
-                return _do_structural_extract()
-
-            if action == "structural_extract_single":
-                return _do_structural_extract_single(addr)
-
             if action == "structural_delete":
                 if os.path.exists(db_path):
                     try:
@@ -1086,6 +1291,9 @@ def intelligence(
                     return {"ok": True, "refreshed": 1, "ea": addr}
                 else:
                     return _do_structural_ingest()
+
+            if action == "suggest":
+                return suggest_next_steps(kwargs, addr)
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
