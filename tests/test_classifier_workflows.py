@@ -514,30 +514,53 @@ class TestIdbOverviewRouting(unittest.TestCase):
             else:
                 sys.modules[name] = value
 
-    @pytest.mark.xfail(reason="RecursionError in classifier dispatcher (§7.6)", strict=False)
     def test_overview_firmware_next_actions_include_triage_snapshot(self):
-        self.idb_mod.idb_meta = lambda: {"file_type": "raw", "processor": "arm"}
-        self.idb_mod.idb_summary = lambda: {"import_count": 0}
-        self.idb_mod.idb_segments_detailed = lambda: []
-        self.idb_mod.idb_entrypoints_detailed = lambda: {"entrypoints": []}
+        # idb(action='overview') calls into the real infer_binary_arch_profile
+        # via idb_architecture_profile. Stub it out so we don't recurse into
+        # the architecture inference path which needs filesystem access.
+        self.idb_mod.idb_architecture_profile = lambda meta=None, summary=None: {
+            "current": {"processor": "arm", "bitness": 32, "endian": "little",
+                        "file_type": "raw"},
+            "inferred_from_binary": {"candidates": []},
+            "raw_binary_mode": True,
+            "recommendations": [],
+        }
+        self.idb_mod.idb_meta = lambda **kw: {
+            "file_type": "raw", "processor": "arm", "image_base": 0,
+            "min_ea": 0, "max_ea": 0, "is_be": False, "file_type_id": 17,
+            "file_type_info": {"effective": "raw", "loader": "raw"},
+        }
+        self.idb_mod.idb_summary = lambda **kw: {"imports": 0, "functions": 0}
+        self.idb_mod.idb_segments_detailed = lambda **kw: []
+        self.idb_mod.idb_entrypoints_detailed = lambda **kw: {"entrypoints": []}
 
         result = self.idb_mod.idb(action="overview")
 
-        self.assertTrue(result.get("ok"))
+        self.assertTrue(result.get("ok"), msg=f"idb(overview) failed: {result}")
         self.assertTrue(result.get("firmware_detected"))
         actions = result.get("next_actions", [])
         self.assertIn("firmware_view(action='triage_snapshot')", actions)
 
-    @pytest.mark.xfail(reason="RecursionError in classifier dispatcher (§7.6)", strict=False)
     def test_overview_non_firmware_next_actions_exclude_triage_snapshot(self):
-        self.idb_mod.idb_meta = lambda: {"file_type": "pe", "processor": "metapc"}
-        self.idb_mod.idb_summary = lambda: {"import_count": 24}
-        self.idb_mod.idb_segments_detailed = lambda: []
-        self.idb_mod.idb_entrypoints_detailed = lambda: {"entrypoints": []}
+        self.idb_mod.idb_architecture_profile = lambda meta=None, summary=None: {
+            "current": {"processor": "metapc", "bitness": 64, "endian": "little",
+                        "file_type": "pe"},
+            "inferred_from_binary": {"candidates": []},
+            "raw_binary_mode": False,
+            "recommendations": [],
+        }
+        self.idb_mod.idb_meta = lambda **kw: {
+            "file_type": "pe", "processor": "metapc", "image_base": 0,
+            "min_ea": 0, "max_ea": 0, "is_be": False, "file_type_id": 8,
+            "file_type_info": {"effective": "pe", "loader": "pe"},
+        }
+        self.idb_mod.idb_summary = lambda **kw: {"imports": 24, "functions": 100}
+        self.idb_mod.idb_segments_detailed = lambda **kw: []
+        self.idb_mod.idb_entrypoints_detailed = lambda **kw: {"entrypoints": []}
 
         result = self.idb_mod.idb(action="overview")
 
-        self.assertTrue(result.get("ok"))
+        self.assertTrue(result.get("ok"), msg=f"idb(overview) failed: {result}")
         self.assertFalse(result.get("firmware_detected", False))
         actions = result.get("next_actions", [])
         self.assertNotIn("firmware_view(action='triage_snapshot')", actions)

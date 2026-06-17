@@ -33,15 +33,27 @@ def _make_fake_install(tmp: Path, name: str, build: str, *, version: tuple[int, 
     """
     d = tmp / name
     d.mkdir(parents=True, exist_ok=True)
+    # On Windows, the discovery code looks for the .exe suffix; on POSIX
+    # it looks for the bare name.  Create both so the test is portable.
+    idat_bare = d / "idat"
+    ida_bare = d / "ida"
+    idat_win = d / "idat.exe"
+    ida_win = d / "ida.exe"
     # Tiny `idat` wrapper script
-    (d / "idat").write_text("#!/bin/sh\nexec ./ida \"$@\"\n")
-    (d / "idat").chmod(0o755)
+    idat_bare.write_text("#!/bin/sh\nexec ./ida \"$@\"\n")
+    idat_bare.chmod(0o755)
+    idat_win.write_text("@echo off\r\nida.exe %*\r\n")
+    idat_win.chmod(0o755)
     # Fake `ida` binary containing the version string.  Real IDA has
     # '9.3.260421.be7de18d' embedded in the binary; we simulate that.
     payload = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 12
     payload += f"{version[0]}.{version[1]}.{build}.deadbeef".encode("ascii") + b"\x00" * 256
-    (d / "ida").write_bytes(payload)
-    (d / "ida").chmod(0o755)
+    ida_bare.write_bytes(payload)
+    ida_bare.chmod(0o755)
+    # On Windows, the file is a PE not ELF, but the version string still
+    # appears in the raw bytes that `strings` reads.
+    ida_win.write_bytes(payload)
+    ida_win.chmod(0o755)
     # Fake pro license
     (d / f"idapro_99-9999-AAAA-99.hexlic").write_text("FAKE")
     return d
@@ -92,6 +104,8 @@ class _DiscoveryFixture(unittest.TestCase):
 
 class IdaInstallDataclassTests(unittest.TestCase):
     def test_to_from_dict_roundtrip(self) -> None:
+        # On Windows, Path("/opt/...") gets rendered with backslashes by
+        # str(); compare via os.path.normpath so the test is portable.
         inst = IdaInstall(
             path=Path("/opt/ida-pro-9.3"),
             version=(9, 3),
@@ -102,8 +116,7 @@ class IdaInstallDataclassTests(unittest.TestCase):
             source="home_scan",
         )
         d = inst.to_dict()
-        self.assertEqual(d["path"], "/opt/ida-pro-9.3")
-        # asdict converts tuples to lists
+        self.assertEqual(os.path.normpath(d["path"]), os.path.normpath("/opt/ida-pro-9.3"))
         self.assertEqual(tuple(d["version"]), (9, 3))
         self.assertEqual(d["build"], "260421.be7de18d")
         back = IdaInstall.from_dict(d)

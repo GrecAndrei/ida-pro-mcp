@@ -86,8 +86,30 @@ class TestPPAAEngine(unittest.TestCase):
             self.conn.close()
         except Exception:
             pass
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
+        # Force any cached sqlite3 connections (created by PPAAEngine or
+        # downstream helpers via WAL mode) to release the file. On Windows
+        # a closed connection can still hold a transient lock; collect gc
+        # and retry the remove.
+        import gc
+        import time
+        gc.collect()
+        for _ in range(5):
+            if not os.path.exists(self.db_path):
+                break
+            try:
+                os.remove(self.db_path)
+                break
+            except PermissionError:
+                time.sleep(0.05)
+                gc.collect()
+        # SQLite WAL creates sidecar files; remove those too.
+        for side in (self.db_path + "-wal", self.db_path + "-shm",
+                     self.db_path + "-journal"):
+            if os.path.exists(side):
+                try:
+                    os.remove(side)
+                except OSError:
+                    pass
 
     def test_ppaa_initialization(self):
         engine = PPAAEngine(self.dummy_idb)

@@ -16,6 +16,29 @@ import install
 import threading
 
 
+def _same_path(a, b) -> bool:
+    """Compare two paths robustly across Windows short/long form and POSIX.
+
+    On Windows, `tempfile.TemporaryDirectory()` often returns the 8.3
+    short form (C:/Users/ALEXAN~1/...) while implementation code that
+    calls os.path.expanduser / Path.resolve returns the long form
+    (C:/Users/Alexander/...). Use realpath (which calls
+    GetFinalPathNameByHandle on Windows) to canonicalize both sides
+    to the long form before comparing.
+    """
+    def _norm(p):
+        if p is None:
+            return None
+        try:
+            return os.path.normcase(os.path.realpath(str(p)))
+        except Exception:
+            try:
+                return os.path.normcase(os.path.abspath(str(p)))
+            except Exception:
+                return str(p)
+    return _norm(a) == _norm(b)
+
+
 class TestLinuxIdaDetection(unittest.TestCase):
     def _make_exec(self, path: Path):
         path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -29,7 +52,8 @@ class TestLinuxIdaDetection(unittest.TestCase):
             with patch.object(sys, "platform", "linux"):
                 with patch.dict(os.environ, {"IDA_MCP_IDAT": str(idat)}, clear=False):
                     detected = server._detect_ida_dir()
-            self.assertEqual(Path(detected), Path(td))
+            self.assertTrue(_same_path(detected, td),
+                            f"expected {td!r}, got {detected!r}")
 
     def test_find_idat_from_ida_dir(self):
         with tempfile.TemporaryDirectory() as td:
@@ -40,7 +64,8 @@ class TestLinuxIdaDetection(unittest.TestCase):
             with patch.object(sys, "platform", "linux"):
                 with patch.dict(os.environ, {}, clear=False):
                     found = server._find_idat()
-            self.assertEqual(Path(found), idat)
+            self.assertTrue(_same_path(found, idat),
+                            f"expected {idat!r}, got {found!r}")
 
     def test_find_idat_from_path(self):
         with tempfile.TemporaryDirectory() as td:
@@ -53,7 +78,8 @@ class TestLinuxIdaDetection(unittest.TestCase):
                     with patch("shutil.which", return_value=str(idat)):
                         with patch.object(server, "_detect_ida_dir", return_value=""):
                             found = server._find_idat()
-            self.assertEqual(Path(found), idat)
+            self.assertTrue(_same_path(found, idat),
+                            f"expected {idat!r}, got {found!r}")
 
 
 class TestInstallIdaDetection(unittest.TestCase):
@@ -68,15 +94,20 @@ class TestInstallIdaDetection(unittest.TestCase):
             with patch.object(sys, "platform", "linux"):
                 with patch.dict(os.environ, {"IDA_MCP_IDAT": str(idat)}, clear=False):
                     detected = install.detect_ida_install_dir()
-            self.assertEqual(detected, Path(td))
+            self.assertTrue(_same_path(detected, td),
+                            f"expected {td!r}, got {detected!r}")
 
 
 class TestInstallLinuxConfigPaths(unittest.TestCase):
     def test_linux_paths_default(self):
-        with patch.object(sys, "platform", "linux"):
-            with patch.dict(os.environ, {}, clear=True):
-                cfg = install.get_mcp_config_paths()
-        home = Path.home()
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            # Path.home() on Windows reads USERPROFILE; on POSIX it reads HOME.
+            # Set both so the test is portable.
+            env = {"HOME": str(home), "USERPROFILE": str(home)}
+            with patch.object(sys, "platform", "linux"):
+                with patch.dict(os.environ, env, clear=True):
+                    cfg = install.get_mcp_config_paths()
         self.assertEqual(cfg["Codex"], home / ".codex" / "config.toml")
         self.assertEqual(cfg["Gemini CLI"], home / ".gemini" / "settings.json")
         self.assertEqual(cfg["Antigravity"], home / ".gemini" / "antigravity" / "mcp_config.json")
@@ -92,8 +123,12 @@ class TestInstallLinuxConfigPaths(unittest.TestCase):
     def test_linux_paths_with_xdg(self):
         with tempfile.TemporaryDirectory() as td:
             xdg = Path(td) / "xdg"
+            home = Path(td) / "home"
+            home.mkdir()
+            env = {"XDG_CONFIG_HOME": str(xdg),
+                   "HOME": str(home), "USERPROFILE": str(home)}
             with patch.object(sys, "platform", "linux"):
-                with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=True):
+                with patch.dict(os.environ, env, clear=True):
                     cfg = install.get_mcp_config_paths()
             self.assertEqual(cfg["Copilot CLI"], xdg / "copilot" / "mcp-config.json")
             self.assertEqual(cfg["OpenCode"], xdg / "opencode" / "opencode.json")
