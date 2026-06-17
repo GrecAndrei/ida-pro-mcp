@@ -385,89 +385,17 @@ class _BackgroundCrawler:
 # Auto-capture helpers (called by memory.py and calc.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def auto_capture_memory(result: Dict, addr: str = "", db_path: Optional[str] = None) -> None:
-    try:
-        store = BlackboardStore(db_path=db_path)
-        action = result.get("_action", "")
-        ptrs = result.get("pointers") or result.get("pointer_list") or []
-        if ptrs and isinstance(ptrs, list):
-            for p in ptrs[:20]:
-                if not isinstance(p, dict):
-                    continue
-                ptr_addr = str(p.get("addr") or p.get("ea") or "")
-                target = str(p.get("target") or p.get("value") or "")
-                name = str(p.get("name") or "")
-                if not ptr_addr or not target:
-                    continue
-                title = f"Pointer {ptr_addr} → {target}" + (f" ({name})" if name else "")
-                if not store.exists_similar(ptr_addr, "pointer", title):
-                    store.write(title=title, content=json.dumps(p), category="pointer",
-                                addr=ptr_addr, tags=["auto", "pointer", "memory"],
-                                confidence=0.8, source="memory.auto")
-        strings = result.get("strings") or []
-        if strings and isinstance(strings, list):
-            for s in strings[:30]:
-                if not isinstance(s, dict):
-                    continue
-                s_addr = str(s.get("addr") or s.get("ea") or "")
-                value = str(s.get("value") or s.get("string") or "")
-                if not value or len(value) < 4:
-                    continue
-                title = f"String @ {s_addr}: {value[:80]}"
-                if not store.exists_similar(s_addr, "string", title):
-                    store.write(title=title, content=value, category="string",
-                                addr=s_addr, tags=["auto", "string", "memory"],
-                                confidence=0.7, source="memory.auto")
-        entropy = result.get("entropy")
-        if entropy and isinstance(entropy, (int, float)) and entropy > 7.0:
-            title = f"High entropy region @ {addr} (H={entropy:.2f})"
-            if not store.exists_similar(addr, "entropy", title):
-                store.write(title=title,
-                            content=f"Shannon entropy {entropy:.4f} — likely packed/encrypted",
-                            category="entropy", addr=addr,
-                            tags=["auto", "entropy", "packed"],
-                            confidence=0.75, source="memory.auto")
-    except Exception:
-        pass
+def auto_capture_calc(result: Dict, db_path: Optional[str] = None) -> None:  # noqa: D401
+    """Deprecated: the always-on auto-capture for `calc` was broken
+    (skipped `eval`, lost the question for `resolve`, looked at the wrong
+    key for `chain`).
 
-
-def auto_capture_calc(result: Dict, db_path: Optional[str] = None) -> None:
-    try:
-        store = BlackboardStore(db_path=db_path)
-        action = result.get("_action", "")
-        resolved = result.get("resolved") or result.get("va") or result.get("address")
-        if resolved:
-            addr_str = str(resolved)
-            name = str(result.get("name") or result.get("symbol") or "")
-            title = f"Resolved address: {addr_str}" + (f" ({name})" if name else "")
-            if not store.exists_similar(addr_str, "address", title):
-                store.write(title=title,
-                            content=json.dumps({k: v for k, v in result.items() if k != "_action"}),
-                            category="address", addr=addr_str,
-                            tags=["auto", "calc", "resolved"],
-                            confidence=0.85, source="calc.auto")
-        chain = result.get("chain") or result.get("pointer_chain") or []
-        if chain and isinstance(chain, list) and len(chain) >= 2:
-            start = str(chain[0].get("addr") or chain[0]) if isinstance(chain[0], dict) else str(chain[0])
-            end_item = chain[-1]
-            end = str(end_item.get("addr") or end_item) if isinstance(end_item, dict) else str(end_item)
-            title = f"Pointer chain {start} → ... → {end} ({len(chain)} hops)"
-            if not store.exists_similar(start, "pointer_chain", title):
-                store.write(title=title, content=json.dumps(chain),
-                            category="pointer_chain", addr=start,
-                            tags=["auto", "calc", "chain", "pointer"],
-                            confidence=0.8, source="calc.auto")
-        deref_val = result.get("value") or result.get("deref")
-        deref_addr = result.get("addr") or result.get("address")
-        if deref_val and deref_addr and action in ("deref", "chain"):
-            title = f"Deref {deref_addr} = {deref_val}"
-            if not store.exists_similar(str(deref_addr), "deref", title):
-                store.write(title=title, content=json.dumps(result),
-                            category="deref", addr=str(deref_addr),
-                            tags=["auto", "calc", "deref"],
-                            confidence=0.75, source="calc.auto")
-    except Exception:
-        pass
+    The replacement is opt-in: pass `persist=True` to `calc()` and the
+    LLM's question + the result are written to the blackboard. See
+    `calc._calc_persist_capture`. This function is kept as a no-op stub
+    so any external import keeps working; new code should not use it.
+    """
+    return
 
 
 # ─────────────────────────────────────────────────────────────────────────────

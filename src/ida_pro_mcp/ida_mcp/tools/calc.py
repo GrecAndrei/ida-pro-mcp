@@ -4,6 +4,7 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import json
 import re
 from ida_pro_mcp.host.intelligence_helpers import parse_str_list
 
@@ -112,6 +113,7 @@ def calc(
     to_va: Annotated[bool, "For resolve: treat addr/value as file offset and convert to VA"] = False,
     from_file: Annotated[bool, "Alias for to_va"] = False,
     deref_depth: Annotated[int, "For deref: pointer depth to follow (1 = single read)"] = 1,
+    persist: Annotated[bool, "If true, write question + answer to blackboard so the LLM doesn't have to remember the result"] = False,
     **kwargs
 ) -> dict:
     """
@@ -211,12 +213,35 @@ def calc(
             gate = q50 + max(0.0, q75 - q50)
             return candidates[0][1] if float(candidates[0][0]) >= float(gate) else idaapi.BADADDR
 
+        # Snapshot the user's input so the persist path can record question
+        # AND answer (not just the answer). This dict is keyed by the same
+        # names the calc() signature uses, so the persist helper can pull
+        # the original string the LLM typed — not whatever the action
+        # branch mangled it into.
+        input_summary: dict = {
+            "action": action,
+            "expr": expr,
+            "addr": addr,
+            "value": value,
+            "offsets": offsets,
+            "type": type,
+            "size": size,
+            "to_va": to_va,
+        }
+
         def _finalize(resp: dict):
             if interpreted_action:
                 resp["interpreted_action"] = interpreted_action
-            # Auto-capture interesting results to the blackboard
-            if resp.get("ok") and action in ("resolve", "deref", "chain"):
-                _calc_auto_capture(resp, action)
+            # Opt-in: write question + answer to blackboard only when the
+            # LLM explicitly asks. This is the fix for the broken
+            # _calc_auto_capture that (a) skipped eval entirely, (b) lost
+            # the question for resolve, and (c) looked at the wrong key
+            # for chain. The new helper uses the input snapshot above so
+            # the question is preserved exactly as the LLM typed it.
+            if persist and resp.get("ok") and action in (
+                "eval", "resolve", "deref", "chain"
+            ):
+                _calc_persist_capture(input_summary, resp, action)
             return resp
 
         def resolve_int(val):
@@ -809,16 +834,115 @@ def calc(
         return handle_error(e)
 
 
-def _calc_auto_capture(result: dict, action: str) -> None:
-    """Fire-and-forget blackboard capture for interesting calc results."""
-    if not result.get("ok"):
-        return
+def _calc_persist_capture(input_summary: dict, result: dict, action: str) -> None:
+    """Opt-in: write question + answer to the blackboard.
+
+    Called only when the LLM passed `persist=True` to calc(). Default is
+    off so the LLM gets the "set it and forget it" benefit of external
+    memory for math without the silent-side-effect bloat of always-on
+    auto-capture.
+
+    The previous implementation was broken: it captured the answer but
+    lost the question (the most valuable part for "what did I just
+    ask?"), skipped `eval` entirely, and looked at the wrong response
+    key for `chain`. This version pulls the original `expr`, `addr`,
+    `offsets`, etc. from the input snapshot so the LLM's question is
+    preserved verbatim.
+    """
     try:
-        from .blackboard import auto_capture_calc
+        from .blackboard import BlackboardStore
     except ImportError:
         try:
-            from blackboard import auto_capture_calc  # type: ignore
+            from blackboard import BlackboardStore  # type: ignore
         except ImportError:
             return
-    result["_action"] = action
-    auto_capture_calc(result)
+    try:
+        store = BlackboardStore()
+    except Exception:
+        return
+
+    # Build a (question, answer, title, content, addr) tuple per action.
+    # The question is the LLM's original input; the answer is what
+    # the action returned. Both are written so a later session can see
+    # "I asked X and got Y" without having to guess.
+    if action == "eval":
+        question = input_summary.get("expr") or ""
+        answer = result.get("value")
+        if not question or answer is None:
+            return
+        answer_str = hex(answer) if isinstance(answer, int) else str(answer)
+        title = f"calc(eval): {question} = {answer_str}"
+        content = json.dumps({
+            "tool": "calc", "action": "eval",
+            "expr": question, "value": answer,
+        }, sort_keys=True)
+        entry_addr = ""
+
+    elif action == "resolve":
+        question = input_summary.get("addr") or input_summary.get("value") or ""
+        answer = result.get("va") or result.get("file_offset") or ""
+        if not question or not answer:
+            return
+        title = f"calc(resolve): {question} -> {answer}"
+        content = json.dumps({
+            "tool": "calc", "action": "resolve",
+            "addr": question, "va": answer,
+            "file_offset": result.get("file_offset"),
+            "segment": result.get("segment"),
+            "direction": result.get("direction"),
+        }, sort_keys=True)
+        entry_addr = answer
+
+    elif action == "deref":
+        question = input_summary.get("addr") or ""
+        answer = result.get("value")
+        if not question or answer is None:
+            return
+        answer_str = hex(answer) if isinstance(answer, int) else str(answer)
+        title = f"calc(deref): {question} = {answer_str}"
+        content = json.dumps({
+            "tool": "calc", "action": "deref",
+            "addr": question,
+            "type": result.get("type"),
+            "value": answer,
+            "depth": result.get("depth"),
+        }, sort_keys=True)
+        entry_addr = question
+
+    elif action == "chain":
+        question_addr = input_summary.get("addr") or ""
+        offsets = input_summary.get("offsets")
+        if isinstance(offsets, str):
+            offsets = [offsets]
+        steps = result.get("steps") or []
+        final = result.get("final") or ""
+        if not question_addr or not steps or not final:
+            return
+        offsets_str = ",".join(str(o) for o in (offsets or []))
+        title = f"calc(chain): {question_addr} +[{offsets_str}] -> {final}"
+        content = json.dumps({
+            "tool": "calc", "action": "chain",
+            "addr": question_addr, "offsets": offsets,
+            "steps": steps, "final": final,
+        }, sort_keys=True)
+        entry_addr = question_addr
+
+    else:
+        return
+
+    # Dedup: don't write twice. Match on (addr, category, title) — a
+    # different question with the same answer is a different entry.
+    if store.exists_similar(entry_addr or title, f"calc_{action}", title):
+        return
+    try:
+        store.write(
+            title=title,
+            content=content,
+            category=f"calc_{action}",
+            addr=entry_addr,
+            tags=["auto", "calc", "persist", action],
+            confidence=0.85,
+            source="calc.persist",
+        )
+    except Exception:
+        pass
