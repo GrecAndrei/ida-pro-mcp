@@ -68,6 +68,7 @@ __all__ = [
     "governance",
     "knowledge",
     "survey",
+    "packer",
 ]
 
 # Mapping from tool name to module name (when they differ)

@@ -6,6 +6,9 @@ except ImportError:
 import ida_entry
 import ida_ida
 import os
+import json
+import time
+import glob
 
 try:
     from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile
@@ -34,8 +37,8 @@ def _safe_inf_get(attr_name, fallback=None):
 
 @tool
 def idb(
-    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile"],
-                      "Action: meta|summary|segments|entrypoints|bookmarks|overview|architecture_profile"] = "summary",
+    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state"],
+                      "Action: meta|summary|segments|entrypoints|bookmarks|overview|architecture_profile|state"] = "summary",
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
     **kwargs
@@ -140,6 +143,9 @@ def idb(
             return {"ok": True, **idb_bookmarks()}
         if action == "architecture_profile":
             return {"ok": True, **idb_architecture_profile()}
+        if action == "state":
+            tail = int(kwargs.get("audit_tail", 5) or 0)
+            return idb_state(audit_tail=tail)
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e, "idb")
@@ -458,4 +464,263 @@ def idb_architecture_profile(meta=None, summary=None):
         "inferred_from_binary": inferred,
         "raw_binary_mode": raw_mode,
         "recommendations": recs,
+    }
+
+
+_AUTO_STATE_NAMES = {
+    0: "NONE",
+    1: "ANALYSING",
+    2: "FINAL",
+    3: "IDB",
+    4: "FINAL_IDB",
+    5: "USED",
+    6: "TYPE",
+    7: "LIBF",
+}
+
+
+def _safe_audit_dir() -> str | None:
+    """Locate the host's audit log directory if reachable from the IDA process.
+
+    The audit log lives on the host's filesystem (<cache_dir>/audit/YYYY-MM/).
+    On single-user machines the IDA process can read it directly; in
+    sandboxed or multi-user setups the path may be unreachable and the caller
+    should degrade gracefully.
+    """
+    try:
+        base = os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR")
+        if not base:
+            base = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp")
+        candidate = os.path.join(base, "audit")
+        if os.path.isdir(candidate):
+            return candidate
+    except Exception:
+        return None
+    return None
+
+
+def _read_audit_tail(audit_dir: str, max_lines: int) -> list[dict]:
+    """Return the most recent <max_lines> audit records across today's files.
+
+    Designed to be cheap: only reads the current month's directory and the
+    current day file (or yesterday's if today's doesn't exist yet).
+    """
+    if max_lines <= 0 or not audit_dir:
+        return []
+    try:
+        month_dirs = sorted(glob.glob(os.path.join(audit_dir, "[0-9][0-9][0-9][0-9]-[0-9][0-9]")))
+        if not month_dirs:
+            return []
+        latest_month = month_dirs[-1]
+        day_files = sorted(glob.glob(os.path.join(latest_month, "audit_[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].jsonl")))
+        if not day_files:
+            return []
+        path = day_files[-1]
+        # Read tail efficiently: seek to last ~256KB and parse lines from there.
+        records: list[dict] = []
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            window = min(size, 256 * 1024)
+            f.seek(size - window)
+            chunk = f.read().decode("utf-8", errors="replace")
+        # Drop a partial first line if we didn't start at file start
+        if window < size and "\n" in chunk:
+            chunk = chunk.split("\n", 1)[1]
+        for line in chunk.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            records.append(rec)
+        return records[-max_lines:]
+    except Exception:
+        return []
+
+
+@idaread
+def idb_state(audit_tail: int = 5) -> dict:
+    """Unified, cheap snapshot of what IDA is doing right now.
+
+    Reads only IDA SDK state and filesystem metadata; never calls other tools,
+    never iterates all functions. Safe to call from any LLM turn.
+
+    Returns:
+        ok, ts, analysis{state,display,is_ok,active}, database{idb_path,
+        idb_age_seconds, input_file, input_size, open_seconds}, inventory{
+        functions_qty, strings_qty, imports_qty, exports_qty}, ui{cursor_ea},
+        debugger{active, process_state}, audit_tail[N], indicators{
+        looks_empty, looks_packed, needs_packer_check}
+    """
+    now = time.time()
+
+    # Auto-analysis state
+    auto_state_id = -1
+    auto_state_name = "UNKNOWN"
+    auto_display = ""
+    auto_is_ok = True
+    try:
+        if hasattr(idaapi, "auto_state"):
+            auto_state_id = int(idaapi.auto_state())
+            auto_state_name = _AUTO_STATE_NAMES.get(auto_state_id, f"STATE_{auto_state_id}")
+        if hasattr(idaapi, "get_auto_display"):
+            try:
+                auto_display = str(idaapi.get_auto_display() or "")
+            except Exception:
+                auto_display = ""
+        if hasattr(idaapi, "auto_is_ok"):
+            auto_is_ok = bool(idaapi.auto_is_ok())
+    except Exception:
+        pass
+
+    # Database paths + liveness
+    idb_path = ""
+    input_path = ""
+    idb_age = -1.0
+    input_size = -1
+    open_seconds = -1.0
+    try:
+        idb_path = idaapi.get_idb_path() if hasattr(idaapi, "get_idb_path") else ""
+    except Exception:
+        idb_path = ""
+    try:
+        input_path = idaapi.get_input_file_path() if hasattr(idaapi, "get_input_file_path") else ""
+    except Exception:
+        input_path = ""
+    if idb_path and os.path.isfile(idb_path):
+        try:
+            idb_age = round(max(0.0, now - os.path.getmtime(idb_path)), 3)
+        except OSError:
+            idb_age = -1.0
+    if input_path and os.path.isfile(input_path):
+        try:
+            input_size = os.path.getsize(input_path)
+        except OSError:
+            input_size = -1
+    # Heuristic: open_seconds = max(idb_age, 60) when no other signal.
+    # If IDB has been touched recently (low age) IDA is active; high age is
+    # either idle or stale.
+    if idb_age >= 0:
+        open_seconds = max(0.0, now - max(idb_age, 60.0) + 60.0) if idb_age > 60 else 60.0
+
+    # Inventory — O(1) APIs only, no full iteration
+    func_qty = -1
+    str_qty = -1
+    import_qty = -1
+    export_qty = -1
+    try:
+        if hasattr(idaapi, "get_func_qty"):
+            func_qty = int(idaapi.get_func_qty())
+    except Exception:
+        pass
+    try:
+        if hasattr(idaapi, "get_strlist_qty"):
+            str_qty = int(idaapi.get_strlist_qty())
+    except Exception:
+        pass
+    try:
+        import_qty = int(ida_nalt.get_import_module_qty())
+    except Exception:
+        pass
+    try:
+        export_qty = int(ida_entry.get_entry_qty())
+    except Exception:
+        pass
+
+    # UI cursor
+    cursor_ea = ""
+    try:
+        if hasattr(ida_kernwin, "get_cursor_ea"):
+            cea = int(ida_kernwin.get_cursor_ea())
+            if cea and cea != idaapi.BADADDR:
+                cursor_ea = hex(cea)
+    except Exception:
+        pass
+
+    # Debugger
+    dbg_active = False
+    dbg_state = "NO_PROCESS"
+    try:
+        if hasattr(idaapi, "is_debugger_on"):
+            dbg_active = bool(idaapi.is_debugger_on())
+        if hasattr(idaapi, "get_process_state"):
+            ps = int(idaapi.get_process_state())
+            dbg_state = {
+                0: "NO_PROCESS",
+                1: "PROCESS_SUSPENDED",
+                2: "PROCESS_RUNNING",
+                3: "PROCESS_EXITED",
+            }.get(ps, f"STATE_{ps}")
+    except Exception:
+        pass
+
+    # Audit log tail
+    audit_dir = _safe_audit_dir()
+    tail_records = _read_audit_tail(audit_dir, audit_tail) if audit_dir else []
+    audit_summary = []
+    for rec in tail_records:
+        try:
+            audit_summary.append({
+                "ts": rec.get("ts"),
+                "tool": rec.get("tool"),
+                "action": rec.get("action"),
+                "latency_ms": rec.get("latency_ms"),
+                "ok": not rec.get("error"),
+                "guardrail_blocked": rec.get("guardrail_blocked", False),
+            })
+        except Exception:
+            continue
+
+    # Indicators: surface the "looks empty" / "looks packed" signal that
+    # LLM agents repeatedly miss on packed game cheat binaries.
+    looks_empty = (
+        func_qty == 0 or
+        (func_qty == 1 and str_qty == 0 and import_qty == 0)
+    )
+    looks_packed = looks_empty
+    needs_packer_check = looks_empty
+    # Heuristic: high idb_age + no auto-analysis activity + 0 functions =
+    # the binary is opaque to IDA right now.
+    if idb_age >= 0 and func_qty <= 1 and not auto_display:
+        needs_packer_check = True
+
+    return {
+        "ok": True,
+        "ts": round(now, 3),
+        "analysis": {
+            "state": auto_state_name,
+            "state_id": auto_state_id,
+            "display": auto_display,
+            "is_ok": auto_is_ok,
+            "active": bool(auto_display) and not auto_is_ok,
+        },
+        "database": {
+            "idb_path": idb_path,
+            "idb_age_seconds": idb_age,
+            "input_file": input_path,
+            "input_size": input_size,
+            "open_seconds": round(open_seconds, 3) if open_seconds >= 0 else -1.0,
+        },
+        "inventory": {
+            "functions_qty": func_qty,
+            "strings_qty": str_qty,
+            "imports_qty": import_qty,
+            "exports_qty": export_qty,
+        },
+        "ui": {
+            "cursor_ea": cursor_ea,
+        },
+        "debugger": {
+            "active": dbg_active,
+            "process_state": dbg_state,
+        },
+        "audit_tail": audit_summary,
+        "indicators": {
+            "looks_empty": looks_empty,
+            "looks_packed": looks_packed,
+            "needs_packer_check": needs_packer_check,
+        },
     }

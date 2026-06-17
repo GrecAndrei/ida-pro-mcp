@@ -118,6 +118,8 @@ TOOLS = [
     "fixups",
     # --- Survey Tool ---
     "survey",
+    # --- Packer / protector / anti-cheat detection ---
+    "packer",
 ]
 
 ADVERTISED_TOOLS = [
@@ -186,6 +188,7 @@ ADVERTISED_TOOLS = [
     "trace_analysis",
     "yara_hunt",
     "survey",
+    "packer",
 ]
 
 _EXTRA_TOOL_ALIASES = {
@@ -333,6 +336,7 @@ TOOL_DESCRIPTIONS = {
     "debug": "Control the debugger: run, step, breakpoints, registers, memory, threads. Actions: status, start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, add_hw_bp, add_watch, regs, set_reg, reg_diff, snapshot_regs, threads, modules, callstack, read_mem, write_mem, search_mem, stack_dump, mem_map, bp_context, trace_start, trace_stop, trace_read, mem_diff.",
     "deobfuscate": "Detect and decode obfuscation: stack strings, API hashing, dead code, anti-disasm. Actions: detect, detect_encoding, stack_strings, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt.",
     "entropy": "Compute entropy over regions to detect packing, encryption, or compressed data. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
+    "packer": "Detect packers / protectors (UPX, MPRESS, VMProtect, Themida, ASPack, custom) and game anti-cheat references in the current IDB. Returns indicators, classification, recommendation, and a structured workflow with concrete tool calls (static_steps) and external user actions (external_steps). Actions: detect, profile, guide, status, script. script runs Python in the packer's namespace for custom heuristics.",
     "export": "Export IDB content in various formats for external tooling. Actions: listing, html, idc, json, sarif, binexport, headers, redact.",
     "filter": "JQ-like deterministic filtering for tool outputs — prevents context overflow. Supports field extraction (.key), slicing ([0:10]), predicate filter ([?size > 100]), sort, unique, pluck, group_by, count, and first(N). Run any large list result through filter before returning to the LLM. Actions: filter.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, campaign_checkpoint, campaign_resume, campaign_feedback, fingerprint_index_sync, fingerprint_index_query, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
