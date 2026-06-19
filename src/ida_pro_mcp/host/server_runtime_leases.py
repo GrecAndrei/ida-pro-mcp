@@ -155,6 +155,9 @@ class ServerRuntimeLeasesMixin:
             except Exception:
                 return
             now = time.time()
+            skip_count = 0
+            removed_count = 0
+            kept_count = 0
             for name in entries:
                 m = _RUNTIME_LEASE_RE.fullmatch(name)
                 if not m:
@@ -204,7 +207,7 @@ class ServerRuntimeLeasesMixin:
                         pass
                     continue
                 if not self._is_expected_ida_process(pid, lease):
-                    log_rpc(f"Skipping stale lease cleanup for non-IDA pid={pid} sid={sid}")
+                    skip_count += 1
                     continue
                 killed = self._kill_stale_pid(pid)
                 if killed:
@@ -212,11 +215,17 @@ class ServerRuntimeLeasesMixin:
                         os.remove(path)
                     except OSError:
                         pass
+                    removed_count += 1
                 else:
                     # Keep lease for retry, but back off immediate repeated kill attempts.
                     lease["updated_at"] = now
                     lease["last_error"] = "terminate_failed"
                     self._write_runtime_lease_record(path, lease)
+                    kept_count += 1
+            if skip_count or removed_count or kept_count:
+                log_rpc(
+                    f"Stale lease cleanup: skipped={skip_count} removed={removed_count} kept={kept_count}"
+                )
 
     def _adopt_or_cleanup_stale_runtime_leases(self) -> None:
             # Backward-compatible alias; method now only performs cleanup.

@@ -167,6 +167,11 @@ READ_ONLY_ACTIONS = {
     ("funcs", "info"),
     ("session", "health"),
     ("session", "create"),
+    ("governance", "list_rules"),
+    ("governance", "stats"),
+    ("governance", "check"),
+    ("funcs", "metrics"),
+    ("funcs", "suggest_names"),
 }
 
 DEBUGGER_TOOLS = {"debug"}

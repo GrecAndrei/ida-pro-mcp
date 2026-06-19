@@ -657,6 +657,35 @@ class SessionManager(SessionSkillsMixin):
                 self._delete_session_unlocked(sid)
             return stale
 
+    def auto_prune_if_over_budget(self, budget: int, max_age_days: int) -> int:
+        """Auto-prune stale sessions when the store exceeds ``budget``.
+
+        Returns the number of sessions deleted. Only acts if the live
+        session count is above the budget and at least one session is
+        older than ``max_age_days``. Safe to call repeatedly (idempotent
+        once the store is within budget).
+        """
+        try:
+            budget_i = int(budget)
+        except Exception:
+            return 0
+        if budget_i <= 0:
+            return 0
+        with self._lock:
+            total = len(self.sessions)
+            if total <= budget_i:
+                return 0
+            cutoff = datetime.now() - timedelta(days=max_age_days)
+            stale = [sid for sid, s in self.sessions.items() if s.last_accessed < cutoff]
+            for sid in stale:
+                self._delete_session_unlocked(sid)
+            if stale:
+                log_rpc(
+                    f"Auto-pruned {len(stale)} stale sessions "
+                    f"(was {total}, budget={budget_i}, max_age_days={max_age_days})"
+                )
+            return len(stale)
+
     def get_stats(self) -> dict:
         with self._lock:
             total = len(self.sessions)

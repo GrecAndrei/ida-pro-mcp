@@ -99,6 +99,58 @@ _migrate_legacy_runtime_dir(CACHE_DIR)
 os.makedirs(CACHE_DIR, exist_ok=True)
 BRIDGE_LOG = os.path.join(CACHE_DIR, "bridge.log")
 
+# Log rotation: if the bridge log has grown past this many MB, truncate it
+# (keep the last 25% as recent context) so it can't grow unbounded across
+# bridge restarts. Off by default until the user opts in via env var, but
+# strongly recommended for any long-lived installation.
+_BRIDGE_LOG_MAX_BYTES = max(
+    0,
+    int(os.environ.get("IDA_MCP_BRIDGE_LOG_MAX_MB", "100")) * 1024 * 1024,
+)
+_BRIDGE_LOG_KEEP_BYTES = max(
+    0,
+    int(os.environ.get("IDA_MCP_BRIDGE_LOG_KEEP_MB", "25")) * 1024 * 1024,
+)
+
+
+def _rotate_bridge_log_if_needed() -> None:
+    """Truncate the bridge log if it exceeds the configured max size.
+
+    Keeps the trailing `_BRIDGE_LOG_KEEP_BYTES` so recent context is
+    preserved. Runs once at import time so the file can't grow unbounded
+    across bridge restarts.
+    """
+    if _BRIDGE_LOG_MAX_BYTES <= 0:
+        return
+    try:
+        size = os.path.getsize(BRIDGE_LOG)
+    except OSError:
+        return
+    if size <= _BRIDGE_LOG_MAX_BYTES:
+        return
+    try:
+        keep = min(_BRIDGE_LOG_KEEP_BYTES, size)
+        with open(BRIDGE_LOG, "rb") as f:
+            if keep:
+                f.seek(-keep, os.SEEK_END)
+                tail = f.read()
+            else:
+                tail = b""
+        with open(BRIDGE_LOG, "wb") as f:
+            f.write(tail)
+        try:
+            print(
+                f"[config] bridge.log rotated: {size} -> {len(tail)} bytes",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+_rotate_bridge_log_if_needed()
+
 # Runtime lease configuration
 RUNTIME_LEASE_TTL = max(15, int(os.environ.get("IDA_MCP_RUNTIME_LEASE_TTL", "75")))
 _DEFAULT_RUNTIME_LEASE_HEARTBEAT_SECONDS = max(2, RUNTIME_LEASE_TTL // 3)

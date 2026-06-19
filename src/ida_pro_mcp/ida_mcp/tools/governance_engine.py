@@ -848,7 +848,7 @@ except ImportError:
 
 @tool
 @idaread
-def governance(
+def governance_engine(
     action: str,
     operation_type: Optional[str] = None,
     addr: Optional[str] = None,

@@ -47,6 +47,9 @@ TOOL_ALIASES = {
     # imports but routed to graph at the runtime layer as well as host).
     "xref_analysis": "graph",
     "c2_detect": "string_ops",
+    # Dispatcher advertises the tool as 'governance'; IDA-side file is
+    # 'governance_engine.py' (the file is the engine implementation).
+    "governance": "governance_engine",
 }
 _ERROR_DETAIL_LEVEL = str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
 if _ERROR_DETAIL_LEVEL not in {"none", "basic", "full"}:
@@ -412,8 +415,8 @@ def run_server():
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    log_ev(f"Socket close failed: {_e}")
 
 def _apply_pre_analysis_options():
     """Apply processor/bitness/endian/loader_options BEFORE auto-analysis."""
@@ -475,8 +478,8 @@ def _apply_pre_analysis_options():
                 try:
                     inf = idaapi.get_inf_structure()
                     current = getattr(inf, "procname", "") if inf else ""
-                except Exception:
-                    pass
+                except Exception as _e:
+                    log_ev(f"get_inf_structure failed: {_e}")
             if current != processor:
                 proc_flags = flags if flags is not None else getattr(
                     idaapi, "SETPROC_LOADER_NON_FATAL", idaapi.SETPROC_LOADER
@@ -550,34 +553,34 @@ def _apply_pre_analysis_options():
                     if cur_class != "CODE":
                         ida_segment.set_segm_class(seg, "CODE")
                         changed.append(f"segment_class={cur_class}→CODE")
-                except Exception:
-                    pass
+                except Exception as _e:
+                    log_ev(f"set_segm_class failed for {hex(seg.start_ea)}: {_e}")
                 try:
                     if seg.type != idaapi.SEG_CODE:
                         seg.type = idaapi.SEG_CODE
                         ida_segment.update_segm(seg)
                         changed.append("SEG_CODE type set")
-                except Exception:
-                    pass
+                except Exception as _e:
+                    log_ev(f"SEG_CODE type set failed for {hex(seg.start_ea)}: {_e}")
                 try:
                     if not (seg.perm & idaapi.SEGPERM_EXEC):
                         seg.perm |= idaapi.SEGPERM_EXEC
                         ida_segment.update_segm(seg)
                         changed.append("SEGPERM_EXEC added")
-                except Exception:
-                    pass
+                except Exception as _e:
+                    log_ev(f"SEGPERM_EXEC set failed for {hex(seg.start_ea)}: {_e}")
                 if bitness == 32:
                     try:
                         if hasattr(seg, "bitness") and seg.bitness != 1:
                             seg.bitness = 1
                             ida_segment.update_segm(seg)
                             changed.append("segment_bitness=32")
-                    except Exception:
+                    except Exception as _e:
                         try:
                             ida_segment.set_segm_addressing(seg, 1)
                             changed.append("segment_addressing=32bit")
-                        except Exception:
-                            pass
+                        except Exception as _e2:
+                            log_ev(f"segment bitness set failed for {hex(seg.start_ea)}: {_e} / {_e2}")
             # ARM Cortex-M Thumb: set T=1 globally on all segments
             if "arm" in proc_lower:
                 for seg_ea in idautils.Segments():
@@ -587,13 +590,8 @@ def _apply_pre_analysis_options():
                             sr_auto = getattr(idc, "SR_auto", 2)
                             idc.split_sreg_range(seg.start_ea, "T", 1, sr_auto)
                             changed.append(f"T=1 set for {hex(seg.start_ea)}")
-                        except Exception:
-                            try:
-                                import ida_segregs
-                                ida_segregs.split_sreg_range(seg.start_ea, "T", 1, 2)
-                                changed.append(f"T=1 via ida_segregs at {hex(seg.start_ea)}")
-                            except Exception:
-                                pass
+                        except Exception as _e:
+                            log_ev(f"T=1 split_sreg_range fallback failed for {hex(seg.start_ea)}: {_e}")
         except Exception:
             log_ev("Segment fix failed (non-fatal)")
 

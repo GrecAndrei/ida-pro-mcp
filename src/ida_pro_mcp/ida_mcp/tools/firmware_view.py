@@ -87,8 +87,9 @@ def _load_fw_state() -> dict:
                 data.setdefault("campaigns", {})
                 data.setdefault("fingerprint_corpus", [])
                 return data
-    except Exception:
-        pass
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).debug("Failed to load fw state from %s: %s", p, _e)
     return {"history": [], "contradictions": [], "campaigns": {}, "fingerprint_corpus": []}
 
 
@@ -373,29 +374,32 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
     if handler_addrs:
         try:
             proc = (_inf_procname() or "").lower()
-        except Exception:
-            proc = ""
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).debug("_inf_procname failed: %s", _e)
         if "arm" in proc:
             try:
                 sr_auto = getattr(idc, "SR_auto", 2)
                 idc.split_sreg_range(mn, "T", 1, sr_auto)
-            except Exception:
+            except Exception as _e:
                 try:
                     import ida_segregs
                     ida_segregs.split_sreg_range(mn, "T", 1, 2)
-                except Exception:
-                    pass
+                except Exception as _e2:
+                    import logging
+                    logging.getLogger(__name__).debug("T=1 split_sreg_range failed for mn %s: %s / %s", hex(mn), _e, _e2)
         for h, _ in handler_addrs:
             if "arm" in proc:
                 try:
                     sr_auto = getattr(idc, "SR_auto", 2)
                     idc.split_sreg_range(h, "T", 1, sr_auto)
-                except Exception:
+                except Exception as _e:
                     try:
                         import ida_segregs
                         ida_segregs.split_sreg_range(h, "T", 1, 2)
-                    except Exception:
-                        pass
+                    except Exception as _e2:
+                        import logging
+                        logging.getLogger(__name__).debug("T=1 split_sreg_range failed for %s: %s / %s", hex(h), _e, _e2)
         for h, _ in handler_addrs:
             if not ida_bytes.is_code(ida_bytes.get_flags(h)):
                 created_insn = False
@@ -403,14 +407,16 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
                     import ida_ua
                     insn_len = ida_ua.create_insn(h)
                     created_insn = insn_len > 0
-                except Exception:
-                    pass
+                except Exception as _e:
+                    import logging
+                    logging.getLogger(__name__).debug("ida_ua.create_insn failed for %s: %s", hex(h), _e)
                 if not created_insn:
                     try:
                         insn_len = idc.create_insn(h)
                         created_insn = insn_len > 0
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        import logging
+                        logging.getLogger(__name__).debug("idc.create_insn failed for %s: %s", hex(h), _e)
                 if not created_insn:
                     code_failures.append(hex(h))
                 if not created_insn:
@@ -418,8 +424,9 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
                         ida_bytes.del_items(h, ida_bytes.DELIT_SIMPLE, 16)
                         if hasattr(ida_auto, "auto_make_code"):
                             ida_auto.auto_make_code(h)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        import logging
+                        logging.getLogger(__name__).debug("del_items+auto_make_code failed for %s: %s", hex(h), _e)
                     try:
                         import ida_ua
                         insn_len = ida_ua.create_insn(h)

@@ -40,6 +40,32 @@ class ServerDispatchMixin:
         except Exception:
             return False
 
+    def _resolve_policy_mode(self) -> str:
+        """Resolve the governance policy mode.
+
+        Precedence (highest first):
+          1. IDA_MCP_POLICY_MODE env var
+          2. ~/.config/ida-pro-mcp/policy.json `mode` key (live override,
+             readable on every call so the user can change it without
+             restarting the bridge)
+          3. Default "assist"
+        """
+        env_mode = os.environ.get("IDA_MCP_POLICY_MODE")
+        if env_mode:
+            return env_mode
+        try:
+            config_path = os.path.expanduser("~/.config/ida-pro-mcp/policy.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    mode = data.get("mode")
+                    if isinstance(mode, str) and mode:
+                        return mode
+        except Exception:
+            pass
+        return "assist"
+
     def call_tool(self, tool_name, idb_path, **kwargs):
             session = self._resolve_session_from_idb_ref(idb_path)
             if not session:
@@ -871,7 +897,7 @@ class ServerDispatchMixin:
                     policy_result = evaluate_policy(
                         tool_name,
                         args.get("action"),
-                        mode=os.environ.get("IDA_MCP_POLICY_MODE", "assist"),
+                        mode=self._resolve_policy_mode(),
                         purpose=args.get("_purpose"),
                         ack=_coerce_bool(args.get("_risk_ack"), False)
                         or _coerce_bool(args.get("_guardrail_ack"), False),

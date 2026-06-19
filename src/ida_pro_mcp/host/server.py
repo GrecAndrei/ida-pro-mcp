@@ -329,6 +329,29 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         self.cache_dir = _select_runtime_dir(preferred_cache)
         os.makedirs(self.cache_dir, exist_ok=True)
         self.session_mgr = SessionManager(self.cache_dir)
+        # Automatic session housekeeping: if we have accumulated way more
+        # sessions than a sensible working set, prune the stale ones
+        # (older than the configured max age) at startup so the user
+        # doesn't have to remember to call session(action='cleanup_stale').
+        # Controlled by IDA_MCP_SESSION_AUTO_PRUNE_BUDGET (default 200) and
+        # IDA_MCP_SESSION_MAX_AGE_DAYS (default 30). Set budget=0 to disable.
+        try:
+            budget = _bounded_int(
+                os.environ.get("IDA_MCP_SESSION_AUTO_PRUNE_BUDGET", "200"),
+                200,
+                min_value=0,
+                max_value=100_000,
+            )
+            max_age = _bounded_int(
+                os.environ.get("IDA_MCP_SESSION_MAX_AGE_DAYS", "30"),
+                30,
+                min_value=1,
+                max_value=3650,
+            )
+            if budget > 0:
+                self.session_mgr.auto_prune_if_over_budget(budget, max_age)
+        except Exception as e:
+            log_rpc(f"Auto session prune failed: {e}")
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
         self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
         self.rate_limiter = RateLimiter()
