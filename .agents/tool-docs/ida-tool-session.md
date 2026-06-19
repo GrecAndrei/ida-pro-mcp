@@ -70,6 +70,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `macro_delete` (tool-specific)
 - `macro_run` (tool-specific)
 - `recent_workset` (tool-specific)
+- `kill` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -85,7 +86,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `61`
+- `action`: `string` - allowed_count: `62`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` - Advanced analysis payload. Preferred for architecture/loader config at session creation.
