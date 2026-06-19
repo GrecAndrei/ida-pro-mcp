@@ -25,7 +25,6 @@ class MCPError:
     IO_ERROR = "IO_ERROR"
     DB_ERROR = "DB_ERROR"
     NOT_FOUND = "NOT_FOUND"
-    SURVEY_REQUIRED = "SURVEY_REQUIRED"
 
 
 _HOST_ERROR_HINTS = {
@@ -48,7 +47,6 @@ _HOST_ERROR_HINTS = {
     MCPError.RPC_CONNECTION_ERROR: "Cannot connect to IDA. The process may have crashed.",
     MCPError.IO_ERROR: "I/O error while writing to disk. Check disk space and permissions.",
     MCPError.DB_ERROR: "Database error. The index may be corrupted. Try schemaboot(action='delete') then re-ingest.",
-    MCPError.SURVEY_REQUIRED: "Active survey pending. You must resolve or delay the survey first.",
 }
 
 

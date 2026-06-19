@@ -582,9 +582,8 @@ def intelligence(
             "structural_extract",
             "structural_extract_single",
             "blackboard_federate",
-            "suggest",
         ],
-        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single|blackboard_federate|suggest",
+        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single|blackboard_federate",
     ],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Free-form text or comma-separated list"] = None,
@@ -1291,9 +1290,6 @@ def intelligence(
                     return {"ok": True, "refreshed": 1, "ea": addr}
                 else:
                     return _do_structural_ingest()
-
-            if action == "suggest":
-                return suggest_next_steps(kwargs, addr)
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

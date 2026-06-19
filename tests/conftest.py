@@ -1,27 +1,45 @@
 # tests/conftest.py
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
 
 # ---------------------------------------------------------------------------
+# Real IDA Pro Python path
+# ---------------------------------------------------------------------------
+# The test suite runs Python tests directly (not inside `idat`), so the IDA
+# Pro pure-Python modules need to be on sys.path. We add a few well-known
+# locations and the first one that exists wins. Set IDA_PYTHON_PATH to
+# override.
+def _resolve_ida_python_path() -> str | None:
+    env = os.environ.get("IDA_PYTHON_PATH")
+    if env and Path(env).is_dir():
+        return env
+    candidates = [
+        "/home/grec-alexander/ida-pro-9.3/python",
+        "/home/grec-alexander/ida-pro-9.2/python",
+        os.path.expanduser("~/ida-pro-9.3/python"),
+        os.path.expanduser("~/ida-pro-9.2/python"),
+    ]
+    for c in candidates:
+        if Path(c).is_dir():
+            return c
+    return None
+
+
+_IDA_PYTHON_PATH = _resolve_ida_python_path()
+if _IDA_PYTHON_PATH and _IDA_PYTHON_PATH not in sys.path:
+    sys.path.insert(0, _IDA_PYTHON_PATH)
+
+
+# ---------------------------------------------------------------------------
 # Module-level env-var setup
 # ---------------------------------------------------------------------------
-# Force the test environment to a known state at import time, BEFORE any
-# module-scoped fixtures (e.g., tests/test_mcp_comprehensive.py's `mcp_client`
-# with scope="module") construct a server. If we relied on autouse fixtures
-# alone, those module-scoped fixtures would race the autouse setup and the
-# RateLimiter (constructed in IDAMCPServer.__init__) would see the default
-# 30.0/s rate.
-#
-# Save the developer's original values so the autouse fixture below can
-# restore them at the end of each test (audit §7.9 — the previous
-# `os.environ.setdefault()` was a no-op when the var was already set).
 os.environ["IDA_MCP_DISABLE_STUCK_DETECTION"] = "1"
 os.environ["IDA_MCP_DISABLE_RATE_LIMIT"] = "1"
 _ORIG_STUCK = os.environ.get("IDA_MCP_DISABLE_STUCK_DETECTION")
@@ -29,16 +47,47 @@ _ORIG_RATE = os.environ.get("IDA_MCP_DISABLE_RATE_LIMIT")
 
 
 # ---------------------------------------------------------------------------
+# sys.modules pollution cleanup
+# ---------------------------------------------------------------------------
+# Many tests mutate `sys.modules` (e.g. to inject stub IDA modules, or
+# because they reload an ida_pro_mcp.* submodule). Without cleanup, the
+# mutation leaks into the next test, causing partial-import "unknown
+# location" errors. We snapshot sys.modules once and restore it between
+# tests.
+_PRESERVED_SYS_MODULES: dict[str, object] | None = None
+
+
+def _freeze_sys_modules() -> dict[str, object]:
+    return dict(sys.modules)
+
+
+def _restore_sys_modules(snapshot: dict[str, object]) -> None:
+    for name in list(sys.modules.keys()):
+        if name not in snapshot:
+            del sys.modules[name]
+    for name, mod in snapshot.items():
+        if sys.modules.get(name) is not mod:
+            sys.modules[name] = mod
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sys_modules():
+    global _PRESERVED_SYS_MODULES
+    if _PRESERVED_SYS_MODULES is None:
+        _PRESERVED_SYS_MODULES = _freeze_sys_modules()
+    snapshot = _freeze_sys_modules()
+    try:
+        yield
+    finally:
+        _restore_sys_modules(snapshot)
+
+
+# ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def _restore_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Restore the developer's original env values around each test.
-
-    Combined with the module-level os.environ[...] = "1" above, this gives
-    the "force the test env, then put it back" semantics that audit §7.9
-    asked for.
-    """
+    """Restore the developer's original env values around each test."""
     monkeypatch.setenv("IDA_MCP_DISABLE_STUCK_DETECTION", _ORIG_STUCK or "1")
     monkeypatch.setenv("IDA_MCP_DISABLE_RATE_LIMIT", _ORIG_RATE or "1")
 
@@ -48,9 +97,6 @@ def tmp_session_dir():
     """Yield a fresh temporary directory paired with a SessionManager that
     points at it. The directory is cleaned up automatically when the test
     completes.
-
-    Replaces the copy-pasted `SessionManager(self.tmpdir)` + `tearDown`
-    rmtre pattern that appears in ~14 unittest classes (audit §7.8).
     """
     from ida_pro_mcp.host.session import SessionManager
 
@@ -59,60 +105,4 @@ def tmp_session_dir():
         try:
             yield tmpdir, manager
         finally:
-            # SessionManager does not hold any persistent resources beyond the
-            # on-disk files, so the TemporaryDirectory cleanup is sufficient.
             manager = None
-
-
-_IDA_MODULES = (
-    "idaapi", "idc", "idautils", "ida_bytes", "ida_funcs", "ida_ua",
-    "ida_segment", "ida_kernwin", "ida_diskio", "ida_loader",
-    "ida_name", "ida_netnode", "ida_entry", "ida_hexrays", "ida_nalt",
-    "ida_strlist", "ida_typeinf", "ida_struct", "ida_enum", "ida_gdl",
-    "ida_frame", "ida_moves", "ida_xref", "ida_search", "ida_expr",
-    "ida_offset", "ida_range", "ida_lines", "ida_problems", "ida_regfind",
-    "ida_allins", "ida_dbg",
-)
-
-
-@contextlib.contextmanager
-def mock_ida_context():
-    """Context manager that mocks the entire `ida_*` namespace and tears it
-    down on exit.
-
-    Factored out of test_advanced_features.py (audit §7.8) so future tests can
-    `from tests.conftest import mock_ida_context` and get the same teardown
-    guarantees the original had.
-    """
-    from unittest.mock import MagicMock
-
-    original_modules = {}
-    for name in _IDA_MODULES:
-        if name in sys.modules:
-            original_modules[name] = sys.modules[name]
-        mock_mod = MagicMock()
-        if name == "idaapi":
-            mock_mod.get_kernel_version.return_value = "9.3"
-        elif name == "idc":
-            mock_mod.get_idb_path.return_value = ""
-        elif name == "ida_loader":
-            mock_mod.get_path.return_value = ""
-            mock_mod.PATH_TYPE_IDB = 0
-        sys.modules[name] = mock_mod
-    try:
-        yield
-    finally:
-        for name in _IDA_MODULES:
-            if name in original_modules:
-                sys.modules[name] = original_modules[name]
-            else:
-                sys.modules.pop(name, None)
-
-
-@pytest.fixture
-def mock_ida():
-    """Pytest fixture wrapper around mock_ida_context() for tests that prefer
-    fixture-style injection over the `with` statement.
-    """
-    with mock_ida_context():
-        yield

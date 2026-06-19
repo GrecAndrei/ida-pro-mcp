@@ -27,112 +27,6 @@ from .server_response import truncate_response
 
 
 class ServerDispatchMixin:
-    _SURVEY_GATE_EXEMPT_WORKFLOW_ACTIONS = frozenset(
-        {
-            "audit_plan",
-            "catalog",
-            "compose",
-            "estimate",
-            "explain",
-            "plan",
-            "prioritize",
-        }
-    )
-
-    def _extract_addresses_from_args(self, args: Any) -> list[str]:
-        addrs = []
-        if isinstance(args, dict):
-            for key in ("addr", "ea", "address", "addrs"):
-                val = args.get(key)
-                if val is not None:
-                    if isinstance(val, list):
-                        for item in val:
-                            addrs.extend(self._extract_addresses_from_args(item))
-                    elif isinstance(val, (int, str)):
-                        try:
-                            if isinstance(val, int):
-                                addrs.append(hex(val))
-                            else:
-                                if val.lower().startswith("0x"):
-                                    addrs.append(hex(int(val, 16)))
-                                else:
-                                    addrs.append(hex(int(val)))
-                        except Exception:
-                            pass
-            for val in args.values():
-                if isinstance(val, (dict, list)):
-                    addrs.extend(self._extract_addresses_from_args(val))
-        elif isinstance(args, list):
-            for item in args:
-                addrs.extend(self._extract_addresses_from_args(item))
-        return list(set(addrs))
-
-    def _promote_eligible_surveys(self, store):
-        visited = set(store.get_visited_addresses())
-        surveys = store.list_surveys()
-        for s in surveys:
-            status = s["status"]
-            addr = s["addr"]
-            if status == "DORMANT":
-                deps = s.get("dependencies", [])
-                if deps and any(d in visited for d in deps):
-                    store.save_survey(
-                        addr=addr,
-                        status="ACTIVE",
-                        variables=s["variables"],
-                        dependencies=deps,
-                        deferred_until=s.get("deferred_until", []),
-                        reason=s.get("reason", "")
-                    )
-            elif status == "DEFERRED":
-                deferred_until = s.get("deferred_until", [])
-                if deferred_until and any(d in visited for d in deferred_until):
-                    store.save_survey(
-                        addr=addr,
-                        status="ACTIVE",
-                        variables=s["variables"],
-                        dependencies=s["dependencies"],
-                        deferred_until=deferred_until,
-                        reason=s.get("reason", "")
-                    )
-
-    def _survey_context_key(self) -> Optional[str]:
-        if self.current_session and getattr(self.current_session, "idb_path", None):
-            return self.current_session.idb_path
-        return None
-
-    def _get_survey_store(self):
-        from .survey_store import SurveyStore
-
-        cache_dir = getattr(self, "cache_dir", None)
-        if cache_dir:
-            db_path = os.path.join(cache_dir, "re_experience.db")
-        else:
-            db_path = None
-
-        return SurveyStore(db_path=db_path, context_key=self._survey_context_key())
-
-    def _get_active_survey(self) -> Optional[Dict[str, Any]]:
-        try:
-            store = self._get_survey_store()
-            active_surveys = [s for s in store.list_surveys() if s["status"] == "ACTIVE"]
-            if active_surveys:
-                return active_surveys[0]
-        except Exception as e:
-            log_rpc(f"Survey lock check failed: {e}")
-        return None
-
-    def _survey_gate_exempt(self, tool_name: str, args: dict[str, Any]) -> bool:
-        if tool_name in {"survey", "blackboard", "session", "wiki", "background"}:
-            return True
-        if getattr(self, "_bg_running", False):
-            return True
-        if tool_name == "workflow":
-            action = str(args.get("action") or "").strip().lower()
-            if action in self._SURVEY_GATE_EXEMPT_WORKFLOW_ACTIONS:
-                return True
-        return False
-
     @staticmethod
     def _runtime_alive(runtime: Any) -> bool:
         """Best-effort runtime liveness check for runtime dict records."""
@@ -187,8 +81,9 @@ class ServerDispatchMixin:
                     allowed = set((TOOL_ARG_SCHEMAS.get(tool_name) or {}).keys())
                     if allowed:
                         rpc_args = {k: v for k, v in rpc_args.items() if k in allowed}
-                except Exception:
-                    pass
+                except Exception as _e:
+                    import logging
+                    logging.getLogger(__name__).debug("arg schema filter failed: %s", _e)
                 res = self._send_rpc_raw({"tool": tool_name, "args": rpc_args}, port)
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}
@@ -903,18 +798,6 @@ class ServerDispatchMixin:
                 )
 
             result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
-            
-            # Record visited addresses and promote surveys
-            if isinstance(result, dict) and not is_error_result(result):
-                try:
-                    visited_addrs = self._extract_addresses_from_args(args)
-                    if visited_addrs:
-                        store = self._get_survey_store()
-                        for addr in visited_addrs:
-                            store.add_visited_address(addr)
-                        self._promote_eligible_surveys(store)
-                except Exception as e:
-                    log_rpc(f"Survey visited address logging/promotion failed: {e}")
 
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             latency_ms = (time.perf_counter() - start_ts) * 1000.0
@@ -963,8 +846,9 @@ class ServerDispatchMixin:
                         resolved_tool, action_name, sid,
                         latency_ms=latency_ms, error=error_str, addr=addr,
                     )
-                except Exception:
-                    pass
+                except Exception as _e:
+                    import logging
+                    logging.getLogger(__name__).debug("usage intel observe failed: %s", _e)
             return result
 
     def _execute_tool_inner(self, tool_name, original_tool_name, args):
@@ -980,34 +864,6 @@ class ServerDispatchMixin:
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
-
-            # Background calls bypass interactive survey locks only; policy and
-            # guardrail checks still apply to the actual child tool call.
-            _bg = (
-                tool_name == "background"
-                or getattr(self, "_bg_running", False)
-                or getattr(self, "_daemon_mode", False)
-            )
-
-            # ---- Active Survey Lock Check ----
-            if not _bg and not self._survey_gate_exempt(tool_name, args):
-                s = self._get_active_survey()
-                if s:
-                    addr = s.get("addr", "unknown")
-                    return make_error(
-                        MCPError.SURVEY_REQUIRED,
-                        f"ACTIVE SURVEY PENDING for {addr}. You must resolve or delay the survey first.",
-                        details={
-                            "addr": addr,
-                            "reason": s.get("reason", ""),
-                            "variables": s.get("variables", []),
-                            "dependencies": s.get("dependencies", []),
-                            "actions": {
-                                "submit": f"survey(action='submit', addr='{addr}', renames={{...}})",
-                                "delay": f"survey(action='delay', addr='{addr}', delay_until_any=[...], reason='...')"
-                            }
-                        }
-                    )
 
             # ---- Deterministic policy preflight ----
             if tool_name != "blackboard" and tool_name != "background":
@@ -1096,8 +952,9 @@ class ServerDispatchMixin:
                                 ),
                                 details={"policy": check.get("policy", {})},
                             )
-            except Exception:
-                pass
+            except Exception as _e:
+                import logging
+                logging.getLogger(__name__).debug("governance check failed: %s", _e)
 
             # ---- Phase-state preflight (adaptive choreography) ----
             try:
@@ -1105,8 +962,9 @@ class ServerDispatchMixin:
                     phase_block = self._phase_preflight_for_tool(tool_name, args if isinstance(args, dict) else {})
                     if isinstance(phase_block, dict) and phase_block.get("error"):
                         return phase_block
-            except Exception:
-                pass
+            except Exception as _e:
+                import logging
+                logging.getLogger(__name__).debug("phase preflight failed: %s", _e)
 
 
 
@@ -1130,10 +988,12 @@ class ServerDispatchMixin:
                         idb_key = (self.current_session.idb_path if self.current_session else "")
                         nudge_record(idb_key, "_reroute", f"{tool_name}.{action}", 
                                     addr=args.get("addr"), query=args.get("query"))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as _e:
+                        import logging
+                        logging.getLogger(__name__).debug("nudge record failed: %s", _e)
+            except Exception as _e:
+                import logging
+                logging.getLogger(__name__).debug("tool reroute failed: %s", _e)
 
             # ---- Stuck Detection (UsageIntelligence DriftDetector) ----
             action = args.get("action", "")

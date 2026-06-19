@@ -851,7 +851,6 @@ class TestResponseCompaction(unittest.TestCase):
                 return {"ok": False, "code": MCPError.DB_ERROR, "message": "trace unavailable"}
             return {"ok": False, "code": MCPError.DB_ERROR, "message": f"{tool_name}.{action} unavailable"}
 
-        self.server._get_active_survey = lambda: None  # type: ignore[method-assign]
         self.server.call_tool = fake_call_tool
         res = self.server._execute_tool(
             "threat_hunt",
@@ -889,7 +888,6 @@ class TestResponseCompaction(unittest.TestCase):
                 return {"ok": False, "code": MCPError.DB_ERROR, "message": "trace unavailable"}
             return {"ok": True, "results": []}
 
-        self.server._get_active_survey = lambda: None  # type: ignore[method-assign]
         self.server.call_tool = fake_call_tool
         res = self.server._execute_tool(
             "threat_hunt",

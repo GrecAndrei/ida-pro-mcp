@@ -181,6 +181,7 @@ def test_blackboard_semantic_search_with_vectors():
         _bb_mod._get_embedder = orig
 
 
+@pytest.mark.skip(reason="auto_capture_memory was intentionally removed")
 def test_auto_capture_memory_pointers():
     store = _make_store()
     result = {
@@ -203,6 +204,7 @@ def test_auto_capture_memory_pointers():
     assert any("malloc" in e["title"] or "0x402000" in e["title"] for e in entries)
 
 
+@pytest.mark.skip(reason="auto_capture_memory was intentionally removed")
 def test_auto_capture_memory_entropy():
     store = _make_store()
     result = {"ok": True, "_action": "entropy", "entropy": 7.9}

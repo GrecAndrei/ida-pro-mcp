@@ -380,49 +380,6 @@ def _detect_dangerous_patterns(found_apis: list[str], pseudo: str, *, detailed: 
     return dangerous
 
 
-def _register_survey_if_needed(func_start_ea: int, var_hints: list[dict]) -> None:
-    if not var_hints:
-        return
-    try:
-        try:
-            from host.survey_store import SurveyStore
-        except ImportError:
-            from ida_pro_mcp.host.survey_store import SurveyStore
-
-        store = SurveyStore(context_key=idc.get_idb_path() or "")
-        hex_addr = hex(func_start_ea)
-        if store.get_survey(hex_addr):
-            return
-
-        deps = set()
-        try:
-            import idautils
-
-            for xref in idautils.CodeRefsTo(func_start_ea, 0):
-                caller_fn = ida_funcs.get_func(xref)
-                if caller_fn and caller_fn.start_ea != func_start_ea:
-                    deps.add(hex(caller_fn.start_ea))
-            for item_ea in idautils.FuncItems(func_start_ea):
-                for xref in idautils.CodeRefsFrom(item_ea, 0):
-                    callee_fn = ida_funcs.get_func(xref)
-                    if callee_fn and callee_fn.start_ea != func_start_ea:
-                        deps.add(hex(callee_fn.start_ea))
-        except Exception:
-            pass
-
-        vars_list = [hint["var"] for hint in var_hints]
-        store.save_survey(
-            addr=hex_addr,
-            status="DORMANT",
-            variables=vars_list,
-            dependencies=sorted(deps),
-            deferred_until=[],
-            reason=f"Function contains generic variables: {', '.join(vars_list)}",
-        )
-    except Exception:
-        pass
-
-
 def _build_pseudocode_complexity(pseudo: str, *, include_switch_cases: bool = False, xor_count: int | None = None) -> dict:
     import re as _re
 
@@ -502,7 +459,6 @@ def _build_decompile_enrichment(
     crypto_hints, xor_count = _detect_crypto_hints(pseudo)
     dangerous = _detect_dangerous_patterns(found_apis, pseudo, detailed=detailed_dangerous)
     var_hints = _extract_var_rename_hints(cfunc)
-    _register_survey_if_needed(func_start_ea, var_hints)
     return {
         "api_calls": found_apis,
         "crypto_hints": crypto_hints,

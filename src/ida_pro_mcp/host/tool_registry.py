@@ -110,7 +110,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "refresh_anchors", "classify_text", "classify_function",
         "index_function", "index_batch", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary",
-        "evidence_card", "suggest",
+        "evidence_card",
     ],
     "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
     "llm_helpers": [
@@ -199,7 +199,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "decrypt_strings", "eval_expr", "deobfuscate_emulate",
         "prefetch_context",
     ],
-    "survey": ["list", "status", "delay", "submit"],
     "truncation": ["continue"],
     "types": ["list", "get", "set_prototype", "parse_decl", "declare", "apply", "search_structs", "infer", "read_struct", "import_header", "diff", "visualize", "propagate", "enum_values", "type_graph"],
     "wiki": ["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],

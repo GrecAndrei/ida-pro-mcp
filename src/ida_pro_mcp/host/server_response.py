@@ -823,6 +823,15 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             except Exception:
                 pass
 
+            # ---- Structural similarity: enrich with agent.cfg_similar ----
+            try:
+                if isinstance(compacted, dict) and addr:
+                    similar = self._exec("agent", action="cfg_similar", addr=addr, top_k=5)
+                    if isinstance(similar, dict) and similar.get("ok"):
+                        compacted.setdefault("similar_functions", similar.get("results") or [])
+            except Exception:
+                pass
+
             # ---- Address Calculation Enrichment ----
             try:
                 if isinstance(compacted, dict):

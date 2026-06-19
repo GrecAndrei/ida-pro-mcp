@@ -93,7 +93,6 @@ class BackgroundMixin:
         action = "script" if script else "tool_call"
 
         def _run(task):
-            self._bg_running = True
             prev_session = getattr(self, "current_session", None)
             try:
                 if task.session_id and hasattr(self, "session_mgr"):
@@ -120,7 +119,6 @@ class BackgroundMixin:
                 return {"status": "unknown"}
             finally:
                 self.current_session = prev_session
-                self._bg_running = False
 
         task_id = self._batch_manager.submit(
             action=action,

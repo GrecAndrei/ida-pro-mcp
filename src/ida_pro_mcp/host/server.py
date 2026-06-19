@@ -734,7 +734,6 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
             self.shutdown()
 
     def run_daemon(self):
-        self._daemon_mode = True
         _write_pidfile()
         sock = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
         sock.bind(DAEMON_SOCKET)

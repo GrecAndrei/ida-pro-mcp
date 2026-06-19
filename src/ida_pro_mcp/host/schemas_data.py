@@ -116,8 +116,6 @@ TOOLS = [
     "knowledge",
     # --- Relocation/fixup management (specialized; not advertised) ---
     "fixups",
-    # --- Survey Tool ---
-    "survey",
     # --- Packer / protector / anti-cheat detection ---
     "packer",
 ]
@@ -187,7 +185,6 @@ ADVERTISED_TOOLS = [
     "taint",
     "trace_analysis",
     "yara_hunt",
-    "survey",
     "packer",
 ]
 
@@ -367,7 +364,6 @@ TOOL_DESCRIPTIONS = {
     "search": "Pattern, reference, and semantic search across the binary. nl: natural language search using bge-code-v1 embeddings (most accurate for RE queries). behavior: find all functions matching a behavior tag (crypto_symmetric, network_http, etc.) via BehaviorClassifier. find: smart unified search (names/strings/imports/instructions, auto-ranked). semantic: NL search with embedding-aware ranking. smart_bundle: fused find+semantic with deduplicated structured items. api: find all usages of an imported API. decompiled: search pseudocode across all functions (auto-writes blackboard entries for matches). structured: schema-based pre-filtered search with behavior_tags constraints. vulnerable: scan for dangerous API patterns. constants: find crypto/magic constants. callers/callees, bytes/string/immediate/name/insns/mnemonic/instruction/text/operand/comment/data_ref/code_ref/regex/func_by_sig/type/export/summary/query_lang. Composition actions: bool (composite boolean query: '(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)'), hunt (named workflow recipes: backdoor, anti_debug, c2, crypto, parser, etc. - pass recipe='list' to enumerate), neighborhood (360-degree context card around a function: callers, callees, similar, tags, blackboard), outlier (find structurally anomalous functions by metric: size, complexity, orphan, leaf, hub, deep, tiny, huge), fingerprint (structural callgraph similarity - distinct from embedding-based nl), path (shortest call-graph path between two symbols), reach (functions reachable from a root within N hops), noreach (functions NOT reachable from any entrypoint). NOTE: search.nl and query.nl both expose natural-language search. search.nl uses the bge-code-v1 embedding ranker directly; query.nl routes through the unified query dispatcher. Use search.nl for behaviorally-precise RE queries; use query.nl when you want the unified dispatcher to pick a target domain.",
     "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge. For relocations/fixups use the dedicated `fixups` tool.",
     "session": "Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy/suggest_triage/suggest_analogy/apply_analogy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).",
-    "survey": "Context-aware reverse-engineering survey queue for variable-renaming follow-up and differential decomp feedback. list/status expose the current scoped backlog, delay defers a survey until other addresses are visited, and submit applies renames/findings then records the resolved experience. Actions: list, status, delay, submit.",
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
     "string_ops": "Advanced string analysis and IOC extraction. score_c2/indicators: C2 risk report — BehaviorClassifier on strings + API triads + family guess. ioc_extract: extract all IOCs (URLs, IPs, registry keys, C2 endpoints). persistence/evasion: persistence mechanisms and evasion techniques. find_urls/find_ips/find_paths/find_registry/find_emails/find_commands: pattern extraction. find_c2/find_configs/find_api_keys/find_databases/find_crypto_addrs: semantic extraction. find_stack_strings/find_base64: obfuscated string recovery. entropy_rank: rank strings by Shannon entropy. suspicious/encoding_stats/multilingual/decode_all: analysis utilities.",
     "summarize": "Structured summaries of binary components. binary: overall binary summary. function: single function summary. segment: segment summary. imports_by_category: imports grouped by API category. strings_by_category: strings grouped by type. complexity: function complexity metrics. call_hierarchy: call tree from entry point. data_flow: data flow summary. security_posture: dangerous APIs + mitigations + risk level. statistics: binary-wide stats. report: FULL REPORT — binary + security_posture + live taint scan + blackboard findings + statistics. NOTE: the binary and function actions share names with classify.binary / classify.function but produce DIFFERENT output — summarize returns counts/structure, classify returns categories/behavior tags. Pick the one that matches the question.",
@@ -1031,30 +1027,5 @@ TOOL_ARG_SCHEMAS = {
         "db_path": {"type": "string", "description": "Override path to symbol knowledge SQLite DB"},
         "chip_family": {"type": "string", "description": "Optional chip family tag for export_session"},
         "session_id": {"type": "string", "description": "Optional source session identifier for export_session"},
-    },
-    "survey": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["survey"]},
-        "addr": {"type": "string", "description": "Address of the function or offset related to the survey"},
-        "renames": {"type": "object", "description": "Map of generic variable names to new names (action=submit)"},
-        "blackboard_publish": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "category": {"type": "string"},
-                    "title": {"type": "string"},
-                    "content": {"type": "string"}
-                },
-                "required": ["title", "content"]
-            },
-            "description": "List of findings to publish to blackboard (action=submit)"
-        },
-        "bookmark": {"type": "string", "description": "Bookmark tag name to apply to the function (action=submit)"},
-        "delay_until_any": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "List of addresses the LLM wants to check first (action=delay)"
-        },
-        "reason": {"type": "string", "description": "Reason for delaying the survey (action=delay)"}
     },
 }

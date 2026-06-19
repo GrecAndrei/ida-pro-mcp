@@ -247,43 +247,6 @@ def test_dispatch_policy_blocks_disallowed_purpose_in_enforce_mode(monkeypatch):
     assert not srv._tool_calls
 
 
-def test_survey_gate_allows_workflow_meta_actions(monkeypatch):
-    monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
-    srv = _DummyDispatchServer()
-    srv._get_active_survey = lambda: {"addr": "0x1000", "status": "ACTIVE"}  # type: ignore[method-assign]
-    srv._handle_workflow = lambda args: {"ok": True, "action": args.get("action")}  # type: ignore[attr-defined]
-
-    for action in ("catalog", "plan", "explain", "estimate", "compose", "prioritize", "audit_plan"):
-        res = srv._execute_tool_inner("workflow", "workflow", {"action": action})
-        assert res.get("ok") is True
-        assert res.get("action") == action
-
-
-def test_survey_gate_still_blocks_executable_workflow_actions(monkeypatch):
-    monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
-    srv = _DummyDispatchServer()
-    srv._get_active_survey = lambda: {"addr": "0x1000", "status": "ACTIVE"}  # type: ignore[method-assign]
-    srv._handle_workflow = lambda args: {"ok": True, "action": args.get("action")}  # type: ignore[attr-defined]
-
-    blocked = srv._execute_tool_inner("workflow", "workflow", {"action": "triage_fast"})
-
-    assert blocked.get("error") is True
-    assert blocked.get("code") == "SURVEY_REQUIRED"
-
-
-def test_survey_gate_allows_wiki_actions(monkeypatch):
-    monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
-    srv = _DummyDispatchServer()
-    srv._get_active_survey = lambda: {"addr": "0x1000", "status": "ACTIVE"}  # type: ignore[method-assign]
-    srv._handle_wiki = lambda args: {"ok": True, "tool": "wiki", "action": args.get("action")}  # type: ignore[attr-defined]
-
-    res = srv._execute_tool_inner("wiki", "wiki", {"action": "list_topics"})
-
-    assert res.get("ok") is True
-    assert res.get("tool") == "wiki"
-    assert res.get("action") == "list_topics"
-
-
 def test_wrapper_actions_propagate_ok_false_child_failures(monkeypatch):
     monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
     srv = _DummyDispatchServer()

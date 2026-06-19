@@ -20,6 +20,13 @@ HOST_INTELLIGENCE_ROOT = HOST_ROOT / "intelligence"
 
 
 def _ensure_namespace_package(name: str, path: Path, *, attrs: dict | None = None) -> types.ModuleType:
+    """Register a namespace package pointing at the given source path.
+
+    Only registers when the module is not already in ``sys.modules`` — that
+    way callers that already imported ``ida_pro_mcp.host`` from the regular
+    install (e.g. tests that need it for side-effect-free host unit tests)
+    aren't clobbered with a partial namespace-package placeholder.
+    """
     mod = sys.modules.get(name)
     if mod is None:
         mod = types.ModuleType(name)
@@ -35,12 +42,15 @@ def _ensure_namespace_package(name: str, path: Path, *, attrs: dict | None = Non
 
 
 def _ensure_package_layout() -> None:
+    # Only register the namespaces the source-tree tools actually need.
+    # `ida_pro_mcp.host` is intentionally NOT registered here so that
+    # host-side unit tests (which import from the regular install) keep
+    # working without their cached package getting clobbered by a partial
+    # placeholder.
     _ensure_namespace_package("ida_pro_mcp", PACKAGE_ROOT, attrs={"__version__": "test"})
     _ensure_namespace_package("ida_pro_mcp.ida_mcp", IDA_MCP_ROOT)
     _ensure_namespace_package("ida_pro_mcp.ida_mcp.tools", TOOLS_ROOT)
     _ensure_namespace_package("ida_pro_mcp.ida_mcp.support", SUPPORT_ROOT)
-    _ensure_namespace_package("ida_pro_mcp.host", HOST_ROOT)
-    _ensure_namespace_package("ida_pro_mcp.host.intelligence", HOST_INTELLIGENCE_ROOT)
 
 
 def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
