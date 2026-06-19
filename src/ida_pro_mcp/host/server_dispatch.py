@@ -110,10 +110,29 @@ class ServerDispatchMixin:
                 except Exception as _e:
                     import logging
                     logging.getLogger(__name__).debug("arg schema filter failed: %s", _e)
+                _t0 = time.time()
                 res = self._send_rpc_raw({"tool": tool_name, "args": rpc_args}, port)
+                _elapsed = time.time() - _t0
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}
                 res = truncate_response(res, max_tokens=self.default_truncate_tokens)
+                try:
+                    _slow_threshold = float(
+                        os.environ.get("IDA_MCP_SLOW_CALL_SEC", "5.0")
+                    )
+                except Exception:
+                    _slow_threshold = 5.0
+                if _elapsed >= _slow_threshold and isinstance(res, dict):
+                    snapshot = self._collect_ida_state_snapshot(
+                        runtime=runtime,
+                        current_tool=tool_name,
+                        current_args=rpc_args,
+                        call_started_at=_t0,
+                    )
+                    snapshot["elapsed_sec"] = round(_elapsed, 2)
+                    res.setdefault("_meta", {})
+                    res["_meta"]["slow_call"] = True
+                    res["_meta"]["ida_state"] = snapshot
                 return res
             except Exception as e:
                 proc = runtime.get("process")

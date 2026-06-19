@@ -221,6 +221,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "macro_delete": "_session_action_macro_delete",
         "macro_run": "_session_action_macro_run",
         "recent_workset": "_session_action_recent_workset",
+        "kill": "_session_action_kill",
     }
 
     def _handle_session(self, args: dict) -> dict:
@@ -814,6 +815,50 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             "session": result,
             "total_sessions": len(self.session_mgr.sessions),
         }
+
+    def _session_action_kill(self, args: dict) -> dict:
+        """
+        Forcefully terminate the IDA process for the active (or specified) session.
+        Tries SIGTERM, then SIGKILL after grace_sec. Use when a tool call is
+        stuck and you want to recover without restarting the bridge.
+        """
+        sid, sid_err = self._resolve_session_id(args)
+        if sid_err:
+            return sid_err
+        if not sid and self.current_session:
+            sid = self.current_session.session_id
+        if not sid:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "session_id required (or create/switch to a session first)",
+            )
+        runtime = self.session_runtimes.get(sid)
+        if not isinstance(runtime, dict):
+            return make_error(
+                MCPError.SESSION_NOT_FOUND,
+                f"No runtime for session {sid}",
+            )
+        try:
+            grace_sec = float((args or {}).get("grace_sec") or 3.0)
+        except Exception:
+            grace_sec = 3.0
+        grace_sec = max(0.5, min(grace_sec, 30.0))
+        result = self._kill_ida_process(runtime, grace_sec=grace_sec)
+        result["session_id"] = sid
+        snapshot = self._collect_ida_state_snapshot(
+            runtime=runtime,
+            tail_lines=5,
+            include_process_stats=False,
+        )
+        result["post_kill_state"] = snapshot
+        try:
+            log_rpc(
+                f"session.kill sid={sid} signaled={result.get('signaled')} "
+                f"terminated={result.get('terminated')} exit={result.get('exit_code')}"
+            )
+        except Exception:
+            pass
+        return {"ok": True, **result}
 
     def _session_action_rebuild(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)

@@ -287,6 +287,197 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 blocks.append(f"[stderr]\n{err_tail}")
             return "\n\n".join(blocks)
 
+    def _collect_ida_state_snapshot(
+        self,
+        runtime: Optional[dict] = None,
+        stdout_log: Optional[str] = None,
+        stderr_log: Optional[str] = None,
+        current_tool: Optional[str] = None,
+        current_args: Optional[dict] = None,
+        call_started_at: Optional[float] = None,
+        tail_lines: int = 5,
+        include_process_stats: bool = True,
+    ) -> dict:
+        """
+        Build a compact snapshot of what IDA is doing right now, suitable for
+        attaching to long-running tool call responses and `session(status)`.
+
+        Always returns a dict. No exception is raised on failure — partial
+        data is better than no data.
+        """
+        snapshot: dict = {
+            "ts": time.time(),
+        }
+        if current_tool is not None:
+            snapshot["current_tool"] = current_tool
+        if current_args is not None:
+            try:
+                args_str = json.dumps(current_args, default=str)
+                if len(args_str) > 200:
+                    args_str = args_str[:197] + "..."
+                snapshot["current_args"] = args_str
+            except Exception:
+                snapshot["current_args"] = "<unserializable>"
+        if call_started_at is not None:
+            snapshot["call_elapsed_sec"] = round(time.time() - float(call_started_at), 2)
+
+        proc = None
+        if isinstance(runtime, dict):
+            proc = runtime.get("process")
+        if proc is None:
+            snapshot["process_alive"] = False
+        else:
+            try:
+                exit_code = proc.poll()
+                if exit_code is not None:
+                    snapshot["process_alive"] = False
+                    snapshot["process_exit_code"] = int(exit_code)
+                else:
+                    snapshot["process_alive"] = True
+                    snapshot["process_pid"] = int(proc.pid) if proc.pid else None
+                    if include_process_stats:
+                        try:
+                            import resource  # POSIX
+                            ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+                            snapshot["process_cpu_user_sec"] = round(ru.ru_utime, 2)
+                            snapshot["process_cpu_sys_sec"] = round(ru.ru_stime, 2)
+                            snapshot["process_rss_kb"] = int(ru.ru_maxrss)
+                        except Exception:
+                            pass
+                        try:
+                            with open(f"/proc/{int(proc.pid)}/stat", "rb") as _sf:
+                                parts = _sf.read().split()
+                            if len(parts) > 23:
+                                snapshot["process_state"] = parts[2].decode("ascii", errors="ignore")
+                                snapshot["process_utime_ticks"] = int(parts[13])
+                                snapshot["process_stime_ticks"] = int(parts[14])
+                                snapshot["process_threads"] = int(parts[19])
+                        except Exception:
+                            pass
+            except Exception as e:
+                snapshot["process_alive"] = None
+                snapshot["process_error"] = str(e)[:200]
+
+        if not stdout_log and isinstance(runtime, dict):
+            stdout_log = runtime.get("stdout_log")
+        if not stderr_log and isinstance(runtime, dict):
+            stderr_log = runtime.get("stderr_log")
+        if not stderr_log and stdout_log:
+            err_guess = stdout_log.replace("ida_stdout_", "ida_stderr_")
+            if err_guess != stdout_log:
+                stderr_log = err_guess
+        if stdout_log:
+            tail = self._tail_text_file(stdout_log, tail_lines=tail_lines)
+            if tail:
+                snapshot["ida_stdout_tail"] = tail
+        if stderr_log:
+            tail = self._tail_text_file(stderr_log, tail_lines=tail_lines)
+            if tail:
+                snapshot["ida_stderr_tail"] = tail
+
+        return snapshot
+
+    def _send_rpc_raw(self, request, port, timeout=5, auth_token: Optional[str] = None):
+            import socket
+
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            try:
+                s.connect(("127.0.0.1", port))
+                payload = dict(request) if isinstance(request, dict) else request
+                token = auth_token
+                if not token and isinstance(payload, dict):
+                    with self._runtime_lock:
+                        for runtime in self.session_runtimes.values():
+                            if int(runtime.get("port") or 0) == int(port):
+                                token = str(runtime.get("auth_token") or "")
+                                break
+                if token and isinstance(payload, dict):
+                    payload["session_token"] = token
+                data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                if len(data) > MAX_RPC_REQUEST_SIZE:
+                    raise ValueError(
+                        f"RPC request exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
+                    )
+                s.sendall(len(data).to_bytes(4, "big") + data)
+                # 30s default (was hardcoded 60s) — env: IDA_MCP_RPC_TIMEOUT
+                try:
+                    recv_timeout = int(os.environ.get("IDA_MCP_RPC_TIMEOUT", "30"))
+                except Exception:
+                    recv_timeout = 30
+                recv_timeout = max(1, min(recv_timeout, 600))
+                s.settimeout(recv_timeout)
+                lb = b""
+                while len(lb) < 4:
+                    c = s.recv(4 - len(lb))
+                    if not c:
+                        raise EOFError()
+                    lb += c
+                rl = int.from_bytes(lb, "big")
+                if rl > MAX_RPC_REQUEST_SIZE:
+                    raise ValueError(
+                        f"RPC response exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
+                    )
+                rd = b""
+                while len(rd) < rl:
+                    c = s.recv(min(4096, rl - len(rd)))
+                    if not c:
+                        raise EOFError()
+                    rd += c
+                return json.loads(rd.decode("utf-8"))
+            finally:
+                s.close()
+
+    def _kill_ida_process(self, runtime: dict, grace_sec: float = 3.0) -> dict:
+        """
+        Forcefully terminate the IDA process associated with a session runtime.
+        Tries SIGTERM, then SIGKILL after grace_sec. Returns a status dict.
+        """
+        result: dict = {
+            "attempted": False,
+            "terminated": False,
+            "signaled": None,
+        }
+        proc = runtime.get("process") if isinstance(runtime, dict) else None
+        if proc is None:
+            result["error"] = "no_process_in_runtime"
+            return result
+        result["attempted"] = True
+        result["pid"] = int(proc.pid) if proc.pid else None
+        try:
+            exit_code = proc.poll()
+        except Exception:
+            exit_code = None
+        if exit_code is not None:
+            result["terminated"] = True
+            result["signaled"] = "already_exited"
+            result["exit_code"] = int(exit_code)
+            return result
+        try:
+            proc.terminate()
+            result["signaled"] = "SIGTERM"
+        except Exception as e:
+            result["terminate_error"] = str(e)[:200]
+        try:
+            proc.wait(timeout=grace_sec)
+            result["terminated"] = True
+            result["exit_code"] = proc.returncode
+            return result
+        except Exception:
+            pass
+        try:
+            proc.kill()
+            result["signaled"] = "SIGKILL"
+        except Exception as e:
+            result["kill_error"] = str(e)[:200]
+        try:
+            proc.wait(timeout=grace_sec)
+            result["terminated"] = True
+            result["exit_code"] = proc.returncode
+        except Exception as e:
+            result["final_wait_error"] = str(e)[:200]
+        return result
+
     def _extract_library_init_failure(self, diag: str) -> Optional[dict]:
             if not isinstance(diag, str) or not diag.strip():
                 return None
@@ -1188,51 +1379,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         log_rpc(f"Removed corrupted IDB: {idb_path}")
                 except Exception as e:
                     log_rpc(f"Failed to check IDB size: {e}")
-
-    def _send_rpc_raw(self, request, port, timeout=5, auth_token: Optional[str] = None):
-            import socket
-
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            try:
-                s.connect(("127.0.0.1", port))
-                payload = dict(request) if isinstance(request, dict) else request
-                token = auth_token
-                if not token and isinstance(payload, dict):
-                    with self._runtime_lock:
-                        for runtime in self.session_runtimes.values():
-                            if int(runtime.get("port") or 0) == int(port):
-                                token = str(runtime.get("auth_token") or "")
-                                break
-                if token and isinstance(payload, dict):
-                    payload["session_token"] = token
-                data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-                if len(data) > MAX_RPC_REQUEST_SIZE:
-                    raise ValueError(
-                        f"RPC request exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
-                    )
-                s.sendall(len(data).to_bytes(4, "big") + data)
-                s.settimeout(60)
-                lb = b""
-                while len(lb) < 4:
-                    c = s.recv(4 - len(lb))
-                    if not c:
-                        raise EOFError()
-                    lb += c
-                rl = int.from_bytes(lb, "big")
-                if rl > MAX_RPC_REQUEST_SIZE:
-                    raise ValueError(
-                        f"RPC response exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
-                    )
-                rd = b""
-                while len(rd) < rl:
-                    c = s.recv(min(4096, rl - len(rd)))
-                    if not c:
-                        raise EOFError()
-                    rd += c
-                return json.loads(rd.decode("utf-8"))
-            finally:
-                s.close()
 
     def _start_server(self, session):
             opts = session.analysis_options or {}
