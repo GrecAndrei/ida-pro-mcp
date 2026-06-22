@@ -3,9 +3,8 @@ IDA RPC Server
 Designed for stability in IDA 9.2 headless mode.
 Uses non-blocking sockets for connection handling, but tool execution remains synchronous.
 """
-import sys, os, json, socket, traceback, time, select, re, hmac
+import sys, os, json, socket, time, select, re, hmac
 import inspect
-import difflib
 from typing import get_args, get_origin, Literal, Annotated
 
 # HEARTBEAT
@@ -18,7 +17,7 @@ def log_ev(msg):
     print(msg)
 
 try:
-    import idaapi, idc, ida_auto, idautils, ida_segment
+    import idc, idautils, ida_segment
     log_ev("IDA modules imported")
 except Exception as e:
     log_ev(f"CRITICAL: {e}")
@@ -208,7 +207,7 @@ def _suggest_choice(value, choices):
     if not value or not choices:
         return None
     try:
-        from ida_pro_mcp.host.intelligence_helpers import best_match
+        from ida_pro_mcp.host.intelligence.helpers import best_match
     except ImportError:
         import difflib
         matches = difflib.get_close_matches(str(value), choices, n=1, cutoff=0.6)

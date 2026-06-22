@@ -942,10 +942,10 @@ def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
     if not gadgets:
         return None
     try:
-        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
     except ImportError:
         try:
-            from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+            from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
         except ImportError:
             return None
     try:
@@ -1006,10 +1006,10 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
     combined chain, and return a structured exploit primitive assessment.
     """
     try:
-        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
     except ImportError:
         try:
-            from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+            from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
         except ImportError:
             return make_error(MCPError.IDA_ERROR, "intelligence.py not available")
 

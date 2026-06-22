@@ -8,7 +8,7 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from .core import (
-    clip_text, build_response, resolve_target, iter_segments, iter_code, SearchTimeout,
+    build_response, resolve_target, iter_segments, iter_code, SearchTimeout,
     CALL_XREF_TYPES, safe_generate_disasm_line,
 )
 

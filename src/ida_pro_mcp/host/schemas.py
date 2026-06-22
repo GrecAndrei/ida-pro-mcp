@@ -3,14 +3,9 @@
 Tool registry: TOOL_ACTIONS, TOOL_DESCRIPTIONS, TOOL_ARG_SCHEMAS,
 schema builders, alias resolution.
 """
-import os
 import re
-import json
-import difflib
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 
-from .config import log_rpc
-from .patterns import compile_smart_pattern, smart_match
 from .schemas_data import (
     ADVERTISED_TOOLS,
     BASE_TOOL_ALIASES,

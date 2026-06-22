@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import re
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 class AgentMacroCrystallizer:
@@ -113,7 +111,7 @@ class AgentMacroCrystallizer:
             if t not in tools:
                 tools.append(t)
 
-        tool_flow = " -> ".join(tools)
+        " -> ".join(tools)
         step_flow = " -> ".join(sequence)
 
         # Auto-generate dynamic names and descriptions based on sequence length/flow
@@ -125,7 +123,6 @@ class AgentMacroCrystallizer:
             "description": description,
             "steps": list(sequence),
             "tags": ["auto-crystallized", "mined-sequence"],
-            "memrl_reward": 0.5,
         }
 
     def crystallize_from_log(

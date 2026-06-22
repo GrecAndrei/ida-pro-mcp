@@ -65,7 +65,7 @@ def _sha256_file(path: str) -> str:
 
 
 def _build_embedder_capsule_state(embed_model: str, embed_server: str) -> dict:
-    from ida_pro_mcp.host.intelligence_core import (
+    from ida_pro_mcp.host.intelligence.core import (
         EMBED_DIM,
         BehaviorClassifier,
     )
@@ -119,7 +119,7 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     ui.info(f"llama-server: {'found ' + embed_server if embed_server else 'not found'}")
     ui.info(f"model: {'found ' + embed_model if embed_model else 'not found'}")
 
-    from ida_pro_mcp.host import intelligence_core as intel_core
+    from ida_pro_mcp.host.intelligence import core as intel_core
 
     # Recreate singleton under doctor-selected env so status/probe reflect this setup.
     prev_server = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
@@ -617,7 +617,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 report.metadata["embed_server_bin"] = embed_server
             if (embed_model or embed_server) and not opts.dry_run:
                 try:
-                    from ida_pro_mcp.host.intelligence_core import write_embedder_state
+                    from ida_pro_mcp.host.intelligence.core import write_embedder_state
                     state_path = write_embedder_state(
                         install_root,
                         model_path=embed_model,

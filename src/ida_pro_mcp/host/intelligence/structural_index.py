@@ -7,15 +7,14 @@ Offloads execution from IDA's thread and executes queries on the host.
 from __future__ import annotations
 
 import os
-import re
 import time
 import sqlite3
 import hashlib
 import json
-from typing import Any, Optional, Dict, List, Tuple
+from typing import Any, Optional
 
 # Re-use safety paths and validation from config/policy
-from ..config import CACHE_DIR, validate_path
+from ..config import CACHE_DIR
 from ..errors import MCPError, make_error
 
 # SQLite Schema Definition
@@ -149,7 +148,7 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
 def _detect_behavior_tags(attrs: dict[str, Any]) -> list[str]:
     tags: list[str] = []
     apis = set(attrs.get("apis", []))
-    strings = [s[0].lower() for s in attrs.get("strings", [])] if isinstance(attrs.get("strings"), list) else []
+    [s[0].lower() for s in attrs.get("strings", [])] if isinstance(attrs.get("strings"), list) else []
     name = attrs.get("name", "").lower()
 
     if any(a in apis for a in ("CryptEncrypt", "CryptDecrypt", "AES", "RSA", "DES", "Blowfish", "ChaCha20", "RC4", "SHA1", "SHA256", "MD5", "hash")):

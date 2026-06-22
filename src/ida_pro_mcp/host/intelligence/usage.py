@@ -39,7 +39,7 @@ import math
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 # ── Sequence Model ────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ class SequenceModel:
         """Return top-k (next_state, probability) pairs."""
         with self._lock:
             counts = dict(self._counts.get(state, {}))
-            total = self._total.get(state, 0)
+            self._total.get(state, 0)
         if not counts:
             return []
         # Laplace smoothing: add 1 to each seen transition

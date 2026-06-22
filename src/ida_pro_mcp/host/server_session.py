@@ -3,11 +3,10 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional
 
 from .arch_profile import infer_binary_arch_profile, normalize_arch_options
 from .chip_db import find_chip_profile
@@ -28,7 +27,7 @@ from .schemas import TOOL_ACTIONS
 from .tool_registry import register_tool_actions
 from .server_session_bootstrap import ServerSessionBootstrapMixin
 from .symbol_db import SymbolDB
-from .intelligence_helpers import parse_str_list
+from .intelligence.helpers import parse_str_list
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -138,7 +137,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         import threading
         def _diff():
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
                 return
             try:
@@ -1277,19 +1276,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             tags = parse_str_list(tags)
         if tags is not None and not isinstance(tags, list):
             return make_error(MCPError.INVALID_ARGS, "tags must be a list or comma-separated string")
-        memrl_reward = args.get("memrl_reward")
-        if memrl_reward is not None:
-            try:
-                memrl_reward = float(memrl_reward)
-            except (TypeError, ValueError):
-                return make_error(MCPError.INVALID_ARGS, "memrl_reward must be a number")
         return self.session_mgr.crystallize_skill(
             sid,
             name=name,
             description=description,
             steps=steps,
             tags=tags,
-            memrl_reward=memrl_reward,
         )
 
     def _session_action_crystallize_mined_macros(self, args: dict) -> dict:

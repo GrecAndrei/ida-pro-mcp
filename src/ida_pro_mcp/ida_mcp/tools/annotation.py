@@ -10,20 +10,6 @@ try:
 except ImportError:
     from governance_engine import evaluate_operation  # type: ignore[import-not-found]
 
-try:
-    from ..host.intelligence_core import emit_preference_suggestion
-except ImportError:
-    try:
-        from ida_pro_mcp.host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
-    except ImportError:
-        try:
-            from host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
-        except ImportError:
-            # No-op fallback if preference store not available
-            def emit_preference_suggestion(*args, **kwargs):  # type: ignore
-                return ""
-
-
 # ============================================================================
 # ANNOTATION - Intelligent Bulk Annotation for LLMs
 # ============================================================================
@@ -204,7 +190,7 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False) -> dict:
         fn = idaapi.get_func(addr_ea)
         if fn:
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                 pseudo = ""
                 try:
                     pseudo = str(idaapi.decompile(fn.start_ea) or "")
@@ -907,15 +893,6 @@ def annotation(
                 "redacted_comment": result["redacted_comment"],
                 "original_comment": proposed,
             }
-            # Log the validation to the preference store as a suggestion
-            try:
-                sug_id = emit_preference_suggestion(
-                    "annotation", "validate", addr, proposed
-                )
-                if sug_id:
-                    response["memrl_suggestion_id"] = sug_id
-            except Exception:
-                pass
             return response
 
         # ----------------------------------------------------------------

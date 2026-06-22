@@ -13,7 +13,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from .config import _bounded_int, _coerce_bool
+from .config import _coerce_bool
 from .errors import MCPError, is_error_result, make_error
 from .schemas import (
     ACTION_ALIASES_BY_TOOL,

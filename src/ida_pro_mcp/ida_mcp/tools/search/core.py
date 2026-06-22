@@ -7,10 +7,9 @@ Architecture:
 """
 
 import re
-import heapq
 import time as _time
 from collections import OrderedDict
-from typing import Optional, Sequence, Mapping
+from typing import Optional
 
 try:
     from .._common import *
@@ -18,9 +17,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ...support.semantic_matching import normalize_action, semantic_score, semantic_tokens
+    from ...support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # noqa: F401
 except ImportError:
-    from support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
+    from support.semantic_matching import semantic_score  # type: ignore[import-not-found]
 
 # ============================================================================
 # Module-Level Caches

@@ -24,8 +24,6 @@ SCHEMAS_PY = PROJECT_ROOT / "src/ida_pro_mcp/host/schemas.py"
 ALWAYS_HIDDEN = {
     "colorize",      # IDA UI highlight only, no analysis value to LLM
     "mbagcn",        # GCN embedding infrastructure
-    "memrl",         # RL ranking infrastructure
-    "schemaboot",    # SchemaBoot indexing (internal)
     "turboquant",    # Embedding quantization infrastructure
     "trace",         # Raw trace get/clear — use trace_analysis instead
     "plugins",       # IDA plugin management, not RE analysis

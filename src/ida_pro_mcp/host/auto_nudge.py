@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 
 # Silent action rewrites for tools LLMs commonly get wrong. These are

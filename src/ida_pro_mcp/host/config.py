@@ -9,8 +9,8 @@ import shutil
 import uuid
 import re
 from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
+from typing import Any, List, Optional
 
 
 def _default_runtime_dir() -> str:
@@ -326,7 +326,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _parse_str_list(value: Any) -> List[str]:
-    from .intelligence_helpers import parse_str_list
+    from .intelligence.helpers import parse_str_list
     return parse_str_list(value)
 
 

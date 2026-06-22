@@ -10,7 +10,6 @@ import signal
 import sys
 import threading
 import time
-from typing import List
 
 from .config import (
     _RUNTIME_LEASE_RE,

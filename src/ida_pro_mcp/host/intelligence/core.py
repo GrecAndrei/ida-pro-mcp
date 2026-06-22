@@ -37,37 +37,23 @@ Discovery:
 from __future__ import annotations
 
 import hashlib
-import atexit
 import glob
 import json
 import math
 import os
 import re
 import shutil
-import struct
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .embeddings import FunctionEmbeddingIndex, NOISE_WORDS, SemanticObject, SemanticObjectIndex
-from .helpers import compact_policy_blob, derive_focus_candidates, prune_policy_store
-from .preference_store import (
-    DEFAULT_ALPHA,
-    PreferenceMemoryBank,
-    Q_CEILING,
-    Q_FLOOR,
-    REWARD_ACCEPT,
-    REWARD_DANGEROUS,
-    REWARD_NEUTRAL,
-    REWARD_PARTIAL,
-    REWARD_REJECT,
-)
+from .embeddings import FunctionEmbeddingIndex, NOISE_WORDS, SemanticObject, SemanticObjectIndex  # noqa: F401
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -931,32 +917,6 @@ class BgeCodeEmbedder:
     def cosine(a: List[float], b: List[float]) -> float:
         from .helpers import cosine_similarity
         return cosine_similarity(a, b)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PreferenceMemoryBank — shared learned-ranking backend for retrieval
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def emit_preference_suggestion(
-    source_tool: str,
-    source_action: str,
-    addr: str,
-    value: str,
-    db_path: Optional[str] = None,
-) -> str:
-    bank = PreferenceMemoryBank(db_path=db_path)
-    intent_key = f"{source_tool}:{source_action}:{addr}"
-    experience_key = f"{source_tool}:{source_action}:{addr}:{value[:64]}"
-    return bank.ingest_suggestion(
-        intent_key=intent_key,
-        experience_key=experience_key,
-        source_tool=source_tool,
-        source_action=source_action,
-        context_addr=addr,
-        experience_meta={"value": value},
-        initial_q=0.5,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

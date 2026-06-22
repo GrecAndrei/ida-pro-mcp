@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import atexit
 import glob
 import json
 import os
@@ -14,36 +13,20 @@ import signal
 import secrets
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from .audit import AuditLogger
 from .config import (
-    _RUNTIME_LEASE_RE,
     _bounded_int,
-    _coerce_bool,
-    _env_bool,
-    _is_writable_dir,
     _normalize_session_id,
-    _parse_str_list,
-    _select_runtime_dir,
-    PROCESS_TERMINATION_TIMEOUT_SECONDS,
-    RUNTIME_LEASE_HEARTBEAT_SECONDS,
-    RUNTIME_LEASE_TTL,
     log_rpc,
 )
-from .context_density import ContextDensityOptimizer
 from .errors import MCPError, is_error_result, make_error
-from .insight_index import InsightIndex
-from .intelligence_context import get_assembler
-from .patterns import GlobalFactsDatabase
-from .rate_limit import RateLimiter
 from .server_runtime_leases import ServerRuntimeLeasesMixin
-from .session import BookmarkManager, Session, SessionManager
+from .session import Session
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -771,19 +754,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
 
-            # preference store auto-reward: when the LLM navigates to an address we previously
-            # suggested, record an implicit accept reward (~0.7) to close the feedback
-            # loop without requiring explicit LLM cooperation.  This is the missing
-            # link that keeps Q-values from being frozen at their initial 0.5.
-            if deduped_addresses:
-                try:
-                    from ida_pro_mcp.host.intelligence_core import PreferenceMemoryBank
-                    bank = PreferenceMemoryBank()
-                    for addr in deduped_addresses[:4]:
-                        bank.auto_reward_for_addr(addr, reward=0.7)
-                except Exception:
-                    pass
-
     def _build_recent_workset(
             self,
             sid: str,
@@ -1256,7 +1226,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if not target_norm:
                 return killed
             try:
-                import psutil  # type: ignore
                 have_psutil = True
             except Exception:
                 have_psutil = False

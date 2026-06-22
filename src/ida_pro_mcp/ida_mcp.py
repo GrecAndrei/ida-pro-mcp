@@ -6,10 +6,6 @@ It loads the actual implementation from the ida_mcp package.
 
 import sys
 import idaapi
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from . import ida_mcp
 
 
 def unload_package(package_name: str):

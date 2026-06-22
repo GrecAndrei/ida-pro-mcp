@@ -12,15 +12,13 @@ import json
 import hashlib
 import os
 import sqlite3
-import struct
 import tempfile
-import threading
 import time
 import uuid
 from contextlib import closing
 from typing import Any, Dict, List, Optional
 
-from .intelligence_helpers import quantile as _quantile
+from .intelligence.helpers import quantile as _quantile
 
 
 def _resolve_db_path(db_path: Optional[str] = None) -> str:
@@ -54,28 +52,28 @@ def _resolve_db_path(db_path: Optional[str] = None) -> str:
 
 def _get_embedder():
     try:
-        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
+        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
         return BgeCodeEmbedder()
     except ImportError:
         try:
-            from host.intelligence_core import BgeCodeEmbedder# type: ignore
+            from host.intelligence.core import BgeCodeEmbedder# type: ignore
             return BgeCodeEmbedder()
         except ImportError:
             return None
 
 
 def _pack_vec(vec: List[float]) -> bytes:
-    from .intelligence_helpers import pack_floats
+    from .intelligence.helpers import pack_floats
     return pack_floats(vec)
 
 
 def _unpack_vec(blob: bytes) -> List[float]:
-    from .intelligence_helpers import unpack_floats
+    from .intelligence.helpers import unpack_floats
     return unpack_floats(blob)
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
-    from .intelligence_helpers import dot_product
+    from .intelligence.helpers import dot_product
     return dot_product(a, b)
 
 
@@ -89,7 +87,7 @@ class BlackboardStore:
             parent = os.path.dirname(self.db_path) or "."
             os.makedirs(parent, exist_ok=True)
             # Verify writability by connecting to the primary path
-            with closing(self._conn()) as conn:
+            with closing(self._conn()):
                 pass
             self._init_db()
         except (sqlite3.OperationalError, OSError, PermissionError):

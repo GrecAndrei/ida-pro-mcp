@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Wiki/search helpers extracted from the main server implementation."""
 
-import difflib
 import json
 import os
 import re
@@ -93,7 +92,7 @@ class ServerWikiMixin:
         if cached is not None:
             return cached
         try:
-            from .intelligence_core import BgeCodeEmbedder
+            from .intelligence.core import BgeCodeEmbedder
             embedder = BgeCodeEmbedder()
             vec = embedder.embed(key)
         except Exception:
@@ -468,7 +467,7 @@ class ServerWikiMixin:
         body_vec = self._wiki_embed_text(body_text) if qvec is not None else None
         if qvec is not None and title_vec is not None:
             try:
-                from .intelligence_core import BgeCodeEmbedder
+                from .intelligence.core import BgeCodeEmbedder
                 s_title = float(BgeCodeEmbedder.cosine(qvec, title_vec))
                 s_body = float(BgeCodeEmbedder.cosine(qvec, body_vec)) if body_vec is not None else 0.0
                 sim = (0.7 * s_title) + (0.3 * s_body)
@@ -476,7 +475,7 @@ class ServerWikiMixin:
                     topic_lower = str(page.get("topic_lower") or "")
                     title_lower = str(page.get("title_lower") or "")
                     base_lower = str(page.get("topic_basename") or "")
-                    from .intelligence_helpers import similarity_ratio
+                    from .intelligence.helpers import similarity_ratio
                     ratio = max(
                         similarity_ratio(query_lower, topic_lower),
                         similarity_ratio(query_lower, title_lower),
@@ -505,7 +504,7 @@ class ServerWikiMixin:
             topic_lower = str(page.get("topic_lower") or "")
             title_lower = str(page.get("title_lower") or "")
             base_lower = str(page.get("topic_basename") or "")
-            from .intelligence_helpers import similarity_ratio
+            from .intelligence.helpers import similarity_ratio
             ratio = max(
                 similarity_ratio(query_lower, topic_lower),
                 similarity_ratio(query_lower, title_lower),
@@ -850,7 +849,7 @@ class ServerWikiMixin:
                     best_ratio = 0.0
                     best_header = None
                     for header in headers:
-                        from .intelligence_helpers import similarity_ratio
+                        from .intelligence.helpers import similarity_ratio
                         ratio = similarity_ratio(section_lower, header["text"].strip().lower())
                         if ratio > best_ratio:
                             best_ratio = ratio

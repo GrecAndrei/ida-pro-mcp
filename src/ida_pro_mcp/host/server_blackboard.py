@@ -2,7 +2,6 @@
 """Blackboard store and host-side orchestration helpers."""
 
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -12,9 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from .config import _bounded_int
 from .errors import MCPError, is_error_result, make_error
-from .schemas import TOOL_ACTIONS
 from .symbol_db import SymbolDB
-from .intelligence_helpers import parse_str_list
+from .intelligence.helpers import parse_str_list
 
 
 
@@ -592,7 +590,7 @@ class ServerBlackboardMixin:
             eid = str(e.get("id") or "")
             addr = str(e.get("addr") or "")
             cat = str(e.get("category") or "")
-            title = str(e.get("title") or "")
+            str(e.get("title") or "")
             if addr:
                 quests.append({"quest_type": "trace_caller", "entry_id": eid, "addr": addr, "call": {"tool": "trace_ingest", "args": {"entry_id": eid}}})
                 quests.append({"quest_type": "verify_this", "entry_id": eid, "addr": addr, "call": {"tool": "search", "args": {"query": addr}}})

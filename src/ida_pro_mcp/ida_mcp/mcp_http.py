@@ -7,7 +7,6 @@ from http.server import HTTPServer
 
 from .sync import idaread, idawrite
 from .rpc import McpRpcRegistry, McpHttpRequestHandler, MCP_SERVER, MCP_UNSAFE
-from .truncation import truncate_response
 
 
 T = TypeVar("T")

@@ -155,7 +155,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "project": ["save", "close", "open", "load_binary", "list_recent", "get_cwd", "set_cwd", "list_dir", "exists", "evidence_graph", "knowledge_merge", "confidence_model", "replay_pipeline", "hypothesis_tracker", "temporal_reasoning", "semantic_artifact_diff", "ai_governance", "knowledge_debt", "casefile_export"],
     "protocol": ["detect", "parsers", "serializers", "handlers", "endpoints", "tls_config", "socket_flow", "packet_struct", "magic_numbers", "state_machine"],
     "query": ["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl", "nl_batch"],
-    "schemaboot": ["ingest", "query", "refresh", "stats", "delete", "get"],
     "search": [
         "nl", "behavior", "find", "semantic", "smart_bundle", "api",
         "decompiled", "structured", "vulnerable", "constants",

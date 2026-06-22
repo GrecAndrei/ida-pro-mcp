@@ -13,7 +13,7 @@ except (ImportError, ValueError):
     except ImportError:
         from .rpc import prompt
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 
 @prompt

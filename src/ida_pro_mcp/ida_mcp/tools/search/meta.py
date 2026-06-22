@@ -11,14 +11,13 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ...support.semantic_matching import semantic_score
+    from ...support.semantic_matching import semantic_score  # noqa: F401
 except ImportError:
-    from support.semantic_matching import semantic_score  # type: ignore[import-not-found]
+    from support.semantic_matching import semantic_score  # type: ignore[import-not-found]  # noqa: F401
 
 from .core import (
-    clip_text, paginate_records, build_response, resolve_target,
-    iter_segments, iter_code, get_cached_imports, get_cached_strings,
-    MAX_LIMIT, safe_generate_disasm_line,
+    build_response, iter_segments, iter_code, get_cached_imports, get_cached_strings,
+    safe_generate_disasm_line,
 )
 
 

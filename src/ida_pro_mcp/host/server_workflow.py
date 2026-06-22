@@ -2,29 +2,20 @@
 """Workflow, batch, and tools list helpers extracted from the main server."""
 
 import time
-from typing import Any
 
 from .config import (
     EMBEDDING_FIRST_MODE,
-    MAX_LIST_LIMIT,
-    MAX_LIST_OFFSET,
     _bounded_int,
     _coerce_bool,
     _parse_str_list,
-    _parse_line_range,
 )
 from .errors import MCPError, is_error_result, make_error
 from .server_workflow_batch import ServerWorkflowBatchMixin
 from .schemas import (
-    ADVERTISED_TOOLS,
-    ACTION_ALIASES_BY_TOOL,
-    ARG_ALIASES_BY_TOOL,
     HIDDEN_TOOLS_IN_LIST,
     TOOL_ACTIONS,
-    TOOL_ARG_SCHEMAS,
     TOOL_DESCRIPTIONS,
     TOOLS,
-    _resolve_tool_alias,
     build_input_schema,
     build_input_schema_lean,
     build_input_schema_ultra,
@@ -325,7 +316,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             step_results: list[dict] = []
             calls_out: list[dict] = []
             completed = 0
-            had_error = False
             blocked = False
             for idx, step in enumerate(normalized_calls):
                 name = str(step.get("name") or "").strip()
@@ -365,7 +355,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     }
                 )
                 if is_err:
-                    had_error = True
                     # Conservative dependency gate for clearly chained operations.
                     if name in {"query", "batch"}:
                         blocked = True
@@ -676,7 +665,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             ).strip()
             if EMBEDDING_FIRST_MODE and plan_text:
                 try:
-                    from .intelligence_core import BgeCodeEmbedder
+                    from .intelligence.core import BgeCodeEmbedder
                     embedder = BgeCodeEmbedder()
                     qv = embedder.embed(plan_text)
                     anchors = [

@@ -4,9 +4,8 @@
 import json
 import math
 import os
-import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from .errors import MCPError, is_error_result, make_error
 from .config import log_rpc
@@ -479,7 +478,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
     def crystallize_skill(
         self, sid: str, name: str, description: str, steps: list,
-        tags: Optional[list] = None, memrl_reward: Optional[float] = None,
+        tags: Optional[list] = None,
     ) -> dict:
         """Crystallize a workflow into a reusable L3 skill, stored in global registry."""
         with self._lock:
@@ -583,7 +582,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             ctx_vec = None
             if ctx_has_text:
                 try:
-                    from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
+                    from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
                     embedder = BgeCodeEmbedder()
                     ctx_vec = embedder.embed((context or "")[:1200])
                 except Exception:

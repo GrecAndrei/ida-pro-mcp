@@ -26,8 +26,7 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from .core import (
-    clip_text, paginate_records, build_response, MAX_LIMIT,
-    resolve_target, safe_generate_disasm_line, CALL_XREF_TYPES,
+    resolve_target, CALL_XREF_TYPES,
 )
 
 
@@ -102,7 +101,7 @@ def _prim_funcs_by_string(pattern: str) -> set[int]:
 
 def _prim_funcs_by_api(pattern: str) -> set[int]:
     """Functions that call at least one API matching pattern (glob)."""
-    import idaapi, ida_xref
+    import idaapi
     matcher = compile_smart_pattern(pattern, case_sensitive=False)
     out = set()
     for ea in idautils.Functions():

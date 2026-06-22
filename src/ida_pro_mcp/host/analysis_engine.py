@@ -17,7 +17,6 @@ Usage (from server.py):
 """
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time
@@ -25,28 +24,14 @@ import uuid
 import importlib.util
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
-try:
-    from .intelligence_helpers import (
-        cosine_similarity as _cosine,
-        pack_floats as _pack,
-        unpack_floats as _unpack,
-        quantile as _q,
-    )
-except ImportError:
-    _helpers_path = Path(__file__).with_name("intelligence_helpers.py")
-    _helpers_spec = importlib.util.spec_from_file_location(
-        "intelligence_helpers", _helpers_path
-    )
-    if _helpers_spec is None or _helpers_spec.loader is None:
-        raise
-    _helpers_mod = importlib.util.module_from_spec(_helpers_spec)
-    _helpers_spec.loader.exec_module(_helpers_mod)
-    _cosine = _helpers_mod.cosine_similarity
-    _pack = _helpers_mod.pack_floats
-    _unpack = _helpers_mod.unpack_floats
-    _q = _helpers_mod.quantile
+from .intelligence.helpers import (
+    cosine_similarity as _cosine,
+    pack_floats as _pack,
+    unpack_floats as _unpack,
+    quantile as _q,
+)
 
 try:
     from .analysis_engine_kg import AnalysisEngineKnowledgeGraphMixin
@@ -847,7 +832,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
                 store.update(existing[0]["id"], entropy=entropy)
                 continue
 
-            eid = store.write(
+            store.write(
                 f"High-entropy region: {name} (entropy={entropy:.2f})",
                 category="region",
                 addr=addr_hex, addr_end=addr_end_hex,
@@ -1085,7 +1070,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
 
     def _get_classifier(self):
         try:
-            from .intelligence_core import BehaviorClassifier
+            from .intelligence.core import BehaviorClassifier
             return BehaviorClassifier()
         except Exception:
             return None

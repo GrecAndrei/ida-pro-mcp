@@ -9,9 +9,8 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from .core import (
-    clip_text, paginate_records, build_response, resolve_target,
-    iter_segments, iter_code, _cache_get, _cache_set, _cache_key, _SEARCH_CACHE,
-    MAX_LIMIT, derive_vuln_type, get_cached_constant_db, get_cached_imports, get_cached_strings,
+    clip_text, paginate_records, build_response, iter_segments, _cache_get, _cache_set, _cache_key, _SEARCH_CACHE,
+    get_cached_constant_db, get_cached_imports, get_cached_strings,
     _get_db_fingerprint, SearchTimeout, safe_generate_disasm_line,
 )
 
@@ -74,10 +73,10 @@ def _coerce_ea(value) -> int:
 
 def _get_intelligence_index():
     try:
-        from ida_pro_mcp.host.intelligence_context import get_assembler
+        from ida_pro_mcp.host.intelligence.context import get_assembler
     except ImportError:
         try:
-            from host.intelligence_context import get_assembler  # type: ignore
+            from host.intelligence.context import get_assembler  # type: ignore
         except ImportError:
             return None, None, ""
     try:
@@ -761,9 +760,9 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         return make_error(MCPError.INVALID_ARGS, "constraints or pattern required")
 
     try:
-        from ..classify import _CATEGORY_APIS, _classify_func, _induce_function_schema
+        from ..classify import _classify_func, _induce_function_schema
     except ImportError:
-        from classify import _CATEGORY_APIS, _classify_func, _induce_function_schema  # type: ignore[import-not-found]
+        from classify import _classify_func, _induce_function_schema  # type: ignore[import-not-found]
     try:
         from ..annotation import _DANGEROUS_APIS, _TAG_CATEGORIES
     except ImportError:

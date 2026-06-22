@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Bootstrap lifecycle helpers for session skills."""
 
-import json
 import math
 import random
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from .errors import MCPError, is_error_result, make_error
 from .session_skills_bootstrap_monitoring import SessionBootstrapMonitoringMixin

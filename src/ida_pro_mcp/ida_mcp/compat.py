@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import importlib
 import logging
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -245,10 +245,8 @@ def _module_importable(name: str) -> bool:
 def _module_attr(*names: str) -> Any:
     """Resolve a dotted attribute path; return None if any link is missing."""
     obj: Any = None
-    cur: Optional[str] = None
     try:
         for n in names:
-            cur = n
             if obj is None:
                 obj = importlib.import_module(n)
             else:

@@ -4,18 +4,6 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ..host.intelligence_core import emit_preference_suggestion
-except ImportError:
-    try:
-        from ida_pro_mcp.host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
-    except ImportError:
-        try:
-            from host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
-        except ImportError:
-            def emit_preference_suggestion(*args, **kwargs):  # type: ignore
-                return ""
-
-try:
     from .blackboard import BlackboardStore
 except ImportError:
     try:
@@ -288,7 +276,7 @@ def _fwb_safe_bounds() -> tuple[int, int]:
 
 def _fwb_int_addr(v: Any) -> Optional[int]:
     try:
-        from ida_pro_mcp.host.intelligence_helpers import coerce_int
+        from ida_pro_mcp.host.intelligence.helpers import coerce_int
         return coerce_int(v)
     except (TypeError, ValueError):
         return None
@@ -614,14 +602,6 @@ def firmware_view(
         ptr_size = 8 if _is_64bit() else 4
 
         def _log_ml(result: dict, act: str, details: str):
-            try:
-                sug = ""
-                if callable(emit_preference_suggestion):
-                    sug = emit_preference_suggestion("firmware_view", act, hex(s_ea), details)
-                if sug:
-                    result["memrl_suggestion_id"] = sug
-            except Exception:
-                pass
             _BB = BlackboardStore  # capture at definition time to avoid closure bug
             if auto_blackboard and _BB is not None:
                 try:

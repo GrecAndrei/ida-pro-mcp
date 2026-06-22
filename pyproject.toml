@@ -63,4 +63,11 @@ exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
 pythonpath = ["."]
 timeout = 30
 timeout_method = "thread"
-addopts = "--ignore=tests/integration --ignore=tests/probes --ignore=tests/benchmarks"
+testpaths = [
+    "tests/capsule",
+    "tests/host",
+    "tests/tools",
+    "tests/other",
+    "tests/integration",
+]
+addopts = "--ignore=tests/probes --ignore=tests/benchmarks"

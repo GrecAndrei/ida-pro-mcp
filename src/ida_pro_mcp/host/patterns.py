@@ -7,9 +7,8 @@ import os
 import re
 import time
 import fnmatch
-import difflib
 from functools import lru_cache
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 
 _SEMANTIC_CANONICALS = {
@@ -151,7 +150,7 @@ def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_F
             return True
         if not fuzzy_tokens:
             return False
-        from .intelligence_helpers import best_match
+        from .intelligence.helpers import best_match
         fuzzy_hits = 0
         for qtok in fuzzy_tokens:
             if best_match(qtok, list(text_tokens), n=1, cutoff=fuzzy_cutoff):

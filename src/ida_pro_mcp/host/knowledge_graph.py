@@ -14,12 +14,11 @@ All tables live in the same .blackboard.db file so joins work.
 from __future__ import annotations
 
 import json
-import math
 import os
 import sqlite3
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

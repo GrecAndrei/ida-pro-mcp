@@ -1,5 +1,4 @@
 from typing import Callable
-import zeromcp
 from zeromcp import McpRpcRegistry, McpServer, McpToolError, McpHttpRequestHandler
 
 MCP_SERVER = McpServer("ida-pro-mcp")

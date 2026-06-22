@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import json
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 
 class FederationBridge:
@@ -25,7 +24,7 @@ class FederationBridge:
         if not os.path.exists(self.local_bb_path):
             try:
                 from ..blackboard_store import BlackboardStore
-                store = BlackboardStore(self.local_bb_path)
+                BlackboardStore(self.local_bb_path)
             except Exception:
                 pass
 

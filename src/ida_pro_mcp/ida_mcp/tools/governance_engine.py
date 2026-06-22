@@ -895,7 +895,7 @@ def governance_engine(
             addr_int = None
             if addr:
                 try:
-                    from ida_pro_mcp.host.intelligence_helpers import coerce_int
+                    from ida_pro_mcp.host.intelligence.helpers import coerce_int
                     addr_int = coerce_int(addr)
                 except (ValueError, TypeError):
                     addr_int = None

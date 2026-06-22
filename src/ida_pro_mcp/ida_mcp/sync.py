@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from enum import IntEnum
 import idaapi
 import ida_kernwin
-import idc
 try:
     from ida_pro_mcp.ida_mcp.rpc import McpToolError
 except ImportError:

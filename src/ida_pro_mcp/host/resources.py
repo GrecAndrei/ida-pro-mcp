@@ -47,7 +47,6 @@ Supported URIs (67 total):
 from __future__ import annotations
 
 import json
-import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -934,7 +933,6 @@ class ResourceResolver:
             # Ranked unvisited functions — read this when choosing what to analyze next
             try:
                 from .frontier import FrontierEngine
-                import os as _os2
                 idb_path = self.bb_path.replace(".blackboard.db", "") if self.bb_path else ""
                 emb_db = idb_path + ".embeddings.db" if idb_path else ""
                 fe = FrontierEngine(emb_db, self.bb_path or store.db_path)

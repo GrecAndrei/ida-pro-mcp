@@ -722,7 +722,6 @@ class HybridSearchEngine:
         Phase 2 (BM25) reranks the pool by semantic relevance to query terms.
         Combined score: (1 - bm25_weight) * sql_rank + bm25_weight * bm25_score.
         """
-        import math as _math
 
         phase1 = self.search(constraints, top_k=min(top_k * 4, 2000))
         if not phase1.get("ok") or not phase1.get("candidates"):

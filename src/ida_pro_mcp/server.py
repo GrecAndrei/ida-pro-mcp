@@ -9,7 +9,7 @@ import tomllib
 import tomli_w
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
-from ida_pro_mcp.legacy_names import LEGACY_SERVER_NAMES
+from ida_pro_mcp.installer.clients import LEGACY_SERVER_NAMES
 
 if TYPE_CHECKING:
     from ida_pro_mcp.ida_mcp.zeromcp import McpServer

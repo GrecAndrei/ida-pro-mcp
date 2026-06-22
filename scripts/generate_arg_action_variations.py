@@ -259,7 +259,6 @@ TEST_ARGS = {
     "schemaboot": {"action": "stats"},
     "turboquant": {"action": "stats"},
     "bridgerag": {"action": "stats"},
-    "memrl": {"action": "stats"},
     "blackboard": {"action": "list"},
     "mbagcn": {"action": "stats"},
     "cfg_analysis": {"action": "complexity", "addr": "0x140001000"},

@@ -5,18 +5,6 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ..host.intelligence_core import emit_preference_suggestion
-except ImportError:
-    try:
-        from ida_pro_mcp.host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
-    except ImportError:
-        try:
-            from host.intelligence_core import emit_preference_suggestion  # type: ignore[import-not-found]
-        except ImportError:
-            def emit_preference_suggestion(*args, **kwargs):  # type: ignore
-                return ""
-
-try:
     from .blackboard import BlackboardStore
 except ImportError:
     try:
@@ -94,12 +82,6 @@ def data_ops(
             return [f"blackboard(action='list', category='firmware_view', addr='{addr}') to review prior local decisions"]
 
         def _attach_ml_context(result: dict, act: str, detail: str = "") -> dict:
-            try:
-                sug = emit_preference_suggestion("data_ops", act, addr, detail or act)
-                if sug:
-                    result["memrl_suggestion_id"] = sug
-            except Exception:
-                pass
             if auto_blackboard and BlackboardStore is not None:
                 try:
                     store = BlackboardStore()

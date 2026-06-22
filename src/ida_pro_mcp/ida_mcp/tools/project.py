@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from ida_pro_mcp.host.intelligence_helpers import parse_str_list
+from ida_pro_mcp.host.intelligence.helpers import parse_str_list
 
 
 try:

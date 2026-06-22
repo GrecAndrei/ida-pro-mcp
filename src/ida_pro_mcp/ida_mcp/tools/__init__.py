@@ -61,7 +61,6 @@ __all__ = [
     "cfg_analysis",
     "binary_info",
     "llm_helpers",
-    "schemaboot",
     "bridge_search",
     "blackboard",
     "filter",

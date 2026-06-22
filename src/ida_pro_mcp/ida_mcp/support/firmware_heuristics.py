@@ -5,7 +5,7 @@ import hashlib
 from typing import Dict, List
 
 try:
-    from ida_pro_mcp.host.intelligence_helpers import quantile as _quantile
+    from ida_pro_mcp.host.intelligence.helpers import quantile as _quantile
 except ImportError:
     def _quantile(vals, q, default=0.0):
         if not vals:

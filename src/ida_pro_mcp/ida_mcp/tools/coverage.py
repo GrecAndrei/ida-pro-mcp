@@ -403,7 +403,7 @@ def coverage(
                 return make_error(MCPError.FILE_NOT_FOUND, load_err)
 
             executed = []
-            from ida_pro_mcp.host.intelligence_helpers import coerce_int
+            from ida_pro_mcp.host.intelligence.helpers import coerce_int
             for addr_str in addresses:
                 try:
                     ea = coerce_int(addr_str)

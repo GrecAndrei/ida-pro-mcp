@@ -8,7 +8,6 @@ class while keeping the same response behavior.
 from __future__ import annotations
 
 import json
-import re
 import time
 from typing import Any, Optional
 
@@ -16,10 +15,6 @@ from .config import (
     _coerce_bool,
     CONTEXT_DENSITY_DEFAULT_BUDGET,
     CONTEXT_DENSITY_COMPACT_THRESHOLD,
-    CONTEXT_DENSITY_MAX_CODE_PREVIEW,
-    CONTEXT_DENSITY_MAX_HEX_PREVIEW,
-    CONTEXT_DENSITY_MAX_XREF_ITEMS,
-    LLM_POINTER_SAFETY_NOTE,
     _POINTER_NOTE_HEX_RE,
     _POINTER_NOTE_MATH_RE,
     _POINTER_NOTE_SIGNAL_KEYWORDS,

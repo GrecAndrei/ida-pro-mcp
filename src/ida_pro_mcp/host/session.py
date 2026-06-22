@@ -15,29 +15,20 @@ Creative features integrated directly into existing session tool:
 """
 import os
 import json
-import time
 import threading
 import shutil
 import re
 import glob
 import uuid
 import copy
-import math
-import random
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
-from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from .config import (
-    CACHE_DIR,
     log_rpc,
-    RUNTIME_LEASE_TTL,
-    RUNTIME_LEASE_HEARTBEAT_SECONDS,
-    _RUNTIME_LEASE_RE,
     _normalize_session_id,
     _parse_iso_datetime,
     MAX_SESSION_ID_RETRIES,
-    MAX_SNAPSHOT_ID_RETRIES,
     MAX_SNAPSHOTS_PER_SESSION,
     MAX_TAG_LEN,
     MAX_TAGS_PER_SESSION,
@@ -197,7 +188,7 @@ class Session:
 
 
 from .session_skills import SessionSkillsMixin
-from .intelligence_helpers import parse_str_list
+from .intelligence.helpers import parse_str_list
 
 
 

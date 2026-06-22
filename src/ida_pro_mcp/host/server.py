@@ -6,27 +6,12 @@ import os
 import sys
 import json
 import time
-import re
-import struct
-import subprocess
 import threading
-import sqlite3
-import hashlib
-import copy
-import shutil
 import tempfile
 import warnings
 import atexit
-import signal
-import glob
-import difflib
 import socket as _socket_mod
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, Future
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
-from pathlib import Path
-import shlex
+from typing import Any, Dict, List, Optional
 
 from ida_pro_mcp import __version__
 
@@ -38,94 +23,29 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 from .resources import list_resources, ResourceResolver
 from .audit import AuditLogger
 from .rate_limit import RateLimiter
-from .intelligence_context import get_assembler
+from .intelligence.context import get_assembler
 from .config import (
     CACHE_DIR,
-    BRIDGE_LOG,
     log_rpc,
-    RUNTIME_LEASE_TTL,
-    RUNTIME_LEASE_HEARTBEAT_SECONDS,
-    PROCESS_TERMINATION_TIMEOUT_SECONDS,
-    _RUNTIME_LEASE_RE,
-    SEMANTIC_INDEX_VERSION,
-    SEMANTIC_INDEX_DB_NAME,
-    SEMANTIC_INDEX_MAX_WORKERS,
-    SEMANTIC_INDEX_WAIT_SECONDS,
-    SEMANTIC_GADGET_SOURCE_ACTIONS,
-    SEMANTIC_INDEX_SOURCE_LIMIT,
-    SEMANTIC_INDEX_MAX_QUERY_WORKERS,
     _bounded_int,
     _coerce_bool,
     _env_bool,
-    _parse_str_list,
-    _parse_line_range,
     _normalize_session_id,
     _select_runtime_dir,
-    _is_writable_dir,
-    MAX_BATCH_CALLS,
-    MAX_BATCH_PAYLOAD_BYTES,
-    MAX_LIST_LIMIT,
-    MAX_LIST_OFFSET,
-    MAX_TAGS_PER_SESSION,
-    MAX_TAG_LEN,
-    MAX_NOTE_LEN,
-    MAX_NAME_LEN,
-    MAX_WIKI_RESULTS,
-    WIKI_SEMANTIC_GROUPS,
-    _POINTER_NOTE_SIGNAL_TOOLS_STRONG,
-    _POINTER_NOTE_SIGNAL_TOOLS_HINT,
-    _POINTER_NOTE_HEX_RE,
-    _POINTER_NOTE_MATH_RE,
-    _POINTER_NOTE_SIGNAL_KEYWORDS,
-    _POINTER_NOTE_SIGNAL_MAX_DEPTH,
-    _POINTER_NOTE_SIGNAL_MAX_LIST_ITEMS,
-    _POINTER_NOTE_SIGNAL_MAX_DICT_ITEMS,
-    _POINTER_NOTE_MAX_SIGNAL_MULTIPLIER,
-    LLM_POINTER_SAFETY_NOTE,
-    _COMPACT_DROP,
-    _COMPACT_META_KEYS,
-    _COMPACT_DETAIL_LIST_KEYS,
     CONTEXT_DENSITY_DEFAULT_BUDGET,
     CONTEXT_DENSITY_COMPACT_THRESHOLD,
     CONTEXT_DENSITY_MAX_CODE_PREVIEW,
     CONTEXT_DENSITY_MAX_HEX_PREVIEW,
     CONTEXT_DENSITY_MAX_XREF_ITEMS,
-    EMBEDDING_FIRST_MODE,
-    ALLOW_HEURISTIC_FALLBACKS,
 )
 from .context_density import ContextDensityOptimizer
 from .errors import MCPError, is_error_result, make_error
-from .patterns import compile_smart_pattern, smart_match, GlobalFactsDatabase
+from .patterns import GlobalFactsDatabase
 from .insight_index import InsightIndex
-from .session import Session, SessionManager, BookmarkManager
+from .session import SessionManager, BookmarkManager
 from .schemas import (
-    TOOLS,
-    TOOL_DESCRIPTIONS,
-    TOOL_ACTIONS,
-    TOOL_ARG_SCHEMAS,
-    ARG_ALIASES_BY_TOOL,
-    ACTION_ALIASES_BY_TOOL,
-    ADVERTISED_TOOLS,
-    HIDDEN_TOOLS_IN_LIST,
     _resolve_tool_alias,
-    _normalize_alias_lookup_key,
-    _strip_balanced_wrappers,
-    ACTION_PREFIX_RE,
-    ACTION_STRIP_CHARS,
-    _WRAPPER_PAIRS,
-    WRAPPER_ACTIONS,
-    build_input_schema,
-    build_input_schema_lean,
-    build_input_schema_ultra,
-    build_tool_description_ultra,
-    build_tool_description_lean,
-    classify_tool_category,
-    sanitize_schema_for_vertex,
 )
-from .arch_profile import normalize_arch_options, infer_binary_arch_profile
-from .chip_db import find_chip_profile
-from .symbol_db import SymbolDB
-from .vuln_db import VULN_PATTERNS
 from .server_args import ServerArgsMixin
 from .server_dispatch import ServerDispatchMixin
 from .server_session import ServerSessionMixin
@@ -143,7 +63,7 @@ from .server_workflow import ServerWorkflowMixin
 # if addr and tool_name in ("code", "data", "search"):
 
 # Import truncation middleware
-from .truncation import truncate_response, continue_truncated
+from .truncation import truncate_response, continue_truncated  # noqa: F401
 
 # =============================================================================
 # MCP SERVER
@@ -358,7 +278,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         self.assembler = get_assembler()  # bge-code-v1 intelligence layer
         # Usage intelligence — passive observer and learner (started in run())
         try:
-            from .usage_intelligence import UsageIntelligence
+            from .intelligence.usage import UsageIntelligence
             self._usage_intel = UsageIntelligence(
                 audit_dir=os.path.join(self.cache_dir, "audit"),
                 notify_fn=None,  # injected in run() once _rs is available
@@ -833,7 +753,7 @@ def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
     import threading
     def _diff():
         try:
-            from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex
+            from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
         except ImportError:
             return
         try:

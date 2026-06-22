@@ -6,8 +6,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
-from ida_pro_mcp.host.intelligence_embeddings import FunctionEmbeddingIndex, SemanticObject, SemanticObjectIndex
+from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex, SemanticObject, SemanticObjectIndex
 
 
 FIX_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "semantic"

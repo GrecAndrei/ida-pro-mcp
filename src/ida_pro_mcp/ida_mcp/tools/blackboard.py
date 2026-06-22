@@ -68,11 +68,11 @@ except ImportError:
 
 def _get_embedder():
     try:
-        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder
+        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
         return BgeCodeEmbedder()
     except ImportError:
         try:
-            from host.intelligence_core import BgeCodeEmbedder# type: ignore
+            from host.intelligence.core import BgeCodeEmbedder# type: ignore
             return BgeCodeEmbedder()
         except ImportError:
             return None

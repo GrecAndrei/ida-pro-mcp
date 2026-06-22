@@ -609,14 +609,14 @@ def intelligence(
     """
     try:
         try:
-            from ida_pro_mcp.host.intelligence_core import (
+            from ida_pro_mcp.host.intelligence.core import (
                 BgeCodeEmbedder,
                 BehaviorClassifier,
                 FunctionEmbeddingIndex,
             )
         except ImportError:
             try:
-                from host.intelligence_core import (  # type: ignore
+                from host.intelligence.core import (  # type: ignore
                     BgeCodeEmbedder,
                     BehaviorClassifier,
                     FunctionEmbeddingIndex,
@@ -726,7 +726,7 @@ def intelligence(
         if action == "refresh_anchors":
             behaviors = []
             if query:
-                from ida_pro_mcp.host.intelligence_helpers import parse_str_list
+                from ida_pro_mcp.host.intelligence.helpers import parse_str_list
                 behaviors = parse_str_list(str(query))
             classifier.refresh_anchors(behaviors or None)
             loaded = len(getattr(classifier, "_anchor_embs", {}) or {})

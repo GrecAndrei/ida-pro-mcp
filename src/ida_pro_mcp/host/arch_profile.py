@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple
-import os
 import struct
 import math
 from .chip_db import identify_chip_from_bytes, find_chip_profile

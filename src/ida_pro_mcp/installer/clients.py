@@ -8,7 +8,15 @@ from datetime import datetime
 from pathlib import Path
 
 from .common import InstallReport
-from ..legacy_names import LEGACY_SERVER_NAMES
+
+
+# Canonical legacy server identifiers that should be migrated/replaced with
+# the current canonical MCP server name.
+LEGACY_SERVER_NAMES = (
+    "github.com/GrecAndrei/ida-pro-mcp",
+    "ida_mcp",
+    "ida-pro-mcp-server",
+)
 
 
 def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:

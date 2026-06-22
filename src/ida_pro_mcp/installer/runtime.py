@@ -232,7 +232,7 @@ def find_embed_model(install_root: Path) -> str:
 
     # Manual override via embedder.json (mirrors host discovery).
     try:
-        from ida_pro_mcp.host.intelligence_core import (
+        from ida_pro_mcp.host.intelligence.core import (
             _read_embedder_state,
             _select_state_path,
         )
@@ -283,7 +283,7 @@ def find_embed_model(install_root: Path) -> str:
         for fn in model_filenames:
             c = base / fn
             try:
-                rp = c.resolve()
+                c.resolve()
             except OSError:
                 continue
             if c.is_file():
@@ -311,7 +311,7 @@ def find_llama_server_bin(install_root: Path) -> str:
 
     # Manual override via embedder.json (mirrors host discovery).
     try:
-        from ida_pro_mcp.host.intelligence_core import (
+        from ida_pro_mcp.host.intelligence.core import (
             _read_embedder_state,
             _select_state_path,
         )
@@ -618,13 +618,11 @@ def _wipe_venv(venv_dir: Path) -> None:
     if not venv_dir.exists():
         return
     deadline = time.time() + 15.0
-    last_err: Exception | None = None
     while time.time() < deadline:
         try:
             shutil.rmtree(venv_dir)
             return
-        except OSError as exc:
-            last_err = exc
+        except OSError:
             time.sleep(0.5)
     try:
         backup = venv_dir.with_name(f".venv.stale.{int(time.time())}")

@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import struct
 import sys
 import tempfile
@@ -8,7 +7,6 @@ from typing import (
     Annotated,
     Any,
     Callable,
-    Generic,
     Literal,
     Optional,
     TypedDict,
@@ -34,7 +32,7 @@ import ida_typeinf
 import idaapi
 import idautils
 import idc
-from ida_pro_mcp.host.intelligence_helpers import parse_str_list
+from ida_pro_mcp.host.intelligence.helpers import parse_str_list
 
 
 # Support both package mode and standalone mode

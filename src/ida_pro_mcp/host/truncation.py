@@ -3,7 +3,7 @@ import copy
 import json
 import uuid
 from collections import deque
-from typing import Any, Dict, List, Union
+from typing import Any, Dict
 
 # Minimum sensible token limit to prevent degenerate truncation
 _MIN_MAX_TOKENS = 500

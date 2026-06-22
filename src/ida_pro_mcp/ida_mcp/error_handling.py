@@ -6,20 +6,8 @@ Every error includes an LLM-actionable hint so the calling model can self-correc
 without burning context tokens on repeated trial-and-error.
 """
 
-import sys
 import traceback
 from typing import Any, Dict, Optional, Tuple, Union
-
-# Try to import IDA modules (will fail in standalone tests, but that's handled by mocks)
-try:
-    import idaapi
-    import idc
-    import ida_funcs
-    import ida_segment
-    import ida_bytes
-    import ida_dbg
-except ImportError:
-    pass
 
 
 class MCPError:
@@ -605,7 +593,7 @@ def validate_action(action: str, valid_actions: list, tool_name: str = "") -> Op
 
     # Find close matches using difflib for better typo correction
     try:
-        from ida_pro_mcp.host.intelligence_helpers import best_match
+        from ida_pro_mcp.host.intelligence.helpers import best_match
         suggestions = best_match(action or "", list(valid_actions), n=3, cutoff=0.4)
     except ImportError:
         import difflib

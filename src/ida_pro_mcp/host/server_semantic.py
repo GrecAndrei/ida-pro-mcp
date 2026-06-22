@@ -343,7 +343,7 @@ class ServerSemanticMixin:
         embedder = None
         if EMBEDDING_FIRST_MODE:
             try:
-                from .intelligence_core import BgeCodeEmbedder
+                from .intelligence.core import BgeCodeEmbedder
                 embedder = BgeCodeEmbedder()
                 query_vec = embedder.embed(query)
             except Exception:

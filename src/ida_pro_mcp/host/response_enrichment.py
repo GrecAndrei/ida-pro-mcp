@@ -14,7 +14,7 @@ Original 339-line implementation had:
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 # ============================================================================
@@ -81,7 +81,7 @@ def patch_addresses(text: str, base_registers: Optional[Dict[str, int]] = None) 
                 base_name = match.group(1)
                 offset_str = match.group(3)
                 try:
-                    from .intelligence_helpers import coerce_int
+                    from .intelligence.helpers import coerce_int
                     offset = coerce_int(offset_str)
                 except (ValueError, ImportError):
                     continue
@@ -305,6 +305,5 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
 # compatibility — only build_session_resume is still wired into the
 # response pipeline.
 from .response_signals import (  # noqa: E402
-    build_session_resume,
-    _update_kg_from_hypothesis,
-)
+    build_session_resume,  # noqa: F401
+    )

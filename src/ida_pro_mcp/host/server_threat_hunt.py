@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Threat-hunt orchestration helpers extracted from the main server."""
 
-from typing import Any, Optional
+from typing import Optional
 
 from .config import (
     ALLOW_HEURISTIC_FALLBACKS,
@@ -10,7 +10,7 @@ from .config import (
     _coerce_bool,
 )
 from .errors import MCPError, is_error_result, make_error
-from .intelligence_helpers import coerce_int
+from .intelligence.helpers import coerce_int
 from .schemas_data import (
     THREAT_LEGACY_CONDITIONAL_PASSTHROUGH,
     THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS,
@@ -261,7 +261,7 @@ class ServerThreatHuntMixin:
         addr = str(finding.get("addr") or finding.get("address") or finding.get("ea") or "")
         if EMBEDDING_FIRST_MODE and text:
             try:
-                from .intelligence_core import BgeCodeEmbedder
+                from .intelligence.core import BgeCodeEmbedder
                 embedder = BgeCodeEmbedder()
                 query_vec = embedder.embed(text)
                 anchors = [

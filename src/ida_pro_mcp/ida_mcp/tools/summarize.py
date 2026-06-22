@@ -390,9 +390,9 @@ def summarize(
             if preview:
                 try:
                     try:
-                        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                     except ImportError:
-                        from host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+                        from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
                     embedder = BgeCodeEmbedder()
                     classifier = BehaviorClassifier.instance(embedder)
                     behavior_tags = classifier.classify(preview, threshold=0.35, top_k=4)

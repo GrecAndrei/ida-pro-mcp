@@ -35,20 +35,10 @@ if "idawrite" not in globals():
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
-try:
-    from ida_pro_mcp.host.intelligence_bridge_retrieval import (
-        MultiHopBridgeIndex,
-        _resolve_schemaboot_db_path,
-    )
-except Exception:
-    try:
-        from host.intelligence_bridge_retrieval import (  # type: ignore
-            MultiHopBridgeIndex,
-            _resolve_schemaboot_db_path,
-        )
-    except Exception:  # pragma: no cover - defensive fallback
-        MultiHopBridgeIndex = None  # type: ignore
-        _resolve_schemaboot_db_path = None  # type: ignore
+from ida_pro_mcp.host.intelligence.bridge_retrieval import (
+    MultiHopBridgeIndex,
+    _resolve_schemaboot_db_path,
+)
 
 
 @tool

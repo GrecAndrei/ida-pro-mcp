@@ -166,9 +166,9 @@ def _embedding_rename_suggestions(
 ) -> dict:
     """Shared embedding-backed rename suggestion engine used by funcs/agent."""
     try:
-        from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
     except ImportError:
-        from host.intelligence_core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
+        from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
 
     embedder = BgeCodeEmbedder()
     idb_path = ""

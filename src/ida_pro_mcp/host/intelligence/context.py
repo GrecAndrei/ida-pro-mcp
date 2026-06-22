@@ -1850,7 +1850,7 @@ class ContextAssembler(
         for row in ranked_rows:
             if len(results) >= limit:
                 break
-            name = row[1] or ""
+            row[1] or ""
             reason = (
                 f"xor={row[2]}, entropy={row[3]:.1f}"
                 if (row[2] or 0) > 3 or float(row[3] or 0) > 5.5

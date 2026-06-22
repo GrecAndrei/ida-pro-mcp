@@ -672,7 +672,7 @@ def _categorize_imports(imports):
 def _estimate_tokens(text):
     """Estimate token count (~4 chars per token)."""
     try:
-        from ida_pro_mcp.host.intelligence_helpers import estimate_tokens
+        from ida_pro_mcp.host.intelligence.helpers import estimate_tokens
     except ImportError:
         return len(text) // 4 if text else 0
     return estimate_tokens(text)
@@ -1489,20 +1489,11 @@ def llm_helpers(
                     if nc == 0:
                         confidence = 0.1
                         suggestions.append("Try different query_constraints or bridge_types=['strings']")
-                    else:
-                        suggestions.append("Run memrl(action='rank', candidate_pool=...) to re-rank by utility")
 
                 # TurboQuant results
                 if "results" in data and "compression_ratio" in data:
                     confidence = 0.85
                     suggestions.append("Use turboquant(action='query', query_key=..., top_k=10) for similarity search")
-
-                # Preference store results
-                if "ranked" in data:
-                    nr = len(data.get("ranked", []))
-                    confidence = min(0.9, 0.6 + nr * 0.05)
-                    if nr > 0 and data["ranked"][0].get("q_value", 0.5) < 0.3:
-                        suggestions.append("Run memrl(action='update', reward=1.0) on successful candidates to improve ranking")
 
                 # Generic: if error present, suggest remediation
                 if data.get("error") is True or "error" in data:
@@ -1664,7 +1655,7 @@ def llm_helpers(
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required: behavioral signature to search for")
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
             except Exception:
                 return make_error(MCPError.IDA_ERROR, "BehaviorClassifier unavailable")
@@ -1736,7 +1727,7 @@ def llm_helpers(
 
             # BehaviorClassifier role
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
                 cfunc = ida_hexrays.decompile(ea)
                 if cfunc:
@@ -1794,7 +1785,7 @@ def llm_helpers(
             # BehaviorClassifier for additional context
             classifier_tags = []
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
                 hits = classifier.classify(pseudo, threshold=0.0, top_k=6, block=False)
                 gate = _adaptive_score_gate([h.get("score", h.get("confidence", 0.0)) for h in hits])
@@ -1886,7 +1877,7 @@ def llm_helpers(
             # Use BehaviorClassifier to infer contract semantics
             contract_tags = []
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
                 call_context = "\n".join(cs["call_line"] for cs in call_sites[:10])
                 if call_context:
@@ -2009,7 +2000,7 @@ def llm_helpers(
             emb_sim = 0.0
             tags_a, tags_b = [], []
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                 embedder = BgeCodeEmbedder()
                 classifier = BehaviorClassifier.instance(embedder)
                 if pseudo_a and pseudo_b:
@@ -2113,7 +2104,7 @@ def llm_helpers(
                 pass
             matches = []
             try:
-                from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                 classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
             except Exception:
                 return make_error(MCPError.IDA_ERROR, "BehaviorClassifier unavailable")
@@ -2181,7 +2172,7 @@ def llm_helpers(
             # Filter by behavior if requested
             if behavior_filter:
                 try:
-                    from ida_pro_mcp.host.intelligence_core import BgeCodeEmbedder, BehaviorClassifier
+                    from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
                     classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
                     filtered = []
                     for func_ea in reachable[:100]:

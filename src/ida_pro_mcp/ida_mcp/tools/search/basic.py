@@ -6,8 +6,8 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from .core import (
-    clip_text, paginate_records, iter_segments, build_response,
-    resolve_target, MAX_LIMIT, safe_get_strlist_items, safe_get_strlit_contents,
+    iter_segments, build_response,
+    resolve_target, safe_get_strlist_items, safe_get_strlit_contents,
     safe_generate_disasm_line, SearchTimeout, xref_count_limited,
 )
 

@@ -15,11 +15,7 @@ Output is plain text (not JSON) so the LLM can read it naturally.
 """
 from __future__ import annotations
 
-import json
-import math
-import os
-import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 
 class NarrativeEngine:
@@ -88,7 +84,7 @@ class NarrativeEngine:
         sms = self.kg.list_state_machines()
         bb_stats = self.bb.stats()
 
-        total_funcs = bb_stats.get("by_category", {}).get("hypothesis", 0) + \
+        bb_stats.get("by_category", {}).get("hypothesis", 0) + \
                       bb_stats.get("by_category", {}).get("general", 0)
 
         lines = ["## Understanding"]

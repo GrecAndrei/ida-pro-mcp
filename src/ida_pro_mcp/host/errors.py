@@ -2,7 +2,6 @@
 """
 Host-side error codes, hints, and error factory.
 """
-from typing import Optional
 
 
 class MCPError:

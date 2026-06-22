@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Shared tool registry data for schemas.py."""
 from .schemas_alias_hints import (
-    _ACTION_ALIAS_HINTS,
-    _COMMON_ARG_ALIAS_HINTS,
-    _TOOL_ACTION_EXTRA_ALIASES,
-    _TOOL_SPECIFIC_ARG_ALIASES,
+    _ACTION_ALIAS_HINTS,  # noqa: F401
+    _COMMON_ARG_ALIAS_HINTS,  # noqa: F401
+    _TOOL_ACTION_EXTRA_ALIASES,  # noqa: F401
+    _TOOL_SPECIFIC_ARG_ALIASES,  # noqa: F401
 )
 from .tool_registry import tool_actions as _tool_actions_from_registry
 
@@ -12,6 +12,7 @@ BASE_TOOL_ALIASES = {
     "plugins": "misc",
     "xref_analysis": "graph",
     "xfer_analysis": "graph",
+    "schemaboot": "intelligence",
 }
 
 TOOLS = [
@@ -103,8 +104,6 @@ TOOLS = [
     "binary_info",
     # LLM helpers
     "llm_helpers",
-    # Structured semantic indexing
-    "schemaboot",
     # Other components
     "bridge_search",
     # --- New infrastructure tools ---
@@ -360,7 +359,6 @@ TOOL_DESCRIPTIONS = {
     "project": "Project I/O and evidence management. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, evidence_graph, knowledge_merge, confidence_model, replay_pipeline, hypothesis_tracker, temporal_reasoning, semantic_artifact_diff, ai_governance, knowledge_debt, casefile_export.",
     "protocol": "Detect and analyze network protocol structures, parsers, endpoints, and state machines in a binary. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine.",
     "query": "Unified query interface combining data, search, code, types, symbols, and natural-language queries. Actions: data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch. NOTE: query.nl and search.nl both expose natural-language search. query.nl routes through the unified query dispatcher (multi-domain NL over the indexed IDB), search.nl uses the bge-code-v1 embedding ranker directly. Use search.nl for behaviorally-precise RE queries; use query.nl when you want the unified dispatcher to pick a target domain.",
-    "schemaboot": "Legacy alias for the structural function-attribute indexer now implemented by intelligence.structural_*. Builds and queries a per-function SQLite index (size, CFG shape, APIs, strings, entropy, etc.), not a separate semantic engine. Actions: ingest, query, refresh, stats, delete, get.",
     "search": "Pattern, reference, and semantic search across the binary. nl: natural language search using bge-code-v1 embeddings (most accurate for RE queries). behavior: find all functions matching a behavior tag (crypto_symmetric, network_http, etc.) via BehaviorClassifier. find: smart unified search (names/strings/imports/instructions, auto-ranked). semantic: NL search with embedding-aware ranking. smart_bundle: fused find+semantic with deduplicated structured items. api: find all usages of an imported API. decompiled: search pseudocode across all functions (auto-writes blackboard entries for matches). structured: schema-based pre-filtered search with behavior_tags constraints. vulnerable: scan for dangerous API patterns. constants: find crypto/magic constants. callers/callees, bytes/string/immediate/name/insns/mnemonic/instruction/text/operand/comment/data_ref/code_ref/regex/func_by_sig/type/export/summary/query_lang. Composition actions: bool (composite boolean query: '(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)'), hunt (named workflow recipes: backdoor, anti_debug, c2, crypto, parser, etc. - pass recipe='list' to enumerate), neighborhood (360-degree context card around a function: callers, callees, similar, tags, blackboard), outlier (find structurally anomalous functions by metric: size, complexity, orphan, leaf, hub, deep, tiny, huge), fingerprint (structural callgraph similarity - distinct from embedding-based nl), path (shortest call-graph path between two symbols), reach (functions reachable from a root within N hops), noreach (functions NOT reachable from any entrypoint). NOTE: search.nl and query.nl both expose natural-language search. search.nl uses the bge-code-v1 embedding ranker directly; query.nl routes through the unified query dispatcher. Use search.nl for behaviorally-precise RE queries; use query.nl when you want the unified dispatcher to pick a target domain.",
     "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge. For relocations/fixups use the dedicated `fixups` tool.",
     "session": "Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking, and skill crystallization. Actions: create/switch/close/list/status, snapshot/restore, crystallize_skill/rate_skill/suggest_strategy/suggest_triage/suggest_analogy/apply_analogy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).",
@@ -956,16 +954,6 @@ TOOL_ARG_SCHEMAS = {
         "dry_run": {"type": "boolean"},
         "template": {"type": "string", "description": "Predefined template name"},
         "template_vars": {"type": "object", "description": "Variables for template expansion"},
-    },
-    "schemaboot": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["schemaboot"]},
-        "constraints": {"type": "object", "description": "Structured query constraints"},
-        "addr": {"type": "string", "description": "Function address for get/refresh"},
-        "limit": {"type": "integer", "description": "Max results"},
-        "offset": {"type": "integer", "description": "Skip first N results"},
-        "order_by": {"type": "string", "description": "Column to order by (e.g., 'entropy DESC')"},
-        "include_apis": {"type": "boolean", "description": "Include API list in results"},
-        "include_strings": {"type": "boolean", "description": "Include string refs in results"},
     },
     "bridge_search": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["bridge_search"]},
