@@ -50,13 +50,23 @@ class TestEvidenceBootstrapManager(unittest.TestCase):
     def test_strategy_uses_bootstrap_blend(self):
         self.mgr.bootstrap_init(self.session.session_id, overwrite=True)
         self.mgr.bootstrap_run_tournament(self.session.session_id, rounds=300, seed=11)
-        self.mgr.crystallize_skill(
-            self.session.session_id,
-            name="Decrypt strings",
-            description="Analyze decoding and string reconstruction",
-            steps=["find decode", "trace call graph"],
-            tags=["crypto", "strings"],
-        )
+        # Inject a skill directly into the store for testing
+        data = self.mgr._load_skills(self.session.session_id)
+        data.setdefault("skills", {})
+        data.setdefault("q_table", {})
+        data["skills"]["skill_decrypt_strings"] = {
+            "name": "Decrypt strings",
+            "description": "Analyze decoding and string reconstruction",
+            "steps": ["find decode", "trace call graph"],
+            "tags": ["crypto", "strings"],
+            "created_at": "2025-01-01T00:00:00",
+            "success_count": 0,
+            "failure_count": 0,
+            "last_used": None,
+            "q_value": 0.5,
+        }
+        data["q_table"]["skill_decrypt_strings"] = 0.5
+        self.mgr._save_skills(self.session.session_id, data)
         self.mgr.rate_skill(self.session.session_id, "skill_decrypt_strings", reward=0.9)
         out = self.mgr.suggest_strategy(self.session.session_id, context="crypto string decoding")
         self.assertTrue(out.get("ok"))
@@ -149,17 +159,24 @@ class TestEvidenceBootstrapRouting(unittest.TestCase):
             "session",
             {"action": "bootstrap_run_tournament", "session_id": self.sid, "rounds": 120, "seed": 17},
         )
-        self.server._execute_tool(
-            "session",
-            {
-                "action": "crystallize_skill",
-                "session_id": self.sid,
-                "name": "Beacon triage",
-                "description": "Triage beacon and C2 behaviors",
-                "steps": ["strings", "xrefs", "network"],
-                "tags": ["network", "c2"],
-            },
-        )
+        # Inject a skill directly into the store
+        mgr = self.server.session_mgr
+        data = mgr._load_skills(self.sid)
+        data.setdefault("skills", {})
+        data.setdefault("q_table", {})
+        data["skills"]["skill_beacon_triage"] = {
+            "name": "Beacon triage",
+            "description": "Triage beacon and C2 behaviors",
+            "steps": ["strings", "xrefs", "network"],
+            "tags": ["network", "c2"],
+            "created_at": "2025-01-01T00:00:00",
+            "success_count": 0,
+            "failure_count": 0,
+            "last_used": None,
+            "q_value": 0.5,
+        }
+        data["q_table"]["skill_beacon_triage"] = 0.5
+        mgr._save_skills(self.sid, data)
         self.server._execute_tool(
             "session",
             {

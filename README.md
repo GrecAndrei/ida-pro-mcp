@@ -91,7 +91,7 @@ With `ida-pro-mcp`, an LLM can:
 - Batch operations to reduce round trips
 - Receive compact-by-default responses to preserve context window
 - Persist findings to a blackboard that survives context window resets
-- Track hypotheses, crystallize skills, and maintain an analysis notebook
+- Track hypotheses and maintain an analysis notebook
 
 ## Requirements
 
@@ -412,7 +412,7 @@ Powers the `_nudge` field in every response.
 ### Additional ML components
 
 - `bridge_search`: Multi-hop bridge query expansion for discovering indirect relationships
-- `predictor`: Deterministic prediction and strategy suggestion using crystallized skills
+- `predictor`: Deterministic prediction and strategy suggestion
 
 ## Production Hardening
 
@@ -432,7 +432,7 @@ Logs rotate daily and are pruned when total size exceeds a configurable cap.
 - **Memory tool path validation:** `/memory` tool enforces an allowlist root (`IDA_MCP_MEMORY_ROOT`, default IDB dir) — no arbitrary file read/write.
 - **RPC size caps:** Both IDA-side (`IDA_MCP_MAX_RPC_REQUEST_BYTES`) and host-side (`IDA_MCP_MAX_RPC_BYTES`) enforce 64 MB request/response limits.
 - **BYPASS_SYNC scoped:** The `@idaread`/`@idawrite` safety net is active by default — bypass is scoped to specific threads via a `bypass_sync()` context manager.
-- **Federation path allowlist:** `blackboard_federate` requires `IDA_MCP_FEDERATION_ALLOWED_ROOTS` — disabled by default.
+- **Federation (blackboard_federate) removed** in the intelligence-theater cut.
 - **Atomic config writes:** MCP client config patching uses tmp/fsync/replace to avoid corruption on crash.
 - **Concurrency controls:** Shared session state (`_session_inflight_calls`) is lock-protected against lost-update races.
 
@@ -517,7 +517,7 @@ Key strategies include:
 
 ## Session Management
 
-Full-featured session lifecycle with analysis notebook, hypothesis tracking, and skill crystallization.
+Full-featured session lifecycle with analysis notebook and hypothesis tracking.
 
 ### Session lifecycle
 
@@ -534,12 +534,11 @@ Full-featured session lifecycle with analysis notebook, hypothesis tracking, and
 
 - `track_hypothesis`/`confirm_hypothesis`/`refute_hypothesis`/`list_hypotheses`: formal hypothesis lifecycle
 
-### Skill crystallization (MemRL)
+### Skills
 
-- `crystallize_skill`: save successful workflows as reusable L3 skills
 - `rate_skill`: TD-style Q-value updates
 - `suggest_strategy`: ranks skills by Q-value + context matching
-- `list_skills`: inspect available crystallized skills
+- `list_skills`: inspect available skills
 - `log_activity`/`get_activity_log`: episodic activity tracking
 
 ### Analysis phases
@@ -865,3 +864,4 @@ See `CONTRIBUTING.md` for contribution workflow and `ARCHITECTURE.md` for a focu
 ## License
 
 GNU General Public License v3.0 (GPL-3.0-only). See `LICENSE`.
+`.

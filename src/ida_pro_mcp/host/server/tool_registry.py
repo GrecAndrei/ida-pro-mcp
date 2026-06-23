@@ -172,7 +172,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "tag", "untag", "find_by_tag", "add_note", "clear_notes",
         "cleanup_stale", "stats", "validate", "bulk_delete", "bulk_tag",
         "search_notes", "recent", "oldest", "snapshot", "restore_snapshot",
-        "merge", "crystallize_skill", "crystallize_mined_macros",
+        "merge",
         "rate_skill", "list_skills", "suggest_strategy", "suggest_triage",
         "suggest_analogy", "apply_analogy", "log_activity",
         "get_activity_log", "notebook_append", "notebook_read",

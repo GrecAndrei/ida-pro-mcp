@@ -24,7 +24,7 @@ The `host/` package (`src/ida_pro_mcp/host/`) contains:
 | File | Role |
 |---|---|
 | `server.py` | `IDAMCPServer` — JSON-RPC stdio server, tool dispatch, response shaping, blackboard pipeline, runtime leases |
-| `session.py` | `Session`, `SessionManager`, `BookmarkManager` — session CRUD, snapshots, notebook, hypotheses, skill crystallization, activity log, dead-end detection |
+| `session.py` | `Session`, `SessionManager`, `BookmarkManager` — session CRUD, snapshots, notebook, hypotheses, skills, activity log |
 | `schemas.py` | `TOOLS`, `TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`, `TOOL_ALIASES`, `ARG_ALIASES_BY_TOOL`, `ACTION_ALIASES_BY_TOOL`, `WRAPPER_ACTIONS`, schema builders (full/lean/ultra), alias resolution |
 | `cartographer_mu.py` | Cartographer-μ semantic engine — S4REncoder, TurboQuantLite, BridgeRAGLite, MemRLUtility, SchemaBootRE, ContextComposer |
 | `audit.py` | JSONL structured audit logging with daily rotation, size cap, args-hash tamper evidence |
@@ -76,7 +76,7 @@ The architecture follows a 5-tier memory hierarchy (L0–L4):
 | L0 Meta Rules | `schemas.py` — `TOOL_ACTIONS` | Canonical action definitions |
 | L1 Insight Index | `insight_index.py` | Fast in-memory tag-based function routing |
 | L2 Global Facts | `patterns.py` — `GlobalFactsDatabase` | Cross-session persistent facts (SQLite) |
-| L3 Task Skills | `session.py` — `crystallize_skill()` | Reusable crystallized workflows with Q-values |
+| L3 Task Skills | `session.py` — `rate_skill()` | Reusable workflows with Q-values |
 
 ---
 

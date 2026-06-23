@@ -159,14 +159,3 @@ def test_search_advanced_fallback_resolution():
             os.remove(resolved_db)
 
 
-def test_context_policy_fallback_resolution():
-    from ida_pro_mcp.services import ContextAssembler
-    
-    assembler = ContextAssembler()
-    unwritable_path = "/usr/bin/nonexistent_path_mcp/test_binary"
-    
-    resolved_path = assembler._policy_store_path(unwritable_path)
-    
-    assert "fallback_indexes" in resolved_path
-    assert resolved_path.endswith(".focus_policy.json")
-

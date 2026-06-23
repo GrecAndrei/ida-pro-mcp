@@ -86,12 +86,10 @@ def benchmark_strategy_blended(rounds=2000):
         mgr.bootstrap_run_tournament(sid, rounds=1000, seed=99)
         for i in range(40):
             name = f"Skill {i}"
-            mgr.crystallize_skill(
+            mgr.rate_skill(
                 sid,
-                name=name,
-                description=f"Synthetic workflow {i} for malware and crypto analysis",
-                steps=["triage", "decompile", "xref"],
-                tags=["malware", "crypto" if i % 2 else "network"],
+                skill_id=f"skill_{name.lower().replace(' ', '_')}",
+                reward=0.5,
             )
             mgr.rate_skill(sid, f"skill_{name.lower().replace(' ', '_')}", reward=(0.8 if i % 3 else 0.2))
 

@@ -37,40 +37,6 @@ import re
 from collections import Counter
 from typing import Any
 
-class _FederationPathError(Exception):
-    """Raised when a federation peer path fails the allowlist check."""
-    pass
-
-
-def _validate_federation_path(p: str) -> str:
-    """Reject any peer path not contained in IDA_MCP_FEDERATION_ALLOWED_ROOTS.
-
-    The env var is a `os.pathsep`-separated list of directory roots. Each
-    entry is realpath'd; the candidate path is also realpath'd and must
-    either equal one of the roots exactly or sit beneath it. If the env
-    var is unset or empty, federation is refused (default: disabled).
-
-    Returns the canonical (realpath'd) form on success; raises
-    :class:`_FederationPathError` on rejection. See audit §2.2.
-    """
-    raw = os.environ.get("IDA_MCP_FEDERATION_ALLOWED_ROOTS", "")
-    allowed = [os.path.realpath(a) for a in raw.split(os.pathsep) if a]
-    if not allowed:
-        raise _FederationPathError(
-            "federation refused: IDA_MCP_FEDERATION_ALLOWED_ROOTS is unset; "
-            "set it to a colon-separated list of allowed root directories to opt in"
-        )
-    if not isinstance(p, str) or not p:
-        raise _FederationPathError("federation peer path must be a non-empty string")
-    real = os.path.realpath(p)
-    for root in allowed:
-        if real == root or real.startswith(root + os.sep):
-            return real
-    raise _FederationPathError(
-        f"federation peer path {p!r} is not contained in IDA_MCP_FEDERATION_ALLOWED_ROOTS"
-    )
-
-
 # Known crypto constant values (subset)
 _CRYPTO_CONSTS: dict[int, str] = {
     0x67452301: "MD5_A", 0xEFCDAB89: "MD5_B", 0x98BADCFE: "MD5_C", 0x10325476: "MD5_D",
@@ -581,9 +547,8 @@ def intelligence(
             "structural_refresh",
             "structural_extract",
             "structural_extract_single",
-            "blackboard_federate",
         ],
-        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single|blackboard_federate",
+        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single",
     ],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Free-form text or comma-separated list"] = None,
@@ -1038,7 +1003,6 @@ def intelligence(
             "structural_stats",
             "structural_delete",
             "structural_refresh",
-            "blackboard_federate",
         ):
             import sqlite3
             import sys
@@ -1139,49 +1103,6 @@ def intelligence(
                     except Exception as e:
                         return {"error": True, "message": f"Failed to delete database: {e}"}
                 return {"error": True, "message": f"No index found at {db_path}"}
-
-            if action == "blackboard_federate":
-                try:
-                    from ida_pro_mcp.services import _resolve_db_path
-                    from ida_pro_mcp.services import FederationBridge
-                except ImportError:
-                    _src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-                    if _src_dir not in sys.path:
-                        sys.path.insert(0, _src_dir)
-                    from ida_pro_mcp.services import _resolve_db_path
-                    from ida_pro_mcp.services import FederationBridge
-
-                idb_path = idc.get_idb_path()
-                local_bb = _resolve_db_path(idb_path + ".blackboard.db" if idb_path else None)
-
-                remote_paths = kwargs.get("remote_paths") or []
-                if isinstance(remote_paths, str):
-                    remote_paths = [r.strip() for r in remote_paths.split(",") if r.strip()]
-
-                remote_capsule_paths = kwargs.get("remote_capsule_paths") or []
-                if isinstance(remote_capsule_paths, str):
-                    remote_capsule_paths = [r.strip() for r in remote_capsule_paths.split(",") if r.strip()]
-
-                # Audit §2.2: validate every peer path against the
-                # IDA_MCP_FEDERATION_ALLOWED_ROOTS allowlist before handing
-                # them to FederationBridge (which calls sqlite3.connect on
-                # each path). Empty allowlist → federation refused.
-                try:
-                    validated_remote = [_validate_federation_path(p) for p in remote_paths]
-                    validated_capsule = [_validate_federation_path(p) for p in remote_capsule_paths]
-                except _FederationPathError as exc:
-                    return make_error(MCPError.INVALID_ARGS, str(exc))
-
-                bridge = FederationBridge(local_bb)
-                bb_stats = bridge.federate_blackboards(validated_remote)
-                pref_stats = bridge.federate_preferences(validated_capsule)
-
-                return {
-                    "ok": True,
-                    "local_blackboard_path": local_bb,
-                    "blackboard_merge": bb_stats,
-                    "preference_merge": pref_stats
-                }
 
             if action == "structural_stats":
                 if not os.path.exists(db_path):

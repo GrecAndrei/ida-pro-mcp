@@ -233,36 +233,6 @@ class SessionManager(SessionSkillsMixin):
         conn.commit()
         conn.close()
 
-    def _crystallize_to_global_registry(self, sid: str, skill_id: str, skill: dict) -> None:
-        import sqlite3
-        try:
-            conn = sqlite3.connect(self._global_skills_db)
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT OR REPLACE INTO global_skills
-                (skill_id, name, description, steps, tags, source_sid, q_value,
-                 success_count, failure_count, created_at, last_used, usage_count_total)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
-                    COALESCE((SELECT usage_count_total FROM global_skills WHERE skill_id = ?), 0))
-            """, (
-                skill_id,
-                skill.get("name", ""),
-                skill.get("description", ""),
-                json.dumps(skill.get("steps", [])),
-                json.dumps(skill.get("tags", [])),
-                sid,
-                skill.get("q_value", 0.5),
-                skill.get("success_count", 0),
-                skill.get("failure_count", 0),
-                skill.get("created_at", ""),
-                skill.get("last_used", ""),
-                skill_id,
-            ))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
     def _find_global_skills(self, context: str = "", tags: Optional[List[str]] = None, limit: int = 10) -> List[dict]:
         import sqlite3
         skills = []

@@ -1,98 +1,18 @@
-"""Tests for UsageIntelligence: SequenceModel, EffectivenessModel, DriftDetector, AuditMiner."""
+"""Tests for UsageIntelligence drift detection (DriftDetector + live observer).
+
+The speculative SequenceModel / EffectivenessModel / AuditMiner that tried to
+predict the LLM's next action and score tool-combo effectiveness were removed
+as unvalidated LLM-steering; only the live stuck-loop / wasted-effort drift
+detector remains.
+"""
 import json
-import os
-import sys
 import tempfile
-import time
 from tests._isolated_repo_loader import load_host_module
 
 _mod = load_host_module("intelligence.usage")
 
-SequenceModel = _mod.SequenceModel
-EffectivenessModel = _mod.EffectivenessModel
 DriftDetector = _mod.DriftDetector
-AuditMiner = _mod.AuditMiner
 UsageIntelligence = _mod.UsageIntelligence
-
-
-# ── SequenceModel ─────────────────────────────────────────────────────────────
-
-def test_seq_predict_after_observations():
-    m = SequenceModel()
-    for _ in range(5):
-        m.observe(("code", "decompile"), ("classify", "function"))
-    for _ in range(2):
-        m.observe(("code", "decompile"), ("modify", "rename"))
-    preds = m.predict(("code", "decompile"), top_k=3)
-    assert len(preds) >= 1
-    top = preds[0]
-    assert top[0] == ("classify", "function")
-    assert top[1] > 0.5
-
-
-def test_seq_predict_empty():
-    m = SequenceModel()
-    assert m.predict(("code", "decompile")) == []
-
-
-def test_seq_is_loop_true():
-    m = SequenceModel()
-    recent = [("code", "decompile")] * 6
-    assert m.is_loop(recent, window=5)
-
-
-def test_seq_is_loop_false():
-    m = SequenceModel()
-    recent = [("code", "decompile"), ("classify", "function"),
-              ("blackboard", "write"), ("modify", "rename"),
-              ("code", "disasm")]
-    assert not m.is_loop(recent, window=5)
-
-
-def test_seq_to_dict():
-    m = SequenceModel()
-    m.observe(("code", "decompile"), ("classify", "function"))
-    d = m.to_dict()
-    assert d["transitions"] == 1
-    assert d["total_observations"] == 1
-    assert len(d["top_sequences"]) == 1
-
-
-# ── EffectivenessModel ────────────────────────────────────────────────────────
-
-def test_eff_default_score():
-    m = EffectivenessModel()
-    assert m.score("code", "decompile") == 0.5
-
-
-def test_eff_productive_increases_score():
-    m = EffectivenessModel(alpha=0.5)
-    m.observe_outcome(("code", "decompile"), productive=True)
-    assert m.score("code", "decompile") > 0.5
-
-
-def test_eff_unproductive_decreases_score():
-    m = EffectivenessModel(alpha=0.5)
-    m.observe_outcome(("code", "decompile"), productive=False)
-    assert m.score("code", "decompile") < 0.5
-
-
-def test_eff_rank_suggestions():
-    m = EffectivenessModel(alpha=0.5)
-    for _ in range(5):
-        m.observe_outcome(("classify", "function"), productive=True)
-    for _ in range(5):
-        m.observe_outcome(("search", "strings"), productive=False)
-    ranked = m.rank_suggestions([("classify", "function"), ("search", "strings")])
-    assert ranked[0][0] == ("classify", "function")
-
-
-def test_eff_low_effectiveness_tools():
-    m = EffectivenessModel(alpha=0.3)
-    for _ in range(6):
-        m.observe_outcome(("search", "strings"), productive=False)
-    low = m.low_effectiveness_tools(threshold=0.4)
-    assert any(t["tool"] == "search" for t in low)
 
 
 # ── DriftDetector ─────────────────────────────────────────────────────────────
@@ -164,90 +84,7 @@ def test_drift_empty_session():
     assert report["total_calls"] == 0
 
 
-# ── AuditMiner ────────────────────────────────────────────────────────────────
-
-def _write_audit(path: str, records: list):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        for r in records:
-            f.write(json.dumps(r) + "\n")
-
-
-def test_audit_miner_basic():
-    tmpdir = tempfile.mkdtemp()
-    audit_path = os.path.join(tmpdir, "2026-05", "audit_2026-05-01.jsonl")
-    records = [
-        {"tool": "code", "action": "decompile", "session_id": "s1",
-         "latency_ms": 120.0, "error": None, "args_preview": '{"addr":"0x401000"}'},
-        {"tool": "classify", "action": "function", "session_id": "s1",
-         "latency_ms": 80.0, "error": None},
-        {"tool": "blackboard", "action": "write", "session_id": "s1",
-         "latency_ms": 30.0, "error": None},
-    ]
-    _write_audit(audit_path, records)
-
-    seq = SequenceModel()
-    eff = EffectivenessModel()
-    drift = DriftDetector()
-    miner = AuditMiner(tmpdir, seq, eff, drift)
-    count = miner.mine_all()
-    assert count == 3
-
-    # Sequence: code.decompile → classify.function should be observed
-    preds = seq.predict(("code", "decompile"))
-    assert len(preds) >= 1
-    assert preds[0][0] == ("classify", "function")
-
-
-def test_audit_miner_incremental():
-    tmpdir = tempfile.mkdtemp()
-    audit_path = os.path.join(tmpdir, "2026-05", "audit_2026-05-01.jsonl")
-    records1 = [
-        {"tool": "code", "action": "decompile", "session_id": "s1",
-         "latency_ms": 100.0, "error": None},
-    ]
-    _write_audit(audit_path, records1)
-
-    seq = SequenceModel()
-    eff = EffectivenessModel()
-    drift = DriftDetector()
-    miner = AuditMiner(tmpdir, seq, eff, drift)
-    count1 = miner.mine_all()
-    assert count1 == 1
-
-    # Append more records
-    with open(audit_path, "a") as f:
-        f.write(json.dumps({"tool": "classify", "action": "function",
-                            "session_id": "s1", "latency_ms": 80.0, "error": None}) + "\n")
-
-    count2 = miner.mine_incremental()
-    assert count2 == 1  # only the new record
-
-
-def test_audit_miner_effectiveness_update():
-    tmpdir = tempfile.mkdtemp()
-    audit_path = os.path.join(tmpdir, "2026-05", "audit_2026-05-01.jsonl")
-    # code.decompile followed by blackboard.write (productive)
-    records = [
-        {"tool": "code", "action": "decompile", "session_id": "s1",
-         "latency_ms": 100.0, "error": None},
-        {"tool": "blackboard", "action": "write", "session_id": "s1",
-         "latency_ms": 30.0, "error": None},
-    ]
-    _write_audit(audit_path, records)
-
-    seq = SequenceModel()
-    eff = EffectivenessModel(alpha=0.5)
-    drift = DriftDetector()
-    miner = AuditMiner(tmpdir, seq, eff, drift)
-    miner.mine_all()
-
-    # code.decompile should have increased effectiveness (followed by productive action)
-    score = eff.score("code", "decompile")
-    assert score > 0.5
-
-
-# ── UsageIntelligence ─────────────────────────────────────────────────────────
+# ── UsageIntelligence (live observer) ─────────────────────────────────────────
 
 def test_usage_intel_start_stop():
     tmpdir = tempfile.mkdtemp()
@@ -259,22 +96,12 @@ def test_usage_intel_start_stop():
     assert ui._stop.is_set()
 
 
-def test_usage_intel_observe_and_predict():
+def test_usage_intel_observe_and_predict_is_noop():
+    # predict_next is now a no-op (Markov/effectiveness models removed).
     tmpdir = tempfile.mkdtemp()
     ui = UsageIntelligence(audit_dir=tmpdir)
-
-    # Simulate observations
-    for _ in range(5):
-        ui.seq.observe(("code", "decompile"), ("classify", "function"))
-    for _ in range(3):
-        ui.seq.observe(("code", "decompile"), ("blackboard", "write"))
-
-    preds = ui.predict_next("code", "decompile", top_k=3)
-    assert len(preds) >= 1
-    assert preds[0]["tool"] in ("classify", "blackboard")
-    assert "probability" in preds[0]
-    assert "effectiveness" in preds[0]
-    assert "score" in preds[0]
+    ui.observe("code", "decompile", "sess1", latency_ms=100.0)
+    assert ui.predict_next("code", "decompile", top_k=3) == []
 
 
 def test_usage_intel_session_report():
@@ -289,14 +116,15 @@ def test_usage_intel_session_report():
     assert report["record_calls"] == 1
 
 
-def test_usage_intel_global_report():
+def test_usage_intel_global_report_drift_only():
     tmpdir = tempfile.mkdtemp()
     ui = UsageIntelligence(audit_dir=tmpdir)
-    ui.seq.observe(("code", "decompile"), ("classify", "function"))
+    ui.observe("code", "decompile", "sess1", latency_ms=100.0)
     report = ui.global_report()
-    assert "sequence_model" in report
-    assert "effectiveness_model" in report
-    assert report["sequence_model"]["transitions"] == 1
+    assert "active_sessions" in report
+    # The removed sequence/effectiveness models are no longer reported.
+    assert "sequence_model" not in report
+    assert "effectiveness_model" not in report
 
 
 def test_usage_intel_drift_notification():
@@ -329,13 +157,13 @@ def test_usage_resource_with_intel():
 
     tmpdir = tempfile.mkdtemp()
     ui = UsageIntelligence(audit_dir=tmpdir)
-    ui.seq.observe(("code", "decompile"), ("classify", "function"))
+    ui.observe("code", "decompile", "sess1", latency_ms=100.0)
 
     resolver = _rmod.ResourceResolver(lambda n, k: {}, usage_intel=ui)
     result = resolver.read("ida://usage")
     data = json.loads(result["text"])
-    assert "sequence_model" in data
-    assert data["sequence_model"]["transitions"] == 1
+    assert "active_sessions" in data
+    assert "sequence_model" not in data
 
 
 if __name__ == "__main__":

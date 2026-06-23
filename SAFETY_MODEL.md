@@ -62,10 +62,7 @@ Outcome: prevents arbitrary file read/write via the `/memory` tool surface. (`[F
 
 ### 4) Federation / blackboard path control
 
-- `intelligence(action="blackboard_federate")` validates all peer paths against `IDA_MCP_FEDERATION_ALLOWED_ROOTS`.
-- Default is empty (federation disabled); users must explicitly opt in.
-
-Outcome: prevents SQLite `ATTACH`-based path traversal via the federation surface. (`[FIXED: 1D.1]`)
+- Federation (blackboard_federate) was removed in the intelligence-theater cut. (`[FIXED: 1D.1]`)
 
 ### 5) RPC request size limits (host side)
 

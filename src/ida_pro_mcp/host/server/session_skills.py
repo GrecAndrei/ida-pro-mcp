@@ -476,42 +476,6 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             return 0.5
         return max(0.0, min(1.0, num / den))
 
-    def crystallize_skill(
-        self, sid: str, name: str, description: str, steps: list,
-        tags: Optional[list] = None,
-    ) -> dict:
-        """Crystallize a workflow into a reusable L3 skill, stored in global registry."""
-        with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-            data = self._load_skills(sid)
-            base_skill_id = f"skill_{name.lower().replace(' ', '_')}"
-            skill_id = base_skill_id
-            suffix = 2
-            while skill_id in data["skills"]:
-                skill_id = f"{base_skill_id}_{suffix}"
-                suffix += 1
-            skill = {
-                "name": name,
-                "description": description,
-                "steps": steps,
-                "tags": tags or [],
-                "created_at": datetime.now().isoformat(),
-                "success_count": 0,
-                "failure_count": 0,
-                "last_used": None,
-                "q_value": 0.5,
-            }
-            data["skills"][skill_id] = skill
-            data["q_table"][skill_id] = 0.5
-            self._save_skills(sid, data)
-            # Also save to global registry for cross-session access
-            self._crystallize_to_global_registry(sid, skill_id, skill)
-            session.update_access()
-            self._save_metadata(session)
-            return {"ok": True, "skill_id": skill_id, "skill": skill, "global": True}
-
     def rate_skill(self, sid: str, skill_id: str, reward: float) -> dict:
         with self._lock:
             session = self.sessions.get(sid)
@@ -532,8 +496,6 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             else:
                 skill["failure_count"] += 1
             self._save_skills(sid, data)
-            # Update global registry
-            self._crystallize_to_global_registry(sid, skill_id, skill)
             # L3 -> L2 promotion if Q-value exceeds 0.8
             result = {"ok": True, "skill_id": skill_id, "q_value": skill["q_value"], "reward": reward}
             if new_q >= 0.8:
@@ -984,7 +946,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             linked = session.linked_sessions
             if not linked:
-                return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to federate."}
+                return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to share findings."}
             # Collect function names from all linked sessions' skills data
             shared_funcs: Dict[str, List[str]] = {}
             for lsid in [sid] + linked:

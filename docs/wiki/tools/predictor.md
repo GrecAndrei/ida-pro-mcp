@@ -1,6 +1,6 @@
 # predictor
 
-Deterministic prediction and strategy suggestions using crystallized skills and session state.
+Deterministic prediction and strategy suggestions using session state.
 
 ## Actions
 - `suggest_next_tool` — suggest the next tool to call; params: `context` (optional)
@@ -20,7 +20,7 @@ Deterministic prediction and strategy suggestions using crystallized skills and 
 ```
 
 ## Notes
-- Uses crystallized skills (MemRL Q-values) and session activity log.
+- Uses session activity log for prediction.
 - `suggest_focus` and `suggest_next_address` now also use embedding-index lookups when `context` is provided, returning semantic target candidates even with sparse blackboard state.
 - `detect_stuck` helps agents break out of unproductive loops.
 - All predictions are deterministic (no LLM inference).

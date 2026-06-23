@@ -301,8 +301,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "snapshot": "_session_action_snapshot",
         "restore_snapshot": "_session_action_restore_snapshot",
         "merge": "_session_action_merge",
-        "crystallize_skill": "_session_action_crystallize_skill",
-        "crystallize_mined_macros": "_session_action_crystallize_mined_macros",
         "rate_skill": "_session_action_rate_skill",
         "list_skills": "_session_action_list_skills",
         "suggest_strategy": ("raw", "suggest_strategy", _sess_coerce_strategy),
@@ -1301,48 +1299,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 MCPError.SESSION_NOT_FOUND, "One or both sessions not found"
             )
         return {"ok": True, "session": result.to_dict()}
-
-    def _session_action_crystallize_skill(self, args: dict) -> dict:
-        sid, sid_err = self._require_session_sid(args)
-        if sid_err:
-            return sid_err
-        name = str(args.get("name") or "").strip()
-        description = str(args.get("description") or "").strip()
-        if not name:
-            return make_error(MCPError.INVALID_ARGS, "name required")
-        if not description:
-            return make_error(MCPError.INVALID_ARGS, "description required")
-        steps = args.get("steps")
-        if not isinstance(steps, list) or not steps:
-            return make_error(MCPError.INVALID_ARGS, "steps must be a non-empty list")
-        tags = args.get("tags")
-        if isinstance(tags, str):
-            tags = parse_str_list(tags)
-        if tags is not None and not isinstance(tags, list):
-            return make_error(MCPError.INVALID_ARGS, "tags must be a list or comma-separated string")
-        return self.session_mgr.crystallize_skill(
-            sid,
-            name=name,
-            description=description,
-            steps=steps,
-            tags=tags,
-        )
-
-    def _session_action_crystallize_mined_macros(self, args: dict) -> dict:
-        sid, sid_err = self._require_session_sid(args)
-        if sid_err:
-            return sid_err
-        min_support = args.get("min_support", 2)
-        try:
-            min_support = int(min_support)
-        except (TypeError, ValueError):
-            return make_error(MCPError.INVALID_ARGS, "min_support must be an integer")
-
-        from ..intelligence.crystallizer import AgentMacroCrystallizer
-        crystallizer = AgentMacroCrystallizer()
-        return crystallizer.crystallize_from_log(
-            self.session_mgr, sid, min_support=min_support
-        )
 
     def _session_action_rate_skill(self, args: dict) -> dict:
         sid, sid_err = self._require_session_sid(args)

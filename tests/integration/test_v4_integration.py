@@ -477,41 +477,6 @@ with open(RESULT_PATH, "w") as f:
         assert r["has_drift_signal"] is True
         assert "ANALYZE_WITHOUT_RECORD" in r["signal_types"]
 
-    def test_predict_next_after_sequence(self, runner):
-        script = '''
-import sys, os, tempfile, json
-from ida_pro_mcp.host.intelligence.usage import UsageIntelligence
-
-tmpdir = tempfile.mkdtemp()
-ui = UsageIntelligence(audit_dir=tmpdir)
-
-# Train: decompile → classify (5 times)
-for _ in range(5):
-    ui.seq.observe(("code", "decompile"), ("classify", "function"))
-for _ in range(2):
-    ui.seq.observe(("code", "decompile"), ("blackboard", "write"))
-
-preds = ui.predict_next("code", "decompile", top_k=3)
-
-result = {
-    "ok": True,
-    "predictions": len(preds),
-    "top_tool": preds[0]["tool"] if preds else None,
-    "top_action": preds[0]["action"] if preds else None,
-    "has_probability": "probability" in preds[0] if preds else False,
-    "has_effectiveness": "effectiveness" in preds[0] if preds else False,
-}
-with open(RESULT_PATH, "w") as f:
-    json.dump(result, f); f.flush(); os.fsync(f.fileno())
-'''
-        r = runner.run_script(script, timeout=30)
-        assert r.get("ok") is True
-        assert r["predictions"] >= 1
-        assert r["top_tool"] == "classify"
-        assert r["top_action"] == "function"
-        assert r["has_probability"] is True
-
-
 class TestSmartDecompileIDA:
     """smart_decompile action inside real IDA."""
 

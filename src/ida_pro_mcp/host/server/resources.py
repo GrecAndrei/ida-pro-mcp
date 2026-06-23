@@ -643,7 +643,7 @@ class ResourceResolver:
 
     def _read_usage(self, parts: List[str]) -> Dict:
         """
-        ida://usage                    — global report (sequence model, effectiveness)
+        ida://usage                    — global report (active sessions, current-session drift)
         ida://usage/session/{sid}      — per-session drift report
         """
         if not self.usage_intel:

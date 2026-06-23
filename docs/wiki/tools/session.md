@@ -45,10 +45,9 @@ Manages analysis sessions, notebooks, hypotheses, skills, macros, and session li
 - `refute_hypothesis` — marks a hypothesis as refuted; params: `hypothesis_id`, `reason`
 - `list_hypotheses` — lists all tracked hypotheses with status
 
-### Skills (MemRL)
-- `crystallize_skill` — saves a successful workflow as a reusable skill; params: `name`, `steps`, `tags`
-- `rate_skill` — applies TD-style Q-value update to a skill; params: `skill_id`, `outcome`
-- `list_skills` — lists all crystallized skills
+### Skills
+- `rate_skill` — applies TD-style Q-value update to a skill; params: `skill_id`, `reward`
+- `list_skills` — lists all skills
 - `suggest_strategy` — ranks skills by Q-value and context match; params: `context`
 
 ### Activity
@@ -101,7 +100,7 @@ Manages analysis sessions, notebooks, hypotheses, skills, macros, and session li
 ```
 
 ```json
-{"name": "session", "arguments": {"action": "crystallize_skill", "name": "crypto_id_flow", "steps": ["search strings for key schedule constants", "decompile candidate", "classify as crypto"], "tags": ["crypto"]}}
+{"name": "session", "arguments": {"action": "rate_skill", "skill_id": "skill_crypto_id_flow", "reward": 0.9}}
 ```
 
 ```json
@@ -119,7 +118,7 @@ Manages analysis sessions, notebooks, hypotheses, skills, macros, and session li
 ## Notes
 
 - IDB path is not required after `create` or `switch` — all subsequent tool calls use the active session automatically.
-- `crystallize_skill` saves workflows as L3 skills; `suggest_strategy` ranks them by Q-value for the current context.
+- `rate_skill` updates skill Q-values; `suggest_strategy` ranks them by Q-value for the current context.
 - Hypotheses follow a formal lifecycle: `track` → `confirm` or `refute`. Use `list_hypotheses` to review status.
 - `advance_phase` includes dead-end detection — it will warn if progress has stalled.
 - `recent_workset` is the fastest way to resume context after a context window reset.

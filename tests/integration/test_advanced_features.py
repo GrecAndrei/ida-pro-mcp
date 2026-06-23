@@ -114,68 +114,6 @@ def test_tiny_emulator_parsing():
         assert emu.parse_address_expr("[rsi+rax*4-0x8]") == 0x1000 + 8 - 8
 
 
-def test_federation_blackboards(tmp_path):
-    local_db = str(tmp_path / "local.blackboard.db")
-    remote_db = str(tmp_path / "remote.blackboard.db")
-    
-    # Initialize local Blackboard with one entry
-    blackboard_store_mod = load_host_module("blackboard_store")
-    BlackboardStore = blackboard_store_mod.BlackboardStore
-    local_store = BlackboardStore(local_db)
-    
-    # Populate local entry
-    with sqlite3.connect(local_db) as conn:
-        conn.execute(
-            """
-            INSERT INTO blackboard (id, category, title, content, confidence, created_at, updated_at, version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("node_1", "general", "Local Node", "Desc 1", 0.5, 100.0, 100.0, 1)
-        )
-        conn.commit()
-        
-    # Initialize remote Blackboard with two entries
-    remote_store = BlackboardStore(remote_db)
-    with sqlite3.connect(remote_db) as conn:
-        conn.execute(
-            """
-            INSERT INTO blackboard (id, category, title, content, confidence, created_at, updated_at, version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("node_1", "general", "Updated Remote Node", "Desc 1 version 2", 0.8, 100.0, 200.0, 2)
-        )
-        conn.execute(
-            """
-            INSERT INTO blackboard (id, category, title, content, confidence, created_at, updated_at, version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("node_2", "network", "Remote Node 2", "Desc 2", 0.9, 150.0, 150.0, 1)
-        )
-        conn.commit()
-        
-    # Import Host-side FederationBridge (no IDA modules imported here)
-    federation_mod = load_host_module("intelligence.federation")
-    FederationBridge = federation_mod.FederationBridge
-    bridge = FederationBridge(local_db)
-    stats = bridge.federate_blackboards([remote_db])
-    
-    assert stats["inserted"] == 1
-    assert stats["updated"] == 1
-    assert stats["skipped"] == 0
-    
-    # Verify local DB updated
-    with sqlite3.connect(local_db) as conn:
-        rows = conn.execute("SELECT id, title, version, confidence FROM blackboard ORDER BY id").fetchall()
-        
-    assert rows[0][0] == "node_1"
-    assert rows[0][1] == "Updated Remote Node"
-    assert rows[0][2] == 2
-    assert rows[0][3] == 0.8
-    
-    assert rows[1][0] == "node_2"
-    assert rows[1][1] == "Remote Node 2"
-
-
 def test_tiny_emulator_advanced():
     with mock_ida_context():
         trace_mod = load_tool_module("trace_analysis")

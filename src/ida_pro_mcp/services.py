@@ -25,9 +25,9 @@ from ida_pro_mcp.host.intelligence.core import (
     FunctionEmbeddingIndex,
     _extract_signature,
 )
-from ida_pro_mcp.host.intelligence.crystallizer import AgentMacroCrystallizer
+# AgentMacroCrystallizer removed (cleanup cut)
+# FederationBridge removed (cleanup cut)
 from ida_pro_mcp.host.intelligence.entropy import FunctionEntropyCalculator
-from ida_pro_mcp.host.intelligence.federation import FederationBridge
 from ida_pro_mcp.host.intelligence.helpers import (
     best_match,
     coerce_int,
@@ -121,9 +121,7 @@ __all__ = [
     "MultiHopBridgeIndex",
     "_resolve_schemaboot_db_path",
     "CrossBinaryAnalogyEngine",
-    "AgentMacroCrystallizer",
     "FunctionEntropyCalculator",
-    "FederationBridge",
     "coerce_int",
     "estimate_tokens",
     "parse_str_list",

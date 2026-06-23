@@ -252,6 +252,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 if self.current_session else None
             )
             bb_store = self._get_blackboard_store()
+            mode = str((opts or {}).get("mode") or "").strip().lower()
             pack = self.assembler.assemble(
                 tool=tool_name,
                 action=action,
@@ -260,6 +261,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 session_id=session_id or "default",
                 idb_path=idb_path or "",
                 bb_store=bb_store,
+                mode=mode,
             )
             if pack:
                 mode = str((opts or {}).get("mode") or "").strip().lower()

@@ -28,9 +28,9 @@ Tools not in `TOOLS` but still reachable through compatibility routing: `vuln_sc
 ## 1. Core Infrastructure
 
 ### session
-Session lifecycle + analysis context hub with runtime tracking. Provides analysis notebook, hypothesis tracking, global skill registry (VOERA MemRL-inspired), dead-end detection, and federated session linking. IDB is optional: after create/switch, tools use active session.
+Session lifecycle + analysis context hub with runtime tracking. Provides analysis notebook, hypothesis tracking, and global skill registry. IDB is optional: after create/switch, tools use active session.
 
-**Actions:** discover, create, get, list, switch, close, status, rebuild, update, rename, duplicate, export_session, import_session, archive, unarchive, tag, untag, find_by_tag, add_note, clear_notes, cleanup_stale, stats, validate, bulk_delete, bulk_tag, search_notes, recent, oldest, snapshot, restore_snapshot, merge, macro_set, macro_get, macro_list, macro_delete, macro_run, recent_workset, crystallize_skill, rate_skill, list_skills, suggest_strategy, log_activity, get_activity_log, notebook_append, notebook_read, notebook_section, track_hypothesis, confirm_hypothesis, refute_hypothesis, list_hypotheses, dashboard, get_phase, advance_phase, link_session, cross_reference_sessions, list_snapshots
+**Actions:** discover, create, get, list, switch, close, status, rebuild, update, rename, duplicate, export_session, import_session, archive, unarchive, tag, untag, find_by_tag, add_note, clear_notes, cleanup_stale, stats, validate, bulk_delete, bulk_tag, search_notes, recent, oldest, snapshot, restore_snapshot, merge, macro_set, macro_get, macro_list, macro_delete, macro_run, recent_workset, rate_skill, list_skills, suggest_strategy, log_activity, get_activity_log, notebook_append, notebook_read, notebook_section, track_hypothesis, confirm_hypothesis, refute_hypothesis, list_hypotheses, dashboard, get_phase, advance_phase, link_session, cross_reference_sessions, list_snapshots
 
 ### truncation
 Continuation helper for auto-truncated responses. Retrieves next chunk by token/field.

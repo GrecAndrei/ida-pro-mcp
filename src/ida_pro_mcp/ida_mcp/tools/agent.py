@@ -1010,7 +1010,7 @@ def agent(
                 "insights": insights,
                 "guardrails": guardrails,
                 "distilled_strategy": distilled,
-                "note": "Store distilled_strategy as a crystallized skill using session(action='crystallize_skill') for future reuse.",
+                "note": "Store distilled_strategy as a skill using session(action='rate_skill') for future reuse.",
             }
 
         elif action == "cluster":

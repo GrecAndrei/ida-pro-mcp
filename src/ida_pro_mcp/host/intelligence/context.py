@@ -24,7 +24,6 @@ from .core import (
     FunctionEmbeddingIndex,
     _extract_signature,
 )
-from .context_policy import ContextAssemblerPolicyMixin
 from .context_semantic import ContextAssemblerSemanticMixin
 from .structural_index import get_db_path
 from . import helpers as _helpers
@@ -47,7 +46,6 @@ def _intel_profile_enabled() -> bool:
 
 class ContextAssembler(
     ContextAssemblerSemanticMixin,
-    ContextAssemblerPolicyMixin,
 ):
     """
     Per-call context assembly.  Replaces cognitive_layer, cartographer_mu,
@@ -78,14 +76,6 @@ class ContextAssembler(
         self._retrieval_metrics_lock = threading.Lock()
         self._session_semantic_threshold: Dict[str, float] = {}
         self._semantic_threshold_lock = threading.Lock()
-        self._focus_feedback: Dict[str, Dict[str, int]] = defaultdict(dict)
-        self._focus_feedback_lock = threading.Lock()
-        self._pending_focus: Dict[str, Dict[str, Any]] = {}
-        self._pending_focus_lock = threading.Lock()
-        self._session_call_outcomes: Dict[str, Dict[str, int]] = defaultdict(dict)
-        self._session_call_outcomes_lock = threading.Lock()
-        self._session_store_binding: Dict[str, str] = {}
-        self._store_binding_lock = threading.Lock()
         # Cache blackboard entry embeddings by stable key to avoid repeated
         # re-embedding the same rows on every decompile call.
         self._bb_entry_vec_cache: Dict[str, Tuple[List[float], float]] = {}
@@ -97,21 +87,14 @@ class ContextAssembler(
         self._bb_cache_stats_lock = threading.Lock()
         self._last_housekeeping_ts = 0.0
         self._housekeeping_lock = threading.Lock()
-        self._pending_focus_ttl_sec = 420.0
         self._related_graph_max_edges = 1200
         self._semantic_circuit_breaker_until: Dict[str, int] = {}
         self._circuit_breaker_lock = threading.Lock()
         self._session_stats_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._stats_cache_lock = threading.Lock()
         self._stats_cache_ttl_sec = 1.5
-        self._source_policy_cache: Dict[str, Tuple[Tuple[int, int, int, int], Dict[str, Dict[str, Any]]]] = {}
-        self._policy_cache_lock = threading.Lock()
         self._perf_buckets: Dict[str, Dict[str, float]] = defaultdict(dict)
         self._perf_lock = threading.Lock()
-        self._policy_save_due_at: Dict[str, float] = {}
-        self._policy_save_inflight: set = set()
-        self._policy_save_lock = threading.Lock()
-        self._policy_save_debounce_sec = 0.35
         self._semantic_result_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
         self._semantic_result_cache_lock = threading.Lock()
         self._semantic_result_cache_ttl_sec = 3.0
@@ -173,11 +156,9 @@ class ContextAssembler(
         """
         if not entries:
             return
-        policy = self._session_source_policy(session_id) if session_id else {}
-        p_src = policy.get(source, {}) if isinstance(policy, dict) else {}
-        min_conf = float(p_src.get("min_confidence", 0.0) or 0.0)
-        max_take = int(p_src.get("max_take", 8) or 8)
-        weight = float(p_src.get("weight", 1.0) or 1.0)
+        min_conf = 0.0
+        max_take = 8
+        weight = 1.0
         filtered_entries = [
             e for e in entries
             if float(e.get("confidence") or 0.0) >= min_conf
@@ -248,7 +229,6 @@ class ContextAssembler(
                     ))
                     metrics[key_kept] = int(metrics.get(key_kept, 0)) + kept
                 self._invalidate_session_caches(session_id)
-                self._schedule_policy_save(session_id)
             except Exception:
                 pass
 
@@ -257,8 +237,6 @@ class ContextAssembler(
             return
         with self._stats_cache_lock:
             self._session_stats_cache.pop(session_id, None)
-        with self._policy_cache_lock:
-            self._source_policy_cache.pop(session_id, None)
         with self._semantic_result_cache_lock:
             if session_id:
                 stale = [k for k in self._semantic_result_cache.keys() if k.startswith(f"{session_id}:")]
@@ -307,63 +285,14 @@ class ContextAssembler(
                     "hit_rate": round(kept / max(1, total), 3),
                 }
             out["semantic_threshold"] = self._get_semantic_threshold(session_id)
-            out["source_policy"] = self._session_source_policy(session_id)
-            out["focus_feedback"] = self._focus_feedback_stats(session_id)
             with self._stats_cache_lock:
                 self._session_stats_cache[session_id] = (now, dict(out))
             return out
         except Exception:
             return {}
 
-    def _focus_feedback_stats(self, session_id: str) -> Dict[str, Any]:
-        if not session_id:
-            return {}
-        try:
-            with self._focus_feedback_lock:
-                m = dict(self._focus_feedback.get(session_id, {}))
-            suggested = int(m.get("suggested", 0))
-            followed = int(m.get("followed", 0))
-            successful = int(m.get("successful", 0))
-            failed = int(m.get("failed", 0))
-            out: Dict[str, Any] = {
-                "suggested": suggested,
-                "followed": followed,
-                "successful": successful,
-                "failed": failed,
-                "follow_rate": round(followed / max(1, suggested), 3),
-                "success_rate": round(successful / max(1, followed), 3),
-            }
-            action_stats: Dict[str, Dict[str, float]] = {}
-            for k, v in m.items():
-                if not k.startswith("action."):
-                    continue
-                # action.<tool:action>.<ok|fail>
-                parts = k.split(".")
-                if len(parts) != 3:
-                    continue
-                ta = parts[1]
-                bucket = action_stats.setdefault(ta, {"ok": 0.0, "fail": 0.0})
-                bucket[parts[2]] = float(v)
-            if action_stats:
-                per_action = {}
-                for ta, vals in action_stats.items():
-                    ok = vals.get("ok", 0.0)
-                    fail = vals.get("fail", 0.0)
-                    total = ok + fail
-                    if total <= 0:
-                        continue
-                    per_action[ta] = {
-                        "success_rate": round(ok / total, 3),
-                        "samples": int(total),
-                    }
-                if per_action:
-                    out["per_action"] = per_action
-            return out
-        except Exception:
-            return {}
-
     def _run_housekeeping(self, session_id: str) -> None:
-        """Periodic cleanup for pending focus and relation graph bounds."""
+        """Periodic cleanup for relation graph bounds."""
         now = time.time()
         if now - self._last_housekeeping_ts < 30.0:
             return
@@ -371,15 +300,6 @@ class ContextAssembler(
             return
         try:
             self._last_housekeeping_ts = now
-            # Expire stale pending focus suggestions.
-            with self._pending_focus_lock:
-                stale = [
-                    sid for sid, rec in self._pending_focus.items()
-                    if now - float(rec.get("ts") or 0.0) > self._pending_focus_ttl_sec
-                ]
-                for sid in stale:
-                    self._pending_focus.pop(sid, None)
-
             # Bound relation graph size per session.
             if session_id:
                 with self._related_addr_lock:
@@ -399,195 +319,6 @@ class ContextAssembler(
             pass
         finally:
             self._housekeeping_lock.release()
-
-    def _collect_intelligence_health(self, session_id: str) -> Dict[str, Any]:
-        """Compact health telemetry for adaptive intelligence quality."""
-        out: Dict[str, Any] = {}
-        try:
-            with self._bb_cache_stats_lock:
-                hits = int(self._bb_cache_hits)
-                misses = int(self._bb_cache_misses)
-            total = hits + misses
-            out["bb_cache"] = {
-                "entries": len(self._bb_entry_vec_cache),
-                "hit_rate": round(hits / max(1, total), 3),
-                "ops": total,
-            }
-            with self._pending_focus_lock:
-                pending = self._pending_focus.get(session_id, {}) if session_id else {}
-            if pending:
-                age = time.time() - float(pending.get("ts") or time.time())
-                out["pending_focus"] = {
-                    "tool": pending.get("tool"),
-                    "action": pending.get("action"),
-                    "age_sec": round(age, 2),
-                }
-            with self._related_addr_lock:
-                rel_nodes = len(self._related_addr_graph.get(session_id, {})) if session_id else 0
-            out["relation_graph"] = {"nodes": rel_nodes}
-            out["semantic_cache"] = {"entries": len(self._semantic_result_cache)}
-            with self._policy_save_lock:
-                out["policy_save_queue"] = len(self._policy_save_due_at)
-            if session_id:
-                out["semantic_threshold"] = self._get_semantic_threshold(session_id)
-                out["semantic_circuit_open"] = self._semantic_circuit_open(session_id)
-                out["semantic_budget"] = self._adaptive_semantic_budget(session_id, default_max=24)
-                if _intel_profile_enabled():
-                    with self._perf_lock:
-                        b = dict(self._perf_buckets.get(session_id, {}))
-                    perf = {}
-                    for k in ("assemble", "decompile_enrich", "search_enrich"):
-                        c = float(b.get(f"{k}.count", 0.0))
-                        s = float(b.get(f"{k}.sum_ms", 0.0))
-                        m = float(b.get(f"{k}.max_ms", 0.0))
-                        if c > 0:
-                            perf[k] = {"avg_ms": round(s / c, 3), "max_ms": round(m, 3), "count": int(c)}
-                    if perf:
-                        out["perf"] = perf
-        except Exception:
-            return {}
-        return out
-
-
-    def _compile_question_tool_plan(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
-        """Embedding-driven question->tool first-step compiler for RE workflows."""
-        apis = set(pack.get("api_calls") or [])
-        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
-            return {
-                "intent": "malware_triage",
-                "first_calls": [
-                    {"tool": "code", "action": "callers", "addr": addr},
-                    {"tool": "graph", "action": "call_chain", "addr": addr},
-                ],
-            }
-        intent = (self._llm_query_intent(pack) or {}).get("intent", "function_understanding")
-        if intent == "malware_behavior":
-            return {
-                "intent": "malware_triage",
-                "first_calls": [
-                    {"tool": "code", "action": "callers", "addr": addr},
-                    {"tool": "graph", "action": "call_chain", "addr": addr},
-                ],
-            }
-        if intent == "obfuscation_or_packer":
-            return {
-                "intent": "packed_or_obfuscated",
-                "first_calls": [
-                    {"tool": "code", "action": "blocks", "addr": addr},
-                    {"tool": "search", "action": "semantic", "addr": addr},
-                ],
-            }
-        return {
-            "intent": "function_understanding",
-            "first_calls": [
-                {"tool": "code", "action": "decompile", "addr": addr},
-                {"tool": "code", "action": "callers", "addr": addr},
-            ],
-        }
-
-    def _evidence_budget_gate(self, pack: Dict[str, Any], addr: str) -> Dict[str, Any]:
-        """Block high-risk claims unless evidence budget is satisfied."""
-        evid = list(pack.get("llm_evidence") or [])
-        apis = set(pack.get("api_calls") or [])
-        claim_type = "general"
-        required = 1
-        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
-            claim_type = "malware_behavior"
-            required = 2
-        if any("overflow" in str(x.get("fact", "")).lower() for x in evid):
-            claim_type = "vulnerability"
-            required = 3
-        met = len(evid) >= required
-        out = {
-            "claim_type": claim_type,
-            "required_evidence": required,
-            "observed_evidence": len(evid),
-            "claim_blocked": not met,
-        }
-        if not met:
-            out["required_followup_call"] = {"tool": "code", "action": "callers", "addr": addr}
-        return out
-
-    def _dead_end_escalation(self, session_id: str, addr: str, pack: Dict[str, Any]) -> Dict[str, Any]:
-        with self._activity_lock:
-            recent = list(self._activity.get(session_id, []))[-12:]
-        if not recent:
-            return {"loop_detected": False}
-        same_addr = sum(1 for r in recent if r.get("addr") == addr)
-        repetitive = sum(1 for r in recent if f"{r.get('tool')}:{r.get('action')}" in ("code:decompile", "search:semantic"))
-        no_findings = not bool(pack.get("related_findings") or pack.get("hit_details"))
-        loop = same_addr >= 4 and repetitive >= 4 and no_findings
-        if not loop:
-            return {"loop_detected": False}
-        return {
-            "loop_detected": True,
-            "required_followup_call": {"tool": "graph", "action": "call_chain", "addr": addr},
-            "secondary": {"tool": "firmware_view", "action": "campaign", "start": addr, "end": addr},
-        }
-
-    def _mcp_value_score(self, session_id: str, pack: Dict[str, Any]) -> float:
-        with self._session_call_outcomes_lock:
-            o = self._session_call_outcomes[session_id]
-            calls = int(o.get("calls", 0))
-            wins = int(o.get("wins", 0))
-        base = wins / max(1, calls)
-        lift = 0.1 if (pack.get("related_findings") or pack.get("hit_details")) else 0.0
-        return round(min(1.0, base + lift), 3)
-
-    def _record_call_outcome(self, session_id: str, pack: Dict[str, Any]) -> None:
-        with self._session_call_outcomes_lock:
-            o = self._session_call_outcomes[session_id]
-            o["calls"] = int(o.get("calls", 0)) + 1
-            if pack.get("related_findings") or pack.get("hit_details") or pack.get("analysis_focus"):
-                o["wins"] = int(o.get("wins", 0)) + 1
-
-    def _mode_profile(self, pack: Dict[str, Any]) -> Dict[str, Any]:
-        apis = set(pack.get("api_calls") or [])
-        if {"VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread"}.intersection(apis):
-            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "graph.call_chain"]}
-        intent = (self._llm_query_intent(pack) or {}).get("intent", "")
-        if intent == "malware_behavior":
-            return {"mode": "triage_mode", "mandatory_sequence": ["code.decompile", "code.callers", "graph.call_chain"]}
-        if intent == "obfuscation_or_packer":
-            return {"mode": "firmware_mode", "mandatory_sequence": ["firmware_view.region_profile", "firmware_view.pointer_clusters", "firmware_view.carve_plan"]}
-        return {"mode": "analysis_mode", "mandatory_sequence": ["code.decompile", "code.callers"]}
-
-    # --- 10 LLM-first feature payloads ---
-    def _llm_query_intent(self, pack: Dict[str, Any]) -> Dict[str, Any]:
-        apis = " ".join(pack.get("api_calls") or [])
-        st = pack.get("structural") or {}
-        structural = " ".join(
-            [
-                f"entropy={st.get('entropy', 0)}",
-                f"xor_count={st.get('xor_count', 0)}",
-                f"cyclomatic={st.get('cyclomatic_complexity', st.get('cyclomatic', 0))}",
-                f"api_count={st.get('api_count', 0)}",
-            ]
-        )
-        query = f"{apis} {structural}".strip() or "function reverse engineering context"
-        anchors = {
-            "malware_behavior": "process injection c2 beacon payload loader remote thread write process memory",
-            "obfuscation_or_packer": "packed obfuscated encrypted xor decoder anti debug high entropy shellcode unpacking",
-            "function_understanding": "normal business logic parser dispatcher validation computation control flow",
-        }
-        try:
-            qv = self._embedder.embed(query[:1200])
-            sims: List[Tuple[str, float]] = []
-            for k, a in anchors.items():
-                av = self._embedder.embed(a)
-                sims.append((k, float(BgeCodeEmbedder.cosine(qv, av))))
-            sims.sort(key=lambda x: x[1], reverse=True)
-            top_intent, top_score = sims[0]
-            return {"intent": top_intent, "confidence": round(max(0.0, min(1.0, top_score)), 3)}
-        except Exception:
-            # Deterministic fallback without fixed score heuristics.
-            intent = "function_understanding"
-            if pack.get("api_calls"):
-                intent = "malware_behavior"
-            elif pack.get("structural"):
-                intent = "obfuscation_or_packer"
-            return {"intent": intent, "confidence": 0.5}
-
 
     def _semantic_circuit_open(self, session_id: str) -> bool:
         if not session_id:
@@ -625,13 +356,16 @@ class ContextAssembler(
         total_sum = sum(max(0, int(x)) for x in totals)
         total_med = self._quantile([float(x) for x in totals if x > 0], 0.50, default=6.0)
         min_total = max(4, int(round(min(total_med, max(6.0, total_sum / 4.0)))))
-        health = self._collect_intelligence_health(session_id)
-        perf = (health.get("perf") or {}) if isinstance(health, dict) else {}
-        perf_avgs = [
-            float(((perf.get(k) or {}).get("avg_ms") or 0.0))
-            for k in ("assemble", "decompile_enrich", "search_enrich")
-            if float(((perf.get(k) or {}).get("avg_ms") or 0.0)) > 0.0
-        ]
+        # Read perf data directly from _perf_buckets
+        perf_avgs = []
+        if _intel_profile_enabled() and session_id:
+            with self._perf_lock:
+                b = dict(self._perf_buckets.get(session_id, {}))
+            for k in ("assemble", "decompile_enrich", "search_enrich"):
+                cnt = float(b.get(f"{k}.count", 0.0))
+                sm = float(b.get(f"{k}.sum_ms", 0.0))
+                if cnt > 0:
+                    perf_avgs.append(sm / cnt)
         perf_q25 = self._quantile(perf_avgs, 0.25, default=20.0)
         perf_q50 = self._quantile(perf_avgs, 0.50, default=45.0)
         perf_q75 = self._quantile(perf_avgs, 0.75, default=75.0)
@@ -665,9 +399,15 @@ class ContextAssembler(
             hit_shift = (hit - hit_center) / hit_iqr
             budget += int(round(hit_shift * 4.0))
 
-            health = self._collect_intelligence_health(session_id)
-            perf = (health.get("perf") or {}).get("decompile_enrich") or {}
-            avg_ms = float(perf.get("avg_ms") or 0.0)
+            # Read perf data directly from _perf_buckets
+            avg_ms = 0.0
+            if _intel_profile_enabled() and session_id:
+                with self._perf_lock:
+                    b = dict(self._perf_buckets.get(session_id, {}))
+                cnt = float(b.get("decompile_enrich.count", 0.0))
+                sm = float(b.get("decompile_enrich.sum_ms", 0.0))
+                if cnt > 0:
+                    avg_ms = sm / cnt
             if avg_ms > 0.0:
                 perf_iqr = max(5.0, profile["perf_q75"] - profile["perf_q25"])
                 perf_shift = (avg_ms - profile["perf_q50"]) / perf_iqr
@@ -692,8 +432,12 @@ class ContextAssembler(
             sem = stats.get("semantic_linked") or {}
             sem_total = int(sem.get("total") or 0)
             sem_hit = float(sem.get("hit_rate") or 0.0)
-            health = self._collect_intelligence_health(session_id)
-            cache_hit = float((health.get("bb_cache") or {}).get("hit_rate") or 0.0)
+            # Read bb_cache hit rate directly
+            with self._bb_cache_stats_lock:
+                bb_hits = int(self._bb_cache_hits)
+                bb_misses = int(self._bb_cache_misses)
+            bb_total = bb_hits + bb_misses
+            cache_hit = bb_hits / max(1, bb_total)
             profile = self._semantic_quality_profile(session_id)
             min_total = int(profile.get("min_total") or 6)
             expected_hit = max(profile["hit_q50"], self._get_semantic_threshold(session_id))
@@ -901,18 +645,18 @@ class ContextAssembler(
         session_id: str,
         idb_path: str,
         bb_store=None,
+        mode: str = "full",
     ) -> Dict[str, Any]:
         """
         Build a context_pack for injection into the tool response.
         Non-blocking: slow operations (embedding new function) are async.
         Returns empty dict if nothing meaningful to inject.
         """
+        _full = mode == "full"
         t_all = self._perf_start()
         pack: Dict[str, Any] = {}
 
-        self._load_session_policy(session_id, idb_path)
         self._run_housekeeping(session_id)
-        followed_focus = self._consume_focus_follow(session_id, tool, action)
 
         # Record for stuck detection
         self.record_call(session_id, tool, action, addr)
@@ -939,7 +683,7 @@ class ContextAssembler(
         if pseudocode and len(pseudocode.strip()) > 80:
             t_dec = self._perf_start()
             try:
-                self._enrich_decompile(pack, payload, pseudocode, addr, idb_path, bb_store, session_id)
+                self._enrich_decompile(pack, payload, pseudocode, addr, idb_path, bb_store, session_id, mode=mode)
             except Exception:
                 pass
             self._perf_end(session_id, "decompile_enrich", t_dec)
@@ -975,7 +719,7 @@ class ContextAssembler(
                     if addr:
                         self._record_related_addresses(session_id, addr, hit_addrs)
                     enriched = self._enrich_address_list(hit_addrs, idb_path)
-                    if enriched:
+                    if _full and enriched:
                         pack["hit_details"] = enriched
             except Exception:
                 pass
@@ -990,46 +734,15 @@ class ContextAssembler(
                     n_calls = len(self._activity.get(session_id, []))
                 if n_calls % 5 == 0 and n_calls > 0:
                     targets = self.suggest_next_targets(idb_path, limit=3)
-                    if targets:
+                    if _full and targets:
                         pack["suggested_targets"] = targets
             except Exception:
                 pass
 
         # ── 3. Stuck detection
         stuck = self.check_stuck(session_id, addr, tool, action)
-        if stuck:
+        if _full and stuck:
             pack["stuck"] = stuck
-
-        if followed_focus:
-            success = bool(
-                pack.get("related_findings")
-                or pack.get("hit_details")
-                or pack.get("similar_functions")
-                or pack.get("api_calls")
-                or pack.get("analysis_focus")
-            )
-            self._record_focus_outcome(session_id, tool, action, success)
-
-        health = self._collect_intelligence_health(session_id)
-        if health:
-            pack["intelligence_health"] = health
-
-        if addr:
-            pack["compiled_plan"] = self._compile_question_tool_plan(pack, addr)
-            budget = self._evidence_budget_gate(pack, addr)
-            pack["evidence_budget"] = budget
-            escalation = self._dead_end_escalation(session_id, addr, pack)
-            pack["dead_end_escalation"] = escalation
-            # default-to-call policy: force at least one call under uncertainty/blocks
-            must_call = bool(budget.get("claim_blocked") or escalation.get("loop_detected") or (pack.get("llm_uncertainty") or {}).get("risk") in ("medium", "high"))
-            pack["must_call_before_answer"] = must_call
-            req = budget.get("required_followup_call") or escalation.get("required_followup_call")
-            if must_call and req:
-                pack["required_followup_call"] = req
-            pack["mode_profile"] = self._mode_profile(pack)
-
-        self._record_call_outcome(session_id, pack)
-        pack["mcp_value_score"] = self._mcp_value_score(session_id, pack)
 
         self._perf_end(session_id, "assemble", t_all)
 
@@ -1091,6 +804,7 @@ class ContextAssembler(
         idb_path: str,
         bb_store,
         session_id: str,
+        mode: str = "full",
     ) -> None:
         """
         Decompile-specific enrichment.  Deterministic first, embeddings second.
@@ -1102,6 +816,7 @@ class ContextAssembler(
           4. Function embedding + similarity search (slow, grows over session)
           5. Semantic blackboard retrieval (slow, only if bb_store populated)
         """
+        _full = mode == "full"
         func_name = payload.get("name") or f"sub_{addr}"
 
         # ── Step 1: Deterministic API extraction (no ML, instant) ─────────
@@ -1127,11 +842,11 @@ class ContextAssembler(
             pass
 
         # ── Step 3: Surface the extracted facts ───────────────────────────
-        if api_calls:
+        if _full and api_calls:
             pack["api_calls"] = api_calls
-        if string_refs:
+        if _full and string_refs:
             pack["string_refs"] = string_refs
-        if crypto_consts:
+        if _full and crypto_consts:
             pack["crypto_constants_detected"] = crypto_consts
 
         if sb_attrs:
@@ -1148,7 +863,7 @@ class ContextAssembler(
                 structural["has_loops"] = True
             if sb_attrs.get("bb_count", 0) > 0:
                 structural["bb_count"] = sb_attrs["bb_count"]
-            if structural:
+            if _full and structural:
                 pack["structural"] = structural
 
         # ── Step 3b: Behavior classification via the shared zero-shot classifier
@@ -1165,7 +880,7 @@ class ContextAssembler(
                 )
             except Exception:
                 behavior_hits = []
-        if behavior_hits:
+        if _full and behavior_hits:
             pack["behavior_classifications"] = behavior_hits
             pack["behavior_tags"] = [hit.get("behavior") for hit in behavior_hits if hit.get("behavior")]
 
@@ -1195,7 +910,7 @@ class ContextAssembler(
                 "tool": "code", "action": "callers", "addr": addr,
                 "reason": "See what calls this function",
             })
-        if actions:
+        if _full and actions:
             pack["suggested_next_actions"] = actions[:6]
 
 
@@ -1290,10 +1005,11 @@ class ContextAssembler(
                                     names[row[0]] = row[1] or row[0]
                         except Exception:
                             pass
-                        pack["similar_functions"] = [
-                            {"ea": ea, "name": names.get(ea, ea), "similarity": round(sim, 4)}
-                            for sim, ea in top
-                        ]
+                        if _full:
+                            pack["similar_functions"] = [
+                                {"ea": ea, "name": names.get(ea, ea), "similarity": round(sim, 4)}
+                                for sim, ea in top
+                            ]
             except Exception:
                 pass
 
@@ -1350,14 +1066,8 @@ class ContextAssembler(
         self._tune_semantic_threshold(session_id)
         self._update_semantic_circuit_breaker(session_id)
         stats = self._session_retrieval_stats(session_id)
-        if stats:
+        if _full and stats:
             pack["retrieval_stats"] = stats
-        alts = self._derive_focus_candidates(pack, addr, session_id)
-        if alts:
-            pack["analysis_focus"] = alts[0]
-            self._record_focus_suggestion(session_id, alts[0])
-            if len(alts) > 1:
-                pack["analysis_focus_alternatives"] = alts[1:3]
 
 
     def _enrich_address_list(
@@ -1598,9 +1308,6 @@ class ContextAssembler(
 
     def stop(self) -> None:
         """Shut down the llama-server subprocess cleanly."""
-        self.flush_policy_saves()
-        # Give background save workers a short chance to flush.
-        time.sleep(0.05)
         self._embedder.stop()
 
     @property
@@ -1615,7 +1322,6 @@ class ContextAssembler(
                 idb: {"functions_indexed": idx.size}
                 for idb, idx in self._indexes.items()
             },
-            "policy_save_queue": len(self._policy_save_due_at),
             "embed_batch_size": getattr(self._embedder, "_batch_size", 1),
         }
 
