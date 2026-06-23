@@ -206,6 +206,20 @@ def _format_install_table(installs: list[IdaInstall]) -> str:
     return "\n".join(lines)
 
 
+def _prompt_model_path() -> str:
+    """Ask the user to provide a model file path interactively."""
+    print("Enter the full path to your bge-code-v1*.gguf model file, or leave empty to skip.")
+    print("Example: /home/user/Downloads/bge-code-v1-q8_0.gguf")
+    while True:
+        ans = input("Model path (or press Enter to skip): ").strip().strip("\"'")
+        if not ans:
+            return ""
+        p = Path(ans).expanduser()
+        if p.is_file():
+            return str(p)
+        print(f"File not found: {ans}. Check the path and try again.")
+
+
 def _prompt_ida_install(installs: list[IdaInstall], default_index: int = 0) -> IdaInstall:
     print("Detected IDA Pro installs:")
     print(_format_install_table(installs))
@@ -340,8 +354,18 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                     default=True,
                 )
     else:
-        ui.warn("No bge-code-v1 model auto-detected. Semantic embedding features stay disabled by default.")
-        opts.embed_auto = False
+        ui.warn("No bge-code-v1 model auto-detected.")
+        if opts.interactive:
+            manual = _prompt_model_path()
+            if manual:
+                ui.ok(f"Using model: {manual}")
+                opts.embed_model_path = manual
+                opts.embed_auto = True
+            else:
+                opts.embed_auto = False
+                ui.warn("Semantic embedding features stay disabled by default.")
+        else:
+            opts.embed_auto = False
 
     opts.rollback_on_fail = _prompt_yes_no(
         "Rollback backed-up config files on failure?",
