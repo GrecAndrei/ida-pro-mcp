@@ -57,7 +57,7 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
     if not name or name.startswith("sub_"):
         return
     try:
-        from ida_pro_mcp.host.symbol_db import SymbolDB
+        from ida_pro_mcp.services import SymbolDB
     except Exception:
         try:
             from host.symbol_db import SymbolDB  # type: ignore
@@ -166,7 +166,7 @@ def _embedding_rename_suggestions(
 ) -> dict:
     """Shared embedding-backed rename suggestion engine used by funcs/agent."""
     try:
-        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+        from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
     except ImportError:
         from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
 

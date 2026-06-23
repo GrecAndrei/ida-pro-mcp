@@ -7,12 +7,12 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from ida_pro_mcp.host.intelligence.entropy import FunctionEntropyCalculator
-from ida_pro_mcp.host.intelligence.structural_index import (
+from ida_pro_mcp.services import (
     ensure_tables,
     get_db_path,
     upsert_functions_batch,
 )
-from ida_pro_mcp.host.session import SessionManager
+from ida_pro_mcp.services import SessionManager
 
 
 class TestNudgeEngine(unittest.TestCase):

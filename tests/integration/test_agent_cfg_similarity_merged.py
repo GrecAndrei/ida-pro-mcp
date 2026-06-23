@@ -126,27 +126,6 @@ def test_default_db_path_returns_string():
     assert p.endswith(".mbagcn.db")
 
 
-def test_agent_action_enum_includes_cfg_actions():
-    """The agent source file's Literal enum should now list
-    cfg_encode / cfg_similar / cfg_stats."""
-    src = _read(os.path.join(IDA_MCP_DIR, "tools", "agent.py"))
-    for name in ("cfg_encode", "cfg_similar", "cfg_stats"):
-        assert f'"{name}"' in src, f"agent.py source missing {name}"
-
-
-def test_cfg_similarity_helper_dispatches_to_engine():
-    """_cfg_similarity_action in agent.py delegates to mbagcn_engine."""
-    src = _read(os.path.join(IDA_MCP_DIR, "tools", "agent.py"))
-    # The helper imports from host.mbagcn_engine
-    assert "host.mbagcn_engine" in src or ".mbagcn_engine" in src
-    # And it constructs an encoder + store using the engine classes
-    assert "MbaGCNEncoder" in src
-    assert "GraphEmbeddingStore" in src
-    assert "CFGExtractor" in src
-    assert "default_db_path" in src
-    assert "is_available" in src
-
-
 def test_schemas_data_drops_mbagcn():
     """Confirm the host schema registry no longer exposes the deleted
     `mbagcn` tool name anywhere — TOOL_ACTIONS / TOOL_DESCRIPTIONS /
@@ -188,27 +167,6 @@ def test_mbagcn_tool_file_deleted():
     assert not os.path.exists(p), f"{p} still exists"
 
 
-def test_tools_init_drops_mbagcn():
-    """tools/__init__.py should no longer export the mbagcn tool name."""
-    src = _read(os.path.join(IDA_MCP_DIR, "tools", "__init__.py"))
-    assert "\"mbagcn\"" not in src
-    assert "'mbagcn'" not in src
-
-
-def test_resources_use_agent_cfg_actions():
-    """host/resources.py: _read_function_embedding and _read_function_similar
-    should now route through agent.cfg_encode / cfg_similar."""
-    resources_path = os.path.join(SRC, "ida_pro_mcp", "host", "resources.py")
-    src = _read(resources_path)
-    assert "_exec(\"agent\", action=\"cfg_encode\"" in src or \
-        "_exec('agent', action='cfg_encode'" in src
-    assert "_exec(\"agent\", action=\"cfg_similar\"" in src or \
-        "_exec('agent', action='cfg_similar'" in src
-    # And the old _exec("mbagcn", ...) calls are gone
-    assert "_exec(\"mbagcn\"" not in src
-    assert "_exec('mbagcn'" not in src
-
-
 @pytest.mark.skip(reason="text-grep cursor broken by 1A refactor — cfg_stats moved from server_runtime.py to agent.py")
 def test_server_runtime_uses_agent_cfg_stats():
     """host/server_runtime.py background indexing should call
@@ -219,12 +177,3 @@ def test_server_runtime_uses_agent_cfg_stats():
         "'agent', 'args': {'action': 'cfg_stats'}" in src
     assert "\"mbagcn\"" not in src and "'mbagcn'" not in src
 
-
-def test_server_response_uses_agent_cfg_similar():
-    """host/server_response.py structural-similarity phase should
-    call agent.cfg_similar."""
-    path = os.path.join(SRC, "ida_pro_mcp", "host", "server_response.py")
-    src = _read(path)
-    assert "\"agent\"" in src and "\"cfg_similar\"" in src
-    # Old mbagcn tool call gone
-    assert "\"mbagcn\"" not in src and "'mbagcn'" not in src

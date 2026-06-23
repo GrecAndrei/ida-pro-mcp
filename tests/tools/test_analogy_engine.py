@@ -6,16 +6,16 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from ida_pro_mcp.host.intelligence.analogy import CrossBinaryAnalogyEngine
-from ida_pro_mcp.host.intelligence.structural_index import (
+from ida_pro_mcp.services import CrossBinaryAnalogyEngine
+from ida_pro_mcp.services import (
     ensure_tables,
     get_db_path,
     upsert_functions_batch,
 )
-from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex
-from ida_pro_mcp.host.session import SessionManager
-from ida_pro_mcp.host.server_session import ServerSessionMixin
-from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.services import FunctionEmbeddingIndex
+from ida_pro_mcp.services import SessionManager
+from ida_pro_mcp.services import ServerSessionMixin
+from ida_pro_mcp.services import MCPError
 
 
 def make_func_attrs(ea, name, **kwargs):

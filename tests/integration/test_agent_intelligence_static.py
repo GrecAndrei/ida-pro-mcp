@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read(rel: str) -> str:
@@ -69,42 +69,6 @@ def test_agent_tool_no_longer_exposes_intelligence_actions():
         lit_idx = src.find("action: Annotated[Literal[")
         enum_block = src[lit_idx:lit_idx + 2000]
         assert f"\"{action}\"" not in enum_block, f"agent.py Literal enum still references {action}"
-
-
-def test_agent_schemas_drop_intelligence_actions():
-    src = _read("src/ida_pro_mcp/host/tool_registry.py")
-    # agent section in TOOL_ACTIONS no longer contains these.
-    agent_start = src.index('"agent": [')
-    agent_end = src.index('],', agent_start)
-    agent_block = src[agent_start:agent_end]
-    for action in (
-        "intelligence_status", "embedder_status", "anchor_status",
-        "refresh_anchors", "classify_text", "classify_function",
-        "index_function", "index_batch", "similar_functions",
-        "semantic_search", "blackboard_search", "export_index_summary",
-        "evidence_card",
-    ):
-        assert f'"{action}"' not in agent_block, f"agent schema still lists {action}"
-
-
-def test_intelligence_schemas_added_to_schemas_data():
-    # TOOL_ACTIONS block now lives in tool_registry.py; TOOL_DESCRIPTIONS
-    # and aliases remain in schemas_data.py.
-    treg = _read("src/ida_pro_mcp/host/tool_registry.py")
-    int_start = treg.index('"intelligence": [')
-    int_end = treg.index('],', int_start)
-    int_block = treg[int_start:int_end]
-    for action in (
-        "intelligence_status", "embedder_status", "anchor_status",
-        "refresh_anchors", "classify_text", "classify_function",
-        "index_function", "index_batch", "similar_functions",
-        "semantic_search", "blackboard_search", "export_index_summary",
-        "evidence_card",
-    ):
-        assert f'"{action}"' in int_block, f"intelligence schema missing {action}"
-    # Description in TOOL_DESCRIPTIONS (still in schemas_data.py).
-    sdata = _read("src/ida_pro_mcp/host/schemas_data.py")
-    assert "intelligence_status, embedder_status" in sdata
 
 
 def test_intelligence_added_to_tools_list():

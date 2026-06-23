@@ -6,7 +6,7 @@ from .schemas_alias_hints import (
     _TOOL_ACTION_EXTRA_ALIASES,  # noqa: F401
     _TOOL_SPECIFIC_ARG_ALIASES,  # noqa: F401
 )
-from .tool_registry import tool_actions as _tool_actions_from_registry
+from .server.tool_registry import tool_actions as _tool_actions_from_registry
 
 BASE_TOOL_ALIASES = {
     "plugins": "misc",

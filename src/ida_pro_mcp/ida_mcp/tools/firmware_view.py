@@ -276,7 +276,7 @@ def _fwb_safe_bounds() -> tuple[int, int]:
 
 def _fwb_int_addr(v: Any) -> Optional[int]:
     try:
-        from ida_pro_mcp.host.intelligence.helpers import coerce_int
+        from ida_pro_mcp.services import coerce_int
         return coerce_int(v)
     except (TypeError, ValueError):
         return None
@@ -2263,7 +2263,7 @@ def firmware_view(
             # `run_firmware_bootstrap` is defined in this module (formerly in
             # the deleted `firmware_bootstrap.py` tool).
             try:
-                from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile
+                from ida_pro_mcp.services import infer_binary_arch_profile
             except Exception:
                 try:
                     from host.arch_profile import infer_binary_arch_profile  # type: ignore

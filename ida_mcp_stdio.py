@@ -28,17 +28,31 @@ _server_mod._real_stdout = _real_stdout
 
 # Re-export everything from the host package so existing imports keep working
 from ida_pro_mcp.host import *  # noqa: E402,F403
-from ida_pro_mcp.host import (  # noqa: E402
+from ida_pro_mcp.host.server.session import (  # noqa: E402
     Session,
     SessionManager,
     BookmarkManager,
-    IDAMCPServer,
-    MCPError,
-    make_error,
+)
+from ida_pro_mcp.host.server.server import IDAMCPServer  # noqa: E402
+from ida_pro_mcp.host.errors import MCPError, make_error  # noqa: E402
+from ida_pro_mcp.host.analysis.patterns import (  # noqa: E402
     compile_smart_pattern,
     smart_match,
+)
+from ida_pro_mcp.host.config import (  # noqa: E402
     CACHE_DIR,
     BRIDGE_LOG,
+    log_rpc,
+    validate_path,
+    _bounded_int,
+    _coerce_bool,
+    _env_bool,
+    _parse_str_list,
+    _parse_line_range,
+    _normalize_session_id,
+    _parse_iso_datetime,
+)
+from ida_pro_mcp.host.schemas import (  # noqa: E402
     TOOLS,
     TOOL_DESCRIPTIONS,
     TOOL_ACTIONS,
@@ -54,19 +68,12 @@ from ida_pro_mcp.host import (  # noqa: E402
     build_tool_description_lean,
     classify_tool_category,
     sanitize_schema_for_vertex,
-    log_rpc,
-    _bounded_int,
-    _coerce_bool,
-    _env_bool,
-    _parse_str_list,
-    _parse_line_range,
-    _normalize_session_id,
-    _parse_iso_datetime,
     _strip_balanced_wrappers,
     _resolve_tool_alias,
+)
+from ida_pro_mcp.host.stores.truncation import (  # noqa: E402
     truncate_response,
     continue_truncated,
-    validate_path,
 )
 
 if __name__ == "__main__":

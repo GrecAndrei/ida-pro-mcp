@@ -390,7 +390,7 @@ def summarize(
             if preview:
                 try:
                     try:
-                        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+                        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                     except ImportError:
                         from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
                     embedder = BgeCodeEmbedder()

@@ -373,7 +373,7 @@ def classify(
                     pass
                 if pseudo:
                     try:
-                        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+                        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                     except ImportError:
                         from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
                     embedder = BgeCodeEmbedder()
@@ -469,7 +469,7 @@ def classify(
             # Try to get BehaviorClassifier for unnamed functions
             _classifier = None
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                 _classifier = BehaviorClassifier.instance(BgeCodeEmbedder())
             except Exception:
                 pass
@@ -724,7 +724,7 @@ def classify(
 
         elif action == "anchor_coverage":
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
             except ImportError:
                 from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
             bc = BehaviorClassifier.instance(BgeCodeEmbedder())

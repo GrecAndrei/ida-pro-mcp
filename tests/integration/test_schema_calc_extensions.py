@@ -6,7 +6,7 @@ SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from ida_pro_mcp.host.schemas import TOOL_ACTIONS, TOOL_ARG_SCHEMAS, TOOL_DESCRIPTIONS
+from ida_pro_mcp.services import TOOL_ACTIONS, TOOL_ARG_SCHEMAS, TOOL_DESCRIPTIONS
 
 
 def test_calc_actions_include_bitops():

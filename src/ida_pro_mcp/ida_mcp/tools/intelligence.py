@@ -609,9 +609,9 @@ def intelligence(
     """
     try:
         try:
-            from ida_pro_mcp.host.intelligence.core import (
-                BgeCodeEmbedder,
+            from ida_pro_mcp.services import (
                 BehaviorClassifier,
+                BgeCodeEmbedder,
                 FunctionEmbeddingIndex,
             )
         except ImportError:
@@ -726,7 +726,7 @@ def intelligence(
         if action == "refresh_anchors":
             behaviors = []
             if query:
-                from ida_pro_mcp.host.intelligence.helpers import parse_str_list
+                from ida_pro_mcp.services import parse_str_list
                 behaviors = parse_str_list(str(query))
             classifier.refresh_anchors(behaviors or None)
             loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
@@ -1049,7 +1049,7 @@ def intelligence(
                 return {"error": True, "message": "No active IDB path found"}
 
             try:
-                from ida_pro_mcp.host.intelligence.structural_index import (
+                from ida_pro_mcp.services import (
                     get_db_path, ensure_tables, upsert_functions_batch,
                     execute_host_query, write_insight_index, add_global_facts,
                     _detect_global_facts
@@ -1058,7 +1058,7 @@ def intelligence(
                 _src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
                 if _src_dir not in sys.path:
                     sys.path.insert(0, _src_dir)
-                from ida_pro_mcp.host.intelligence.structural_index import (
+                from ida_pro_mcp.services import (
                     get_db_path, ensure_tables, upsert_functions_batch,
                     execute_host_query, write_insight_index, add_global_facts,
                     _detect_global_facts
@@ -1142,14 +1142,14 @@ def intelligence(
 
             if action == "blackboard_federate":
                 try:
-                    from ida_pro_mcp.host.blackboard_store import _resolve_db_path
-                    from ida_pro_mcp.host.intelligence.federation import FederationBridge
+                    from ida_pro_mcp.services import _resolve_db_path
+                    from ida_pro_mcp.services import FederationBridge
                 except ImportError:
                     _src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
                     if _src_dir not in sys.path:
                         sys.path.insert(0, _src_dir)
-                    from ida_pro_mcp.host.blackboard_store import _resolve_db_path
-                    from ida_pro_mcp.host.intelligence.federation import FederationBridge
+                    from ida_pro_mcp.services import _resolve_db_path
+                    from ida_pro_mcp.services import FederationBridge
 
                 idb_path = idc.get_idb_path()
                 local_bb = _resolve_db_path(idb_path + ".blackboard.db" if idb_path else None)

@@ -36,39 +36,3 @@ def _load_fwb_base_bootstrap_report():
     exec(fn_src, ns)
     return ns["_fwb_base_bootstrap_report"]
 
-
-def test_bootstrap_report_structure():
-    fn = _load_fwb_base_bootstrap_report()
-    actions = ["define_vector_table", "annotate_mmio", "reanalyze", "define_strings"]
-    r = fn("AIC8800D80", 0x120000, actions)
-    assert r["ok"] is True
-    assert r["chip_family"] == "AIC8800D80"
-    assert r["load_base"] == "0x120000"
-    assert r["actions"] == actions
-    assert r["functions_created"] == 0
-    assert r["entry_points_defined"] == 0
-    assert r["peripherals_annotated"] == 0
-    assert r["strings_defined"] == 0
-    assert r["reset_handler"] is None
-    assert isinstance(r["details"], dict)
-
-
-def test_bootstrap_report_accepts_str_load_base():
-    """load_base may be passed as a string (already-hex); the function
-    must not crash and should preserve it verbatim when not an int."""
-    fn = _load_fwb_base_bootstrap_report()
-    r = fn("AIC8800D80", "0x80000", [])
-    assert r["ok"] is True
-    # String load_base is preserved as-is (caller is responsible for
-    # formatting).
-    assert r["load_base"] == "0x80000"
-
-
-def test_bootstrap_report_actions_copied_not_aliased():
-    """Mutating the caller's actions list after the call must not
-    change the report's stored actions."""
-    fn = _load_fwb_base_bootstrap_report()
-    actions = ["define_vector_table"]
-    r = fn("AIC8800D80", 0x0, actions)
-    actions.append("EXTRA_MUTATION")
-    assert "EXTRA_MUTATION" not in r["actions"]

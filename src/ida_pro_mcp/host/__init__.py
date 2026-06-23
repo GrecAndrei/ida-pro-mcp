@@ -34,9 +34,7 @@ from .config import (
 
 from .errors import MCPError, make_error
 
-from .patterns import compile_smart_pattern, smart_match
-
-from .session import Session, SessionManager, BookmarkManager
+from .analysis.patterns import compile_smart_pattern, smart_match
 
 from .schemas import (
     TOOLS,
@@ -59,7 +57,8 @@ from .schemas import (
     sanitize_schema_for_vertex,
 )
 
-from .server import IDAMCPServer, truncate_response, continue_truncated
+from .server.server import IDAMCPServer
+from .stores.truncation import truncate_response, continue_truncated
 
 __all__ = [
     "CACHE_DIR",
@@ -93,9 +92,6 @@ __all__ = [
     "make_error",
     "compile_smart_pattern",
     "smart_match",
-    "Session",
-    "SessionManager",
-    "BookmarkManager",
     "TOOLS",
     "TOOL_DESCRIPTIONS",
     "TOOL_ACTIONS",

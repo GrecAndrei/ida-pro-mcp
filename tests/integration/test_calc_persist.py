@@ -30,7 +30,7 @@ def _load_persist_fn():
     """
     src_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "calc.py",
+        "..", "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "calc.py",
     )
     src_path = os.path.normpath(src_path)
     with open(src_path, encoding="utf-8") as f:

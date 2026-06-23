@@ -207,7 +207,7 @@ def _suggest_choice(value, choices):
     if not value or not choices:
         return None
     try:
-        from ida_pro_mcp.host.intelligence.helpers import best_match
+        from ida_pro_mcp.services import best_match
     except ImportError:
         import difflib
         matches = difflib.get_close_matches(str(value), choices, n=1, cutoff=0.6)
@@ -448,7 +448,7 @@ def _apply_pre_analysis_options():
 
     # Normalize architecture aliases via shared host helper when available.
     try:
-        from ida_pro_mcp.host.arch_profile import normalize_arch_options as _norm_arch
+        from ida_pro_mcp.services import normalize_arch_options as _norm_arch
         _norm, _meta = _norm_arch(
             {
                 "processor": processor,

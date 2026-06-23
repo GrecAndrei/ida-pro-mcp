@@ -58,7 +58,7 @@ if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
 try:
-    from ida_pro_mcp.host.blackboard_store import BlackboardStore as _BaseBlackboardStore
+    from ida_pro_mcp.services import BlackboardStore as _BaseBlackboardStore
 except ImportError:
     try:
         from host.blackboard_store import BlackboardStore as _BaseBlackboardStore  # type: ignore
@@ -68,7 +68,7 @@ except ImportError:
 
 def _get_embedder():
     try:
-        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
+        from ida_pro_mcp.services import BgeCodeEmbedder
         return BgeCodeEmbedder()
     except ImportError:
         try:
@@ -530,7 +530,7 @@ def blackboard(
                 import threading as _thr
                 def _propagate():
                     try:
-                        from ida_pro_mcp.host.frontier import FrontierEngine
+                        from ida_pro_mcp.services import FrontierEngine
                     except ImportError:
                         try:
                             from host.frontier import FrontierEngine  # type: ignore
@@ -898,7 +898,7 @@ def blackboard(
         # Return ranked unvisited functions from FrontierEngine.
         # Requires embeddings to be indexed (code(action='decompile') or schemaboot).
         try:
-            from ida_pro_mcp.host.frontier import FrontierEngine
+            from ida_pro_mcp.services import FrontierEngine
         except ImportError:
             from host.frontier import FrontierEngine  # type: ignore
         idb_path = ""
@@ -953,7 +953,7 @@ def blackboard(
     elif action == "coverage":
         # Coverage map: analyzed/visited/unvisited counts + per-cluster breakdown.
         try:
-            from ida_pro_mcp.host.frontier import FrontierEngine
+            from ida_pro_mcp.services import FrontierEngine
         except ImportError:
             from host.frontier import FrontierEngine  # type: ignore
         idb_path = ""
@@ -980,7 +980,7 @@ def blackboard(
         # Propagate LLM blackboard labels to embedding-similar neighbors.
         # Writes 'propagated' source_type entries for neighbors within cosine threshold.
         try:
-            from ida_pro_mcp.host.frontier import FrontierEngine
+            from ida_pro_mcp.services import FrontierEngine
         except ImportError:
             from host.frontier import FrontierEngine  # type: ignore
         idb_path = ""

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PROJECT_PATH = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "project.py"
 HOST_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"
 
@@ -67,7 +67,7 @@ class TestHostToolActionsProjectProvenance(unittest.TestCase):
                 if tool_actions is not None:
                     break
         self.assertIsNotNone(tool_actions)
-        from ida_pro_mcp.host.schemas import TOOL_ACTIONS
+        from ida_pro_mcp.services import TOOL_ACTIONS
 
         action_values = set(TOOL_ACTIONS.get("project", []))
         for action in NEW_ACTIONS:

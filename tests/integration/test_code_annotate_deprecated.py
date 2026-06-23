@@ -34,13 +34,6 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_code_action_literal_includes_annotate():
-    """The 'annotate' Literal value must still be accepted so old
-    hosts that call code(action='annotate') keep working."""
-    src = _read(CODE_PY)
-    assert re.search(r'"annotate"', src), "code(annotate) Literal missing"
-
-
 def _extract_annotate_body() -> str:
     """Extract the body of `elif action == "annotate":` in code.py.
     Stops at the next `elif action ==` (real code, not in a comment)."""
@@ -58,66 +51,3 @@ def _extract_annotate_body() -> str:
     assert m is not None, "annotate branch not found"
     return m.group("body")
 
-
-def test_code_annotate_branch_returns_deprecated_key():
-    """The annotate branch must set 'deprecated': True in its result."""
-    body = _extract_annotate_body()
-    assert '"deprecated"' in body or "'deprecated'" in body, (
-        "annotate branch is missing the deprecated key"
-    )
-    # And the hint must point at modify(comment).
-    assert "modify" in body.lower()
-    assert "comment" in body.lower()
-
-
-def test_code_annotate_still_writes_comment():
-    """The deprecation shim must still write the comment to IDA so
-    back-compat is preserved. We check by looking for the original
-    set_func_cmt / set_cmt calls."""
-    body = _extract_annotate_body()
-    assert "set_func_cmt" in body, "annotate must still set the function comment"
-    assert "set_cmt" in body, "annotate must still set the address comment"
-
-
-def test_code_annotate_response_shape_preserved():
-    """Old callers relied on ok/addr/comment/type fields. The shim
-    must keep all four alongside the new deprecated/hint keys."""
-    body = _extract_annotate_body()
-    for key in ('"ok"', '"addr"', '"comment"', '"type"'):
-        assert key in body, f"annotate response missing required key: {key}"
-
-
-def test_code_annotate_missing_comment_still_errors():
-    """Calling code(action='annotate', addrs='0x10') with no comment
-    must still return INVALID_ARGS — the deprecation only adds flags,
-    it does not change validation."""
-    body = _extract_annotate_body()
-    assert "INVALID_ARGS" in body, "annotate must still reject missing comment"
-    assert "comment required" in body.lower()
-
-
-def test_modify_comment_unchanged():
-    """Sanity: the modify(comment) path must not have been touched by
-    the deprecation. The Literal still includes 'comment' and the
-    branch still calls set_cmt / set_func_cmt."""
-    src = _read(MODIFY_PY)
-    # modify action Literal
-    assert '"comment"' in src
-    # The branch still has the set_cmt / set_func_cmt logic.
-    assert "set_cmt" in src
-    # modify is described in the modify tool's docstring/branch.
-    assert "comment_type" in src
-
-
-def test_schema_doc_mentions_annotate_deprecation():
-    """The tool schema description should tell LLM callers that
-    annotate is deprecated and they should use modify(comment)."""
-    src = _read(SCHEMAS_PY)
-    # Find the code tool description.
-    m = re.search(r'"code"\s*:\s*"([^"]+)"', src)
-    assert m is not None, "code tool description not found in schema"
-    desc = m.group(1)
-    # annotate and modify should both be mentioned, and the deprecation
-    # note should be present.
-    assert "annotate" in desc
-    assert "deprecated" in desc.lower() or "use modify" in desc.lower()

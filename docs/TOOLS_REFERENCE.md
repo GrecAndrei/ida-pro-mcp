@@ -267,7 +267,6 @@ Function comparison and similarity analysis including side-by-side diff, semanti
 
 **Actions:** functions, blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog
 
-### mbagcn
 MbaGCN graph encoding for function CFG similarity. Encodes CFGs to embeddings and queries nearest neighbors.
 
 **Actions:** encode, similar, stats
@@ -443,12 +442,10 @@ LLM workflow helpers plus 50+ advanced external-expansion actions for planning, 
 
 ## 25. VOERA Tools
 
-### schemaboot
 Deterministic function attribute extraction and structured search (VOERA Structured Semantic Indexing). Ingests all functions into a SQLite index with instruction mix, API calls, string refs, structural metrics, and entropy. Enables instant SQL-style queries without iterating functions.
 
 **Actions:** ingest, query, refresh, stats, delete, get
 
-### turboquant
 3-bit extreme embedding compression with PolarQuant + QJL (VOERA embedding compression). Ingests function vectors from SchemaBoot and compresses them to 3 bits per dimension (~8x memory reduction). Supports similarity search on compressed embeddings.
 
 **Actions:** ingest, query, stats, delete
@@ -458,7 +455,6 @@ Bridge-conditioned Multi-Hop Search (VOERA retrieval). Finds structurally relate
 
 **Actions:** search, bridges
 
-### memrl
 Non-parametric reinforcement learning on episodic memory (VOERA Memory-Reinforced Learning). Stores Intent-Experience-Utility triplets with learned Q-values. Two-phase retrieval: similarity recall followed by Q-value re-ranking. Updates via TD rule: Q_new = Q_old + alpha * (reward - Q_old).
 
 **Actions:** record, update, rank, stats, top, get_q, suggest, feedback, ingest, list_suggestions, get_suggestion

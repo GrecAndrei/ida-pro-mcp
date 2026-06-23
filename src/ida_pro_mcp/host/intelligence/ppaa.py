@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from .structural_index import get_db_path
 from .bridge_retrieval import MultiHopBridgeIndex
-from ..symbol_db import SymbolDB
+from ..stores.symbol_db import SymbolDB
 
 class PPAAEngine:
     """Predictive Pointer & Address Anticipator (PPAA) Engine.

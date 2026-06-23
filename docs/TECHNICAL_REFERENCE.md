@@ -63,8 +63,6 @@ Key categories:
 - **Analysis:** `ctree.py`, `graph.py`, `entropy.py`, `crypto_id.py`, `cfg_analysis.py`, `stack_analysis.py`, `deobfuscate.py`
 - **Comparison:** `compare.py`, `lumina.py`
 - **Threat hunting:** `threat_hunt.py`, `yara_hunt.py`, `gadgets.py`, `trace_analysis.py`
-- **Classification:** `classify.py`, `schemaboot.py`, `summarize.py`
-- **LLM optimization:** `llm_helpers.py`, `memrl.py`, `turboquant.py`, `bridgerag.py`, `mbagcn.py`, `hybrid_search.py`
 - **Governance:** `governance_engine.py`
 - **Infrastructure:** `blackboard.py`, `filter.py`, `protocol.py`, `abi.py`, `project.py`, `query.py`, `query_lang.py`
 - **Utilities:** `misc.py`, `calc.py`, `nav.py`, `wiki.py`, `batch.py`, `history.py`, `bookmarks` (via session)
@@ -79,7 +77,6 @@ The architecture follows a 5-tier memory hierarchy (L0–L4):
 | L1 Insight Index | `insight_index.py` | Fast in-memory tag-based function routing |
 | L2 Global Facts | `patterns.py` — `GlobalFactsDatabase` | Cross-session persistent facts (SQLite) |
 | L3 Task Skills | `session.py` — `crystallize_skill()` | Reusable crystallized workflows with Q-values |
-| L4 Session Archive | `blackboard.py` + `memrl.py` | Long-term blackboard persistence |
 
 ---
 
@@ -152,7 +149,6 @@ Every `tools/call` passes through this sequence:
 9. Host-side routing         (wiki/misc/project/session/query)
 10. IDA bridge dispatch      (TCP to server_script.py)
 11. Response shaping         (_prepare_response_payload)
-12. MemRL observation        (_observe_memrl)
 13. Next-cache write         (_cache_next_page)
 14. Activity recording       (_record_activity)
 15. Audit logging            (audit.log)
@@ -490,8 +486,6 @@ The full response enrichment pipeline (applied after tool execution):
 | File | Focus |
 |---|---|
 | `test_cartographer_mu.py` | Cartographer-μ semantic engine |
-| `test_memrl_bridgerag.py` | MemRL + BridgeRAGLite |
-| `test_turboquant.py` | TurboQuantLite quantization |
 | `test_governance_engine.py` | Governance rule engine |
 | `test_host_wiki_and_hardening.py` | Wiki, audit, rate limiting |
 | `test_mcp_client.py` | Full client-server round trips |

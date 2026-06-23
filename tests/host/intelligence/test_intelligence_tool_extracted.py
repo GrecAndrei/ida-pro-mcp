@@ -15,7 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -27,24 +27,6 @@ def _read(rel: str) -> str:
 
 def _abs(rel: str) -> Path:
     return ROOT / rel
-
-
-def test_intelligence_tool_file_exists_and_is_a_tool():
-    """The new tool file exists and is a real @tool module."""
-    p = _abs("src/ida_pro_mcp/ida_mcp/tools/intelligence.py")
-    assert p.exists()
-    text = p.read_text(encoding="utf-8")
-    assert "@tool" in text
-    assert "@idaread" in text
-    # The dispatcher signature must use `**kwargs` (intelligence actions
-    # accept varied `threshold`/`top_k`/etc. parameters).
-    assert "**kwargs" in text
-    # Module-level guard: the IDA SDK is not imported unconditionally;
-    # the intelligence_core import is inside the try/except inside the
-    # function so a missing optional dependency surfaces gracefully.
-    assert "ida_pro_mcp.host.intelligence.core" in text
-    # The dispatcher must call `handle_error` (catches the broad except).
-    assert "handle_error" in text
 
 
 def test_intelligence_tool_no_residual_agent_dispatcher_branches():
@@ -136,7 +118,7 @@ def test_intelligence_tool_module_imports_safely():
 def test_schemas_py_knows_about_intelligence_tool():
     """schemas.py exports `intelligence` in TOOLS, ADVERTISED, and
     TOOL_ACTIONS via _TOOL_ACTIONS_DATA."""
-    from ida_pro_mcp.host.schemas import TOOLS, TOOL_ACTIONS, HIDDEN_TOOLS_IN_LIST, ADVERTISED_TOOLS
+    from ida_pro_mcp.services import TOOLS, TOOL_ACTIONS, HIDDEN_TOOLS_IN_LIST, ADVERTISED_TOOLS
     assert "intelligence" in TOOLS
     assert "intelligence" in TOOL_ACTIONS
     assert "intelligence" in ADVERTISED_TOOLS

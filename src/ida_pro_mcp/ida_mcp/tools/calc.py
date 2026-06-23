@@ -6,7 +6,7 @@ except ImportError:
 
 import json
 import re
-from ida_pro_mcp.host.intelligence.helpers import parse_str_list
+from ida_pro_mcp.services import parse_str_list
 
 try:
     from ..support.semantic_matching import normalize_action, semantic_score, semantic_tokens

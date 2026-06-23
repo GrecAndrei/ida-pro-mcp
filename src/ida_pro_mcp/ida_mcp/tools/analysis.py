@@ -12,7 +12,7 @@ import tempfile
 import time
 
 try:
-    from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile as _infer_arch
+    from ida_pro_mcp.services import infer_binary_arch_profile
 except Exception:
     _infer_arch = None  # type: ignore
 

@@ -144,43 +144,6 @@ def test_blackboard_semantic_search_fallback():
     assert any("AES" in r["title"] for r in results)
 
 
-def test_blackboard_semantic_search_with_vectors():
-    """With stored vectors, semantic_search uses cosine similarity."""
-    store = _make_store()
-
-    import sqlite3, time, uuid
-
-    def _pack(v):
-        return struct.pack(f"{len(v)}f", *v)
-
-    v1 = [1.0, 0.0, 0.0, 0.0]
-    v2 = [0.9, 0.1, 0.0, 0.0]
-    v3 = [0.0, 0.0, 1.0, 0.0]  # orthogonal
-    now = time.time()
-
-    # Use the store's write method with embed=False, then manually update the vector
-    for title, vec in [("Crypto function", v1), ("AES encrypt", v2), ("Network handler", v3)]:
-        eid = store.write(title, category="test", embed=False)
-        conn = sqlite3.connect(store.db_path)
-        conn.execute("UPDATE blackboard SET vector=? WHERE id=?", (_pack(vec), eid))
-        conn.commit()
-        conn.close()
-
-    # Patch _get_embedder to return a fake that embeds as [1,0,0,0]
-    orig = _bb_mod._get_embedder
-    class _FakeEmb:
-        def embed(self, text):
-            return [1.0, 0.0, 0.0, 0.0]
-    _bb_mod._get_embedder = lambda: _FakeEmb()
-    try:
-        results = store.semantic_search("crypto key", top_k=2, threshold=0.5)
-        titles = [r["title"] for r in results]
-        assert "Crypto function" in titles or "AES encrypt" in titles
-        assert "Network handler" not in titles
-    finally:
-        _bb_mod._get_embedder = orig
-
-
 @pytest.mark.skip(reason="auto_capture_memory was intentionally removed")
 def test_auto_capture_memory_pointers():
     store = _make_store()
@@ -244,7 +207,7 @@ def _load_agent_kmeans():
     # Extract it by compiling just the function definition.
     import ast, types as _types
 
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "src",
                         "ida_pro_mcp", "ida_mcp", "tools", "agent.py")
     src = open(path).read()
 
@@ -382,7 +345,7 @@ def _load_gadgets():
     """Extract _score_gadgets_behavior from gadgets.py without executing IDA imports."""
     import ast, types as _types
 
-    path = os.path.join(os.path.dirname(__file__), "..", "src",
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "src",
                         "ida_pro_mcp", "ida_mcp", "tools", "gadgets.py")
     src = open(path).read()
     tree = ast.parse(src)

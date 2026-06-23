@@ -98,7 +98,7 @@ def tmp_session_dir():
     points at it. The directory is cleaned up automatically when the test
     completes.
     """
-    from ida_pro_mcp.host.session import SessionManager
+    from ida_pro_mcp.services import SessionManager
 
     with tempfile.TemporaryDirectory(prefix="ida-mcp-test-") as tmpdir:
         manager = SessionManager(tmpdir)
@@ -106,3 +106,12 @@ def tmp_session_dir():
             yield tmpdir, manager
         finally:
             manager = None
+
+# Stubs for integration tests (no IDA Pro required)
+class IDARunner:
+    """Stub runner for integration tests."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+def ida_is_available():
+    return False

@@ -8,7 +8,7 @@ import typing
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = ROOT / "src"
 TESTS_ROOT = ROOT / "tests"
 PACKAGE_ROOT = SRC_ROOT / "ida_pro_mcp"

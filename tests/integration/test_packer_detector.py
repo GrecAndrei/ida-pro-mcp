@@ -79,7 +79,7 @@ def _load_packer_module():
     import importlib.util
     path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "packer.py",
+        "..", "..", "src", "ida_pro_mcp", "ida_mcp", "tools", "packer.py",
     )
     path = os.path.normpath(path)
     spec = importlib.util.spec_from_file_location("packer_under_test", path)

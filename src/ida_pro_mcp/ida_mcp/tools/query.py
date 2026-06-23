@@ -184,7 +184,7 @@ def query(
             if not q:
                 return make_error(MCPError.INVALID_ARGS, "q required")
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
+                from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
                 from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
             embedder = BgeCodeEmbedder()
@@ -212,7 +212,7 @@ def query(
             results = idx.search(q, top_k=top_k * 3, threshold=0.0)
             expansion_queries = []
             try:
-                from ida_pro_mcp.host.intelligence.core import BehaviorClassifier
+                from ida_pro_mcp.services import BehaviorClassifier
             except ImportError:
                 try:
                     from host.intelligence.core import BehaviorClassifier# type: ignore

@@ -73,7 +73,7 @@ def _coerce_ea(value) -> int:
 
 def _get_intelligence_index():
     try:
-        from ida_pro_mcp.host.intelligence.context import get_assembler
+        from ida_pro_mcp.services import get_assembler
     except ImportError:
         try:
             from host.intelligence.context import get_assembler  # type: ignore
@@ -669,7 +669,7 @@ def _schemaboot_db_path() -> str | None:
         
     import hashlib
     try:
-        from ida_pro_mcp.host.config import CACHE_DIR
+        from ida_pro_mcp.services import CACHE_DIR
     except ImportError:
         import sys
         if sys.platform == "win32":

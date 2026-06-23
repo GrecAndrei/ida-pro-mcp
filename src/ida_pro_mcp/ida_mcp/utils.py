@@ -32,7 +32,7 @@ import ida_typeinf
 import idaapi
 import idautils
 import idc
-from ida_pro_mcp.host.intelligence.helpers import parse_str_list
+from ida_pro_mcp.services import parse_str_list
 
 
 # Support both package mode and standalone mode
@@ -47,7 +47,7 @@ except ImportError:
 
 # Smart pattern matching — shared with host (no IDA deps)
 try:
-    from ida_pro_mcp.host.patterns import compile_smart_pattern, smart_match
+    from ida_pro_mcp.services import compile_smart_pattern, smart_match
 except ImportError:
     try:
         from ...host.patterns import compile_smart_pattern, smart_match

@@ -2,14 +2,14 @@ import sys
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex, SemanticObjectIndex
+from ida_pro_mcp.services import FunctionEmbeddingIndex, SemanticObjectIndex
 from ida_pro_mcp.host.config import CACHE_DIR
-from ida_pro_mcp.host.intelligence.structural_index import get_db_path, ensure_tables
+from ida_pro_mcp.services import get_db_path, ensure_tables
 
 
 class FakeEmbedder:
@@ -85,7 +85,7 @@ def test_name_synchronization_on_pseudo_hash_match(tmp_path):
 
 
 def test_context_assembler_fallback_resolution():
-    from ida_pro_mcp.host.intelligence.context import ContextAssembler
+    from ida_pro_mcp.services import ContextAssembler
     
     assembler = ContextAssembler()
     unwritable_path = "/usr/bin/nonexistent_path_mcp/test_binary"
@@ -171,7 +171,7 @@ def test_search_advanced_fallback_resolution():
 
 
 def test_context_policy_fallback_resolution():
-    from ida_pro_mcp.host.intelligence.context import ContextAssembler
+    from ida_pro_mcp.services import ContextAssembler
     
     assembler = ContextAssembler()
     unwritable_path = "/usr/bin/nonexistent_path_mcp/test_binary"
@@ -181,13 +181,3 @@ def test_context_policy_fallback_resolution():
     assert "fallback_indexes" in resolved_path
     assert resolved_path.endswith(".focus_policy.json")
 
-
-def test_blackboard_store_fallback_resolution():
-    from ida_pro_mcp.host.blackboard_store import BlackboardStore
-    
-    unwritable_path = "/usr/bin/nonexistent_path_mcp/test_bb.db"
-    
-    store = BlackboardStore(unwritable_path)
-    
-    assert "fallback_indexes" in store.db_path
-    assert store.db_path.endswith(".blackboard.db")

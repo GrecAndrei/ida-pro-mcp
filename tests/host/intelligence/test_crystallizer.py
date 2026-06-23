@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock
 
-from ida_pro_mcp.host.intelligence.crystallizer import AgentMacroCrystallizer
-from ida_pro_mcp.host.session import SessionManager
-from ida_pro_mcp.host.server_session import ServerSessionMixin
-from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.services import AgentMacroCrystallizer
+from ida_pro_mcp.services import SessionManager
+from ida_pro_mcp.services import ServerSessionMixin
+from ida_pro_mcp.services import MCPError
 
 
 class TestAgentMacroCrystallizer(unittest.TestCase):

@@ -389,7 +389,7 @@ def search(
             if not actual_pattern:
                 return make_error(MCPError.INVALID_ARGS, "pattern or query required for nl search")
             try:
-                from ida_pro_mcp.host.intelligence.context import get_assembler
+                from ida_pro_mcp.services import get_assembler
                 asm = get_assembler()
                 idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
                 if not idb_path:
@@ -500,7 +500,7 @@ def search(
             # Try BehaviorClassifier on unnamed functions if not enough results
             if len(rows) < limit // 2:
                 try:
-                    from ida_pro_mcp.host.intelligence.context import get_assembler
+                    from ida_pro_mcp.services import get_assembler
                     asm = get_assembler()
                     classifier = asm._behavior_classifier()
                     checked = 0

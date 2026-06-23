@@ -38,7 +38,7 @@ def test_canonical_modules_are_importable():
         SemanticObjectIndex,
         _extract_signature,
     )
-    from ida_pro_mcp.host.intelligence.context import ContextAssembler, get_assembler
+    from ida_pro_mcp.services import ContextAssembler, get_assembler
     # Smoke-construct: classes are reachable
     assert ContextAssembler is not None
     assert get_assembler is not None

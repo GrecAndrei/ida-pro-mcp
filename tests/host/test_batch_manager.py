@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import pytest
-from ida_pro_mcp.host.batch_manager import BatchManager, BatchTask
+from ida_pro_mcp.services import BatchManager, BatchTask
 
 
 def test_submit_and_status():

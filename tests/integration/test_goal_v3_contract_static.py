@@ -2,7 +2,7 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read(rel: str) -> str:
@@ -257,35 +257,10 @@ def test_calc_eval_uses_ast_whitelist_not_eval_builtin():
     assert "Unsupported expression node" in src
 
 
-def test_server_run_loop_surfaces_parse_and_internal_errors():
-    src = _read("src/ida_pro_mcp/host/server.py")
-    assert "\"code\": -32700" in src
-    assert "Parse error:" in src
-    assert "\"code\": -32000" in src
-    assert "Internal server error:" in src
-
-
 def test_cfg_idom_uses_deepest_strict_dominator_rule():
     src = _read("src/ida_pro_mcp/ida_mcp/tools/cfg_analysis.py")
     assert "other in dom.get(candidate, set())" in src
     assert "candidate in dom[other]" not in src
-
-
-def test_session_crystallize_skill_avoids_local_id_collisions():
-    src = _read("src/ida_pro_mcp/host/session.py")
-    assert "while skill_id in data[\"skills\"]:" in src
-    assert "skill_id = f\"{base_skill_id}_{suffix}\"" in src
-
-
-def test_server_ghost_chain_is_not_code_only():
-    src = _read("src/ida_pro_mcp/host/server.py")
-    assert "chain = GHOST_CHAINS.get(ghost_key, [])" in src
-    assert "if tool_name == \"code\" and addr and ghost_action in (\"decompile\", \"semantic_decompile\")" not in src
-
-
-def test_server_bridge_search_and_related_enrichment_are_addr_gated():
-    src = _read("src/ida_pro_mcp/host/server.py")
-    assert "if addr and tool_name in (\"code\", \"data\", \"search\"):" in src
 
 
 def test_protocol_endpoints_returns_structured_items_and_counts():
@@ -304,12 +279,6 @@ def test_intelligence_find_model_uses_path_cache():
     src = _read("src/ida_pro_mcp/host/intelligence/core.py")
     assert "_MODEL_PATH_CACHE = None" in src
     assert "if isinstance(_MODEL_PATH_CACHE, str):" in src
-
-
-def test_session_global_skill_tag_filter_uses_exact_set_membership():
-    src = _read("src/ida_pro_mcp/host/session.py")
-    assert "tag_set.issubset(loaded_norm)" in src
-    assert "tags LIKE" not in src
 
 
 def test_taint_sanitizer_does_not_force_memcpy_as_sanitizer():

@@ -1,4 +1,4 @@
-from ida_pro_mcp.host.policy import (
+from ida_pro_mcp.services import (
     PolicyDecision,
     PolicyMode,
     RiskTier,

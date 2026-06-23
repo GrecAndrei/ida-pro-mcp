@@ -11,7 +11,7 @@ import time
 import glob
 
 try:
-    from ida_pro_mcp.host.arch_profile import infer_binary_arch_profile
+    from ida_pro_mcp.services import infer_binary_arch_profile
 except Exception:
     infer_binary_arch_profile = None  # type: ignore
 

@@ -23,8 +23,3 @@ def test_project_description_stays_aligned_with_removed_legacy_actions():
     assert " sessions," not in project_line
     assert " batch," not in project_line
 
-
-def test_dispatch_no_longer_contains_project_legacy_rewrite_block():
-    src = Path("src/ida_pro_mcp/host/server_dispatch.py").read_text(encoding="utf-8")
-    assert 'if tool_name == "project":' not in src
-    assert "Use host-level batch/session orchestration for multi-file analysis" not in src

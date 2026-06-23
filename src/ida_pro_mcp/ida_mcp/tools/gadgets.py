@@ -942,7 +942,7 @@ def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
     if not gadgets:
         return None
     try:
-        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
     except ImportError:
         try:
             from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
@@ -1006,7 +1006,7 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
     combined chain, and return a structured exploit primitive assessment.
     """
     try:
-        from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
     except ImportError:
         try:
             from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore

@@ -7,10 +7,10 @@ import time
 from pathlib import Path
 
 from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
-from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex, SemanticObject, SemanticObjectIndex
+from ida_pro_mcp.services import FunctionEmbeddingIndex, SemanticObject, SemanticObjectIndex
 
 
-FIX_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "semantic"
+FIX_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "semantic"
 
 
 def _fixture(name: str) -> str:

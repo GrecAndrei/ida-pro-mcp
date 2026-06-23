@@ -150,7 +150,7 @@ def nav(
 
             # Embedding-based semantic candidates (merge with keyword scores).
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
+                from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
                 try:
                     from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex# type: ignore

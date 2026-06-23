@@ -593,7 +593,7 @@ def validate_action(action: str, valid_actions: list, tool_name: str = "") -> Op
 
     # Find close matches using difflib for better typo correction
     try:
-        from ida_pro_mcp.host.intelligence.helpers import best_match
+        from ida_pro_mcp.services import best_match
         suggestions = best_match(action or "", list(valid_actions), n=3, cutoff=0.4)
     except ImportError:
         import difflib

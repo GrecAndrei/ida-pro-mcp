@@ -162,7 +162,7 @@ def agent(
             behavior_tags = []
             rename_suggestion = ""
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+                from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                 pseudo = ""
                 if isinstance(ctx_res, dict):
                     pseudo = str(ctx_res.get("pseudocode") or "")
@@ -705,7 +705,7 @@ def agent(
 
             # Try embedding-based similarity first (fast, O(n) cosine scan)
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
+                from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
                 try:
                     from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex# type: ignore
@@ -1018,7 +1018,7 @@ def agent(
             # Uses bge-code-v1 embeddings (or TF-IDF fallback) + pure-numpy k-means.
             # Returns labeled clusters with representative functions and behavior tags.
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex, _extract_signature
+                from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
             except ImportError:
                 from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex, _extract_signature# type: ignore
 
@@ -1118,7 +1118,7 @@ def agent(
 
         elif action == "fingerprint":
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+                from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
             except ImportError:
                 from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
 
@@ -1224,7 +1224,7 @@ def _cfg_similarity_action(action: str, addr, kwargs) -> dict:
     shape as the original tool so existing call sites work unchanged.
     """
     try:
-        from ida_pro_mcp.host.mbagcn_engine import (
+        from ida_pro_mcp.services import (
             CFGExtractor,
             GraphEmbeddingStore,
             MbaGCNEncoder,

@@ -468,7 +468,7 @@ def test_capsule_list_evidence_cards_roundtrip(tmp_path):
 def test_capsule_session_auto_resolution(tmp_path):
     import os
     from unittest.mock import MagicMock
-    from ida_pro_mcp.host.server_session import ServerSessionMixin
+    from ida_pro_mcp.services import ServerSessionMixin
 
     mixin = ServerSessionMixin()
     mixin._session_capsules = {}

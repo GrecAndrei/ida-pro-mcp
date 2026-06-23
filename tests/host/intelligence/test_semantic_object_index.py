@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 
-from ida_pro_mcp.host.intelligence.embeddings import SemanticObject, SemanticObjectIndex
+from ida_pro_mcp.services import SemanticObject, SemanticObjectIndex
 
 
 class _FakeEmbedder:

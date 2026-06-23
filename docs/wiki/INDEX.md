@@ -97,11 +97,7 @@ Auto-generated from wiki file structure.
 
 - [lumina](tools/lumina.md)
 
-- [mbagcn](tools/mbagcn.md)
-
 - [memory](tools/memory.md)
-
-- [memrl](tools/memrl.md)
 
 - [microcode](tools/microcode.md)
 
@@ -120,8 +116,6 @@ Auto-generated from wiki file structure.
 - [protocol](tools/protocol.md)
 
 - [query](tools/query.md)
-
-- [schemaboot](tools/schemaboot.md)
 
 - [search](tools/search.md)
 
@@ -148,8 +142,6 @@ Auto-generated from wiki file structure.
 - [trace_analysis](tools/trace_analysis.md)
 
 - [truncation](tools/truncation.md)
-
-- [turboquant](tools/turboquant.md)
 
 - [types](tools/types.md)
 

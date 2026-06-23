@@ -50,7 +50,7 @@ It provides:
 Important architecture note:
 
 - This project does **not** run any backend cloud LLM service.
-- Tool execution is deterministic IDA SDK logic plus local ML components (bge-code-v1 embeddings, BehaviorClassifier, FrontierEngine, schemaboot, Q-learning).
+- Tool execution is deterministic IDA SDK logic plus local ML components (bge-code-v1 embeddings, BehaviorClassifier, FrontierEngine).
 - Any LLM behavior comes from the MCP client using this server, not from an embedded server-side LLM runtime.
 
 ## Local Semantic Memory
@@ -353,7 +353,7 @@ Additional specialized capabilities remain accessible via hub tools + wiki docs.
 - Debug/trace: `debug`, `trace`, `trace_analysis`, `coverage`
 - Structural: `ctree`, `microcode`, `graph`, `imports_deep`, `symbols`, `patterns`
 - Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `llm_helpers`, `binary_info`, `string_ops`
-- Infrastructure: `blackboard`, `governance`, `filter`, `schemaboot`
+- Infrastructure: `blackboard`, `governance`, `filter`
 
 For detailed per-tool docs, use the `wiki` tool or browse `docs/wiki/tools/`.
 
@@ -411,18 +411,8 @@ Powers the `_nudge` field in every response.
 
 ### Additional ML components
 
-Legacy `memrl`, `turboquant`, and `bridgerag` tool names were removed from the canonical `TOOLS` registry/tools-list surface, even though some internal legacy references remain.
-
-Tool surface:
-
-- `schemaboot`: Structured semantic indexing with induced attribute-value schemas per function
 - `bridge_search`: Multi-hop bridge query expansion for discovering indirect relationships
 - `predictor`: Deterministic prediction and strategy suggestion using crystallized skills
-
-Internal components:
-
-- `PreferenceMemoryBank`: Q-value learning and skill crystallization based on usage patterns
-- `MultiHopBridgeIndex`: Canonical bridge index used by `bridge_search`
 
 ## Production Hardening
 
@@ -845,18 +835,10 @@ Recommended compact defaults:
 
 ## Development
 
-Run targeted tests:
-
-```bash
-python -m unittest tests.test_host_wiki_and_hardening
-python -m unittest tests.test_linux_support
-python -m unittest tests.test_session_features
-```
-
 Run all tests:
 
 ```bash
-python -m unittest discover tests
+python -m pytest tests/
 ```
 
 Generate noisy-argument/action acceptance corpus (10k+ cases; current default flow emits 20k):

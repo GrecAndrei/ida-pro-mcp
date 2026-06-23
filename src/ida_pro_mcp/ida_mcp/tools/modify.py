@@ -63,7 +63,7 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
     if not name or name.startswith("sub_"):
         return
     try:
-        from ida_pro_mcp.host.symbol_db import SymbolDB
+        from ida_pro_mcp.services import SymbolDB
     except Exception:
         try:
             from host.symbol_db import SymbolDB  # type: ignore
@@ -338,7 +338,7 @@ def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
 
     def _propagate():
         try:
-            from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+            from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
         except ImportError:
             try:
                 from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore

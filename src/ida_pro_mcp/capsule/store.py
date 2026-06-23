@@ -1048,11 +1048,3 @@ class CapsuleStore:
             },
         }
 
-    def run_vulnerability_reasoner(self) -> list[dict[str, Any]]:
-        self._assert_initialized()
-        from ida_pro_mcp.host.intelligence.reasoner import VulnerabilityReasoner
-        reasoner = VulnerabilityReasoner()
-        return reasoner.reason_on_capsule(self)
-
-
-

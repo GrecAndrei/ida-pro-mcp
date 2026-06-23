@@ -8,7 +8,7 @@ from collections import Counter
 import math
 
 try:
-    from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
+    from ida_pro_mcp.services import BgeCodeEmbedder
 except Exception:
     try:
         from host.intelligence.core import BgeCodeEmbedder# type: ignore
