@@ -26,7 +26,6 @@ The `host/` package (`src/ida_pro_mcp/host/`) contains:
 | `server.py` | `IDAMCPServer` — JSON-RPC stdio server, tool dispatch, response shaping, blackboard pipeline, runtime leases |
 | `session.py` | `Session`, `SessionManager`, `BookmarkManager` — session CRUD, snapshots, notebook, hypotheses, skills, activity log |
 | `schemas.py` | `TOOLS`, `TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`, `TOOL_ALIASES`, `ARG_ALIASES_BY_TOOL`, `ACTION_ALIASES_BY_TOOL`, `WRAPPER_ACTIONS`, schema builders (full/lean/ultra), alias resolution |
-| `cartographer_mu.py` | Cartographer-μ semantic engine — S4REncoder, TurboQuantLite, BridgeRAGLite, MemRLUtility, SchemaBootRE, ContextComposer |
 | `audit.py` | JSONL structured audit logging with daily rotation, size cap, args-hash tamper evidence |
 | `rate_limit.py` | Token-bucket rate limiter with per-tool + global buckets |
 | `config.py` | Runtime directory resolution, env var parsing, constants, limits, pointer note config |
@@ -216,106 +215,9 @@ All wrappers require `source_action` (or alias `on`/`target_action`/`subaction`)
 
 ---
 
-## 4. Cartographer-μ Semantic Engine
+## 4. Production Hardening
 
-**File:** `src/ida_pro_mcp/host/cartographer_mu.py` (816 lines, pure Python + numpy)
-
-A 32KB-parameter (effective) semantic engine replacing passive blackboard injection with
-utility-driven, relevance-ranked context selection. Zero external ML libraries. Deterministic
-(fixed seeds, no stochastic inference).
-
-### 4.1 S4REncoder (Selective State Space Encoder)
-
-128-dimensional state space model with RE-specific structured decay priors:
-- **Address band** (0–16): decay 0.95
-- **API band** (16–32): decay 0.80
-- **String band** (32–48): decay 0.50
-- **CF band** (48–64): decay 0.85
-- **General band** (64–128): decay 0.30
-
-Tokenizes payloads into feature tokens (tool name, addresses, APIs, keys), embeds via hash-based
-projection, and updates hidden state via `h_t = A@h_t + B@x_t`.
-
-### 4.2 TurboQuantLite (4-bit PolarQuant)
-
-Compresses 128-dim vectors to ~64 bytes using:
-1. **Hadamard rotation** (Walsh-Hadamard transform)
-2. **4-bit Lloyd-Max quantization** (16 levels with learned centroids)
-3. **QJL residual** (1-bit sign correction)
-
-`similarity()` computes approximate inner product via bin-matching + QJL correction, enabling
-fast nearest-neighbor search without decompression.
-
-### 4.3 BridgeRAGLite (Cross-Reference Bridge Extraction)
-
-Extracts bridge entities from payloads using three regex patterns:
-- `addr`: `0x[0-9a-fA-F]{8,16}`
-- `api`: 200+ known Windows/Linux APIs
-- `func_name`: `sub_*` and symbol names
-
-Scoring is domain-aware for reverse engineering:
-- **Exact address match:** maximum relevance (0.85–1.0)
-- **Bridge overlap:** Jaccard similarity weighted 0.7
-- **Semantic similarity:** tiebreaker (0.2) when no bridges match
-- **Temporal decay:** slower for bridged entries (`exp(-age/10)`), faster for orphans (`exp(-age/3)`)
-
-### 4.4 MemRLUtility (Non-Parametric Q-Learning)
-
-Per-entry Q-value table backed by SQLite. TD(0) update:
-```
-Q_new = Q_old + α * (reward - Q_old),  α=0.15
-```
-
-`observe_usage()` infers reward from LLM behavior:
-- Injected entry + next call uses related bridges → +1.0
-- Injected entry + no related bridges → -0.3
-- Missed relevant entry → +0.5
-
-`prune_low_q(threshold=0.2)` removes entries with persistently low utility.
-
-### 4.5 SchemaBootRE (Deterministic Attribute Induction)
-
-Extracts structured attributes from any tool payload:
-- `tool`, `action`, `has_addr`, `has_api`, `has_crypto`, `has_network`
-- `phase_hint`: triage → behavioral_analysis → threat_analysis
-- Phase inference from crypto/network API patterns
-
-`pre_filter()` filters blackboard entries by schema compatibility: phase match, address
-compatibility, high-confidence pass-through, API compatibility.
-
-### 4.6 ContextComposer (Pipeline Orchestrator)
-
-Full pipeline per tool response:
-```
-1. SchemaBoot    → extract query attributes
-2. Encode        → S4R state vector
-3. Quantize      → TurboQuant 4-bit
-4. Pre-filter    → SchemaBoot compatibility
-5. BridgeRAG     → relevance scoring
-6. MemRL         → utility = 0.8·relevance + 0.2·Q
-7. Select top-k  → default k=3
-8. Density opt   → 1-line compact summaries
-```
-
-Returns `working_memory` (compact entries), `memory_stats` (total/pre-filtered/injected/avg_utility),
-`analysis_phase`, `bridges_detected`.
-
-### 4.7 Cognitive Architecture and Bridge Query
-
-The `agent.py` tool provides two additional actions:
-
-- **`bridge_query`**: Bridge-Conditioned Multi-Hop Search. Chains through intermediate entities
-  (bridge → string refs → candidates). Automatically extracts bridge entities and expands via
-  dual-entity search.
-
-- **`reflect`**: ReasoningBank Distillation. Analyzes attempted strategies, extracts insights
-  and guardrails. Distills successes/failures into reusable strategy objects.
-
----
-
-## 5. Production Hardening
-
-### 5.1 Audit Logging (`audit.py`)
+### 4.1 Audit Logging (`audit.py`)
 
 - **Format:** JSONL at `<cache_dir>/audit/YYYY-MM/audit_YYYY-MM-DD.jsonl`
 - **Per record:** `ts`, `unix_ms`, `session_id`, `tool`, `action`, `args_hash` (SHA-256 first 16 hex),
@@ -324,7 +226,7 @@ The `agent.py` tool provides two additional actions:
 - **Rotation:** daily by date, auto-prunes oldest months when total exceeds 256 MB
 - **Thread-safe:** uses `threading.Lock`
 
-### 5.2 Rate Limiting (`rate_limit.py`)
+### 4.2 Rate Limiting (`rate_limit.py`)
 
 Token-bucket algorithm with two scopes:
 - **Per-tool:** default 10 calls/second (configurable via `IDA_MCP_RATE_LIMIT_PER_TOOL`)
@@ -332,14 +234,13 @@ Token-bucket algorithm with two scopes:
 - **Burst:** default 20 tokens (configurable via `IDA_MCP_RATE_LIMIT_BURST`)
 - **Disable:** `IDA_MCP_DISABLE_RATE_LIMIT=1` for testing
 
-### 5.3 Blackboard Pruning
+### 4.3 Blackboard Pruning
 
-- **MemRL:** `prune_low_q(threshold=0.2)` removes entries below utility threshold
 - **Session cleanup:** `cleanup_stale(max_age_days=30)` removes sessions untouched for >30 days
 - **Activity log:** capped at 500 entries per session
 - **Insight Index:** stale demotion via `get_stale_functions()`
 
-### 5.4 Context Density Optimization (`context_density.py`)
+### 4.4 Context Density Optimization (`context_density.py`)
 
 `ContextDensityOptimizer` provides:
 - XML/HTML tag stripping
@@ -349,7 +250,7 @@ Token-bucket algorithm with two scopes:
 - Information density measurement
 - Budget-aware response compaction (default 30K token budget)
 
-### 5.5 Semantic Index
+### 4.5 Semantic Index
 
 Configurable semantic ASM index:
 - Versioned SQLite DB (`semantic_asm_index_v1.sqlite3`)
@@ -357,7 +258,7 @@ Configurable semantic ASM index:
 - Scoring: substring match (48), pattern match (120), per-token (12)
 - Source limit: default 3000 entries
 
-### 5.6 MCP Resource Layer
+### 4.6 MCP Resource Layer
 
 65 read-only `ida://` URIs provide a virtual filesystem over the IDB:
 - `ida://functions/{addr}/decompile` — decompilation on demand
@@ -371,9 +272,9 @@ IDA tool and caches results through the insight index.
 
 ---
 
-## 6. Guardrails
+## 5. Guardrails
 
-### 6.1 Pointer Notes
+### 5.1 Pointer Notes
 
 The system detects when an LLM is about to compute addresses mentally and injects a safety note:
 ```
@@ -391,18 +292,18 @@ ALWAYS USE THE CALC/MEMORY TOOL FOR ADDRESS MATH OR POINTER CHAINING.
 Injected every `IDA_MCP_POINTER_NOTE_INTERVAL` (default 900s) when signal exceeds threshold
 (`IDA_MCP_POINTER_NOTE_MIN_SIGNAL`, default 3).
 
-### 6.2 Strict Mode (`IDA_MCP_GUARDRAIL_STRICT_WRITES`)
+### 5.2 Strict Mode (`IDA_MCP_GUARDRAIL_STRICT_WRITES`)
 
 When enabled, blocks risky write operations (patch, rename, set_type, comment, delete, etc.)
 unless `_guardrail_ack=true` is explicitly provided. Affects tools: `modify`, `bulk`,
 `annotation`, `funcs`, `segments`, `memory`, `data_ops`.
 
-### 6.3 Address Lockstep
+### 5.3 Address Lockstep
 
 All address arguments pass through hex normalization and validation. `_normalize_field_variants`
 resolves bracket-wrapped addresses, strips quotes, and handles comma-separated lists.
 
-### 6.4 Auto-Nudge Middleware
+### 5.4 Auto-Nudge Middleware
 
 `AutoNudge` (injected into every response as `_nudge` field) solves 6 persistent LLM behavioral
 patterns:
@@ -421,7 +322,7 @@ patterns:
 **Smart tool suggestions** use Z-score normalized scoring with behavior-tag boosts and
 MemRL Q-value integration.
 
-### 6.5 Ghost Tool Chains
+### 5.5 Ghost Tool Chains
 
 `response_enrichment.py` defines companion chains triggered by specific tool/action pairs:
 - `code:decompile` → auto-runs `callers`, `callees`, `strings_in_func`
@@ -433,7 +334,7 @@ Results are silently merged into the response before the LLM sees it. Certain to
 
 ---
 
-## 7. Auto-Blackboard Pipeline
+## 6. Auto-Blackboard Pipeline
 
 The full response enrichment pipeline (applied after tool execution):
 
@@ -445,8 +346,7 @@ The full response enrichment pipeline (applied after tool execution):
 5. Security Detection     → Flag anti-debug, anti-VM, crypto, shellcode patterns
 6. Ghost Tool Chains      → Pre-emptively execute companion tool calls
 7. Auto-Nudge             → Compute _nudge field (hex resolution, suggestions, stuck alerts)
-8. Cartographer-μ         → Encode → Quantize → BridgeRAG → MemRL → Context injection
-9. Response Shaping       → _response_mode, field projection, truncation, table mode
+8. Response Shaping       → _response_mode, field projection, truncation, table mode
 ```
 
 ### Auto-Blackboard Triggers
@@ -461,9 +361,9 @@ The full response enrichment pipeline (applied after tool execution):
 
 ---
 
-## 8. Testing Strategy
+## 7. Testing Strategy
 
-### 8.1 Test Infrastructure
+### 6.1 Test Infrastructure
 
 - **679 test functions** across 41 files under `tests/`
 - Tests use a combined `conftest.py` and `MCPClient` helper class (subprocess stdio client)
@@ -471,21 +371,10 @@ The full response enrichment pipeline (applied after tool execution):
 - Comprehensive tests include `test_mcp_comprehensive.py`, `test_host_wiki_and_hardening.py`,
   `test_improvements.py`, `test_revamp.py`, `test_session_features.py`, etc.
 
-### 8.2 Benchmark Suite (`tests/benchmark_cartographer_mu.py`)
-
-761-line comprehensive benchmark for Cartographer-μ measuring:
-1. **Latency:** per-component and end-to-end pipeline
-2. **Accuracy:** relevance ranking quality vs baselines
-3. **Memory:** footprint and scalability across 10–5000 entries
-4. **Determinism:** consistency guarantees across runs
-5. **Learning:** MemRL convergence speed
-6. **Scalability:** performance vs blackboard size
-
-### 8.3 Key Test Files
+### 6.2 Key Test Files
 
 | File | Focus |
 |---|---|
-| `test_cartographer_mu.py` | Cartographer-μ semantic engine |
 | `test_governance_engine.py` | Governance rule engine |
 | `test_host_wiki_and_hardening.py` | Wiki, audit, rate limiting |
 | `test_mcp_client.py` | Full client-server round trips |
@@ -499,7 +388,7 @@ The full response enrichment pipeline (applied after tool execution):
 | `test_funcs_sync_routing.py` | Function sync/routing |
 | `tool_sweep_probe.py` | Tool action sweep testing |
 
-### 8.4 Optimization Profiles
+### 6.3 Optimization Profiles
 
 Three QoL profiles control the trade-off between context efficiency and detail:
 
@@ -511,9 +400,9 @@ Three QoL profiles control the trade-off between context efficiency and detail:
 
 ---
 
-## 9. Installer & Build System
+## 8. Installer & Build System
 
-### 9.1 Installer Architecture (`install.py`)
+### 7.1 Installer Architecture (`install.py`)
 
 - Hardcoded MCP client config paths extracted into `client_configs.json`
 - Dynamically loads and resolves paths from JSON data
@@ -525,14 +414,14 @@ Three QoL profiles control the trade-off between context efficiency and detail:
   - Additional compact/truncation budgets
 - Supports env overrides, XDG fallback, OS-specific paths
 
-### 9.2 Documentation Generation
+### 7.2 Documentation Generation
 
 - `docs/TOOLS_REFERENCE.md` generated from live schema metadata
 - `docs/wiki/tools/*.md` generated from live tool metadata/schemas
 - `docs/wiki/INDEX.md` generated from wiki tree content
 - `.agents/tool-docs/*.md` generated by `scripts/generate_tool_skills.py`
 
-### 9.3 Environment Variables (Key)
+### 7.3 Environment Variables (Key)
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -556,7 +445,7 @@ Three QoL profiles control the trade-off between context efficiency and detail:
 
 ---
 
-## 10. Tool Schema Contract
+## 9. Tool Schema Contract
 
 Source of truth is in `src/ida_pro_mcp/host/schemas.py`:
 - `TOOLS` — ordered list of all 67 tool names
