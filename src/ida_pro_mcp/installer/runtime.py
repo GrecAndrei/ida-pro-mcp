@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from .common import InstallReport
+
+_log = logging.getLogger(__name__)
 
 
 # Hard cap on llama.cpp release asset size. Anything larger is refused
@@ -226,11 +229,23 @@ def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
 
 
 def find_embed_model(install_root: Path) -> str:
+    """Locate a ``bge-code-v1*.gguf`` model file on disk.
+
+    Returns the first match found from this search order:
+
+    1. ``IDA_MCP_EMBED_MODEL`` env var (direct file path).
+    2. ``embedder.json`` config file (mirrors host discovery).
+    3. Globbing for ``bge-code-v1*.gguf`` across a prioritized list of
+       base directories (install root, user home, cwd).
+    4. HuggingFace hub cache (``~/.cache/huggingface/hub/``).
+    5. Recursive scan under *install_root* only (broad last-ditch walk).
+    """
+    # 1. Explicit env override.
     env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "").strip()
     if env_val and Path(env_val).is_file():
         return env_val
 
-    # Manual override via embedder.json (mirrors host discovery).
+    # 2. embedder.json (persistent state from a previous install/doctor run).
     try:
         from ida_pro_mcp.host.intelligence.core import (
             _read_embedder_state,
@@ -243,22 +258,22 @@ def find_embed_model(install_root: Path) -> str:
         pass
 
     home = Path.home()
-    model_filenames = ("bge-code-v1-q8_0.gguf", "bge-code-v1.gguf")
-    # Scope the discovery walk to project-specific directories and an
-    # opt-in env var (audit §6.8). The previous version scanned the
-    # user's entire ~/Downloads and ~/Documents, which is slow on
-    # network shares and follows arbitrary symlinks.
-    #
-    # IDA_MCP_EMBED_SEARCH_PATHS is a PATH-style list (':' on POSIX,
-    # ';' on Windows). Each entry is a directory; we check it at the
-    # top level only (no recursion) for the candidate filenames.
+    cwd = Path.cwd()
+
+    # ── 3. Glob-based search across sensible locations ─────────────────
+    # Each base is checked via Path.glob("bge-code-v1*.gguf") so every
+    # quantization variant (q8_0, f16, q4_K_M, etc.) is found without
+    # hardcoding filenames.
     bases: list[Path] = [
         install_root,
         install_root / "models",
         install_root.parent,
+        home / ".cache" / "ida-pro-mcp" / "models",
         home / "models",
         home / "Downloads" / "ida-pro-mcp",
         home / "Documents" / "ida-pro-mcp",
+        cwd,
+        cwd / "models",
     ]
     extra = os.environ.get("IDA_MCP_EMBED_SEARCH_PATHS", "").strip()
     if extra:
@@ -267,12 +282,12 @@ def find_embed_model(install_root: Path) -> str:
             entry = entry.strip()
             if entry:
                 bases.append(Path(entry).expanduser())
+
+    searched: list[str] = []
     seen: set[Path] = set()
     for base in bases:
         if not base:
             continue
-        # Reject symlinks that escape the install or home tree before
-        # touching the filesystem.
         try:
             base_resolved = base.resolve()
         except OSError:
@@ -280,27 +295,30 @@ def find_embed_model(install_root: Path) -> str:
         if base_resolved in seen:
             continue
         seen.add(base_resolved)
-        for fn in model_filenames:
-            c = base / fn
-            try:
-                c.resolve()
-            except OSError:
-                continue
-            if c.is_file():
-                return str(c)
+        if not base_resolved.is_dir():
+            continue
+        searched.append(str(base_resolved))
+        for f in sorted(base_resolved.glob("bge-code-v1*.gguf")):
+            if f.is_file():
+                return str(f)
 
-    # Hugging Face cache snapshots.
+    # 4. Hugging Face cache snapshots.
     hf_root = home / ".cache" / "huggingface" / "hub"
     if hf_root.is_dir():
         for f in hf_root.glob("models--*/snapshots/*/bge-code-v1*.gguf"):
             if f.is_file():
                 return str(f)
 
-    # Last-ditch recursive scan under the install root.
+    # 5. Last-ditch recursive scan under the install root only.
     for f in install_root.rglob("bge-code-v1*.gguf"):
         if f.is_file():
             return str(f)
 
+    _log.debug(
+        "bge-code-v1*.gguf not found after searching %d directories: %s",
+        len(searched),
+        "; ".join(searched),
+    )
     return ""
 
 
