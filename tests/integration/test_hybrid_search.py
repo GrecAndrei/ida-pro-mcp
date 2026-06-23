@@ -12,12 +12,13 @@ import time
 import unittest
 from typing import Any, Dict, List
 
-# Ensure the source is importable
+# Ensure the source is importable. This file lives in tests/integration/, so
+# project root is two levels up; src/ sits at <root>/src.
 SRC_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "tools")
+    os.path.join(os.path.dirname(__file__), "..", "..", "src", "ida_pro_mcp", "ida_mcp", "tools")
 )
 SUPPORT_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "src", "ida_pro_mcp", "ida_mcp", "support")
+    os.path.join(os.path.dirname(__file__), "..", "..", "src", "ida_pro_mcp", "ida_mcp", "support")
 )
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
