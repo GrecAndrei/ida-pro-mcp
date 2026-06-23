@@ -24,7 +24,6 @@ from .core import (
     FunctionEmbeddingIndex,
     _extract_signature,
 )
-from .context_semantic import ContextAssemblerSemanticMixin
 from .structural_index import get_db_path
 from . import helpers as _helpers
 from .api_patterns import (
@@ -44,9 +43,7 @@ def _intel_profile_enabled() -> bool:
     return bool(intelligence_core.INTEL_PROFILE)
 
 
-class ContextAssembler(
-    ContextAssemblerSemanticMixin,
-):
+class ContextAssembler:
     """
     Per-call context assembly.  Replaces cognitive_layer, cartographer_mu,
     and attention_kernel with a clean, honest pipeline:
@@ -76,15 +73,6 @@ class ContextAssembler(
         self._retrieval_metrics_lock = threading.Lock()
         self._session_semantic_threshold: Dict[str, float] = {}
         self._semantic_threshold_lock = threading.Lock()
-        # Cache blackboard entry embeddings by stable key to avoid repeated
-        # re-embedding the same rows on every decompile call.
-        self._bb_entry_vec_cache: Dict[str, Tuple[List[float], float]] = {}
-        self._bb_entry_vec_cache_lock = threading.Lock()
-        self._bb_entry_cache_ttl_sec = 900.0
-        self._bb_entry_cache_max = 4000
-        self._bb_cache_hits = 0
-        self._bb_cache_misses = 0
-        self._bb_cache_stats_lock = threading.Lock()
         self._last_housekeeping_ts = 0.0
         self._housekeeping_lock = threading.Lock()
         self._related_graph_max_edges = 1200
@@ -95,9 +83,6 @@ class ContextAssembler(
         self._stats_cache_ttl_sec = 1.5
         self._perf_buckets: Dict[str, Dict[str, float]] = defaultdict(dict)
         self._perf_lock = threading.Lock()
-        self._semantic_result_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-        self._semantic_result_cache_lock = threading.Lock()
-        self._semantic_result_cache_ttl_sec = 3.0
         self._semantic_budget_cache: Dict[str, Tuple[float, int]] = {}
         self._semantic_budget_lock = threading.Lock()
 
@@ -237,11 +222,6 @@ class ContextAssembler(
             return
         with self._stats_cache_lock:
             self._session_stats_cache.pop(session_id, None)
-        with self._semantic_result_cache_lock:
-            if session_id:
-                stale = [k for k in self._semantic_result_cache.keys() if k.startswith(f"{session_id}:")]
-                for k in stale[:128]:
-                    self._semantic_result_cache.pop(k, None)
 
     def _perf_start(self) -> float:
         return time.perf_counter()
@@ -424,7 +404,7 @@ class ContextAssembler(
         return budget
 
     def _update_semantic_circuit_breaker(self, session_id: str) -> None:
-        """Open semantic circuit briefly when quality is persistently weak."""
+        """Open semantic circuit briefly when retrieval quality is persistently weak."""
         if not session_id:
             return
         try:
@@ -432,18 +412,11 @@ class ContextAssembler(
             sem = stats.get("semantic_linked") or {}
             sem_total = int(sem.get("total") or 0)
             sem_hit = float(sem.get("hit_rate") or 0.0)
-            # Read bb_cache hit rate directly
-            with self._bb_cache_stats_lock:
-                bb_hits = int(self._bb_cache_hits)
-                bb_misses = int(self._bb_cache_misses)
-            bb_total = bb_hits + bb_misses
-            cache_hit = bb_hits / max(1, bb_total)
             profile = self._semantic_quality_profile(session_id)
             min_total = int(profile.get("min_total") or 6)
             expected_hit = max(profile["hit_q50"], self._get_semantic_threshold(session_id))
             quality_gap = expected_hit - sem_hit
-            cache_gap = profile["hit_q25"] - cache_hit
-            if sem_total >= min_total and quality_gap > max(0.05, profile["hit_q75"] - profile["hit_q25"]) and cache_gap > 0:
+            if sem_total >= min_total and quality_gap > max(0.05, profile["hit_q75"] - profile["hit_q25"]):
                 with self._circuit_breaker_lock:
                     ttl = int(max(45, min(240, round(60 + (quality_gap * 180)))))
                     self._semantic_circuit_breaker_until[session_id] = int(time.time()) + ttl
@@ -869,8 +842,10 @@ class ContextAssembler(
         # ── Step 3b: Behavior classification via the shared zero-shot classifier
         # This is intentionally separate from API/structural extraction so the
         # response can expose both deterministic and semantic signals.
+        # Skip the embedding work in compact mode — the result is only surfaced
+        # in full mode, so computing it would be pure waste.
         behavior_hits: List[Dict[str, Any]] = []
-        if pseudocode.strip():
+        if _full and pseudocode.strip():
             try:
                 behavior_hits = self._behavior_classifier().classify(
                     pseudocode,
@@ -880,38 +855,41 @@ class ContextAssembler(
                 )
             except Exception:
                 behavior_hits = []
-        if _full and behavior_hits:
+        if behavior_hits:
             pack["behavior_classifications"] = behavior_hits
             pack["behavior_tags"] = [hit.get("behavior") for hit in behavior_hits if hit.get("behavior")]
 
         # ── Step 4: Rule-based actions from API patterns + structural attrs
-        actions: List[Dict[str, Any]] = []
-        seen_act: set = set()
-        try:
-            for act in actions_from_apis(api_calls, addr):
-                key = f"{act['tool']}:{act['action']}"
-                if key not in seen_act:
-                    seen_act.add(key)
-                    actions.append(act)
-        except Exception:
-            pass
-        try:
-            if sb_attrs:
-                for act in actions_from_schemaboot(sb_attrs, addr):
+        # Only surfaced in full mode, so skip the rule evaluation entirely in
+        # compact mode.
+        if _full:
+            actions: List[Dict[str, Any]] = []
+            seen_act: set = set()
+            try:
+                for act in actions_from_apis(api_calls, addr):
                     key = f"{act['tool']}:{act['action']}"
                     if key not in seen_act:
                         seen_act.add(key)
                         actions.append(act)
-        except Exception:
-            pass
-        # Always suggest callers if we haven't already
-        if f"code:callers" not in seen_act and addr:
-            actions.append({
-                "tool": "code", "action": "callers", "addr": addr,
-                "reason": "See what calls this function",
-            })
-        if _full and actions:
-            pack["suggested_next_actions"] = actions[:6]
+            except Exception:
+                pass
+            try:
+                if sb_attrs:
+                    for act in actions_from_schemaboot(sb_attrs, addr):
+                        key = f"{act['tool']}:{act['action']}"
+                        if key not in seen_act:
+                            seen_act.add(key)
+                            actions.append(act)
+            except Exception:
+                pass
+            # Always suggest callers if we haven't already
+            if f"code:callers" not in seen_act and addr:
+                actions.append({
+                    "tool": "code", "action": "callers", "addr": addr,
+                    "reason": "See what calls this function",
+                })
+            if actions:
+                pack["suggested_next_actions"] = actions[:6]
 
 
         # -- Step 4b: Auto-blackboard -- write dangerous findings automatically --
@@ -983,29 +961,31 @@ class ContextAssembler(
                         pass
                 threading.Thread(target=_persist, daemon=True).start()
 
-                # Similarity search over in-memory cache (instant)
-                cache_snap = idx.cache_snapshot()
-                if len(cache_snap) > 1:
-                    scored = sorted(
-                        [(BgeCodeEmbedder.cosine(query_vec, v), ea)
-                         for ea, v in cache_snap if ea != addr],
-                        reverse=True,
-                    )
-                    top = [(sim, ea) for sim, ea in scored[:3] if sim >= 0.6]
-                    if top:
-                        top_eas = [ea for _, ea in top]
-                        names: Dict[str, str] = {}
-                        try:
-                            with idx._conn() as conn:
-                                ph2 = ",".join("?" * len(top_eas))
-                                for row in conn.execute(
-                                    f"SELECT ea, name FROM func_embeddings WHERE ea IN ({ph2})",
-                                    top_eas,
-                                ):
-                                    names[row[0]] = row[1] or row[0]
-                        except Exception:
-                            pass
-                        if _full:
+                # Similarity search over in-memory cache. Only surfaced in full
+                # mode, so skip the cosine scan entirely in compact mode — the
+                # embed + async persist above is the valuable indexing side-effect.
+                if _full:
+                    cache_snap = idx.cache_snapshot()
+                    if len(cache_snap) > 1:
+                        scored = sorted(
+                            [(BgeCodeEmbedder.cosine(query_vec, v), ea)
+                             for ea, v in cache_snap if ea != addr],
+                            reverse=True,
+                        )
+                        top = [(sim, ea) for sim, ea in scored[:3] if sim >= 0.6]
+                        if top:
+                            top_eas = [ea for _, ea in top]
+                            names: Dict[str, str] = {}
+                            try:
+                                with idx._conn() as conn:
+                                    ph2 = ",".join("?" * len(top_eas))
+                                    for row in conn.execute(
+                                        f"SELECT ea, name FROM func_embeddings WHERE ea IN ({ph2})",
+                                        top_eas,
+                                    ):
+                                        names[row[0]] = row[1] or row[0]
+                            except Exception:
+                                pass
                             pack["similar_functions"] = [
                                 {"ea": ea, "name": names.get(ea, ea), "similarity": round(sim, 4)}
                                 for sim, ea in top
@@ -1032,32 +1012,22 @@ class ContextAssembler(
                 pass
 
         # ── Step 8: Semantic blackboard retrieval (if bb_store populated) ─
+        # Runs in all modes: this is the recall that makes the blackboard useful
+        # to the LLM — semantically related past findings are surfaced without
+        # the LLM having to query for them. BlackboardStore.semantic_search
+        # embeds the signature once and cosine-scans stored vectors (no
+        # re-embedding of entries).
         if query_vec is not None and bb_store is not None and not self._semantic_circuit_open(session_id):
             try:
                 sem_thr = self._get_semantic_threshold(session_id)
-                # Use stored vectors in the new blackboard (fast cosine scan, no re-embedding)
-                if hasattr(bb_store, "semantic_search"):
-                    # New blackboard: vectors already stored, O(n) cosine scan
-                    sig = _extract_signature(pseudocode, max_idents=40) or pseudocode[:512]
-                    sem_bb = bb_store.semantic_search(
-                        query=sig,
-                        top_k=5,
-                        threshold=sem_thr,
-                    )
-                    # Exclude the entry for this exact address to avoid self-reference
-                    sem_bb = [e for e in sem_bb if e.get("addr") != addr][:3]
-                else:
-                    # Legacy blackboard: embed on-the-fly
-                    sem_budget = self._adaptive_semantic_budget(session_id, default_max=24)
-                    sem_bb = self._get_bb_semantic_vec(
-                        query_vec,
-                        bb_store,
-                        top_k=3,
-                        threshold=sem_thr,
-                        max_entries=sem_budget,
-                        api_calls=api_calls,
-                        session_id=session_id,
-                    )
+                sig = _extract_signature(pseudocode, max_idents=40) or pseudocode[:512]
+                sem_bb = bb_store.semantic_search(
+                    query=sig,
+                    top_k=5,
+                    threshold=sem_thr,
+                )
+                # Exclude the entry for this exact address to avoid self-reference
+                sem_bb = [e for e in sem_bb if e.get("addr") != addr][:3]
                 if sem_bb:
                     self._merge_related_findings(pack, sem_bb, "semantic_linked", session_id=session_id)
             except Exception:

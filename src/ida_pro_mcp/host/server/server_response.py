@@ -268,9 +268,27 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 # Only inject context_pack in full mode — it's verbose
                 if mode == "full":
                     payload["context_pack"] = pack
-                elif pack.get("top_entries"):
-                    # In compact mode, only inject the top entry titles (not full content)
-                    payload["_context"] = [e.get("title", "") for e in pack["top_entries"][:3] if e.get("title")]
+                else:
+                    # Compact mode: inject the top related blackboard findings as a
+                    # terse recall hint — title, category, and address — so past
+                    # findings reach the LLM without it having to query for them.
+                    related = pack.get("related_findings") or []
+                    if related:
+                        hints = []
+                        for e in related[:3]:
+                            title = str(e.get("title") or "").strip()
+                            if not title:
+                                continue
+                            parts = [title]
+                            cat = str(e.get("category") or "").strip()
+                            if cat and cat != "general":
+                                parts.append(cat)
+                            addr_e = str(e.get("addr") or "").strip()
+                            if addr_e:
+                                parts.append(f"@ {addr_e}")
+                            hints.append(" — ".join(parts))
+                        if hints:
+                            payload["_context"] = hints
         except Exception:
             pass
 

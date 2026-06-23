@@ -96,24 +96,6 @@ def test_cross_address_blackboard_retrieval_by_api_tags():
     assert "retrieval_stats" in pack
 
 
-def test_semantic_blackboard_vectors_are_cached():
-    asm = ContextAssembler()
-    embedder = _FakeEmbedder()
-    asm._embedder = embedder
-    bb = _FakeBlackboardStore()
-    q = embedder.embed("VirtualAllocEx WriteProcessMemory")
-
-    out1 = asm._get_bb_semantic_vec(q, bb, top_k=3, threshold=0.1, max_entries=10)
-    cache_after_first = len(asm._bb_entry_vec_cache)
-    out2 = asm._get_bb_semantic_vec(q, bb, top_k=3, threshold=0.1, max_entries=10)
-    cache_after_second = len(asm._bb_entry_vec_cache)
-
-    assert out1
-    assert out2
-    assert cache_after_first > 0
-    assert cache_after_second == cache_after_first
-
-
 def test_related_address_blackboard_retrieval_from_observed_graph():
     asm = ContextAssembler()
     bb = _FakeBlackboardStore()
@@ -179,14 +161,11 @@ def test_helper_prune_policy_store_standalone():
 def test_semantic_circuit_breaker_opens_for_persistently_weak_signal():
     asm = ContextAssembler()
     sess = "sess-cb"
-    # Build weak semantic stats and low cache hit rate.
+    # Build weak semantic stats: many semantic lookups but almost none kept.
     with asm._retrieval_metrics_lock:
         asm._retrieval_metrics[sess]["semantic_linked.total"] = 20
         asm._retrieval_metrics[sess]["semantic_linked.accepted"] = 20
         asm._retrieval_metrics[sess]["semantic_linked.kept"] = 1
-    with asm._bb_cache_stats_lock:
-        asm._bb_cache_hits = 0
-        asm._bb_cache_misses = 30
     asm._update_semantic_circuit_breaker(sess)
     assert asm._semantic_circuit_open(sess) is True
 
@@ -201,40 +180,6 @@ def test_session_retrieval_stats_cache_invalidation_on_merge():
     asm._merge_related_findings(pack, [{"id": "b", "confidence": 0.8}], "api_linked", session_id=sess)
     s2 = asm._session_retrieval_stats(sess)
     assert s2["api_linked"]["total"] >= s1["api_linked"]["total"]
-
-
-def test_semantic_candidates_prioritize_api_overlap_and_confidence():
-    asm = ContextAssembler()
-    entries = [
-        {"id": "e1", "confidence": 0.4, "updated_at": 10, "tags": ["foo"]},
-        {"id": "e2", "confidence": 0.3, "updated_at": 10, "tags": ["VirtualAllocEx"]},
-        {"id": "e3", "confidence": 0.9, "updated_at": 1, "tags": []},
-    ]
-    out = asm._semantic_candidates(entries, ["VirtualAllocEx"], max_entries=2)
-    ids = [e.get("id") for e in out]
-    assert "e2" in ids
-    assert "e3" in ids
-
-
-def test_semantic_result_cache_avoids_repeated_scoring_pass():
-    asm = ContextAssembler()
-    asm._embedder = _FakeEmbedder()
-    bb = _FakeBlackboardStore()
-    q = [1.0, 0.0]
-    sess = "sess-sem-cache"
-
-    _ = asm._get_bb_semantic_vec(q, bb, top_k=2, threshold=0.1, max_entries=6, api_calls=["VirtualAllocEx"], session_id=sess)
-    with asm._bb_cache_stats_lock:
-        miss1 = asm._bb_cache_misses
-        hit1 = asm._bb_cache_hits
-    _ = asm._get_bb_semantic_vec(q, bb, top_k=2, threshold=0.1, max_entries=6, api_calls=["VirtualAllocEx"], session_id=sess)
-    with asm._bb_cache_stats_lock:
-        miss2 = asm._bb_cache_misses
-        hit2 = asm._bb_cache_hits
-
-    # second request should be served from semantic result cache path
-    assert miss2 == miss1
-    assert hit2 == hit1
 
 
 def test_adaptive_semantic_budget_bounds_and_direction():
