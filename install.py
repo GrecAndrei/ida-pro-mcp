@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _bootstrap_import_path() -> None:
@@ -33,19 +35,47 @@ from ida_pro_mcp.installer.runtime import (  # noqa: E402
     get_install_root,
 )
 
+__all__: list[str] = [
+    "get_mcp_config_paths",
+    "get_mcp_server_config",
+    "update_json_config",
+    "update_opencode_config",
+    "update_toml_config",
+    "main",
+]
 
+_log = logging.getLogger(__name__)
 _SOURCE_ROOT = Path(__file__).resolve().parent
 
+# Clients that expect vertex-compatibility mode enabled by default.
+_VERTEX_COMPAT_CLIENTS: frozenset[str] = frozenset({
+    "Gemini CLI",
+    "OpenCode",
+    "opencode",
+    "Antigravity",
+    "Antigravity CLI",
+    "Antigravity IDE",
+})
 
-def get_mcp_config_paths():
-    """Compatibility wrapper used by older tests/callers."""
+
+def _resolve_venv_python(install_root: Path) -> Path:
+    """Return the Python executable path inside a project venv."""
+    return install_root / ".venv" / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
+
+
+def get_mcp_config_paths() -> dict[str, Path]:
+    """Return a dict of MCP client name → config path.
+
+    Compatibility wrapper used by older tests/callers.  Delegates to the
+    installer module's resolution, then applies client-specific overrides.
+    """
     cfg = get_config_paths(_SOURCE_ROOT)
     home = Path.home()
     xdg = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config")))
-    if "XDG_CONFIG_HOME" in os.environ:
-        cfg["Copilot CLI"] = xdg / "copilot" / "mcp-config.json"
-    else:
-        cfg["Copilot CLI"] = home / ".copilot" / "mcp-config.json"
+    # Copilot always lives under ~/.copilot regardless of XDG.
+    cfg["Copilot CLI"] = home / ".copilot" / "mcp-config.json"
     cfg["OpenCode"] = xdg / "opencode" / "opencode.json"
     return cfg
 
@@ -54,22 +84,43 @@ def get_mcp_server_config(
     install_path: Path,
     client_name: str = "",
     global_vertex_compat: bool = False,
-):
-    """Compatibility wrapper for previous installer API."""
-    python_exe = install_path / ".venv" / (
-        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
-    )
+) -> dict[str, Any]:
+    """Build an MCP stdio server-config dict.
+
+    Compatibility wrapper that delegates to ``build_stdio_config()`` with
+    the venv Python resolved from *install_path*.  Vertex-compat mode is
+    enabled when *global_vertex_compat* is set or *client_name* is in the
+    known vertex-compat set.
+    """
+    python_exe = _resolve_venv_python(install_path)
     cfg = build_stdio_config(python_exe, install_path)
-    if global_vertex_compat or client_name in {
-        "Gemini CLI",
-        "OpenCode",
-        "opencode",
-        "Antigravity",
-        "Antigravity CLI",
-        "Antigravity IDE",
-    }:
+    if global_vertex_compat or client_name in _VERTEX_COMPAT_CLIENTS:
         cfg.setdefault("env", {})["IDA_MCP_VERTEX_COMPAT"] = "1"
     return cfg
+
+
+def _try_update_config(
+    install_path: Path | None,
+    build_cfg_fn,  # (root) -> dict[str, Any]
+    update_fn,     # (path, server_name, server_cfg, report, dry_run) -> bool
+    config_path: Path,
+    server_name: str,
+) -> bool:
+    """Shared error-handling wrapper for config update callbacks."""
+    try:
+        root = Path(install_path) if install_path is not None else get_install_root()
+        report = InstallReport()
+        server_cfg = build_cfg_fn(root)
+        return update_fn(
+            path=config_path,
+            server_name=server_name,
+            server_cfg=server_cfg,
+            report=report,
+            dry_run=False,
+        )
+    except Exception:
+        _log.exception("Failed to update config at %s", config_path)
+        return False
 
 
 def update_json_config(
@@ -79,48 +130,87 @@ def update_json_config(
     install_path: Path | None = None,
     global_vertex_compat: bool = False,
 ) -> bool:
-    """Compatibility wrapper retaining old callable signature."""
+    """Register *server_name* in a JSON-based MCP client config.
+
+    Compatibility wrapper retaining the old callable signature.
+    """
+    root = Path(install_path) if install_path is not None else get_install_root()
+    report = InstallReport()
+    server_cfg = get_mcp_server_config(root, client_name, global_vertex_compat)
+
+    if client_name == "Antigravity CLI":
+        return _write_antigravity_plugin(config_path, server_name, server_cfg)
+
+    if client_name == "Copilot CLI":
+        return _update_copilot_config(config_path, server_name, server_cfg)
+
+    return _delegate_json_config(config_path, server_name, server_cfg, report)
+
+
+def _write_antigravity_plugin(
+    config_path: Path,
+    server_name: str,
+    server_cfg: dict[str, Any],
+) -> bool:
+    """Write Antigravity CLI plugin.json if missing, then delegate to JSON updater."""
     try:
-        root = Path(install_path) if install_path is not None else get_install_root()
-        report = InstallReport()
-        server_cfg = get_mcp_server_config(root, client_name, global_vertex_compat)
+        plugin_json = config_path.parent / "plugin.json"
+        plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        if not plugin_json.exists():
+            plugin_json.write_text(
+                json.dumps({"name": server_name}, indent=2), encoding="utf-8"
+            )
+        return _delegate_json_config(config_path, server_name, server_cfg, InstallReport())
+    except Exception:
+        _log.exception("Antigravity plugin config failed")
+        return False
 
-        if client_name == "Antigravity CLI":
-            plugin_json = config_path.parent / "plugin.json"
-            plugin_json.parent.mkdir(parents=True, exist_ok=True)
-            if not plugin_json.exists():
-                plugin_json.write_text(
-                    json.dumps({"name": server_name}, indent=2), encoding="utf-8"
-                )
 
-        if client_name == "Copilot CLI":
-            # Maintain legacy Copilot format used by existing users/tests.
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            if config_path.exists():
-                try:
-                    config = json.loads(config_path.read_text(encoding="utf-8"))
-                except Exception:
-                    config = {}
-            else:
+def _update_copilot_config(
+    config_path: Path,
+    server_name: str,
+    server_cfg: dict[str, Any],
+) -> bool:
+    """Write Copilot CLI config in its legacy format."""
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
                 config = {}
-            config.pop("servers", None)
-            mcp_servers = config.setdefault("mcpServers", {})
-            for legacy in list(mcp_servers.keys()):
-                if legacy != server_name and (
-                    legacy in LEGACY_SERVER_NAMES
-                    or "ida-pro-mcp" in str(mcp_servers.get(legacy, {})).lower()
-                ):
-                    mcp_servers.pop(legacy, None)
-            mcp_servers[server_name] = {
-                "type": "local",
-                "command": server_cfg["command"],
-                "args": server_cfg.get("args", []),
-                "env": server_cfg.get("env", {}),
-                "tools": ["*"],
-            }
-            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-            return True
+        else:
+            config = {}
+        config.pop("servers", None)
+        mcp_servers = config.setdefault("mcpServers", {})
+        for legacy in list(mcp_servers.keys()):
+            if legacy != server_name and (
+                legacy in LEGACY_SERVER_NAMES
+                or "ida-pro-mcp" in str(mcp_servers.get(legacy, {})).lower()
+            ):
+                mcp_servers.pop(legacy, None)
+        mcp_servers[server_name] = {
+            "type": "local",
+            "command": server_cfg["command"],
+            "args": server_cfg.get("args", []),
+            "env": server_cfg.get("env", {}),
+            "tools": ["*"],
+        }
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        _log.exception("Copilot CLI config update failed")
+        return False
 
+
+def _delegate_json_config(
+    config_path: Path,
+    server_name: str,
+    server_cfg: dict[str, Any],
+    report: InstallReport,
+) -> bool:
+    """Delegate to the installer module's JSON config updater."""
+    try:
         return _update_json_config(
             path=config_path,
             server_name=server_name,
@@ -129,6 +219,7 @@ def update_json_config(
             dry_run=False,
         )
     except Exception:
+        _log.exception("JSON config update failed for %s", config_path)
         return False
 
 
@@ -138,20 +229,17 @@ def update_opencode_config(
     install_path: Path | None = None,
     global_vertex_compat: bool = False,
 ) -> bool:
-    """Compatibility wrapper retaining old callable signature."""
-    try:
-        root = Path(install_path) if install_path is not None else get_install_root()
-        report = InstallReport()
-        server_cfg = get_mcp_server_config(root, "OpenCode", global_vertex_compat)
-        return _update_opencode_config(
-            path=config_path,
-            server_name=server_name,
-            server_cfg=server_cfg,
-            report=report,
-            dry_run=False,
-        )
-    except Exception:
-        return False
+    """Register *server_name* in OpenCode's config.
+
+    Compatibility wrapper retaining the old callable signature.
+    """
+    def _build_cfg(root: Path) -> dict[str, Any]:
+        return get_mcp_server_config(root, "OpenCode", global_vertex_compat)
+
+    return _try_update_config(
+        install_path, _build_cfg, _update_opencode_config,
+        config_path, server_name,
+    )
 
 
 def update_toml_config(
@@ -161,20 +249,17 @@ def update_toml_config(
     client_name: str = "",
     global_vertex_compat: bool = False,
 ) -> bool:
-    """Compatibility wrapper retaining old callable signature."""
-    try:
-        root = Path(install_path) if install_path is not None else get_install_root()
-        report = InstallReport()
-        server_cfg = get_mcp_server_config(root, client_name, global_vertex_compat)
-        return _update_toml_config(
-            path=config_path,
-            server_name=server_name,
-            server_cfg=server_cfg,
-            report=report,
-            dry_run=False,
-        )
-    except Exception:
-        return False
+    """Register *server_name* in a TOML-based MCP client config.
+
+    Compatibility wrapper retaining the old callable signature.
+    """
+    def _build_cfg(root: Path) -> dict[str, Any]:
+        return get_mcp_server_config(root, client_name, global_vertex_compat)
+
+    return _try_update_config(
+        install_path, _build_cfg, _update_toml_config,
+        config_path, server_name,
+    )
 
 
 def main() -> int:
