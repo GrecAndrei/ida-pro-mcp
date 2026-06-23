@@ -56,6 +56,9 @@ sys.modules["idc"].get_func_name = lambda ea: ""
 sys.modules["idc"].get_name = lambda ea, *a: ""
 sys.modules["idc"].print_insn_mnem = lambda ea: ""
 sys.modules["idc"].next_head = lambda ea, end: ea + 1
+sys.modules["idautils"].Functions = lambda: []
+sys.modules["idautils"].XrefsFrom = lambda ea, *a: []
+sys.modules["idautils"].XrefsTo = lambda ea, *a: []
 
 # Mock rpc and sync modules in-place
 for mod_name in ("rpc", "sync"):
@@ -142,8 +145,8 @@ def test_bool_new_primitives():
             self.start_ea = start
             self.end_ea = end
 
-    sys.modules["idautils"].Functions = lambda: [0x401000, 0x402000]
-    sys.modules["idaapi"].get_func = lambda ea: MockFunc(0x401000, 0x401200) if ea == 0x401000 else MockFunc(0x402000, 0x402030)
+    cb.idautils.Functions = lambda: [0x401000, 0x402000]
+    cb.idaapi.get_func = lambda ea: MockFunc(0x401000, 0x401200) if ea == 0x401000 else MockFunc(0x402000, 0x402030)
 
     # Test size primitive
     assert cb._prim_size(">100") == {0x401000}
@@ -155,8 +158,8 @@ def test_bool_new_primitives():
         def __init__(self, iscode=True, xtype=21):
             self.iscode = iscode
             self.type = xtype
-    sys.modules["idautils"].XrefsFrom = lambda ea, *a: [MockXref()] if ea == 0x401000 else []
-    sys.modules["idautils"].XrefsTo = lambda ea, *a: [MockXref()] if ea == 0x401000 else []
+    cb.idautils.XrefsFrom = lambda ea, *a: [MockXref()] if ea == 0x401000 else []
+    cb.idautils.XrefsTo = lambda ea, *a: [MockXref()] if ea == 0x401000 else []
 
     assert cb._prim_leaf("") == {0x402000}
     assert cb._prim_no_callers("") == {0x402000}

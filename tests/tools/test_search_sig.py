@@ -26,6 +26,9 @@ sys.modules["ida_funcs"].func_t = type("func_t", (), {})
 sys.modules["ida_typeinf"].tinfo_t = type("tinfo_t", (), {})
 sys.modules["ida_hexrays"].user_lvar_modifier_t = type("user_lvar_modifier_t", (), {})
 sys.modules["idc"].batch = lambda x: 0
+sys.modules["idautils"].Functions = lambda: []
+sys.modules["idautils"].XrefsFrom = lambda ea, *a: []
+sys.modules["idautils"].XrefsTo = lambda ea, *a: []
 sys.modules["ida_netnode"].netnode = type("netnode", (), {
     "__init__": lambda *a, **kw: None,
     "longval": lambda *a: 0,
@@ -84,18 +87,19 @@ MOCK_XREFS_TO = {
 }
 
 def setup_mocks():
-    sys.modules["idautils"].Functions = lambda: MOCK_FUNCTIONS
-    sys.modules["idaapi"].get_func = lambda ea: MOCK_FUNC_MAP.get(ea)
-    sys.modules["ida_funcs"].get_func_name = lambda ea: f"func_{hex(ea)}"
-    sys.modules["idc"].get_func_name = lambda ea: f"func_{hex(ea)}"
-    sys.modules["idc"].get_name = lambda ea, *a: f"func_{hex(ea)}"
-    sys.modules["idautils"].XrefsFrom = lambda ea, *a: MOCK_XREFS_FROM.get(ea, [])
-    sys.modules["idautils"].XrefsTo = lambda ea, *a: MOCK_XREFS_TO.get(ea, [])
+    _refs_mod.idautils.Functions = lambda: MOCK_FUNCTIONS
+    _refs_mod.idaapi.get_func = lambda ea: MOCK_FUNC_MAP.get(ea)
+    _refs_mod.ida_funcs.get_func_name = lambda ea: f"func_{hex(ea)}"
+    _refs_mod.idc.get_func_name = lambda ea: f"func_{hex(ea)}"
+    _refs_mod.idc.get_name = lambda ea, *a: f"func_{hex(ea)}"
+    _refs_mod.idautils.XrefsFrom = lambda ea, *a: MOCK_XREFS_FROM.get(ea, [])
+    _refs_mod.idautils.XrefsTo = lambda ea, *a: MOCK_XREFS_TO.get(ea, [])
 
 # Imports list for caching stub
 sys.modules["ida_nalt"].get_import_module_qty = lambda: 0
 
-search_func_by_sig = load_tool_submodule("search.refs").search_func_by_sig
+_refs_mod = load_tool_submodule("search.refs")
+search_func_by_sig = _refs_mod.search_func_by_sig
 
 def test_func_by_sig_and_logic():
     setup_mocks()

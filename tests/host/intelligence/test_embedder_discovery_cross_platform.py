@@ -279,7 +279,8 @@ def test_find_llama_server_returns_empty_when_nothing_found(clean_state, sandbox
     assert _find_llama_server() == ""
 
 
-def test_find_llama_server_rejects_non_executable_override(clean_state, tmp_path: Path, monkeypatch):
+def test_find_llama_server_rejects_non_executable_override(clean_state, sandbox_home: Path, tmp_path: Path, monkeypatch):
+    clean_state.setenv("IDA_PRO_MCP_HOME", str(sandbox_home))
     fake = tmp_path / "fake-llama"
     fake.write_text("not a real binary", encoding="utf-8")
     clean_state.setenv("IDA_MCP_EMBED_SERVER_BIN", str(fake))

@@ -1,5 +1,11 @@
 # IDA Pro MCP
 
+> **⚠️ Work in Progress** — This project is under active development. APIs, tools,
+> configuration, and documentation may change without notice. Breaking changes
+> between commits are the norm. Test coverage is strongest in the host-side
+> services and tool-surface layers; integration tests require IDA Pro and are
+> run separately. Proceed accordingly.
+
 Deterministic and ML-powered reverse engineering for IDA Pro via the Model Context Protocol (MCP).
 
 `ida-pro-mcp` exposes IDA analysis, decompilation, debugging, triage, and annotation as structured MCP tools so coding agents can operate on binaries with deterministic calls instead of fragile text scraping.
