@@ -20,7 +20,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_FILE = REPO_ROOT / "src" / "ida_pro_mcp" / "host" / "schemas_data.py"
-TOOL_REGISTRY_FILE = REPO_ROOT / "src" / "ida_pro_mcp" / "host" / "tool_registry.py"
+TOOL_REGISTRY_FILE = REPO_ROOT / "src" / "ida_pro_mcp" / "host" / "server" / "tool_registry.py"
 SKILLS_ROOT = REPO_ROOT / ".agents" / "skills"
 TOOL_DOCS_ROOT = REPO_ROOT / ".agents" / "tool-docs"
 GEN_MARKER = "<!-- GENERATED: scripts/generate_tool_skills.py -->"

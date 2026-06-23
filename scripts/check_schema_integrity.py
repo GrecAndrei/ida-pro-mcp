@@ -22,7 +22,7 @@ def main() -> int:
         TOOLS,
     )
     from ida_pro_mcp.host import schemas
-    from ida_pro_mcp.host.tool_registry import advertised_tools, tool_actions
+    from ida_pro_mcp.host.server.tool_registry import advertised_tools, tool_actions
 
     errors: list[str] = []
     tool_set = set(TOOLS)

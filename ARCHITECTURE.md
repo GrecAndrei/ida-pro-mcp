@@ -61,7 +61,7 @@ This project has two primary runtime layers:
 
 - `src/ida_pro_mcp/host/intelligence/`
   - ML components: BehaviorClassifier, BgeCodeEmbedder, ContextAssembler,
-    FrontierEngine, VulnerabilityReasoner, UsageIntelligence, etc.
+    FrontierEngine, UsageIntelligence, etc.
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
   - IDA-side tool implementations.

@@ -85,12 +85,6 @@ Sweep all segments for firmware artifacts.
 ### multi_region_campaign
 Main entry point for full firmware triage across all regions.
 
-### campaign_checkpoint / campaign_resume / campaign_feedback
-Save, resume, and provide feedback on campaign progress.
-
-### fingerprint_index_sync / fingerprint_index_query
-Cross-image function fingerprinting.
-
 ---
 
 ## Recommended Workflow (no datasheet)
@@ -110,18 +104,10 @@ Cross-image function fingerprinting.
 {"name": "firmware_view", "arguments": {"action": "scan_region", "start": "0x08000000", "end": "0x08001000"}}
 ```
 ```json
-{"name": "firmware_view", "arguments": {"action": "fingerprint_index_query", "address": "0x08000400"}}
-```
-```json
-{"name": "firmware_view", "arguments": {"action": "campaign_resume", "checkpoint_id": "cp_001"}}
-```
-```json
 {"name": "firmware_view", "arguments": {"action": "rollback_last"}}
 ```
 
 ## Notes
 - **Always run `binary_info(action="headers")` or `binary_info(action="sections")` first** to understand the layout before using firmware_view on raw blobs.
 - `multi_region_campaign` is the recommended starting point for firmware triage — it orchestrates scan, type, and carve across all regions.
-- `fingerprint_index_sync` + `fingerprint_index_query` enable cross-image function matching (useful for shared library detection across firmware versions).
-- Use `campaign_checkpoint` / `campaign_resume` for long-running analyses that may exceed session time.
 - `rollback_last` undoes only the most recent `auto_retype` — use `review_contradictions` to inspect conflicting assignments before rolling back.

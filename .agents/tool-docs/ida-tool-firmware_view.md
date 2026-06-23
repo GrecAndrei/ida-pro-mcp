@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, campaign_checkpoint, campaign_resume, campaign_feedback, fingerprint_index_sync, fingerprint_index_query, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.
+Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.
 
 ## Actions
 - `scan_region` (tool-specific)
@@ -23,11 +23,6 @@ Firmware triage: region scanning, pointer sweeps, table carving, deterministic d
 - `campaign` (tool-specific)
 - `segment_sweep` (tool-specific)
 - `multi_region_campaign` (tool-specific)
-- `campaign_checkpoint` (tool-specific)
-- `campaign_resume` (tool-specific)
-- `campaign_feedback` (tool-specific)
-- `fingerprint_index_sync` (tool-specific)
-- `fingerprint_index_query` (tool-specific)
 - `detect_load_address` (tool-specific)
 - `detect_vector_table` (tool-specific)
 - `detect_mmio` (tool-specific)
