@@ -33,6 +33,115 @@ from ..intelligence.helpers import parse_str_list
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+# ---------------------------------------------------------------------------
+# Declarative session-action dispatch.
+#
+# Most session actions follow one of three trivial shapes:
+#   "dict" -> resolve sid, call mgr.<m>(sid, **kw); None => SESSION_NOT_FOUND,
+#             return {"ok": True, "session": r.to_dict()}
+#   "list" -> call mgr.<m>(**kw), return {"ok": True, "sessions": [...], "count": n}
+#   "raw"  -> resolve sid, return mgr.<m>(sid, **kw) unchanged
+#
+# Each coerce function returns (kwargs, error): kwargs is the dict of keyword
+# args forwarded to the SessionManager method; error is a ready-to-return
+# capsule (or None). Actions needing bespoke control flow stay as explicit
+# _session_action_* methods and map to a method-name string in _SESSION_ACTIONS.
+# ---------------------------------------------------------------------------
+
+def _sess_coerce_none(args):
+    return {}, None
+
+
+def _sess_coerce_rename(args):
+    name = args.get("name") or args.get("new_name")
+    if not name:
+        return None, make_error(MCPError.INVALID_ARGS, "name required")
+    return {"new_name": str(name).strip()[:MAX_NAME_LEN]}, None
+
+
+def _sess_coerce_tag(args):
+    tag = args.get("tag")
+    if not tag:
+        return None, make_error(MCPError.INVALID_ARGS, "tag required")
+    tag = str(tag).strip()[:MAX_TAG_LEN]
+    if not tag:
+        return None, make_error(MCPError.INVALID_ARGS, "tag required")
+    return {"tag": tag}, None
+
+
+def _sess_coerce_untag(args):
+    tag = args.get("tag")
+    if not tag:
+        return None, make_error(MCPError.INVALID_ARGS, "tag required")
+    return {"tag": tag}, None
+
+
+def _sess_coerce_note(args):
+    note = args.get("note", "")
+    if not note:
+        return None, make_error(MCPError.INVALID_ARGS, "note required")
+    return {"note": str(note)[:MAX_NOTE_LEN]}, None
+
+
+def _sess_coerce_find_tag(args):
+    tag = args.get("tag")
+    if not tag:
+        return None, make_error(MCPError.INVALID_ARGS, "tag required")
+    return {"tag": tag}, None
+
+
+def _sess_coerce_query(args):
+    query = args.get("query", "")
+    if not query:
+        return None, make_error(MCPError.INVALID_ARGS, "query required")
+    return {"query": query}, None
+
+
+def _sess_coerce_n_default5(args):
+    return {"n": _bounded_int(args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT)}, None
+
+
+def _sess_coerce_link(args):
+    other = _normalize_session_id(
+        args.get("other_session_id") or args.get("other_sid") or args.get("target_session_id")
+    )
+    if not other:
+        return None, make_error(MCPError.INVALID_ARGS, "other_session_id required")
+    return {"other_sid": other}, None
+
+
+def _sess_coerce_nb_append(args):
+    entry = str(args.get("note") or args.get("entry") or "").strip()
+    if not entry:
+        return None, make_error(MCPError.INVALID_ARGS, "entry (or note) required")
+    section = str(args.get("section") or "").strip() or None
+    return {"entry": entry, "section": section}, None
+
+
+def _sess_coerce_nb_read(args):
+    lines = args.get("lines")
+    return {"lines": str(lines).strip() if lines is not None else None}, None
+
+
+def _sess_coerce_nb_section(args):
+    name = str(args.get("section") or args.get("name") or "").strip()
+    if not name:
+        return None, make_error(MCPError.INVALID_ARGS, "section required")
+    return {"section_name": name}, None
+
+
+def _sess_coerce_strategy(args):
+    return {"context": str(args.get("context") or "")}, None
+
+
+def _sess_coerce_activity_limit(args):
+    return {"limit": _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500)}, None
+
+
+def _sess_coerce_hyp_status(args):
+    return {"status": str(args.get("status") or "").strip() or None}, None
+
+
 class ServerSessionMixin(ServerSessionBootstrapMixin):
     def _resolve_session_capsule(self, sid: str, requested: Any = None) -> str:
         sid_norm = _normalize_session_id(sid) or str(sid or "").strip().upper()
@@ -158,7 +267,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         threading.Thread(target=_diff, daemon=True).start()
 
 
-    _SESSION_ACTIONS: dict[str, str] = {
+    _SESSION_ACTIONS: dict[str, Any] = {
         "health": "_session_action_health",
         "create": "_session_action_create",
         "discover": "_session_action_discover",
@@ -169,25 +278,26 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "status": "_session_action_status",
         "rebuild": "_session_action_rebuild",
         "update": "_session_action_update",
-        "rename": "_session_action_rename",
-        "duplicate": "_session_action_duplicate",
+        # Declarative (kind, mgr_method, coerce_fn) specs — see _run_session_spec.
+        "rename": ("dict", "rename_session", _sess_coerce_rename),
+        "duplicate": ("dict", "duplicate_session", _sess_coerce_none),
         "export_session": "_session_action_export_session",
         "import_session": "_session_action_import_session",
-        "archive": "_session_action_archive",
-        "unarchive": "_session_action_unarchive",
-        "tag": "_session_action_tag",
-        "untag": "_session_action_untag",
-        "find_by_tag": "_session_action_find_by_tag",
-        "add_note": "_session_action_add_note",
-        "clear_notes": "_session_action_clear_notes",
+        "archive": ("dict", "archive_session", _sess_coerce_none),
+        "unarchive": ("dict", "unarchive_session", _sess_coerce_none),
+        "tag": ("dict", "tag_session", _sess_coerce_tag),
+        "untag": ("dict", "untag_session", _sess_coerce_untag),
+        "find_by_tag": ("list", "find_by_tag", _sess_coerce_find_tag),
+        "add_note": ("dict", "add_note", _sess_coerce_note),
+        "clear_notes": ("dict", "clear_notes", _sess_coerce_none),
         "cleanup_stale": "_session_action_cleanup_stale",
         "stats": "_session_action_stats",
         "validate": "_session_action_validate",
         "bulk_delete": "_session_action_bulk_delete",
         "bulk_tag": "_session_action_bulk_tag",
-        "search_notes": "_session_action_search_notes",
-        "recent": "_session_action_recent",
-        "oldest": "_session_action_oldest",
+        "search_notes": ("list", "search_notes", _sess_coerce_query),
+        "recent": ("list", "get_recent", _sess_coerce_n_default5),
+        "oldest": ("list", "get_oldest", _sess_coerce_n_default5),
         "snapshot": "_session_action_snapshot",
         "restore_snapshot": "_session_action_restore_snapshot",
         "merge": "_session_action_merge",
@@ -195,25 +305,25 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "crystallize_mined_macros": "_session_action_crystallize_mined_macros",
         "rate_skill": "_session_action_rate_skill",
         "list_skills": "_session_action_list_skills",
-        "suggest_strategy": "_session_action_suggest_strategy",
+        "suggest_strategy": ("raw", "suggest_strategy", _sess_coerce_strategy),
         "suggest_triage": "_session_action_suggest_triage",
         "suggest_analogy": "_session_action_suggest_analogy",
         "apply_analogy": "_session_action_apply_analogy",
         "log_activity": "_session_action_log_activity",
-        "get_activity_log": "_session_action_get_activity_log",
-        "notebook_append": "_session_action_notebook_append",
-        "notebook_read": "_session_action_notebook_read",
-        "notebook_section": "_session_action_notebook_section",
+        "get_activity_log": ("raw", "get_activity_log", _sess_coerce_activity_limit),
+        "notebook_append": ("raw", "notebook_append", _sess_coerce_nb_append),
+        "notebook_read": ("raw", "notebook_read", _sess_coerce_nb_read),
+        "notebook_section": ("raw", "notebook_section", _sess_coerce_nb_section),
         "track_hypothesis": "_session_action_track_hypothesis",
         "confirm_hypothesis": "_session_action_confirm_hypothesis",
         "refute_hypothesis": "_session_action_refute_hypothesis",
-        "list_hypotheses": "_session_action_list_hypotheses",
-        "dashboard": "_session_action_dashboard",
-        "get_phase": "_session_action_get_phase",
-        "advance_phase": "_session_action_advance_phase",
-        "link_session": "_session_action_link_session",
-        "cross_reference_sessions": "_session_action_cross_reference_sessions",
-        "list_snapshots": "_session_action_list_snapshots",
+        "list_hypotheses": ("raw", "list_hypotheses", _sess_coerce_hyp_status),
+        "dashboard": ("raw", "dashboard", _sess_coerce_none),
+        "get_phase": ("raw", "get_phase", _sess_coerce_none),
+        "advance_phase": ("raw", "advance_phase", _sess_coerce_none),
+        "link_session": ("raw", "link_session", _sess_coerce_link),
+        "cross_reference_sessions": ("raw", "cross_reference_sessions", _sess_coerce_none),
+        "list_snapshots": ("raw", "list_snapshots", _sess_coerce_none),
         "macro_set": "_session_action_macro_set",
         "macro_get": "_session_action_macro_get",
         "macro_list": "_session_action_macro_list",
@@ -225,9 +335,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
 
     def _handle_session(self, args: dict) -> dict:
         action = args.get("action")
-        handler_name = self._SESSION_ACTIONS.get(action)
-        if handler_name:
-            return getattr(self, handler_name)(args)
+        spec = self._SESSION_ACTIONS.get(action)
+        if spec is not None:
+            if isinstance(spec, str):
+                return getattr(self, spec)(args)
+            return self._run_session_spec(spec, args)
         if action and action.startswith("bootstrap_"):
             result = self._handle_session_bootstrap(action, args, lambda: self._resolve_session_id(args))
             if result is not None:
@@ -237,6 +349,49 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             f"Unsupported session action: '{action}'",
             hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
         )
+
+    def _require_session_sid(self, args: dict) -> tuple[Optional[str], Optional[dict]]:
+        """Resolve the target session_id, returning (sid, error_capsule).
+
+        On success sid is set and error is None. On any failure sid is None and
+        error is a ready-to-return capsule (format error or 'session_id
+        required'). Handles the resolve→validate boilerplate shared by every
+        sid-requiring session action.
+        """
+        sid, err = self._resolve_session_id(args)
+        if err:
+            return None, err
+        if not sid:
+            return None, make_error(MCPError.INVALID_ARGS, "session_id required")
+        return sid, None
+
+    def _run_session_spec(self, spec: tuple, args: dict) -> dict:
+        """Execute a declarative session action spec.
+
+        spec is (kind, mgr_method, coerce_fn) where kind is one of the three
+        trivial shapes documented above _SESSION_ACTIONS. Behavior matches the
+        former per-action handler bodies exactly.
+        """
+        kind, mgr_method, coerce = spec
+        sid = None
+        if kind in ("dict", "raw"):
+            sid, err = self._require_session_sid(args)
+            if err:
+                return err
+        coerced, cerr = coerce(args)
+        if cerr:
+            return cerr
+        mgr_call = getattr(self.session_mgr, mgr_method)
+        if kind == "dict":
+            result = mgr_call(sid, **coerced)
+            if result is None:
+                return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
+            return {"ok": True, "session": result.to_dict()}
+        if kind == "list":
+            sessions = [s.to_dict() for s in mgr_call(**coerced)]
+            return {"ok": True, "sessions": sessions, "count": len(sessions)}
+        # raw: return the manager result unchanged.
+        return mgr_call(sid, **coerced)
 
     def _resolve_session_id(self, args: dict, key: str = "session_id", allow_current: bool = True) -> tuple[Optional[str], Optional[dict]]:
         raw_sid = args.get(key)
@@ -762,31 +917,72 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 and runtime["process"].poll() is None
             )
             session_meta = getattr(fresh_session, "metadata", None) or {}
-            indexing_state = (
-                str(session_meta.get("indexing_state") or "").strip().lower()
-                if isinstance(session_meta, dict)
-                else ""
-            )
-            hot_indexed_count = 0
-            if isinstance(session_meta, dict):
+            if not isinstance(session_meta, dict):
+                session_meta = {}
+
+            # --- Honest analysis state, sourced from IDA's own auto_is_ok()
+            # via idb(action='state'), NOT from the host's idle-indexing worker
+            # (which is an orthogonal process whose state was previously
+            # misreported as "analysis_ready"). The watchdog thread keeps a
+            # per-session verdict in metadata; we also take a fresh sample
+            # when the runtime is alive so a status call is never stale. ---
+            sid = fresh_session.session_id
+            is_running = bool(result.get("is_running", False))
+            fresh_state = self._query_ida_state(sid) if is_running else None
+            wd_is_ok = bool(session_meta.get("analysis_is_ok"))
+            wd_verdict = str(session_meta.get("analysis_state") or "").strip().lower()
+            if isinstance(fresh_state, dict):
+                analysis = fresh_state.get("analysis") or {}
+                inventory = fresh_state.get("inventory") or {}
+                result["analysis_ready"] = bool(analysis.get("is_ok"))
+                result["analysis_active"] = bool(analysis.get("active"))
+                fqty = inventory.get("functions_qty")
                 try:
-                    hot_indexed_count = int(session_meta.get("hot_indexed_count") or 0)
+                    result["analysis_functions_qty"] = (
+                        int(fqty) if fqty is not None else None
+                    )
                 except Exception:
-                    hot_indexed_count = 0
-            result["analysis_ready"] = bool(
-                isinstance(session_meta, dict)
-                and (
-                    session_meta.get("indexing_complete")
-                    or indexing_state in {"partial", "ready"}
-                    or hot_indexed_count > 0
-                )
-            )
+                    result["analysis_functions_qty"] = None
+            else:
+                # Runtime gone or RPC failed — fall back to the watchdog's
+                # last known verdict so status still reflects history.
+                result["analysis_ready"] = wd_is_ok
+            if wd_verdict:
+                result["analysis_state"] = wd_verdict
+            try:
+                stall = session_meta.get("analysis_stall_seconds")
+                if stall is not None:
+                    result["analysis_stall_seconds"] = round(float(stall), 1)
+            except Exception:
+                pass
+            if result.get("analysis_state") == "stalled":
+                result["analysis_stalled"] = True
+
+            # --- Host-side structural-index warmup is a SEPARATE concern
+            # from IDA analysis. Report it under its own name so it can no
+            # longer be mistaken for analysis readiness. ---
+            indexing_state = str(session_meta.get("indexing_state") or "").strip().lower()
+            hot_indexed_count = 0
+            try:
+                hot_indexed_count = int(session_meta.get("hot_indexed_count") or 0)
+            except Exception:
+                hot_indexed_count = 0
             if indexing_state:
                 result["indexing_state"] = indexing_state
-            if isinstance(session_meta, dict) and session_meta.get("indexing_mode"):
+            if session_meta.get("indexing_mode"):
                 result["indexing_mode"] = session_meta.get("indexing_mode")
             if hot_indexed_count > 0:
                 result["hot_indexed_count"] = hot_indexed_count
+
+            # Surface the most recent apply transcript (what the black-box
+            # startup actually did) so a caller can see it after the fact.
+            last_apply = session_meta.get("last_apply_steps")
+            if isinstance(last_apply, list) and last_apply:
+                result["apply_steps"] = last_apply
+                result["steps_done"] = len(last_apply)
+            live_progress = session_meta.get("apply_progress")
+            if isinstance(live_progress, dict) and live_progress:
+                result["apply_in_progress"] = live_progress
             # Inject recent blackboard into session status so LLM sees it by default
             try:
                 import importlib.util
@@ -960,42 +1156,17 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             ),
         }
 
-    def _session_action_rename(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        new_name = args.get("name") or args.get("new_name")
-        if not new_name:
-            return make_error(MCPError.INVALID_ARGS, "name required")
-        new_name = str(new_name).strip()[:MAX_NAME_LEN]
-        result = self.session_mgr.rename_session(sid, new_name)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
-
-    def _session_action_duplicate(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        result = self.session_mgr.duplicate_session(sid)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
+    # rename, duplicate, archive, unarchive, tag, untag, find_by_tag, add_note,
+    # clear_notes, search_notes, recent, oldest, suggest_strategy,
+    # get_activity_log, notebook_append/read/section, list_hypotheses,
+    # dashboard, get_phase, advance_phase, link_session,
+    # cross_reference_sessions, list_snapshots: declarative — see
+    # _SESSION_ACTIONS + _run_session_spec.
 
     def _session_action_export_session(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         exported_hypotheses = self._export_session_hypotheses_to_symbol_db(sid)
         result = self.session_mgr.export_session(sid)
         if result is None:
@@ -1011,104 +1182,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         result = self.session_mgr.import_session(data)
         return {"ok": True, "session": result.to_dict()}
 
-    def _session_action_archive(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        result = self.session_mgr.archive_session(sid)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
-
-    def _session_action_unarchive(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        result = self.session_mgr.unarchive_session(sid)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
-
-    def _session_action_tag(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        tag = args.get("tag")
-        if not tag:
-            return make_error(MCPError.INVALID_ARGS, "tag required")
-        tag = str(tag).strip()[:MAX_TAG_LEN]
-        if not tag:
-            return make_error(MCPError.INVALID_ARGS, "tag required")
-        result = self.session_mgr.tag_session(sid, tag)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
-
-    def _session_action_untag(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        tag = args.get("tag")
-        if not tag:
-            return make_error(MCPError.INVALID_ARGS, "tag required")
-        result = self.session_mgr.untag_session(sid, tag)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
-
-    def _session_action_find_by_tag(self, args: dict) -> dict:
-        tag = args.get("tag")
-        if not tag:
-            return make_error(MCPError.INVALID_ARGS, "tag required")
-        sessions = [s.to_dict() for s in self.session_mgr.find_by_tag(tag)]
-        return {"ok": True, "sessions": sessions, "count": len(sessions)}
-
-    def _session_action_add_note(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        note = args.get("note", "")
-        if not note:
-            return make_error(MCPError.INVALID_ARGS, "note required")
-        note = str(note)[:MAX_NOTE_LEN]
-        result = self.session_mgr.add_note(sid, note)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
-
-    def _session_action_clear_notes(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        result = self.session_mgr.clear_notes(sid)
-        if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
-        return {"ok": True, "session": result.to_dict()}
-
     def _session_action_cleanup_stale(self, args: dict) -> dict:
         max_age = _bounded_int(
             args.get("max_age_days", 30), 30, min_value=1, max_value=3650
@@ -1120,11 +1193,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         return {"ok": True, "stats": self.session_mgr.get_stats()}
 
     def _session_action_validate(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         result = self.session_mgr.validate_session(sid)
         if result is None:
             return make_error(
@@ -1188,33 +1259,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         results = self.session_mgr.bulk_tag(cleaned_sids, tag)
         return {"ok": True, "results": results}
 
-    def _session_action_search_notes(self, args: dict) -> dict:
-        query = args.get("query", "")
-        if not query:
-            return make_error(MCPError.INVALID_ARGS, "query required")
-        sessions = [s.to_dict() for s in self.session_mgr.search_notes(query)]
-        return {"ok": True, "sessions": sessions, "count": len(sessions)}
-
-    def _session_action_recent(self, args: dict) -> dict:
-        n = _bounded_int(
-            args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT
-        )
-        sessions = [s.to_dict() for s in self.session_mgr.get_recent(n)]
-        return {"ok": True, "sessions": sessions, "count": len(sessions)}
-
-    def _session_action_oldest(self, args: dict) -> dict:
-        n = _bounded_int(
-            args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT
-        )
-        sessions = [s.to_dict() for s in self.session_mgr.get_oldest(n)]
-        return {"ok": True, "sessions": sessions, "count": len(sessions)}
-
     def _session_action_snapshot(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         snapshot_res = self.session_mgr.snapshot_session(sid)
         if snapshot_res is None:
             return make_error(
@@ -1223,11 +1271,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         return {"ok": True, "session_id": sid, "snapshot_id": snapshot_res.get("snapshot_id"), "message": snapshot_res.get("message", "")}
 
     def _session_action_restore_snapshot(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         snapshot_id = args.get("snapshot_id")
         if not snapshot_id:
             return make_error(MCPError.INVALID_ARGS, "snapshot_id required")
@@ -1257,11 +1303,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         return {"ok": True, "session": result.to_dict()}
 
     def _session_action_crystallize_skill(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         name = str(args.get("name") or "").strip()
         description = str(args.get("description") or "").strip()
         if not name:
@@ -1285,11 +1329,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         )
 
     def _session_action_crystallize_mined_macros(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         min_support = args.get("min_support", 2)
         try:
             min_support = int(min_support)
@@ -1303,11 +1345,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         )
 
     def _session_action_rate_skill(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         skill_id = str(args.get("skill_id") or "").strip()
         if not skill_id:
             return make_error(MCPError.INVALID_ARGS, "skill_id required")
@@ -1319,11 +1359,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         return self.session_mgr.rate_skill(sid, skill_id=skill_id, reward=reward_f)
 
     def _session_action_list_skills(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         min_q = args.get("min_q", 0.0)
         try:
             min_q = float(min_q)
@@ -1336,21 +1374,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             global_skills=include_global,
         )
 
-    def _session_action_suggest_strategy(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        context = str(args.get("context") or "")
-        return self.session_mgr.suggest_strategy(sid, context=context)
-
     def _session_action_suggest_triage(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         context = args.get("context")
         if context is not None:
             context = str(context)
@@ -1365,11 +1392,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         return self.session_mgr.suggest_triage(sid, context=context, limit=limit)
 
     def _session_action_suggest_analogy(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         library_idbs = args.get("library_idbs")
         if library_idbs is not None:
             if not isinstance(library_idbs, list):
@@ -1406,11 +1431,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         )
 
     def _session_action_apply_analogy(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         mappings = args.get("mappings")
         if not mappings:
             return make_error(MCPError.INVALID_ARGS, "mappings list required")
@@ -1462,11 +1485,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         }
 
     def _session_action_log_activity(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         tool = str(args.get("tool") or "").strip()
         tool_action = str(args.get("tool_action") or args.get("activity_action") or args.get("activity") or "").strip()
         if not tool_action:
@@ -1483,54 +1504,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         result = str(args.get("result") or "")
         return self.session_mgr.log_activity(sid, tool=tool, action=tool_action, result=result)
 
-    def _session_action_get_activity_log(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500)
-        return self.session_mgr.get_activity_log(sid, limit=limit)
-
-    def _session_action_notebook_append(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        entry = str(args.get("note") or args.get("entry") or "").strip()
-        if not entry:
-            return make_error(MCPError.INVALID_ARGS, "entry (or note) required")
-        section = str(args.get("section") or "").strip() or None
-        return self.session_mgr.notebook_append(sid, entry=entry, section=section)
-
-    def _session_action_notebook_read(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        lines = args.get("lines")
-        lines = str(lines).strip() if lines is not None else None
-        return self.session_mgr.notebook_read(sid, lines=lines)
-
-    def _session_action_notebook_section(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        section_name = str(args.get("section") or args.get("name") or "").strip()
-        if not section_name:
-            return make_error(MCPError.INVALID_ARGS, "section required")
-        return self.session_mgr.notebook_section(sid, section_name=section_name)
-
     def _session_action_track_hypothesis(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         statement = str(args.get("statement") or "").strip()
         if not statement:
             return make_error(MCPError.INVALID_ARGS, "statement required")
@@ -1554,11 +1531,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         )
 
     def _session_action_confirm_hypothesis(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         hid = str(args.get("hypothesis_id") or args.get("id") or "").strip()
         if not hid:
             return make_error(MCPError.INVALID_ARGS, "hypothesis_id required")
@@ -1568,11 +1543,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         return self.session_mgr.confirm_hypothesis(sid, hid=hid, evidence=evidence)
 
     def _session_action_refute_hypothesis(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
+        sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
         hid = str(args.get("hypothesis_id") or args.get("id") or "").strip()
         if not hid:
             return make_error(MCPError.INVALID_ARGS, "hypothesis_id required")
@@ -1588,66 +1561,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             reason=reason,
             evidence=evidence,
         )
-
-    def _session_action_list_hypotheses(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        status = str(args.get("status") or "").strip() or None
-        return self.session_mgr.list_hypotheses(sid, status=status)
-
-    def _session_action_dashboard(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        return self.session_mgr.dashboard(sid)
-
-    def _session_action_get_phase(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        return self.session_mgr.get_phase(sid)
-
-    def _session_action_advance_phase(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        return self.session_mgr.advance_phase(sid)
-
-    def _session_action_link_session(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        other_sid = _normalize_session_id(args.get("other_session_id") or args.get("other_sid") or args.get("target_session_id"))
-        if not other_sid:
-            return make_error(MCPError.INVALID_ARGS, "other_session_id required")
-        return self.session_mgr.link_session(sid, other_sid=other_sid)
-
-    def _session_action_cross_reference_sessions(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        return self.session_mgr.cross_reference_sessions(sid)
-
-    def _session_action_list_snapshots(self, args: dict) -> dict:
-        sid, sid_err = self._resolve_session_id(args)
-        if sid_err:
-            return sid_err
-        if not sid:
-            return make_error(MCPError.INVALID_ARGS, "session_id required")
-        return self.session_mgr.list_snapshots(sid)
 
     def _session_action_macro_set(self, args: dict) -> dict:
         macro_name = self._normalize_macro_name(

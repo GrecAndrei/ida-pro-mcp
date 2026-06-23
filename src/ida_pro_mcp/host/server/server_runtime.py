@@ -1025,6 +1025,157 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 except Exception:
                     pass
 
+    # ------------------------------------------------------------------
+    # Analysis-state observability
+    #
+    # The host refuses to block on IDA auto-analysis (it starts the RPC
+    # server immediately and lets analysis run in the background), so callers
+    # are blind between "create" and "ready". These helpers give an honest
+    # picture of what IDA is doing RIGHT NOW, sourced from IDA's own
+    # auto_is_ok() via the idb(action='state') RPC — not from the host's
+    # idle-indexing worker, which is an orthogonal process whose state was
+    # previously (mis)reported as "analysis_ready".
+    # ------------------------------------------------------------------
+
+    def _query_ida_state(self, sid: str, timeout: float = 3.0) -> Optional[dict]:
+            """Fresh, honest IDA state snapshot via idb(action='state').
+
+            Returns the idb_state() dict (analysis.is_ok, analysis.active,
+            inventory.functions_qty, ...) or None if the runtime is gone or
+            the RPC fails. Cheap: O(1) SDK calls, no function iteration.
+            """
+            with self._runtime_lock:
+                runtime = self.session_runtimes.get(sid)
+            if not self._runtime_alive(runtime):
+                return None
+            port = runtime.get("port") if isinstance(runtime, dict) else None
+            if not isinstance(port, int) or port <= 0:
+                return None
+            try:
+                res = self._send_rpc_raw(
+                    {"tool": "idb", "args": {"action": "state"}},
+                    port,
+                    timeout=timeout,
+                    auth_token=runtime.get("auth_token") if isinstance(runtime, dict) else None,
+                )
+            except Exception:
+                return None
+            if isinstance(res, dict) and not is_error_result(res) and res.get("ok"):
+                return res
+            return None
+
+    def _start_analysis_watchdog(self, session_id: str, server_port: int) -> None:
+            """Start a per-session host thread that watches IDA's real analysis
+            progress and flags the session as 'stalled' when the process is
+            alive but analysis stops advancing. Idempotent: restarting a
+            session replaces any prior watchdog for it.
+            """
+            self._stop_analysis_watchdog(session_id, join_timeout=0.2)
+            stop_event = threading.Event()
+
+            interval = float(getattr(self, "_analysis_watchdog_interval", 5))
+            stall_threshold = float(getattr(self, "_analysis_watchdog_stall_seconds", 120))
+
+            def _worker() -> None:
+                last_funcs: Optional[int] = None
+                stall_since: Optional[float] = None  # ts when progress last stalled
+                last_is_ok: Optional[bool] = None
+                self._update_session_indexing_metadata(
+                    session_id,
+                    analysis_state="starting",
+                    analysis_stall_seconds=0,
+                    analysis_is_ok=None,
+                    analysis_functions_qty=None,
+                )
+                log_rpc(f"[watchdog] Started for {session_id}")
+                while not stop_event.wait(interval):
+                    with self._runtime_lock:
+                        runtime = self.session_runtimes.get(session_id)
+                    if not self._runtime_alive(runtime):
+                        return
+                    state = self._query_ida_state(session_id, timeout=float(interval))
+                    if not state:
+                        # RPC failed but process alive — keep watching; treat
+                        # as no signal rather than declaring stalled.
+                        continue
+                    analysis = state.get("analysis") or {}
+                    inventory = state.get("inventory") or {}
+                    is_ok = bool(analysis.get("is_ok"))
+                    active = bool(analysis.get("active"))
+                    funcs = inventory.get("functions_qty")
+                    try:
+                        funcs_i = int(funcs) if funcs is not None else None
+                    except Exception:
+                        funcs_i = None
+
+                    now = time.time()
+                    if is_ok:
+                        # Analysis queue is empty — done (for now).
+                        stall_since = None
+                        verdict = "ready"
+                    else:
+                        # Analysis in progress. Stall if function count has
+                        # not advanced since the last poll. (func count can be
+                        # None early in load — don't count that as progress.)
+                        progressed = (
+                            funcs_i is not None
+                            and last_funcs is not None
+                            and funcs_i > last_funcs
+                        )
+                        if progressed or last_funcs is None:
+                            stall_since = None
+                            verdict = "analyzing"
+                        elif stall_since is None:
+                            stall_since = now
+                            verdict = "analyzing"
+                        else:
+                            verdict = "analyzing"
+                        if stall_since is not None:
+                            stall_sec = now - stall_since
+                            if stall_sec >= stall_threshold:
+                                verdict = "stalled"
+                                log_rpc(
+                                    f"[watchdog] {session_id} STALLED: no "
+                                    f"function-count progress for {int(stall_sec)}s "
+                                    f"(funcs={funcs_i})"
+                                )
+
+                    last_funcs = funcs_i
+                    last_is_ok = is_ok
+                    stall_sec_report = (
+                        round(time.time() - stall_since, 1) if stall_since else 0
+                    )
+                    self._update_session_indexing_metadata(
+                        session_id,
+                        analysis_state=verdict,
+                        analysis_stall_seconds=stall_sec_report,
+                        analysis_is_ok=is_ok,
+                        analysis_active=active,
+                        analysis_functions_qty=funcs_i,
+                    )
+
+            t = threading.Thread(
+                target=_worker,
+                daemon=True,
+                name=f"ida-watchdog-{session_id}",
+            )
+            with self._analysis_watchdog_lock:
+                self._analysis_watchdog_stop_events[session_id] = stop_event
+                self._analysis_watchdog_threads[session_id] = t
+            t.start()
+
+    def _stop_analysis_watchdog(self, session_id: str, join_timeout: float = 1.0) -> None:
+            with self._analysis_watchdog_lock:
+                stop_event = self._analysis_watchdog_stop_events.pop(session_id, None)
+                thread = self._analysis_watchdog_threads.pop(session_id, None)
+            if stop_event is not None:
+                stop_event.set()
+            if thread and thread.is_alive() and thread is not threading.current_thread():
+                try:
+                    thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
+                except Exception:
+                    pass
+
     def _json_safe_value(self, value: Any) -> Any:
             """Recursively convert non-JSON-safe values to safe representations."""
             if isinstance(value, bytes):
@@ -1446,81 +1597,107 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")
-            server_process = subprocess.Popen(
-                cmd,
-                stdout=stdout_fh,
-                stderr=stderr_fh,
-                env=env,
-                **_popen_new_session_kwargs(),
-            )
-
-            # WAIT FOR STARTUP using ping
-            startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
-            start_time = time.time()
-            ida_crashed = False
-            while time.time() - start_time < startup_timeout:
-                exit_code = server_process.poll()
-                if exit_code is not None:
-                    ida_crashed = True
-                    break
-
-                try:
-                    res = self._send_rpc_raw(
-                        {"type": "ping"},
-                        server_port,
-                        timeout=0.5,
-                        auth_token=session_token,
-                    )
-                    if res.get("pong"):
-                        log_rpc(f"IDA RPC listener is ready for {session.idb_path}")
-                        runtime = {
-                            "process": server_process,
-                            "port": server_port,
-                            "idb_path": session.idb_path,
-                            "stdout_log": stdout_log,
-                            "stderr_log": stderr_log,
-                            "auth_token": session_token,
-                            "log_handles": [stdout_fh, stderr_fh],
-                        }
-                        with self._runtime_lock:
-                            self.session_runtimes[session.session_id] = runtime
-                        self._write_runtime_lease(session.session_id, runtime)
-                        apply_res = self._apply_session_options(session, runtime)
-                        if is_error_result(apply_res):
-                            return apply_res
-                        # Start lightweight host services immediately, and defer
-                        # structural indexing until the session goes idle.
-                        self._start_session_background_services(session, server_port)
-                        return {
-                            "ok": True,
-                            "idb_path": session.idb_path,
-                            "current_options": apply_res.get("current_options"),
-                            "bootstrap_report": apply_res.get("bootstrap_report"),
-                            "analysis_in_progress": True,
-                            "indexing_state": "idle_hot_scheduled",
-                            "hint": "IDA RPC is ready. Auto-analysis continues in background, and hot structural indexing starts only after the session goes idle.",
-                        }
-                except Exception:
-                    pass
-                time.sleep(0.5)
-
-            if ida_crashed:
-                diag = self._get_ida_diagnostics(stdout_log, stderr_log)
-                if self._is_library_init_err2(diag):
-                    return self._attempt_session_recovery(session, diag, server_port)
-                lib_init = self._extract_library_init_failure(diag)
-                details = {"log": diag}
-                if lib_init:
-                    details["library_init"] = lib_init
-                return make_error(
-                    MCPError.IDA_CRASHED,
-                    f"IDA exited with code {exit_code}",
-                    details=details,
+            _handles_transferred = False
+            try:
+                server_process = subprocess.Popen(
+                    cmd,
+                    stdout=stdout_fh,
+                    stderr=stderr_fh,
+                    env=env,
+                    **_popen_new_session_kwargs(),
                 )
 
-            return make_error(
-                MCPError.IDA_TIMEOUT, f"IDA failed to initialize within {startup_timeout}s."
-            )
+                # WAIT FOR STARTUP using ping
+                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
+                start_time = time.time()
+                ida_crashed = False
+                exit_code = None
+                actual_port = server_port
+                while time.time() - start_time < startup_timeout:
+                    exit_code = server_process.poll()
+                    if exit_code is not None:
+                        ida_crashed = True
+                        break
+
+                    try:
+                        res = self._send_rpc_raw(
+                            {"type": "ping"},
+                            server_port,
+                            timeout=0.5,
+                            auth_token=session_token,
+                        )
+                        if res.get("pong"):
+                            # IDA may have rebound to an ephemeral port if
+                            # the host's pre-allocated one was taken in the
+                            # TOCTOU window. Trust the port IDA reports.
+                            try:
+                                actual_port = int(res.get("port") or server_port)
+                            except Exception:
+                                actual_port = server_port
+                            log_rpc(
+                                f"IDA RPC listener is ready for {session.idb_path} on port {actual_port}"
+                            )
+                            runtime = {
+                                "process": server_process,
+                                "port": actual_port,
+                                "idb_path": session.idb_path,
+                                "stdout_log": stdout_log,
+                                "stderr_log": stderr_log,
+                                "auth_token": session_token,
+                                "log_handles": [stdout_fh, stderr_fh],
+                            }
+                            with self._runtime_lock:
+                                self.session_runtimes[session.session_id] = runtime
+                            self._write_runtime_lease(session.session_id, runtime)
+                            _handles_transferred = True
+                            apply_res = self._apply_session_options(session, runtime)
+                            if is_error_result(apply_res):
+                                return apply_res
+                            # Start lightweight host services immediately, and defer
+                            # structural indexing until the session goes idle.
+                            self._start_session_background_services(session, actual_port)
+                            return {
+                                "ok": True,
+                                "idb_path": session.idb_path,
+                                "current_options": apply_res.get("current_options"),
+                                "bootstrap_report": apply_res.get("bootstrap_report"),
+                                "apply_steps": apply_res.get("apply_steps"),
+                                "steps_done": apply_res.get("steps_done"),
+                                "analysis_in_progress": True,
+                                "indexing_state": "idle_hot_scheduled",
+                                "hint": "IDA RPC is ready. Auto-analysis continues in background, and hot structural indexing starts only after the session goes idle.",
+                            }
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+
+                if ida_crashed:
+                    diag = self._get_ida_diagnostics(stdout_log, stderr_log)
+                    if self._is_library_init_err2(diag):
+                        return self._attempt_session_recovery(session, diag, server_port)
+                    lib_init = self._extract_library_init_failure(diag)
+                    details = {"log": diag}
+                    if lib_init:
+                        details["library_init"] = lib_init
+                    return make_error(
+                        MCPError.IDA_CRASHED,
+                        f"IDA exited with code {exit_code}",
+                        details=details,
+                    )
+
+                return make_error(
+                    MCPError.IDA_TIMEOUT, f"IDA failed to initialize within {startup_timeout}s."
+                )
+            finally:
+                # On any non-success return, the log handles were never
+                # handed off to a registered runtime — close them so we do
+                # not leak file descriptors across repeated failed starts.
+                if not _handles_transferred:
+                    for fh in (stdout_fh, stderr_fh):
+                        try:
+                            fh.close()
+                        except Exception:
+                            pass
 
     def _launch_and_wait(self, session, server_port, sanitize_env: bool = False):
             script_path = os.path.join(os.path.dirname(SCRIPT_DIR), "server_script.py")
@@ -1573,55 +1750,72 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")
-            server_process = subprocess.Popen(
-                cmd,
-                stdout=stdout_fh,
-                stderr=stderr_fh,
-                env=env,
-                **_popen_new_session_kwargs(),
-            )
+            _handles_transferred = False
+            try:
+                server_process = subprocess.Popen(
+                    cmd,
+                    stdout=stdout_fh,
+                    stderr=stderr_fh,
+                    env=env,
+                    **_popen_new_session_kwargs(),
+                )
 
-            startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
-            start_time = time.time()
-            while time.time() - start_time < startup_timeout:
-                exit_code = server_process.poll()
-                if exit_code is not None:
-                    diag = self._get_ida_diagnostics(stdout_log, stderr_log)
-                    return {
-                        "error": True,
-                        "exit_code": exit_code,
-                        "log": diag,
-                        "library_init": self._extract_library_init_failure(diag),
-                        "sanitize_env": sanitize_env,
-                    }
-
-                try:
-                    res = self._send_rpc_raw(
-                        {"type": "ping"},
-                        server_port,
-                        timeout=0.5,
-                        auth_token=session_token,
-                    )
-                    if res.get("pong"):
-                        log_rpc(f"IDA RPC listener is ready for {session.idb_path}")
-                        runtime = {
-                            "process": server_process,
-                            "port": server_port,
-                            "idb_path": session.idb_path,
-                            "stdout_log": stdout_log,
-                            "stderr_log": stderr_log,
-                            "auth_token": session_token,
-                            "log_handles": [stdout_fh, stderr_fh],
+                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
+                start_time = time.time()
+                while time.time() - start_time < startup_timeout:
+                    exit_code = server_process.poll()
+                    if exit_code is not None:
+                        diag = self._get_ida_diagnostics(stdout_log, stderr_log)
+                        return {
+                            "error": True,
+                            "exit_code": exit_code,
+                            "log": diag,
+                            "library_init": self._extract_library_init_failure(diag),
+                            "sanitize_env": sanitize_env,
                         }
-                        with self._runtime_lock:
-                            self.session_runtimes[session.session_id] = runtime
-                        self._write_runtime_lease(session.session_id, runtime)
-                        return {"ok": True, "idb_path": session.idb_path}
-                except Exception:
-                    pass
-                time.sleep(0.5)
 
-            return {"error": True, "reason": "timeout"}
+                    try:
+                        res = self._send_rpc_raw(
+                            {"type": "ping"},
+                            server_port,
+                            timeout=0.5,
+                            auth_token=session_token,
+                        )
+                        if res.get("pong"):
+                            # Trust the port IDA reports (TOCTOU self-heal).
+                            try:
+                                actual_port = int(res.get("port") or server_port)
+                            except Exception:
+                                actual_port = server_port
+                            log_rpc(
+                                f"IDA RPC listener is ready for {session.idb_path} on port {actual_port}"
+                            )
+                            runtime = {
+                                "process": server_process,
+                                "port": actual_port,
+                                "idb_path": session.idb_path,
+                                "stdout_log": stdout_log,
+                                "stderr_log": stderr_log,
+                                "auth_token": session_token,
+                                "log_handles": [stdout_fh, stderr_fh],
+                            }
+                            with self._runtime_lock:
+                                self.session_runtimes[session.session_id] = runtime
+                            self._write_runtime_lease(session.session_id, runtime)
+                            _handles_transferred = True
+                            return {"ok": True, "idb_path": session.idb_path, "port": actual_port}
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+
+                return {"error": True, "reason": "timeout"}
+            finally:
+                if not _handles_transferred:
+                    for fh in (stdout_fh, stderr_fh):
+                        try:
+                            fh.close()
+                        except Exception:
+                            pass
 
     def _attempt_session_recovery(self, session, diag, server_port):
             opts = session.analysis_options or {}
@@ -1737,6 +1931,44 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if not port:
                 return make_error(MCPError.IDA_CRASHED, "Missing runtime port")
 
+            # Stream apply progress so a long create() is not a black box.
+            # The MCP stdio server is serial, so a client cannot poll
+            # session(status) mid-create; instead we emit live progress
+            # notifications and mirror the current step into session metadata.
+            apply_steps: List[Dict[str, Any]] = []
+
+            def _progress(step: str, status: str = "start", detail: Any = None) -> None:
+                try:
+                    self._update_session_indexing_metadata(
+                        session.session_id,
+                        apply_progress={
+                            "step": step,
+                            "status": status,
+                            "ts": time.time(),
+                        },
+                    )
+                except Exception:
+                    pass
+                try:
+                    params: Dict[str, Any] = {
+                        "progressToken": f"apply:{session.session_id}",
+                        "progress": {"step": step, "status": status},
+                    }
+                    if detail is not None:
+                        params["progress"]["detail"] = detail
+                    self._send_notification(
+                        {"method": "notifications/progress", "params": params}
+                    )
+                except Exception:
+                    pass
+
+            def _record(step: str, res: Any) -> None:
+                ok = True
+                if isinstance(res, dict):
+                    ok = not is_error_result(res)
+                apply_steps.append({"step": step, "ok": ok})
+                _progress(step, "done" if ok else "error")
+
             actions = []
             options_payload = {}
             if isinstance(opts.get("options"), dict):
@@ -1771,10 +2003,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             reanalyze = opts.get("reanalyze")
 
+            if actions:
+                _progress("apply_options", "start", detail=[a.get("action") for a in actions if isinstance(a, dict)])
             for action_args in actions:
                 res = self._send_rpc_raw({"tool": "analysis", "args": action_args}, port)
                 if is_error_result(res):
+                    _record(action_args.get("action", "apply_options"), res)
                     return res
+                _record(action_args.get("action", "apply_options"), res)
 
             # After setting architecture, synchronously fix segment state for
             # firmware binaries BEFORE reanalyze or bootstrap run. IDA's raw
@@ -1782,6 +2018,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # and add_func(). This fix sets class→CODE, type=SEG_CODE,
             # perm|=SEGPERM_EXEC, bitness→32, and T=1 for ARM Thumb.
             if any(k in opts for k in ("processor", "bitness")):
+                _progress("fix_segments", "start")
                 try:
                     self._send_rpc_raw({
                         "tool": "misc",
@@ -1831,8 +2068,10 @@ for seg_ea in idautils.Segments():
                         }, port, timeout=5)
                 except Exception as e:
                     log_rpc(f"Thumb T=1 RPC failed: {e}")
+                _record("fix_segments", {"ok": True})
 
             if actions and (reanalyze is None or reanalyze):
+                _progress("reanalyze", "start")
                 reanalyze_args = {"action": "reanalyze"}
                 if opts.get("start") is not None:
                     reanalyze_args["start"] = opts.get("start")
@@ -1840,10 +2079,13 @@ for seg_ea in idautils.Segments():
                     reanalyze_args["end"] = opts.get("end")
                 res = self._send_rpc_raw({"tool": "analysis", "args": reanalyze_args}, port)
                 if is_error_result(res):
+                    _record("reanalyze", res)
                     return res
+                _record("reanalyze", res)
 
             bootstrap_knowledge = {"chip_family": None, "imported_symbol_count": 0}
             bootstrap_report = None
+            _progress("bootstrap_knowledge", "start")
             try:
                 chip_res = self._send_rpc_raw(
                     {"tool": "knowledge", "args": {"action": "chip_identify"}},
@@ -1868,7 +2110,9 @@ for seg_ea in idautils.Segments():
                     bootstrap_knowledge["imported_symbol_count"] = int(import_res.get("imported", 0) or 0)
             except Exception:
                 pass
+            _record("bootstrap_knowledge", {"ok": True})
 
+            _progress("firmware_bootstrap", "start")
             try:
                 chip_family = str(opts.get("chip_family") or bootstrap_knowledge.get("chip_family") or "").strip()
                 if chip_family:
@@ -1885,10 +2129,12 @@ for seg_ea in idautils.Segments():
                         bootstrap_report = fw_res.get("bootstrap_report") or fw_res
             except Exception:
                 bootstrap_report = None
+            _record("firmware_bootstrap", {"ok": True})
 
             if opts.get("apply_once", True):
                 session.analysis_applied = True
             self.session_mgr._save_metadata(session)
+            _progress("verify_architecture", "start")
             current_options = {}
             try:
                 current_options = self._send_rpc_raw(
@@ -1936,11 +2182,25 @@ for seg_ea in idautils.Segments():
                         )
             except Exception:
                 pass
+            _record("verify_architecture", {"ok": True})
+            # Persist the apply transcript so session(status) can show what the
+            # (black-box) startup actually did, and clear the live marker.
+            try:
+                self._update_session_indexing_metadata(
+                    session.session_id,
+                    apply_progress=None,
+                    last_apply_steps=apply_steps,
+                    last_apply_at=time.time(),
+                )
+            except Exception:
+                pass
             return {
                 "ok": True,
                 "current_options": current_options if not is_error_result(current_options) else None,
                 "bootstrap_knowledge": bootstrap_knowledge,
                 "bootstrap_report": bootstrap_report,
+                "apply_steps": apply_steps,
+                "steps_done": len(apply_steps),
             }
 
     def _start_session_background_services(self, session, server_port: int) -> None:
@@ -1976,6 +2236,9 @@ for seg_ea in idautils.Segments():
             except Exception as e:
                 log_rpc(f"[idle-index] Analysis engine failed to start (non-fatal): {e}")
             self._start_idle_index_worker(session_id, server_port)
+            # Watchdog gives the host an honest picture of IDA's analysis
+            # progress (and stalls) while the background analysis runs.
+            self._start_analysis_watchdog(session_id, server_port)
 
     def _stop_analysis_engine(self, sid: str, join_timeout: float = 2.0) -> None:
             engine = getattr(self, "_analysis_engines", {}).pop(sid, None)
@@ -1993,6 +2256,7 @@ for seg_ea in idautils.Segments():
 
     def _cleanup_runtime(self, sid):
             self._stop_idle_index_worker(sid, join_timeout=0.5)
+            self._stop_analysis_watchdog(sid, join_timeout=0.5)
             self._stop_analysis_engine(sid)
             self._session_last_activity.pop(sid, None)
             self._session_inflight_calls.pop(sid, None)

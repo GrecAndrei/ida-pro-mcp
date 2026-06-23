@@ -523,30 +523,49 @@ def analysis(
             return result
 
         if action == "wait":
-            # Report current analysis state and optionally spin-wait for completion.
-            # Uses request_idle callback + short spins to avoid blocking the socket loop.
+            # Report current analysis state and optionally wait for completion.
+            #
+            # Two modes:
+            #   - Bounded poll (default): passively watch auto_is_ok() until it
+            #     flips True or the timeout elapses. This does NOT drive the
+            #     analyzer — in headless idat, auto-analysis advances on IDA's
+            #     own thread; sleeping in this RPC handler only observes.
+            #   - Pump (pump=true): call ida_auto.auto_wait(), which actively
+            #     processes the auto-analysis queue to completion. This DOES
+            #     drive analysis, but blocks until the queue is empty (no cap),
+            #     so a genuinely stuck analysis will hang the call. Use this
+            #     when a caller wants to force completion rather than observe.
+            pump = bool(kwargs.get("pump") or kwargs.get("blocking") or False)
             poll_timeout = float(kwargs.get("timeout", 0.0) or 0.0)
             poll_max_wait = float(kwargs.get("max_wait", 30.0) or 30.0)
             start_time = time.time()
             waited = 0.0
-            while True:
-                analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
-                if analysis_ok:
-                    break
-                if poll_timeout <= 0:
-                    break
-                remaining = min(poll_timeout, poll_max_wait) - waited
-                if remaining <= 0:
-                    break
-                sleep_sec = min(0.1, remaining)
-                time.sleep(sleep_sec)
-                waited += sleep_sec
-                # Pump IDA's idle queue to let auto-analysis make progress
+            pumped = False
+            if pump:
                 try:
-                    if hasattr(idaapi, "process_ui_action"):
-                        pass  # non-blocking, just let the loop spin
+                    import ida_auto as _ida_auto
+                    if hasattr(_ida_auto, "auto_wait"):
+                        _ida_auto.auto_wait()
+                        pumped = True
                 except Exception:
                     pass
+            if not pumped:
+                while True:
+                    analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+                    if analysis_ok:
+                        break
+                    if poll_timeout <= 0:
+                        break
+                    remaining = min(poll_timeout, poll_max_wait) - waited
+                    if remaining <= 0:
+                        break
+                    sleep_sec = min(0.1, remaining)
+                    time.sleep(sleep_sec)
+                    waited += sleep_sec
+                    # NOTE: deliberately not pretending to pump IDA's event loop
+                    # here. The analyzer advances on its own thread; this loop
+                    # only observes. Use pump=true to actively drive analysis.
+            waited = time.time() - start_time
             analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
             try:
                 func_count = sum(1 for _ in idautils.Functions())
@@ -559,13 +578,15 @@ def analysis(
             return {
                 "ok": True,
                 "analysis_complete": analysis_ok,
+                "pumped": pumped,
                 "functions": func_count,
                 "strings": string_count,
                 "seconds_waited": round(waited, 2),
                 "note": (
                     "Analysis complete. Safe to call code/data/funcs tools."
                     if analysis_ok else
-                    f"Analysis still in progress after {round(waited, 1)}s. Retry with timeout=<seconds> or poll session(action='status')."
+                    f"Analysis still in progress after {round(waited, 1)}s. "
+                    "Use pump=true to actively drive it, or poll session(action='status')."
                 ),
             }
 

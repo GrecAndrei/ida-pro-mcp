@@ -39,6 +39,11 @@ for p in [_src_root, _pkg_root, _mcp_root, _tools_root]:
 # context manager in ida_mcp.sync.
 
 TOOLS = {}
+# Actual port the bridge bound to. Set in run_server(); surfaced in ping
+# responses so the host can learn the real port if it had to fall back to
+# an ephemeral one (TOCTOU self-heal: if the host pre-allocated port was
+# taken between host-close and our bind, we bind 0 and report back).
+_BOUND_PORT = None
 TOOL_ALIASES = {
     # Compatibility typo used by some wrappers.
     "xfer_analysis": "graph",
@@ -240,7 +245,9 @@ def process_single(r):
             )
             
     if r.get("type") == "ping":
-        return {"pong": True}
+        # Report the actual bound port so the host can self-heal if we had
+        # to fall back to an ephemeral port (the pre-allocated one was taken).
+        return {"pong": True, "port": _BOUND_PORT}
         
     tool_name = r.get("tool")
     args = r.get("args", {})
@@ -342,13 +349,30 @@ def process_single(r):
         return _build_error(tool_name, msg, details=details, hint=hint)
 
 def run_server():
+    global _BOUND_PORT
     port = int(os.environ.get("IDA_MCP_PORT", 13337))
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.setblocking(False)
-    server_sock.bind(('127.0.0.1', port))
+    # Bind with ephemeral fallback. The host pre-allocates a free port and
+    # hands it to us via IDA_MCP_PORT, but there is a TOCTOU window between
+    # the host closing its probe socket and our bind. If the port was taken
+    # in that window, fall back to an ephemeral port (0) and report the
+    # actual bound port back to the host in the ping response so it can
+    # route subsequent RPCs to the right place instead of failing.
+    bound_port = None
+    for try_port in (port, 0):
+        try:
+            server_sock.bind(('127.0.0.1', try_port))
+            bound_port = server_sock.getsockname()[1]
+            break
+        except OSError as e:
+            if try_port == 0:
+                raise
+            log_ev(f"Port {try_port} unavailable ({e}); falling back to ephemeral")
+    _BOUND_PORT = bound_port
     server_sock.listen(1)
-    log_ev(f"Listening on {port}")
+    log_ev(f"Listening on {bound_port}")
 
     while True:
         conn = None

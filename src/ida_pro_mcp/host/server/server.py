@@ -210,6 +210,26 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
             min_value=5,
             max_value=300,
         )
+        # Analysis stall watchdog: a per-session host thread that polls IDA's
+        # real analysis state (auto_is_ok + function count) and flags a session
+        # as "stalled" when the process is alive but analysis stops advancing.
+        # See _start_analysis_watchdog / _stop_analysis_watchdog.
+        self._analysis_watchdog_lock = threading.RLock()
+        self._analysis_watchdog_threads: Dict[str, threading.Thread] = {}
+        self._analysis_watchdog_stop_events: Dict[str, threading.Event] = {}
+        self._analysis_watchdog_state: Dict[str, Dict[str, Any]] = {}
+        self._analysis_watchdog_interval = _bounded_int(
+            os.environ.get("IDA_MCP_WATCHDOG_INTERVAL", 5),
+            5,
+            min_value=2,
+            max_value=60,
+        )
+        self._analysis_watchdog_stall_seconds = _bounded_int(
+            os.environ.get("IDA_MCP_WATCHDOG_STALL_SECONDS", 120),
+            120,
+            min_value=15,
+            max_value=3600,
+        )
         self._pointer_note_interval_seconds = _bounded_int(
             os.environ.get("IDA_MCP_POINTER_NOTE_INTERVAL", 900),
             900,
