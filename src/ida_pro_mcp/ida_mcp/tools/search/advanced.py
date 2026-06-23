@@ -1,12 +1,17 @@
 """SEARCH.ADVANCED - Vulnerable, constants, decompiled, and structured search."""
 
-import re
 import time as _time
 
 try:
     from .._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+
+# Import re after the wildcard import — the latter may shadow `re` with
+# typing.re (Python 3.12+) which is a deprecated proxy that lacks
+# re.compile().
+import re as _stdlib_re
+re = _stdlib_re
 
 from .core import (
     clip_text, paginate_records, build_response, iter_segments, _cache_get, _cache_set, _cache_key, _SEARCH_CACHE,
