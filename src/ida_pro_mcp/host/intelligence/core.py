@@ -53,7 +53,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .embeddings import FunctionEmbeddingIndex, NOISE_WORDS, SemanticObject, SemanticObjectIndex  # noqa: F401
+from .embeddings import FunctionEmbeddingIndex, NOISE_WORDS  # noqa: F401
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -1216,16 +1216,6 @@ class BehaviorClassifier:
             row["explain"] = self._anchor_explain(self.ANCHORS.get(b, ""), query)
         rows.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
         return rows
-
-    def _classify_impl(
-        self,
-        q: List[float],
-        threshold: float = 0.25,
-        top_k: int = 4,
-        block: bool = True,
-    ) -> List[Dict[str, Any]]:
-        """Internal compatibility wrapper for older call sites."""
-        return self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
 
     def anchor_coverage_report(self, min_similarity: float = 0.4, max_funcs: int = 5000) -> Dict[str, Any]:
         """Report how many functions match each anchor above min_similarity."""

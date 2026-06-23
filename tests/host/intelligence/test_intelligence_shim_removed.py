@@ -34,8 +34,6 @@ def test_canonical_modules_are_importable():
         BehaviorClassifier,
         FunctionEmbeddingIndex,
         INTEL_PROFILE,
-        SemanticObject,
-        SemanticObjectIndex,
         _extract_signature,
     )
     from ida_pro_mcp.services import ContextAssembler, get_assembler
@@ -45,7 +43,5 @@ def test_canonical_modules_are_importable():
     assert BgeCodeEmbedder is not None
     assert BehaviorClassifier is not None
     assert FunctionEmbeddingIndex is not None
-    assert SemanticObject is not None
-    assert SemanticObjectIndex is not None
     assert _extract_signature is not None
     assert isinstance(INTEL_PROFILE, bool)

@@ -14,7 +14,6 @@ except ImportError:
 import json
 import os
 import time
-import uuid
 
 try:
     from ..support.firmware_heuristics import (
@@ -26,7 +25,6 @@ try:
         aggregate_fingerprint_scores,
         apply_fingerprint_boost,
         rank_region_plans,
-        region_fingerprint,
         region_priority_score,
         summarize_campaign_regions,
         shannon_entropy,
@@ -41,7 +39,6 @@ except ImportError:
         aggregate_fingerprint_scores,
         apply_fingerprint_boost,
         rank_region_plans,
-        region_fingerprint,
         region_priority_score,
         summarize_campaign_regions,
         shannon_entropy,
@@ -181,21 +178,6 @@ def _record_contradiction(state: dict, ea: int, old: str, new: str, reason: str,
             "confidence": round(max(0.0, min(1.0, confidence)), 3),
         }
     )
-
-
-def _parse_executed_feedback(value) -> list:
-    """Parse optional executed-step feedback payload for campaign_resume."""
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        try:
-            v = json.loads(value)
-            return v if isinstance(v, list) else []
-        except Exception:
-            return []
-    return []
 
 
 def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
@@ -553,11 +535,10 @@ def run_firmware_bootstrap(
 @tool
 @idawrite
 def firmware_view(
-    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "campaign_checkpoint", "campaign_resume", "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|campaign_checkpoint|campaign_resume|campaign_feedback|fingerprint_index_sync|fingerprint_index_query|detect_load_address|detect_vector_table|detect_mmio|rtos_scan|triage_snapshot|bootstrap"],
+    action: Annotated[Literal["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"], "Action: scan_region|auto_retype|pointer_sweep|recommend|table_candidates|smart_carve|rollback_last|review_contradictions|region_profile|pointer_clusters|carve_plan|campaign|segment_sweep|multi_region_campaign|detect_load_address|detect_vector_table|detect_mmio|rtos_scan|triage_snapshot|bootstrap"],
     start: Annotated[Optional[str], "Range start address"] = None,
     end: Annotated[Optional[str], "Range end address"] = None,
     addr: Annotated[Optional[str], "Anchor address for recommend"] = None,
-    campaign_id: Annotated[Optional[str], "Campaign ID for campaign_resume/campaign_checkpoint"] = None,
     stride: Annotated[int, "Pointer scan stride"] = 4,
     limit: Annotated[int, "Maximum suggested/applied items"] = 128,
     apply: Annotated[bool, "Apply suggested conversions (auto_retype)"] = False,
@@ -581,8 +562,7 @@ def firmware_view(
             "scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates",
             "smart_carve", "rollback_last", "review_contradictions", "region_profile",
             "pointer_clusters", "carve_plan", "campaign", "segment_sweep",
-            "multi_region_campaign", "campaign_checkpoint", "campaign_resume",
-            "campaign_feedback", "fingerprint_index_sync", "fingerprint_index_query",
+            "multi_region_campaign",
         }
         if action in range_actions:
             s_ea, e_ea, err = _seg_bounds(start, end)
@@ -1169,258 +1149,6 @@ def firmware_view(
                 ],
             }
             return _log_ml(result, action, f"regions={campaign_summary.get('count',0)}; high={campaign_summary.get('risk_counts',{}).get('high',0)}")
-
-        if action == "campaign_checkpoint":
-            # Snapshot current multi-region campaign plan for resumable execution.
-            segs = []
-            seg = idaapi.get_first_seg()
-            while seg:
-                if seg.end_ea > seg.start_ea:
-                    try:
-                        sname = idaapi.get_segm_name(seg) or ""
-                    except Exception:
-                        sname = ""
-                    segs.append((int(seg.start_ea), int(seg.end_ea), sname))
-                seg = idaapi.get_next_seg(seg.start_ea)
-            regions = []
-            for ss, ee, name in segs[: max(1, min(limit * 4, 128))]:
-                if ee - ss < 64:
-                    continue
-                prof = _profile_range(ss, ee, ptr_size)
-                plan = build_carve_plan(
-                    {"unknown_ratio": prof["unknown_ratio"], "entropy": prof["entropy"], "ascii_runs": prof["ascii_runs"]},
-                    ptr_count=prof.get("ptr_hits_sampled", 0),
-                    table_count=0,
-                )
-                pri = region_priority_score(prof, plan, cluster_count=0)
-                regions.append(
-                    {
-                        "segment": name,
-                        "start": hex(ss),
-                        "end": hex(ee),
-                        "profile": {
-                            "entropy": prof["entropy"],
-                            "unknown_ratio": prof["unknown_ratio"],
-                            "pointer_density": prof["pointer_density"],
-                            "ascii_runs": prof["ascii_runs"],
-                        },
-                        "plan": plan,
-                        "priority_score": pri,
-                    }
-                )
-            ranked = dedup_regions_by_fingerprint(rank_region_plans(regions, limit=max(1, min(limit * 2, 48))))
-            ranked = ranked[: max(1, min(limit, 24))]
-            exec_plan = build_campaign_execution_plan(ranked, max_steps=min(48, max(8, limit * 3)))
-            cid = str(uuid.uuid4())[:12]
-            state.setdefault("campaigns", {})[cid] = {
-                "created_at": int(time.time()),
-                "cursor": 0,
-                "regions": ranked,
-                "execution_plan": exec_plan,
-                "done": [],
-            }
-            _save_fw_state(state)
-            return {
-                "ok": True,
-                "action": action,
-                "campaign_id": cid,
-                "regions": len(ranked),
-                "plan_steps": len(exec_plan),
-                "next_actions": [
-                    f"firmware_view(action='campaign_resume', addr='{cid}')",
-                    "firmware_view(action='review_contradictions')",
-                ],
-            }
-
-        if action == "campaign_resume":
-            cid = (campaign_id or addr or "").strip()
-            if not cid:
-                return make_error(MCPError.INVALID_ARGS, "campaign_resume requires campaign_id=<id>")
-            campaigns = state.setdefault("campaigns", {})
-            camp = campaigns.get(cid)
-            if not camp:
-                return make_error(MCPError.NOT_FOUND, f"Unknown campaign_id: {cid}")
-            plan = list(camp.get("execution_plan") or [])
-            # Optional auto-feedback: executed outcomes from prior chunk.
-            executed = _parse_executed_feedback(kwargs.get("executed"))
-            ingested = 0
-            if executed:
-                step_map = {int(st.get("step") or 0): st for st in plan}
-                for rec in executed:
-                    try:
-                        step_id = int(rec.get("step") or 0)
-                    except Exception:
-                        continue
-                    outcome = str(rec.get("outcome") or "").strip().lower()
-                    if outcome not in ("success", "failure"):
-                        continue
-                    st = step_map.get(step_id)
-                    if not st:
-                        continue
-                    fp = str(st.get("fingerprint") or "")
-                    if not fp:
-                        continue
-                    state.setdefault("fingerprint_corpus", []).append(
-                        {
-                            "ts": int(time.time()),
-                            "fingerprint": fp,
-                            "priority_score": float(rec.get("priority_score") or 0.5),
-                            "outcome": outcome,
-                            "segment": rec.get("segment") or "",
-                            "start": st.get("start") or "",
-                            "end": st.get("end") or "",
-                        }
-                    )
-                    ingested += 1
-                corpus = state.setdefault("fingerprint_corpus", [])
-                if len(corpus) > 2000:
-                    del corpus[:-2000]
-
-            cursor = int(camp.get("cursor") or 0)
-            chunk_n = max(1, min(limit, 10))
-            chunk = plan[cursor : cursor + chunk_n]
-            camp["cursor"] = min(len(plan), cursor + len(chunk))
-            regions_by_range = {
-                (str(r.get("start")), str(r.get("end"))): str(r.get("fingerprint") or "")
-                for r in (camp.get("regions") or [])
-            }
-            for st in chunk:
-                fp = regions_by_range.get((str(st.get("start")), str(st.get("end"))), "")
-                if fp:
-                    st["fingerprint"] = fp
-            for st in chunk:
-                camp.setdefault("done", []).append(st.get("step"))
-            _save_fw_state(state)
-            finished = camp["cursor"] >= len(plan)
-            return {
-                "ok": True,
-                "action": action,
-                "campaign_id": cid,
-                "finished": finished,
-                "cursor": camp["cursor"],
-                "total_steps": len(plan),
-                "next_chunk": chunk,
-                "feedback_ingested": ingested,
-                "next_actions": [
-                    (f"firmware_view(action='campaign_resume', addr='{cid}')" if not finished else "campaign complete"),
-                    "Execute chunk actions manually with apply=false first.",
-                ],
-            }
-
-        if action == "campaign_feedback":
-            fp = str(kwargs.get("fingerprint") or "").strip()
-            outcome = str(kwargs.get("outcome") or "").strip().lower()
-            if not fp:
-                return make_error(MCPError.INVALID_ARGS, "campaign_feedback requires fingerprint=<id>")
-            if outcome not in ("success", "failure"):
-                return make_error(MCPError.INVALID_ARGS, "campaign_feedback requires outcome=success|failure")
-            corpus = state.setdefault("fingerprint_corpus", [])
-            corpus.append(
-                {
-                    "ts": int(time.time()),
-                    "fingerprint": fp,
-                    "priority_score": float(kwargs.get("priority_score") or 0.5),
-                    "outcome": outcome,
-                    "segment": kwargs.get("segment") or "",
-                    "start": kwargs.get("start") or "",
-                    "end": kwargs.get("end") or "",
-                }
-            )
-            if len(corpus) > 2000:
-                del corpus[:-2000]
-            _save_fw_state(state)
-            agg = aggregate_fingerprint_scores(corpus, limit=24)
-            top = next((x for x in agg if str(x.get("fingerprint")) == fp), None)
-            return {
-                "ok": True,
-                "action": action,
-                "fingerprint": fp,
-                "outcome": outcome,
-                "corpus_size": len(corpus),
-                "updated_score": (top or {}).get("score"),
-                "updated_success_rate": (top or {}).get("success_rate"),
-            }
-
-        if action == "fingerprint_index_sync":
-            # Ingest current ranked regions into cross-image fingerprint corpus.
-            segs = []
-            seg = idaapi.get_first_seg()
-            while seg:
-                if seg.end_ea > seg.start_ea:
-                    try:
-                        sname = idaapi.get_segm_name(seg) or ""
-                    except Exception:
-                        sname = ""
-                    segs.append((int(seg.start_ea), int(seg.end_ea), sname))
-                seg = idaapi.get_next_seg(seg.start_ea)
-            rows = []
-            for ss, ee, name in segs[: max(1, min(limit * 4, 128))]:
-                if ee - ss < 64:
-                    continue
-                prof = _profile_range(ss, ee, ptr_size)
-                plan = build_carve_plan(
-                    {"unknown_ratio": prof["unknown_ratio"], "entropy": prof["entropy"], "ascii_runs": prof["ascii_runs"]},
-                    ptr_count=prof.get("ptr_hits_sampled", 0),
-                    table_count=0,
-                )
-                pri = region_priority_score(prof, plan, cluster_count=0)
-                r = {
-                    "segment": name,
-                    "start": hex(ss),
-                    "end": hex(ee),
-                    "profile": {
-                        "entropy": prof["entropy"],
-                        "unknown_ratio": prof["unknown_ratio"],
-                        "pointer_density": prof["pointer_density"],
-                        "ascii_runs": prof["ascii_runs"],
-                    },
-                    "plan": {"risk": plan.get("risk"), "phases": plan.get("phases", [])[:2]},
-                    "priority_score": pri,
-                }
-                r["fingerprint"] = region_fingerprint(r)
-                rows.append(r)
-            rows = dedup_regions_by_fingerprint(rows)
-            corpus = state.setdefault("fingerprint_corpus", [])
-            now = int(time.time())
-            for r in rows[: max(1, min(limit * 2, 64))]:
-                corpus.append(
-                    {
-                        "ts": now,
-                        "fingerprint": r.get("fingerprint"),
-                        "segment": r.get("segment"),
-                        "start": r.get("start"),
-                        "end": r.get("end"),
-                        "priority_score": r.get("priority_score"),
-                    }
-                )
-            # bounded corpus size
-            if len(corpus) > 2000:
-                del corpus[:-2000]
-            _save_fw_state(state)
-            return {
-                "ok": True,
-                "action": action,
-                "ingested": len(rows),
-                "corpus_size": len(corpus),
-                "next_actions": [
-                    "firmware_view(action='fingerprint_index_query')",
-                    "firmware_view(action='multi_region_campaign')",
-                ],
-            }
-
-        if action == "fingerprint_index_query":
-            corpus = state.setdefault("fingerprint_corpus", [])
-            agg = aggregate_fingerprint_scores(corpus, limit=max(1, min(limit, 48)))
-            return {
-                "ok": True,
-                "action": action,
-                "count": len(agg),
-                "items": agg,
-                "next_actions": [
-                    "Use top fingerprints to prioritize campaign regions with similar profiles.",
-                    "firmware_view(action='multi_region_campaign')",
-                ],
-            }
 
         if action == "smart_carve":
             if apply and snapshot_before_apply:

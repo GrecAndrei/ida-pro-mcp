@@ -7,7 +7,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ida_pro_mcp.services import FunctionEmbeddingIndex, SemanticObjectIndex
+from ida_pro_mcp.services import FunctionEmbeddingIndex
 from ida_pro_mcp.host.config import CACHE_DIR
 from ida_pro_mcp.services import get_db_path, ensure_tables
 
@@ -39,17 +39,6 @@ def test_function_embedding_index_fallback_on_read_only():
     idx.index("0x1000", "test_func", "void main() { return; }")
     assert idx.size == 1
     assert "0x1000" in idx._cache
-
-
-def test_semantic_object_index_fallback_on_read_only():
-    embedder = FakeEmbedder()
-    unwritable_path = "/usr/bin/nonexistent_path_mcp/test_sem.db"
-    
-    # Initialize index — should fall back to CACHE_DIR
-    idx = SemanticObjectIndex(unwritable_path, embedder)
-    
-    assert "fallback_indexes" in idx._db_path
-    assert idx._db_path.endswith(".semantic.db")
 
 
 def test_structural_index_get_db_path_fallback_on_read_only():

@@ -612,20 +612,20 @@ with open(RESULT_PATH, "w") as f:
         script = '''
 import sys, os, json
 import idautils
-from code import code
+from modify import modify
 
 funcs = list(idautils.Functions())
 if not funcs:
     result = {"ok": False, "error": "no functions"}
 else:
     target = funcs[0]
-    r = code(action="annotate", addr=hex(target), comment="Test annotation from smart_decompile")
+    r = modify(action="comment", addr=hex(target), value="Test annotation from smart_decompile", comment_type="repeatable")
     if isinstance(r, list): r = r[0]
     result = {
         "ok": r.get("ok", False),
         "addr": r.get("addr"),
         "comment": r.get("comment"),
-        "type": r.get("type"),
+        "type": r.get("comment_type"),
     }
 
 with open(RESULT_PATH, "w") as f:
@@ -634,7 +634,7 @@ with open(RESULT_PATH, "w") as f:
         r = runner.run_script(script, timeout=30)
         assert r.get("ok") is True
         assert r["comment"] == "Test annotation from smart_decompile"
-        assert r["type"] in ("function_comment", "address_comment")
+        assert r["type"] in ("regular", "repeatable", "anterior", "posterior")
 
 
 class TestTaintToolIDA:

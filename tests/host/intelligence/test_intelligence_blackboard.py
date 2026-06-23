@@ -227,45 +227,6 @@ def test_analysis_focus_falls_back_to_structural_blocks_on_high_entropy():
     assert focus["action"] == "blocks"
 
 
-def test_llm_payload_builders_produce_action_uncertainty_and_evidence():
-    asm = ContextAssembler()
-    pack = {
-        "api_calls": ["VirtualAllocEx", "WriteProcessMemory"],
-        "structural": {"entropy": 6.7, "xor_count": 5},
-        "related_findings": [{"title": "Process injection", "retrieval_source": "api_linked"}],
-        "analysis_focus": {"tool": "code", "action": "callers", "addr": "0x401000", "reason": "expand"},
-        "analysis_focus_alternatives": [{"tool": "search", "action": "api", "pattern": "VirtualAllocEx", "reason": "pivot"}],
-        "retrieval_stats": {"semantic_threshold": 0.7},
-    }
-    card = asm._build_llm_action_card(pack, "0x401000")
-    unc = asm._build_llm_uncertainty(pack)
-    evid = asm._build_llm_evidence_snippets(pack)
-
-    assert card["primary"]["call"]["tool"] == "code"
-    assert unc["risk"] in ("medium", "high")
-    assert evid and len(evid) >= 3
-
-
-def test_llm_contract_failover_and_style_guard_shapes():
-    asm = ContextAssembler()
-    pack = {
-        "analysis_focus": {"tool": "code", "action": "callers", "addr": "0x401000", "reason": "expand"},
-        "analysis_focus_alternatives": [
-            {"tool": "search", "action": "api", "pattern": "VirtualAllocEx", "reason": "pivot"}
-        ],
-        "llm_evidence": [{"fact": "API observed: VirtualAllocEx", "source": "decompile/api_extract"}],
-        "llm_uncertainty": {"risk": "high", "checks": ["semantic_circuit_open"]},
-    }
-    contract = asm._build_llm_tool_call_contract(pack, "0x401000")
-    failover = asm._build_llm_failover_route(pack, "0x401000")
-    style = asm._build_llm_response_style_guard(pack)
-
-    assert contract["format"] == "json"
-    assert contract["primary"]["tool"] == "code"
-    assert failover and failover[0]["call"]["tool"] == "search"
-    assert style["mode"] == "cautious"
-
-
 def test_compiled_plan_budget_and_mode_profiles_are_emitted():
     asm = ContextAssembler()
     pack = {
@@ -293,41 +254,6 @@ def test_record_call_outcome_updates_mcp_value_score():
     asm._record_call_outcome(sess, {"related_findings": [{"id": "x"}]})
     s2 = asm._mcp_value_score(sess, {"related_findings": [{"id": "x"}]})
     assert s2 >= s1
-
-
-def test_ten_llm_feature_payload_builders_shapes():
-    asm = ContextAssembler()
-    pack = {
-        "api_calls": ["VirtualAllocEx", "WriteProcessMemory"],
-        "related_findings": [{"title": "Process injection"}],
-        "structural": {"entropy": 6.6},
-        "llm_action_card": {"primary": {"call": {"tool": "code", "action": "callers", "addr": "0x401000"}}},
-        "llm_failover_route": [{"call": {"tool": "search", "action": "api", "pattern": "VirtualAllocEx"}}],
-        "evidence_budget": {"claim_blocked": True},
-    }
-    addr = "0x401000"
-    assert asm._llm_query_intent(pack)["intent"]
-    assert "required_min" in asm._llm_required_evidence_sources(pack)
-    assert "safe_claim" in asm._llm_claim_templates()
-    assert asm._llm_call_sequence(pack, addr)
-    assert "must_refuse_definitive_claim" in asm._llm_refusal_policy(pack)
-    assert "avoid_repeating" in asm._llm_tool_cooldowns("sess-any")
-    assert asm._llm_context_capsule(pack, addr)["addr"] == addr
-    assert asm._llm_verification_checklist(pack, addr)
-    assert isinstance(asm._llm_next_best_question(pack), str)
-    assert asm._llm_auto_notes(pack)
-
-
-def test_llm_nudge_requires_call_when_gate_is_active():
-    asm = ContextAssembler()
-    pack = {
-        "must_call_before_answer": True,
-        "required_followup_call": {"tool": "code", "action": "callers", "addr": "0x401000"},
-    }
-    n = asm._build_llm_nudge(pack, "0x401000")
-    assert n["must_call"] is True
-    assert n["required_call"]["tool"] == "code"
-    assert "Run required MCP call now" in " ".join(n["protocol"])
 
 
 def test_focus_feedback_closed_loop_updates_stats():
@@ -465,18 +391,6 @@ def test_analysis_focus_alternatives_are_ranked():
     assert cands
     assert len(cands) >= 2
     assert float(cands[0]["score"]) >= float(cands[1]["score"])
-
-
-def test_focus_explainability_has_margin_with_runner_up():
-    asm = ContextAssembler()
-    cands = [
-        {"tool": "code", "action": "callers", "score": 1.4, "reason": "r1"},
-        {"tool": "search", "action": "api", "score": 1.1, "reason": "r2"},
-    ]
-    ex = asm._focus_explainability(cands)
-    assert ex.get("selected") == "code:callers"
-    assert ex.get("runner_up") == "search:api"
-    assert float(ex.get("score_margin") or 0.0) > 0
 
 
 def test_semantic_circuit_breaker_opens_for_persistently_weak_signal():

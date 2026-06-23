@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from ida_pro_mcp.host.intelligence.core import BehaviorClassifier, _extract_signature
-from ida_pro_mcp.services import SemanticObject, SemanticObjectIndex
 
 
 FIX_DIR = Path(__file__).resolve().parents[3] / "fixtures" / "semantic"

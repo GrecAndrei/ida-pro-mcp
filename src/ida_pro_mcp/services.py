@@ -23,8 +23,6 @@ from ida_pro_mcp.host.intelligence.core import (
     BehaviorClassifier,
     BgeCodeEmbedder,
     FunctionEmbeddingIndex,
-    SemanticObject,
-    SemanticObjectIndex,
     _extract_signature,
 )
 from ida_pro_mcp.host.intelligence.crystallizer import AgentMacroCrystallizer
@@ -37,7 +35,6 @@ from ida_pro_mcp.host.intelligence.helpers import (
     parse_str_list,
     quantile,
 )
-from ida_pro_mcp.host.intelligence.reasoner import VulnerabilityReasoner
 from ida_pro_mcp.host.intelligence.structural_index import (
     get_db_path,
     ensure_tables,
@@ -117,8 +114,6 @@ __all__ = [
     "BgeCodeEmbedder",
     "BehaviorClassifier",
     "FunctionEmbeddingIndex",
-    "SemanticObject",
-    "SemanticObjectIndex",
     "_extract_signature",
     "INTEL_PROFILE",
     "ContextAssembler",
@@ -132,7 +127,6 @@ __all__ = [
     "coerce_int",
     "estimate_tokens",
     "parse_str_list",
-    "VulnerabilityReasoner",
     "StructuralIndex",
     "get_structural_db_path",
     "get_db_path",

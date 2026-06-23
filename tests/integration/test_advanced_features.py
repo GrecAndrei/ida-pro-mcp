@@ -676,12 +676,3 @@ def test_tiny_emulator_symbolic_execution_branch_split(mock_ida):
     p1 = paths[1]
     assert p1["last_address"] == "0x100c"
     assert "(rdi + 0x10) != 0x1337" in p1["constraints"]
-
-
-# Test Ghidra simulation logic in code.py
-code_mod = load_tool_module("code")
-_simulate_ghidra_decomp = code_mod._simulate_ghidra_decomp
-simulated = _simulate_ghidra_decomp("int v1 = 0; sub_4010(v1);", "test_func", 0x4000)
-assert "uVar1" in simulated
-assert "FUN_4010" in simulated
-assert "FUN_00004000" in simulated

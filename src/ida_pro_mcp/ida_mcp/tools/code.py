@@ -633,41 +633,14 @@ def _disasm_range(
 # 2. CODE - Decompilation & Disassembly
 # ============================================================================
 
-def _simulate_ghidra_decomp(pseudo: str, func_name: str, start_ea: int) -> str:
-    import re
-    ghidra_code = pseudo
-    type_map = {
-        r'\b_QWORD\b': 'ulong',
-        r'\b_DWORD\b': 'uint',
-        r'\b_WORD\b': 'ushort',
-        r'\b_BYTE\b': 'byte',
-        r'\b__int64\b': 'long',
-        r'\b__int32\b': 'int',
-        r'\b__int16\b': 'short',
-        r'\b__int8\b': 'char',
-    }
-    for ida_t, ghidra_t in type_map.items():
-        ghidra_code = re.sub(ida_t, ghidra_t, ghidra_code)
-    
-    ghidra_code = re.sub(r'\ba(\d+)\b', r'param_\1', ghidra_code)
-    ghidra_code = re.sub(r'\bv(\d+)\b', r'uVar\1', ghidra_code)
-    ghidra_code = re.sub(r'\bsub_([0-9a-fA-F]+)\b', r'FUN_\1', ghidra_code)
-    
-    header = f"""/* WARNING: Control flow encounter failure analysis simulated */
-/* WARNING: Globals starting with '_' overlap with other symbols */
-
-undefined8 FUN_{start_ea:08x}(undefined8 param_1, undefined8 param_2)
-"""
-    return header + "\n" + ghidra_code
-
 @tool
 @idaread
 def code(
     action: Annotated[Literal[
         "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
-        "callees", "callers", "blocks", "analyze", "callgraph", "export",
+        "callees", "callers", "blocks", "callgraph", "export",
         "find_paths", "strings_in_func", "diff_functions", "semantic_decompile",
-        "decomp_dataflow", "decompile_chain", "smart_decompile", "annotate", "explain"
+        "decomp_dataflow", "decompile_chain", "smart_decompile", "explain"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,
@@ -816,15 +789,6 @@ def code(
                             "code": pseudo,
                             "prototype": get_prototype(func),
                         }
-                        if kwargs.get("engine") == "ghidra":
-                            pseudo_ghidra = _simulate_ghidra_decomp(pseudo, ida_funcs.get_func_name(func.start_ea) or "", func.start_ea)
-                            result_entry["code"] = pseudo_ghidra
-                            result_entry["engine"] = "ghidra"
-                        elif kwargs.get("engine") == "differential":
-                            pseudo_ghidra = _simulate_ghidra_decomp(pseudo, ida_funcs.get_func_name(func.start_ea) or "", func.start_ea)
-                            result_entry["ida_code"] = pseudo
-                            result_entry["ghidra_code"] = pseudo_ghidra
-                            result_entry["engine"] = "differential"
                         # Inline enrichment shared with smart_decompile so the two
                         # decompilation entrypoints do not drift apart.
                         try:
@@ -1042,34 +1006,7 @@ def code(
                     if block_count >= max_items:
                         break
                 results.append({"ok": True, "addr": addr, "blocks": "\n".join(block_lines), "count": block_count})
-            
-            elif action == "analyze":
-                # Deprecated: the comprehensive analysis shape is now
-                # produced by `agent(action="analyze_function", addr=...)`
-                # which is the canonical one-stop shop. This branch is
-                # kept as a thin shim for back-compat — it just returns
-                # a decompile + a hint.
-                func = idaapi.get_func(ea)
-                if not func:
-                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
-                    continue
-                # Return a redirect marker so callers can update.
-                info = {
-                    "ok": True,
-                    "addr": hex_ea(func.start_ea),
-                    "deprecated": True,
-                    "hint": "code(action=\"analyze\") is deprecated; use agent(action=\"analyze_function\", addr=...) instead",
-                }
-                # Provide a quick decompile snapshot so the response
-                # is still useful.
-                try:
-                    cfunc, _ = _decompile_with_diagnostics(func.start_ea)
-                    if cfunc:
-                        info["pseudocode"] = str(cfunc)
-                except Exception:
-                    pass
-                results.append(info)
-            
+
             elif action == "callgraph":
                 # BFS for call graph
                 func = idaapi.get_func(ea)
@@ -1522,36 +1459,6 @@ def code(
                     "complexity": complexity,
                     "suggested_next_actions": suggested[:4],
                 })
-
-            elif action == "annotate":
-                # Deprecated: the canonical comment-write path is now
-                # `modify(action="comment", addr=..., value=..., comment_type=...)`
-                # which runs governance checks, redactions, and supports
-                # regular / repeatable / anterior / posterior comment types.
-                # The old 'code(annotate)' shortcut only set a repeatable
-                # function-or-address comment, so any host still calling
-                # it should migrate to modify(comment) for the richer
-                # behavior.
-                if not comment:
-                    results.append(make_error(MCPError.INVALID_ARGS, "comment required for annotate"))
-                    continue
-                try:
-                    func = idaapi.get_func(ea)
-                    target_ea = func.start_ea if func else ea
-                    if func:
-                        idc.set_func_cmt(target_ea, comment, 1)
-                    else:
-                        idc.set_cmt(ea, comment, 1)
-                    results.append({
-                        "ok": True,
-                        "deprecated": True,
-                        "addr": hex_ea(target_ea),
-                        "comment": comment,
-                        "type": "function_comment" if func else "address_comment",
-                        "hint": "use modify(action='comment', addr=..., value=...) instead",
-                    })
-                except Exception as e:
-                    results.append({"addr": addr, "error": str(e)})
 
             elif action == "explain":
                 # Plain-English explanation of what a function does.

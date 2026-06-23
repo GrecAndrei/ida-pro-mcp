@@ -56,18 +56,6 @@ class TestLLMHelpersExpansionAst(unittest.TestCase):
         for action in REQUIRED_ACTIONS:
             self.assertIn(action, values, f"Action '{action}' missing from Literal")
 
-    def test_feature_phase_map_exists(self):
-        node = next(
-            (
-                n for n in self.module.body
-                if isinstance(n, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "_FEATURE_PHASES" for t in n.targets)
-            ),
-            None,
-        )
-        self.assertIsNotNone(node)
-        self.assertIsInstance(node.value, ast.Dict)
-
     def test_dispatcher_source_mentions_all_expansion_actions(self):
         for action in REQUIRED_ACTIONS:
             self.assertIn(f'"{action}"', self.source, f'Action "{action}" not mentioned in source')
