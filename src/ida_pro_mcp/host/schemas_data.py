@@ -536,6 +536,21 @@ TOOL_ARG_SCHEMAS = {
         "include_stack": {"type": "boolean"},
         "include_items": {"type": "boolean"},
         "include_xrefs": {"type": "boolean"},
+        # find_similar / suggest_names tuning knobs. Previously NOT admitted, so
+        # the dispatch arg-filter silently stripped them: find_similar and
+        # suggest_names were unreachable in their tuned form (defaults always
+        # applied). Address aliases (ea/start/function/target for addr,
+        # end_ea/stop for end) are admitted for parity with the handler.
+        "limit": {"type": "integer"},
+        "min_score": {"type": "number"},
+        "threshold": {"type": "number"},
+        "top_k": {"type": "integer"},
+        "ea": {"type": "string"},
+        "start": {"type": "string"},
+        "function": {"type": "string"},
+        "target": {"type": "string"},
+        "end_ea": {"type": "string"},
+        "stop": {"type": "string"},
     },
     "calc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["calc"]},
@@ -547,6 +562,12 @@ TOOL_ARG_SCHEMAS = {
         "type": {"type": "string"},
         "size": {"type": "integer"},
         "offsets": {"type": ["array", "string"], "items": {"type": "string"}},
+        # eval reads a natural-language `query` for action/value inference
+        # (e.g. "what is 0x401000 + 0x20"). Previously stripped, so NL eval
+        # inference was unreachable through MCP (only bare `expr` worked).
+        # `op` is an alias for `bit_op` in bitops.
+        "query": {"type": "string"},
+        "op": {"type": "string"},
     },
     "memory": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["memory"]},
@@ -577,6 +598,18 @@ TOOL_ARG_SCHEMAS = {
             "type": "string",
             "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.",
         },
+        # Region end + search/compare knobs. `end_addr` is a named handler
+        # param; without schema admission it was always None, so search
+        # always scanned a fixed ea+0x10000 window and compare could never
+        # specify its second region ("addr1/addr2 required"). `regex` /
+        # `int_width` select search modes; `depth` bounds struct_walk.
+        "end_addr": {"type": "string"},
+        "depth": {"type": "integer"},
+        "pattern": {"type": "string"},
+        "regex": {"type": "boolean"},
+        "int_width": {"type": "integer"},
+        "addr1": {"type": "string"},
+        "addr2": {"type": "string"},
     },
     "misc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["misc"]},
@@ -622,6 +655,8 @@ TOOL_ARG_SCHEMAS = {
         "min_size": {"type": "integer"},
         "named_only": {"type": "boolean"},
         "items": {"type": "array", "items": {"type": "object"}},
+        # `queries` is the alias bulk_query reads alongside `items`.
+        "queries": {"type": "array", "items": {"type": "object"}},
     },
     "search": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["search"]},
@@ -823,6 +858,21 @@ TOOL_ARG_SCHEMAS = {
         "value": {"type": ["string", "integer"]},
         "offset": {"type": "integer"},
         "count": {"type": "integer"},
+        # `name2` is the second-segment name for compare/merge. Without
+        # admission, name-based compare was unreachable (only address-based
+        # via `end` worked). The address/name aliases are admitted for
+        # parity with the handler's alias normalization block.
+        "name2": {"type": "string"},
+        "address": {"type": "string"},
+        "addr": {"type": "string"},
+        "ea": {"type": "string"},
+        "segment": {"type": "string"},
+        "address2": {"type": "string"},
+        "addr2": {"type": "string"},
+        "ea2": {"type": "string"},
+        "segment2": {"type": "string"},
+        "segment_name": {"type": "string"},
+        "segment_name2": {"type": "string"},
     },
     "agent": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["agent"]},
@@ -832,6 +882,19 @@ TOOL_ARG_SCHEMAS = {
         "include_pseudocode": {"type": "boolean"},
         "max_items": {"type": "integer"},
         "use_cache": {"type": "boolean"},
+        # Knobs for rename_suggestions / cluster / reflect / fingerprint /
+        # cfg_similar. Previously stripped, so these actions ran with fixed
+        # defaults and their tuning/persistence flags were unreachable.
+        "top_k": {"type": "integer"},
+        "limit": {"type": "integer"},
+        "threshold": {"type": "number"},
+        "k": {"type": "integer"},
+        "func_limit": {"type": "integer"},
+        "include_evidence": {"type": "boolean"},
+        "persist_blackboard": {"type": "boolean"},
+        "persist_capsule": {"type": "boolean"},
+        "items": {"type": "array", "items": {"type": "object"}},
+        "db_path": {"type": "string"},
     },
     "intelligence": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["intelligence"]},
@@ -849,6 +912,12 @@ TOOL_ARG_SCHEMAS = {
         "order_by": {"type": "string", "description": "Column to order by (e.g., 'entropy DESC')"},
         "include_apis": {"type": "boolean", "description": "Include API list in results"},
         "include_strings": {"type": "boolean", "description": "Include string refs in results"},
+        # blackboard_search reads `include_resolved`; evidence_card reads
+        # `similar_top_k`. Previously stripped, so both flags were unreachable
+        # through MCP. (`tool`/`payload` are intentionally NOT admitted: they
+        # belong to the internal suggest_next_steps helper, not an action.)
+        "include_resolved": {"type": "boolean"},
+        "similar_top_k": {"type": "integer"},
     },
     "query": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["query"]},
@@ -859,6 +928,9 @@ TOOL_ARG_SCHEMAS = {
         "action": {"type": "string", "enum": TOOL_ACTIONS["idb"]},
         "offset": {"type": "integer"},
         "count": {"type": "integer"},
+        # `state` reads `audit_tail` (number of recent audit records to show).
+        # Previously stripped, so state always returned the default 5.
+        "audit_tail": {"type": "integer"},
     },
     "code": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["code"]},
@@ -993,6 +1065,29 @@ TOOL_ARG_SCHEMAS = {
         "force": {"type": "boolean", "description": "Force semantic_rebuild to re-embed all matching entries"},
         "offset": {"type": "integer", "description": "Pagination offset"},
         "db_path": {"type": "string", "description": "Override path to blackboard SQLite DB"},
+        # Knowledge-graph builder fields for add_system / add_struct / add_gap /
+        # fill_gap / add_state_machine / add_peripheral / add_attack_surface /
+        # kg_gaps. Previously stripped, so the KG-builder actions could only
+        # set title/content/confidence/tags — the structuring fields (members,
+        # gap_type, size_bytes, drivers, reachable_from, ...) were silently
+        # dropped, making these actions non-functional through MCP.
+        "members": {"type": "array", "items": {"type": "string"}},
+        "entry_points": {"type": "array", "items": {"type": "string"}},
+        "exit_points": {"type": "array", "items": {"type": "string"}},
+        "size_bytes": {"type": "integer"},
+        "hints": {"type": "array", "items": {"type": "string"}},
+        "gap_type": {"type": "string"},
+        "binary_type": {"type": "string"},
+        "gap_id": {"type": "string"},
+        "filled_by": {"type": "string"},
+        "state_var": {"type": "string"},
+        "states": {"type": "array", "items": {"type": "object"}},
+        "periph_type": {"type": "string"},
+        "drivers": {"type": "array", "items": {"type": "string"}},
+        "reachable_from": {"type": "array", "items": {"type": "string"}},
+        "input_type": {"type": "string"},
+        "call_stack": {"type": "array", "items": {"type": "string"}},
+        "resolved": {"type": "boolean"},
     },
     "filter": {
         "data": {"type": "object", "description": "Tool output dict to filter"},
