@@ -148,7 +148,31 @@ class ServerDispatchMixin:
                             )
                         },
                     )
-                return make_error(MCPError.IDA_CRASHED, str(e))
+                # Process is still alive (poll() is None): the RPC raised, most
+                # often a socket timeout from IDA_MCP_RPC_TIMEOUT on a slow call
+                # (long decompile, pump, pending analysis) — NOT a crash. Report
+                # a recoverable timeout so the caller retries / raises the
+                # deadline instead of chasing a nonexistent IDA crash.
+                import socket as _socket
+                try:
+                    _recv_to = int(os.environ.get("IDA_MCP_RPC_TIMEOUT", "30"))
+                except Exception:
+                    _recv_to = 30
+                if isinstance(e, (_socket.timeout, TimeoutError, OSError)):
+                    return make_error(
+                        MCPError.IDA_TIMEOUT,
+                        f"IDA did not respond within {_recv_to}s (IDA_MCP_RPC_TIMEOUT). "
+                        "The process is still alive; the call likely needs more time. "
+                        "Retry, or raise IDA_MCP_RPC_TIMEOUT.",
+                        recoverable=True,
+                        details={"port": port, "rpc_timeout_sec": _recv_to},
+                    )
+                return make_error(
+                    MCPError.RPC_CONNECTION_ERROR,
+                    f"RPC to IDA failed (process alive): {e}",
+                    recoverable=True,
+                    details={"port": port},
+                )
 
     def _handle_session_health(self, args: dict) -> dict:
             verbose = bool(args.get("verbose", False))
