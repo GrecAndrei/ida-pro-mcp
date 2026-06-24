@@ -396,7 +396,7 @@ class ServerPredictorMixin:
                     import importlib.util as _ilu
                     _bb_path = os.path.join(
                         os.path.dirname(os.path.abspath(__file__)),
-                        "..", "ida_mcp", "tools", "blackboard.py"
+                        "..", "..", "ida_mcp", "tools", "blackboard.py"
                     )
                     _spec = _ilu.spec_from_file_location("_pred_bb", os.path.abspath(_bb_path))
                     _bmod = _ilu.module_from_spec(_spec)

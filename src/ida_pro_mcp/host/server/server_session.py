@@ -984,7 +984,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             # Inject recent blackboard into session status so LLM sees it by default
             try:
                 import importlib.util
-                bb_path = os.path.join(SCRIPT_DIR, "..", "ida_mcp", "tools", "blackboard.py")
+                # SCRIPT_DIR is host/server/; blackboard.py is at ida_pro_mcp/ida_mcp/tools/.
+                bb_path = os.path.join(SCRIPT_DIR, "..", "..", "ida_mcp", "tools", "blackboard.py")
                 bb_path = os.path.abspath(bb_path)
                 spec = importlib.util.spec_from_file_location("_host_blackboard_status", bb_path)
                 mod = importlib.util.module_from_spec(spec)

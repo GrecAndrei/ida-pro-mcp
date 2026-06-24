@@ -1525,8 +1525,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             log_rpc(f"Assigned dynamic port: {server_port}")
 
-            # server_script.py lives next to host/, not inside host/src/
-            script_path = os.path.join(os.path.dirname(SCRIPT_DIR), "server_script.py")
+            # server_script.py lives at the package root (ida_pro_mcp/).
+            # SCRIPT_DIR is host/server/, so the package root is two levels up.
+            script_path = os.path.join(os.path.dirname(os.path.dirname(SCRIPT_DIR)), "server_script.py")
 
             # Environment for IDA
             env = os.environ.copy()
@@ -1700,7 +1701,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             pass
 
     def _launch_and_wait(self, session, server_port, sanitize_env: bool = False):
-            script_path = os.path.join(os.path.dirname(SCRIPT_DIR), "server_script.py")
+            # SCRIPT_DIR is host/server/; server_script.py is at the package root.
+            script_path = os.path.join(os.path.dirname(os.path.dirname(SCRIPT_DIR)), "server_script.py")
             env = os.environ.copy()
             ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
             if ida_runtime_dir:

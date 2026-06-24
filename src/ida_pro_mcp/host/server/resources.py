@@ -519,7 +519,7 @@ class ResourceResolver:
             import importlib.util, os as _os, sys as _sys, types as _types
             path = _os.path.join(
                 _os.path.dirname(_os.path.abspath(__file__)),
-                "..", "ida_mcp", "tools", "blackboard.py"
+                "..", "..", "ida_mcp", "tools", "blackboard.py"
             )
             spec = importlib.util.spec_from_file_location("_res_bb2", _os.path.abspath(path))
             mod = importlib.util.module_from_spec(spec)
@@ -885,7 +885,7 @@ class ResourceResolver:
             import importlib.util, os as _os
             bb_path = _os.path.join(
                 _os.path.dirname(_os.path.abspath(__file__)),
-                "..", "ida_mcp", "tools", "blackboard.py"
+                "..", "..", "ida_mcp", "tools", "blackboard.py"
             )
             bb_path = _os.path.abspath(bb_path)
             spec = importlib.util.spec_from_file_location("_res_bb", bb_path)
