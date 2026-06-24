@@ -537,13 +537,17 @@ def analysis(
             #     when a caller wants to force completion rather than observe.
             pump = bool(kwargs.get("pump") or kwargs.get("blocking") or False)
             poll_max_wait = float(kwargs.get("max_wait", 30.0) or 30.0)
-            # Default to max_wait so a bare analysis.wait actually polls for
-            # completion instead of returning instantly with seconds_waited=0.
-            # An explicit timeout=0 means "report current state, don't block."
+            # Default to a bounded 10s observe window so a bare analysis.wait
+            # actually polls for completion (was 0s) but stays safely under the
+            # host RPC recv deadline (IDA_MCP_RPC_TIMEOUT, default 30s). A poll
+            # that exceeds that deadline gets killed and is falsely reported as
+            # IDA_CRASHED. 10s is enough to distinguish "done" from "needs pump";
+            # an explicit timeout=0 means "report current state, don't block."
+            # For longer waits, raise timeout/max_wait AND IDA_MCP_RPC_TIMEOUT.
             if "timeout" in kwargs and kwargs["timeout"] is not None:
                 poll_timeout = float(kwargs["timeout"] or 0.0)
             else:
-                poll_timeout = poll_max_wait
+                poll_timeout = 10.0
             start_time = time.time()
             waited = 0.0
             pumped = False
