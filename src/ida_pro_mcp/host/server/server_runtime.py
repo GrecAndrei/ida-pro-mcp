@@ -2014,12 +2014,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if options_payload:
                 actions.append({"action": "set_options", "options": options_payload})
 
-            if any(k in opts for k in ("processor", "bitness", "endian", "flags")):
-                action_args = {"action": "set_architecture"}
-                for k in ("processor", "bitness", "endian", "flags"):
-                    if k in opts and opts[k] is not None:
-                        action_args[k] = opts[k]
-                actions.append(action_args)
+            _arch_payload = {}
+            for k in ("processor", "bitness", "endian", "flags"):
+                v = opts.get(k)
+                if v is None or (isinstance(v, str) and not v.strip()) or v == 0:
+                    continue
+                _arch_payload[k] = v
+            if _arch_payload:
+                actions.append({"action": "set_architecture", **_arch_payload})
 
             loader_value = opts.get("value")
             if loader_value is None and "loader_options" in opts:

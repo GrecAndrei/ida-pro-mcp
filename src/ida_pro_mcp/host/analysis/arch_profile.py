@@ -51,6 +51,16 @@ def normalize_arch_options(options: Dict[str, Any]) -> Tuple[Dict[str, Any], Dic
     out = dict(options or {})
     meta: Dict[str, Any] = {"normalizations": []}
 
+    # Strip arch keys that are empty/zero/whitespace — an LLM passing processor=""
+    # or bitness=0 should be treated the same as not passing it at all, otherwise
+    # IDA's loader detection gets overridden with nonsense.
+    for _k in ("processor", "bitness", "endian", "loader", "flags"):
+        if _k in out:
+            _v = out[_k]
+            if _v is None or (isinstance(_v, str) and not _v.strip()) or _v == 0:
+                del out[_k]
+                meta["normalizations"].append(f"{_k}:dropped_empty")
+
     proc = out.get("processor")
     if proc is not None:
         raw = str(proc).strip().lower()
