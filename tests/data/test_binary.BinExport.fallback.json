@@ -1,9 +1,9 @@
 {
   "format": "binexport-fallback",
-  "source_file": "tests/data/test_binary.exe",
+  "source_file": "/home/alex/ida-pro-mcp/tests/data/test_binary.exe",
   "imagebase": "0x140000000",
-  "functions": 520,
-  "names": 1657,
+  "functions": 378,
+  "names": 1628,
   "segments": 10,
   "note": "BinExport plugin unavailable; emitted fallback metadata artifact."
 }

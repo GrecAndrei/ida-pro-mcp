@@ -840,10 +840,16 @@ except ImportError:
         tool = lambda f: f  # type: ignore
         idaread = lambda f: f  # type: ignore
         def make_error(*args, **kwargs):  # type: ignore
-            return {"error": args[0] if args else "unknown", "message": str(kwargs)}
+            # Match the standard in-IDA envelope: {"error": True, "code", "message"}.
+            code = args[0] if len(args) > 0 else kwargs.get("code", "UNKNOWN_ERROR")
+            message = args[1] if len(args) > 1 else kwargs.get("message", str(kwargs) or "unknown")
+            return {"error": True, "code": str(code), "message": str(message)}
         class MCPError:
             GOVERNANCE_BLOCKED = "governance_blocked"
             INVALID_ARGS = "invalid_args"
+            IDA_ERROR = "ida_error"
+            NOT_FOUND = "not_found"
+            UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
 
 @tool
@@ -927,4 +933,4 @@ def governance_engine(
             return make_error(MCPError.INVALID_ARGS, f"Unknown governance action: {action}")
 
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return make_error(MCPError.IDA_ERROR, str(e))

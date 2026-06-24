@@ -70,7 +70,7 @@ def bridge_search(
         db_path: override path to SchemaBoot SQLite DB.
     """
     if MultiHopBridgeIndex is None:
-        return {"ok": False, "error": "MultiHopBridgeIndex not importable"}
+        return make_error(MCPError.IDA_ERROR, "MultiHopBridgeIndex not importable")
 
     bt = bridge_types or ["apis", "strings"]
     try:
@@ -100,16 +100,16 @@ def bridge_search(
         except Exception:
             dbp = None
     if not dbp or not os.path.exists(dbp):
-        return {"ok": False, "error": f"SchemaBoot DB not found: {dbp!r}"}
+        return make_error(MCPError.NOT_FOUND, f"SchemaBoot DB not found: {dbp!r}")
 
     try:
         idx = MultiHopBridgeIndex(dbp)
     except Exception as exc:
-        return {"ok": False, "error": f"index init failed: {exc}"}
+        return make_error(MCPError.IDA_ERROR, f"index init failed: {exc}")
 
     if action == "search":
         if not query_constraints:
-            return {"ok": False, "error": "query_constraints required for action='search'"}
+            return make_error(MCPError.INVALID_ARGS, "query_constraints required for action='search'")
         try:
             res = idx.search_via_bridges(
                 query_constraints=query_constraints,
@@ -118,7 +118,7 @@ def bridge_search(
                 hops=int(hops),
             )
         except Exception as exc:
-            return {"ok": False, "error": f"search failed: {exc}"}
+            return make_error(MCPError.IDA_ERROR, f"search failed: {exc}")
         return {
             "ok": True,
             "action": "search",
@@ -138,7 +138,7 @@ def bridge_search(
                 top_k=int(top_k),
             )
         except Exception as exc:
-            return {"ok": False, "error": f"bridges failed: {exc}"}
+            return make_error(MCPError.IDA_ERROR, f"bridges failed: {exc}")
         return {
             "ok": True,
             "action": "bridges",
@@ -150,4 +150,4 @@ def bridge_search(
             "top_k": int(top_k),
         }
 
-    return {"ok": False, "error": f"unknown action: {action!r}"}
+    return make_error(MCPError.ACTION_NOT_FOUND, f"unknown action: {action!r}")

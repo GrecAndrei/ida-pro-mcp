@@ -589,9 +589,21 @@ def calc(
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
 
+            # IDA 9.x moved the file<->VA mapping helpers out of ida_nalt into
+            # idaapi (and ida_loader). Resolve them robustly across versions.
+            _get_fro = (getattr(idaapi, "get_fileregion_offset", None)
+                        or getattr(ida_nalt, "get_fileregion_offset", None))
+            _get_frea = (getattr(idaapi, "get_fileregion_ea", None)
+                         or getattr(ida_nalt, "get_fileregion_ea", None))
+            if not _get_fro or not _get_frea:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    "fileregion mapping helpers unavailable in this IDA build",
+                )
+
             if reverse:
                 file_off = ea
-                va = ida_nalt.get_fileregion_ea(file_off)
+                va = _get_frea(file_off)
                 if va == idaapi.BADADDR:
                     return make_error(MCPError.INVALID_ARGS, f"File offset {hex(file_off)} not mapped")
                 seg = idaapi.getseg(va)
@@ -605,9 +617,9 @@ def calc(
                     "segment_end": hex(seg.end_ea) if seg else None,
                     "direction": "file_offset_to_va",
                 })
-            
+
             # Get file offset
-            file_off = ida_nalt.get_fileregion_offset(ea)
+            file_off = _get_fro(ea)
             seg = idaapi.getseg(ea)
             seg_name = ida_segment.get_segm_name(seg) if seg else "none"
             

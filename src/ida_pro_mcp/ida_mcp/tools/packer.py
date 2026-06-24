@@ -841,15 +841,15 @@ _MAX_SCRIPT_OUTPUT = 200000
 
 def _run_script(code: str | None, extra_globals: dict | None) -> dict:
     if not code or not isinstance(code, str):
-        return {
-            "ok": False,
-            "error": "packer(action='script') requires non-empty 'code' (Python expression)",
-        }
+        return make_error(
+            MCPError.INVALID_ARGS,
+            "packer(action='script') requires non-empty 'code' (Python expression)",
+        )
     if len(code) > _MAX_SCRIPT_CHARS:
-        return {
-            "ok": False,
-            "error": f"script code exceeds {_MAX_SCRIPT_CHARS} characters",
-        }
+        return make_error(
+            MCPError.INVALID_ARGS,
+            f"script code exceeds {_MAX_SCRIPT_CHARS} characters",
+        )
     # Disallow obviously dangerous builtins that the whitelist does not include.
     forbidden = {"open", "exec", "eval", "__import__", "compile", "input"}
     for tok in forbidden:
@@ -857,10 +857,10 @@ def _run_script(code: str | None, extra_globals: dict | None) -> dict:
             # Loose check; refuse anything that looks like the dangerous
             # builtin is being used. False positives are acceptable here —
             # the LLM can wrap the value in a helper if needed.
-            return {
-                "ok": False,
-                "error": f"script may not use '{tok}'; use packer helpers or IDA SDK instead",
-            }
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"script may not use '{tok}'; use packer helpers or IDA SDK instead",
+            )
     ns = _build_script_namespace(extra_globals)
     try:
         # Try expression first; fall back to a statement suite.
@@ -870,10 +870,10 @@ def _run_script(code: str | None, extra_globals: dict | None) -> dict:
             exec(compile(code, "<packer-script>", "exec"), ns)
             value = ns.get("result", None)
     except Exception as e:
-        return {
-            "ok": False,
-            "error": f"script raised: {type(e).__name__}: {e}",
-        }
+        return make_error(
+            MCPError.IDA_ERROR,
+            f"script raised: {type(e).__name__}: {e}",
+        )
     # Truncate large outputs so a runaway script can't blow the context window.
     serialized: Any = value
     try:

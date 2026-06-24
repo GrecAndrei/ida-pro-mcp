@@ -1362,7 +1362,10 @@ def _prefetch_function_context(ea):
     
     func = ida_funcs.get_func(ea)
     if not func:
-        return {"error": "Invalid function address"}
+        return make_error(
+            MCPError.FUNCTION_NOT_FOUND,
+            f"No function at address {ea:#x}",
+        )
         
     func_start = func.start_ea
     func_end = func.end_ea

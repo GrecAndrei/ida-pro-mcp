@@ -422,7 +422,7 @@ def _detect_anti_disasm(func_ea, limit):
 def _decode_attempt_at(ea, key_hex, limit):
     raw = ida_bytes.get_bytes(ea, 256)
     if not raw:
-        return {"ok": False, "error": f"Cannot read bytes at {hex_ea(ea)}"}
+        return make_error(MCPError.IDA_ERROR, f"Cannot read bytes at {hex_ea(ea)}")
 
     results = []
 
@@ -430,7 +430,7 @@ def _decode_attempt_at(ea, key_hex, limit):
         try:
             key_bytes = bytes.fromhex(key_hex.replace("0x", "").replace(" ", ""))
         except ValueError:
-            return {"ok": False, "error": "Invalid hex key format"}
+            return make_error(MCPError.INVALID_ARGS, "Invalid hex key format")
 
         if len(key_bytes) == 1:
             decoded = _xor_decode(raw, key_bytes[0])

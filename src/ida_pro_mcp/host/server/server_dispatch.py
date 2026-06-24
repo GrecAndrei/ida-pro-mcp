@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 
 from ida_pro_mcp import __version__
 
-from ..config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
+from ..config import _bounded_int, _coerce_bool, _is_writable_dir, _parse_str_list, log_rpc
 from ..errors import MCPError, is_error_result, make_error
 from ..policy import PolicyDecision, build_audit_record, evaluate_policy
 from ..schemas import (

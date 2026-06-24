@@ -1266,17 +1266,17 @@ def _cfg_similarity_action(action: str, addr, kwargs) -> dict:
         return {"ok": True, **store.stats()}
 
     if not addr:
-        return {"ok": False, "error": f"addr required for {action}"}
+        return make_error(MCPError.INVALID_ARGS, f"addr required for {action}")
 
     try:
         ea = int(addr, 16)
     except (TypeError, ValueError):
-        return {"ok": False, "error": f"Invalid address: {addr}"}
+        return make_error(MCPError.INVALID_ARGS, f"Invalid address: {addr}")
 
     if action == "cfg_encode":
         node_features, adjacency = CFGExtractor.extract_from_ida(ea)
         if node_features.shape[0] == 0:
-            return {"ok": False, "error": "Could not extract CFG"}
+            return make_error(MCPError.IDA_ERROR, "Could not extract CFG")
         embedding = encoder.encode_function(node_features, adjacency)
         try:
             import idc
@@ -1303,7 +1303,7 @@ def _cfg_similarity_action(action: str, addr, kwargs) -> dict:
         if query_emb is None:
             node_features, adjacency = CFGExtractor.extract_from_ida(ea)
             if node_features.shape[0] == 0:
-                return {"ok": False, "error": "Could not extract CFG"}
+                return make_error(MCPError.IDA_ERROR, "Could not extract CFG")
             query_emb = encoder.encode_function(node_features, adjacency)
             try:
                 import idc
@@ -1323,7 +1323,7 @@ def _cfg_similarity_action(action: str, addr, kwargs) -> dict:
             ],
         }
 
-    return {"ok": False, "error": f"Unknown cfg action: {action}"}
+    return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown cfg action: {action}")
 
 
 # ============================================================================

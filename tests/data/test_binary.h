@@ -1,5 +1,5 @@
 // Type definitions exported from IDA
-// Source: tests/data/test_binary.exe
+// Source: /home/alex/ida-pro-mcp/tests/data/test_binary.exe
 
 // Ordinal 1
 // GUID

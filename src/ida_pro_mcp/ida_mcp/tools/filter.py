@@ -262,7 +262,7 @@ def filter(
         filter(data=schemaboot_result, query=".functions | group_by(segment)")
     """
     if data is None:
-        return {"ok": False, "error": "data required"}
+        return make_error(MCPError.INVALID_ARGS, "data required")
     try:
         result = _apply_filter(data, query)
         return {
@@ -273,4 +273,4 @@ def filter(
             "result_type": type(result).__name__,
         }
     except Exception as e:
-        return {"ok": False, "error": f"Filter error: {e}", "query": query}
+        return make_error(MCPError.IDA_ERROR, f"Filter error: {e}")

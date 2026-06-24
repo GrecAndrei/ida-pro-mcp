@@ -547,20 +547,48 @@ def ctree(
         elif action == "traverse":
             node_lines = []
             class TraverseVisitor(ida_hexrays.ctree_visitor_t):
+                # IDA 9.x dropped the ctree_visitor_t.level depth attribute; track
+                # nesting depth ourselves. visit_* fires on entry (pre-order),
+                # leave_* on exit (post-order) -- but leave may not fire under
+                # CV_FAST, so prune once depth exceeds the cap regardless.
                 def __init__(self, max_depth):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
                     self.max_depth = max_depth
+                    self.depth = 0
+                def _emit(self, item, text):
+                    if match_filter(text):
+                        indent = "  " * self.depth
+                        ea_s = hex(item.ea) if item.ea != idaapi.BADADDR else "?"
+                        node_lines.append(f"{indent}{ea_s}  {ida_hexrays.get_ctype_name(item.op)}  {text}")
                 def visit_expr(self, e):
-                    if self.level > self.max_depth:
-                        return 1
+                    if self.depth > self.max_depth:
+                        return 1  # prune: stop descending
                     text = ""
                     try:
                         text = ida_lines.tag_remove(e.print1(None))
                     except Exception:
                         pass
-                    if match_filter(text):
-                        indent = "  " * self.level
-                        node_lines.append(f"{indent}{hex(e.ea)}  {ida_hexrays.get_ctype_name(e.op)}  {text}")
+                    self._emit(e, text)
+                    self.depth += 1
+                    return 0
+                def leave_expr(self, e):
+                    if self.depth > 0:
+                        self.depth -= 1
+                    return 0
+                def visit_insn(self, i):
+                    if self.depth > self.max_depth:
+                        return 1
+                    text = ""
+                    try:
+                        text = ida_lines.tag_remove(i.print1(None))
+                    except Exception:
+                        pass
+                    self._emit(i, text)
+                    self.depth += 1
+                    return 0
+                def leave_insn(self, i):
+                    if self.depth > 0:
+                        self.depth -= 1
                     return 0
             visitor = TraverseVisitor(depth)
             visitor.apply_to(cfunc.body, None)
