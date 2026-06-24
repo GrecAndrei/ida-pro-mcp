@@ -439,6 +439,83 @@ class ServerDispatchMixin:
                 runtime.get("port"),
             )
 
+    def _handle_analysis_wait(self, args: dict) -> dict:
+            """Host-side polling loop for analysis/wait.
+
+            The IDA-side wait blocks inside the RPC handler, which causes the
+            MCP client to hit its own request timeout (-32001).  Instead, we
+            poll IDA with short non-blocking status checks (timeout=0) every
+            few seconds on the host side, keeping each individual RPC well
+            under the client deadline.
+            """
+            session = self.current_session
+            if not session:
+                return make_error(
+                    MCPError.SESSION_REQUIRED,
+                    "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+                )
+            runtime = self.session_runtimes.get(session.session_id)
+            if not self._runtime_alive(runtime):
+                return make_error(MCPError.IDA_CRASHED, "IDA runtime is not alive.")
+            port = runtime.get("port")
+
+            try:
+                max_wait = float(args.get("max_wait") or args.get("timeout") or 300.0)
+            except Exception:
+                max_wait = 300.0
+            max_wait = max(0.0, min(max_wait, 3600.0))
+
+            try:
+                poll_interval = float(args.get("poll_timeout") or 5.0)
+            except Exception:
+                poll_interval = 5.0
+            poll_interval = max(1.0, min(poll_interval, 30.0))
+
+            import time as _time
+            start = _time.time()
+            last_result = None
+
+            while True:
+                # Ask IDA for current state without blocking (timeout=0)
+                try:
+                    res = self._send_rpc_raw(
+                        {"tool": "analysis", "args": {"action": "wait", "timeout": 0, "pump": False}},
+                        port,
+                        recv_timeout=15,
+                    )
+                except Exception as e:
+                    import socket as _socket
+                    if isinstance(e, (_socket.timeout, TimeoutError, OSError)):
+                        # IDA is alive but slow — keep polling
+                        elapsed = _time.time() - start
+                        if elapsed >= max_wait:
+                            break
+                        _time.sleep(min(poll_interval, max_wait - elapsed))
+                        continue
+                    return make_error(MCPError.RPC_CONNECTION_ERROR, f"RPC failed: {e}", recoverable=True)
+
+                last_result = res
+                if isinstance(res, dict) and res.get("analysis_complete"):
+                    res["host_waited_sec"] = round(_time.time() - start, 1)
+                    return res
+
+                elapsed = _time.time() - start
+                if elapsed >= max_wait:
+                    break
+
+                _time.sleep(min(poll_interval, max_wait - elapsed))
+
+            if last_result is None:
+                last_result = {}
+            last_result["ok"] = True
+            last_result["analysis_complete"] = last_result.get("analysis_complete", False)
+            last_result["host_waited_sec"] = round(_time.time() - start, 1)
+            last_result["note"] = (
+                f"Analysis still in progress after {last_result['host_waited_sec']}s. "
+                "Call analysis(action='wait') again to keep waiting, or proceed and accept incomplete analysis."
+            )
+            return last_result
+
     def _handle_bookmarks(self, args: dict) -> dict:
             if not self.current_session:
                 return make_error(
@@ -1222,6 +1299,9 @@ class ServerDispatchMixin:
 
             if tool_name == "analysis" and str(args.get("action") or "").strip() == "plugin_run":
                 return self._handle_analysis_plugin_run(args)
+
+            if tool_name == "analysis" and str(args.get("action") or "").strip() == "wait":
+                return self._handle_analysis_wait(args)
 
             if tool_name == "threat_hunt":
                 return self._handle_threat_hunt(args)
