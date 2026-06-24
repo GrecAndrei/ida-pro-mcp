@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. Note: renames and comments live on modify; listings on code. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names.
+Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. Note: regex-based filters live in search, while renames and comments live on modify; listings on code. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names.
 
 ## Actions
 - `create` (write/mutate)
